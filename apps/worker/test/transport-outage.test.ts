@@ -1,5 +1,6 @@
 import { RunnerDO } from "../src/runner-do.js";
 import { BridgeReplies } from "../src/platform/bridge-replies.js";
+import { internalHeaders } from "../src/security.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { encodeWireFrame, PROTOCOL_CURRENT_VERSION as version, PROTOCOL_MIN_VERSION, type WireMessage } from "@aloneio/runmesh-protocol";
 import { expect, it, vi } from "vitest";
@@ -114,5 +115,204 @@ it.each([undefined, 409, 401, 403])("rejects pending RPC replies when the sessio
       expect(f.close).toHaveBeenCalledWith(status === undefined ? 1013 : status === 409 ? 4000 : 4001,
         status === undefined ? "control plane temporarily unavailable" : status === 409 ? "stale runner session" : "runner credentials rejected");
     } finally { clearTimeout(timer); request.mockRestore(); }
+  });
+});
+
+it.each(sessionFrames)("releases the discarded Registry response when a %s frame fails", async kind => {
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-frame-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const cancel = vi.fn();
+    const receipt = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 503 });
+    const request = vi.fn(async () => receipt);
+    const instance = new RunnerDO(state, env, { registryRequest: request });
+    const f = socket(kind);
+    await instance.webSocketMessage(f.ws, encodeWireFrame(frame(kind)));
+    expect(f.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+    expect(f.send).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
+it.each([403, 429, 503])("releases discarded HTTP %s authentication receipts without changing the result", async status => {
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-auth-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const cancel = vi.fn();
+    const receipt = new Response(new ReadableStream<Uint8Array>({ cancel }), { status, headers: { "retry-after": "73" } });
+    const request = vi.fn(async () => receipt);
+    const instance = new RunnerDO(state, env, { registryRequest: request });
+    const response = await instance.fetch(new Request(`https://runner.internal/runner/${runner}`, { headers: { Upgrade: "websocket", Authorization: "Bearer synthetic-runner-token" } }));
+    try {
+      expect(response.status).toBe(status === 403 ? 401 : status);
+      if (status !== 403) expect(response.headers.get("retry-after")).toBe("73");
+      expect(request).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally { await response.body?.cancel(); }
+  });
+});
+
+it("releases the status-only disconnect receipt", async () => {
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-disconnect-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const cancel = vi.fn(), request = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 503 }));
+    const instance = new RunnerDO(state, env, { registryRequest: request });
+    await instance.webSocketClose(socket("session").ws);
+    expect(request.mock.calls).toHaveLength(1);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
+it.each(["pending", "rejected"] as const)("keeps the original frame failure when receipt cleanup is %s", async cleanup => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-cleanup-${crypto.randomUUID()}`));
+  try {
+    await runInDurableObject(stub, async (_existing, state) => {
+      const cancel = vi.fn(() => cleanup === "pending" ? pending : Promise.reject(new Error("cleanup unavailable")));
+      const request = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 503 }));
+      const instance = new RunnerDO(state, env, { registryRequest: request });
+      const f = socket("heartbeat");
+      await instance.webSocketMessage(f.ws, encodeWireFrame(frame("heartbeat")));
+      expect(f.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+      expect(request).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+  } finally { release(); }
+}, 2_000);
+
+it.each(["heartbeat", "event", "sync"])("releases a status-only successful %s receipt", async kind => {
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-success-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const cancel = vi.fn(), request = vi.fn(async () => new Response(new ReadableStream({ cancel })));
+    const instance = new RunnerDO(state, env, { registryRequest: request });
+    const f = socket(kind);
+    await instance.webSocketMessage(f.ws, encodeWireFrame(frame(kind)));
+    expect(f.close).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
+async function internalRequest(instance: RunnerDO, path: string, value?: Record<string, unknown>) {
+  const method = value === undefined ? "GET" : "POST";
+  const body = value === undefined ? "" : JSON.stringify(value);
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET!, method, path, body);
+  return instance.fetch(new Request(`https://runner.internal${path}`, { method, headers, ...(value === undefined ? {} : { body }) }));
+}
+
+it.each([
+  { path: "/mark-policy-committed", action: "/desired-policy", status: 503, code: "policy_commit_unverified" },
+  { path: "/cancel-policy-mutation", action: "/mutation-state?mutation_id=original", status: 503, code: "registry_unavailable" },
+  { path: "/begin-policy-mutation", action: "/mutation-state?mutation_id=original", status: 409, code: "mutation_in_progress" },
+  { path: "/revoke", action: "/mutation-state?mutation_id=original", status: 409, code: "mutation_uncommitted" },
+])("releases $action failures during $path and retains the original mutation", async ({ path, action, status, code }) => {
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-mutation-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const cancel = vi.fn(), registryRequest = vi.fn(async (_id: string, _action: string) => new Response(new ReadableStream({ cancel }), { status: 503 }));
+    const instance = new RunnerDO(state, env, { registryRequest });
+    expect((await internalRequest(instance, "/begin-policy-mutation", { mutation_id: "original", runner_id: runner })).status).toBe(204);
+    const response = await internalRequest(instance, path, {
+      mutation_id: path === "/begin-policy-mutation" ? "replacement" : "original", runner_id: runner,
+      desired_revision: 1, desired_checksum: "b".repeat(64), phase: "offline_pending",
+    });
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ error: { code } });
+    expect(registryRequest).toHaveBeenCalledOnce();
+    expect(registryRequest.mock.calls[0]?.[1]).toBe(action);
+    expect(cancel).toHaveBeenCalledOnce();
+    const admission = await internalRequest(instance, "/admission-state");
+    expect(await admission.json()).toMatchObject({ fenced: true, mutationId: "original", mutationPhase: "precommit" });
+  });
+});
+
+it.each(["/policy-readiness", "/active-policy"])("releases %s failure during policy acknowledgment reconciliation", async action => {
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-policy-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const cancel = vi.fn();
+    const registryRequest = vi.fn(async (_id: string, route: string) => {
+      if (route === action) return new Response(new ReadableStream({ cancel }), { status: 503 });
+      if (route === "/policy-ack") return Response.json({ ack_result: "applied" });
+      if (route === "/policy-readiness") return Response.json({ ok: true, policy_status: "applied", desired_revision: 1, applied_revision: 1,
+        runner_reported_policy_revision: 1, desired_checksum: "b".repeat(64), active_checksum: "b".repeat(64),
+        runner_reported_policy_checksum: "b".repeat(64), connection_epoch: 1, credential_version: 1,
+        session_id: "outage-session", lifecycle_id: "a".repeat(64) });
+      throw new Error(`Unexpected test route: ${route}`);
+    });
+    const instance = new RunnerDO(state, env, { registryRequest });
+    const f = socket("policy");
+    await instance.webSocketMessage(f.ws, encodeWireFrame(frame("policy")));
+    expect(f.close).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(registryRequest.mock.calls.at(-1)?.[1]).toBe(action);
+    const admission = await internalRequest(instance, "/admission-state");
+    expect(await admission.json()).toMatchObject({ fenced: true, reconciled: false, activeRevision: null });
+  });
+});
+
+it("releases a failed current-session receipt before returning a structured RPC error", async () => {
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-current-session-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_existing, state) => {
+    let attachment: unknown = socket("hello").ws.deserializeAttachment();
+    const ws = { close: vi.fn(), send: vi.fn(), readyState: WebSocket.OPEN,
+      deserializeAttachment: () => attachment, serializeAttachment: (value: unknown) => { attachment = value; } } as unknown as WebSocket;
+    const statePort = new Proxy(state, { get(target, key) {
+      if (key === "getWebSockets") return () => [ws];
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    let connected = false;
+    const cancel = vi.fn();
+    const registryRequest = vi.fn(async (_id: string, action: string) => {
+      if (action === "/connect") return Response.json({ epoch: 1, lifecycle_id: "a".repeat(64) });
+      if (action === "/session") return connected ? new Response(new ReadableStream({ cancel }), { status: 503 }) : new Response(null, { status: 204 });
+      throw new Error(`Unexpected test route: ${action}`);
+    });
+    const instance = new RunnerDO(statePort, env, { registryRequest });
+    await instance.webSocketMessage(ws, encodeWireFrame(frame("hello")));
+    expect(ws.send).toHaveBeenCalledOnce();
+    expect(ws.close).not.toHaveBeenCalled();
+    connected = true;
+    const response = await internalRequest(instance, "/rpc", { method: "echo", params: {} });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: "control_plane_unavailable" } });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(ws.send).toHaveBeenCalledOnce();
+  });
+});
+
+it.each([401, 403, 409])("releases rejected policy receipt %s before a failed admission write reaches the outer catch", async status => {
+  const stub = env.RUNNER.get(env.RUNNER.idFromName(`discarded-policy-write-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (_existing, state) => {
+    let attachment: unknown = socket("hello").ws.deserializeAttachment();
+    const ws = { close: vi.fn(), send: vi.fn(), readyState: WebSocket.OPEN,
+      deserializeAttachment: () => attachment, serializeAttachment: (value: unknown) => { attachment = value; } } as unknown as WebSocket;
+    const events: string[] = [], cancel = vi.fn(() => { events.push("cancel"); });
+    const registryRequest = vi.fn(async (_id: string, action: string) => {
+      if (action === "/connect") return Response.json({ epoch: 1, lifecycle_id: "a".repeat(64) });
+      if (action === "/session") return new Response(null, { status: 204 });
+      if (action === "/policy-ack") return new Response(new ReadableStream({ cancel }), { status });
+      throw new Error(`Unexpected test route: ${action}`);
+    });
+    const replies = new BridgeReplies(), instance = new RunnerDO(state, env, { registryRequest, replies });
+    await instance.webSocketMessage(ws, encodeWireFrame(frame("hello")));
+    expect(ws.send).toHaveBeenCalledOnce();
+    expect(ws.close).not.toHaveBeenCalled();
+    expect((await internalRequest(instance, "/begin-policy-mutation", { mutation_id: "policy-write", runner_id: runner })).status).toBe(204);
+    const resolve = vi.fn(), timer = setTimeout(() => {}, 10_000);
+    replies.register("pending-policy-rpc", { resolve, timer, socket: ws });
+    const put = vi.spyOn(state.storage, "put");
+    try {
+      put.mockImplementationOnce(async () => { events.push("write"); throw new Error("synthetic admission storage failure"); });
+      await instance.webSocketMessage(ws, encodeWireFrame(frame("policy")));
+      expect(put).toHaveBeenCalledOnce();
+      expect(ws.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+      expect(ws.send).toHaveBeenCalledOnce();
+      expect(resolve).toHaveBeenCalledOnce();
+      expect(resolve.mock.calls[0]?.[0]).toMatchObject({ type: "rpc.error" });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(events).toEqual(["cancel", "write"]);
+      const admission = await internalRequest(instance, "/admission-state");
+      expect(await admission.json()).toMatchObject({ fenced: true, reconciled: false, mutationId: "policy-write", mutationPhase: "invalid" });
+    } finally { clearTimeout(timer); put.mockRestore(); }
   });
 });

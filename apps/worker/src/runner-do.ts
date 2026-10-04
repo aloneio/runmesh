@@ -25,7 +25,7 @@ import {
 import { bearerToken, isConfiguredSecret, isSafeIdentifier, verifyInternalRequest } from "./security.js";
 import { isRunnerPolicy, validLifecycleId, negotiateRunnerHello, parseRegistryHelloReceipt, runnerWelcome } from "./domain/runner-handshake.js";
 import { PRODUCT_VERSION } from "./generated-version.js";
-import { readCappedText } from "./body.js";
+import { cancelBody, readCappedText } from "./body.js";
 
 
 interface ConnectionAttachment {
@@ -176,8 +176,11 @@ export class RunnerDO {
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
       if (attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
       const desired = await this.registryRequest(attachment.runnerId, "/desired-policy", { method: "GET" });
-      if (desired.status === 404) return new Response(null, { status: 204 });
-      if (!desired.ok) return Response.json({ error: { code: "registry_unavailable", message: "policy is unavailable" } }, { status: 503 });
+      if (!desired.ok) {
+        cancelBody(desired);
+        return desired.status === 404 ? new Response(null, { status: 204 })
+          : Response.json({ error: { code: "registry_unavailable", message: "policy is unavailable" } }, { status: 503 });
+      }
       const desiredValue = await desired.json() as unknown;
       if (typeof desiredValue !== "object" || desiredValue === null || Array.isArray(desiredValue)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
       const desiredRecord = desiredValue as Record<string, unknown>;
@@ -250,8 +253,11 @@ export class RunnerDO {
       method: "POST",
       body: JSON.stringify({ token }),
     });
-    if (!authResponse.ok) return authResponse.status === 401 || authResponse.status === 403
-      ? new Response("unauthorized", { status: 401 }) : controlPlaneUnavailableResponse(authResponse);
+    if (!authResponse.ok) {
+      cancelBody(authResponse);
+      return authResponse.status === 401 || authResponse.status === 403
+        ? new Response("unauthorized", { status: 401 }) : controlPlaneUnavailableResponse(authResponse);
+    }
     let authBody: { credential_version?: unknown };
     try {
       const parsed = await authResponse.json();
@@ -294,6 +300,7 @@ export class RunnerDO {
   }
 
   private closeForRegistryFailure(ws: WebSocket, response: Response): void {
+    cancelBody(response);
     const { code, reason } = registrySessionClose(response);
     this.rejectBridgeWaiters(ws, reason);
     ws.close(code, reason);
@@ -458,12 +465,14 @@ export class RunnerDO {
     if (message.type === "job.started" || message.type === "job.status" || message.type === "job.completed") {
       const response = await this.registryRequest(attachment.runnerId, "/event", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), message, now_ms: Date.now() }) });
       if (!response.ok) this.closeForRegistryFailure(ws, response);
+      else cancelBody(response);
       return;
     }
     if (message.type === "runner.heartbeat") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const response = await this.registryRequest(attachment.runnerId, "/heartbeat", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), now_ms: Date.now() }) });
       if (!response.ok) this.closeForRegistryFailure(ws, response);
+      else cancelBody(response);
       return;
     }
     if (message.type === "runner.policy_ack") {
@@ -471,6 +480,8 @@ export class RunnerDO {
       const expectedAdmission = { ...(await this.admission()) };
       const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
       if (!response.ok) {
+        // Release the receipt even if persisting the admission fence fails.
+        cancelBody(response);
         if (registryRejectedSession(response) && expectedAdmission.mutationPhase === "precommit") await this.markInvalidAdmission(attachment, expectedAdmission);
         this.closeForRegistryFailure(ws, response);
         return;
@@ -496,7 +507,7 @@ export class RunnerDO {
         const status = isRecord(result) && ["recorded","unchanged","disabled","deferred","degraded"].includes(String(result.history_status)) ? result.history_status : "degraded";
         try { ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:`history-${message.sync_sequence}`,result:{history_status:status as string}})); }
         catch { /* Local Jobs remain authoritative; next connection resends. */ }
-      }
+      } else cancelBody(response);
       return;
     }
     if (message.type === "rpc.request") {
@@ -703,13 +714,14 @@ export class RunnerDO {
     const before = await this.admission();
     if (before.mutationId !== RESTART_RECONCILE_MUTATION_ID || !before.fenced || before.reconciled) return false;
     const response = await this.registryRequest(attachment.runnerId, "/policy-readiness", { method: "GET" });
-    if (!response.ok) return false;
+    if (!response.ok) { cancelBody(response); return false; }
     const value = await response.json() as Record<string, unknown>;
     const revision = value.applied_revision;
     const checksum = value.active_checksum;
     if (!isCurrentPolicyReadiness(value, attachment, revision, checksum)) return false;
     const active = await this.registryRequest(attachment.runnerId, "/active-policy", { method: "GET" });
-    const policy = active.ok ? await active.json() as unknown : undefined;
+    if (!active.ok) { cancelBody(active); return false; }
+    const policy = await active.json() as unknown;
     if (!isRunnerPolicy(policy) || policy.revision !== revision || policy.checksum !== checksum) return false;
     const next: AdmissionState = {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
@@ -890,7 +902,7 @@ export class RunnerDO {
   private async recoverCredentialMutation(expected: AdmissionState, allowLifecycleChange = false): Promise<boolean> {
     if (!expected.fenced || expected.mutationPhase !== "precommit" || expected.mutationId === null || expected.runnerId === null) return false;
     const response = await this.registryRequest(expected.runnerId, `/mutation-state?mutation_id=${encodeURIComponent(expected.mutationId)}`, { method: "GET" });
-    if (!response.ok) return false;
+    if (!response.ok) { cancelBody(response); return false; }
     const state = await response.json() as Record<string, unknown>;
     return state.runner_exists === true && state.mutation_committed === true && state.credential_mutation_committed === true
       && typeof state.lifecycle_id === "string" && validLifecycleId(state.lifecycle_id)
@@ -909,7 +921,7 @@ export class RunnerDO {
   private async recoverCommittedPrecommit(expected: AdmissionState): Promise<boolean> {
     if (!expected.fenced || expected.mutationPhase !== "precommit" || expected.mutationId === null || expected.runnerId === null) return false;
     const response = await this.registryRequest(expected.runnerId, `/mutation-state?mutation_id=${encodeURIComponent(expected.mutationId)}`, { method: "GET" });
-    if (!response.ok) return false;
+    if (!response.ok) { cancelBody(response); return false; }
     const state = await response.json() as Record<string, unknown>;
     // A committed delete leaves a tombstone in Registry but no Runner row.
     // Clear the transport fence so a later registration can acquire the DO
@@ -948,7 +960,10 @@ export class RunnerDO {
       return Response.json({ error: { code: "mutation_mismatch", message: "mutation does not own a precommit fence" } }, { status: 409 });
     }
     const desired = await this.registryRequest(before.runnerId ?? "", "/desired-policy", { method: "GET" });
-    if (!desired.ok) return Response.json({ error: { code: "policy_commit_unverified", message: "desired policy could not be verified" } }, { status: 503 });
+    if (!desired.ok) {
+      cancelBody(desired);
+      return Response.json({ error: { code: "policy_commit_unverified", message: "desired policy could not be verified" } }, { status: 503 });
+    }
     const value = await desired.json() as unknown;
     const desiredRecord = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
     if (desiredRecord?.mutation_id !== mutationId || desiredRecord.revision !== desiredRevision || desiredRecord.checksum !== desiredChecksum) return Response.json({ error: { code: "policy_commit_mismatch", message: "desired policy identity does not match the mutation" } }, { status: 409 });
@@ -1028,7 +1043,10 @@ export class RunnerDO {
     if (before.mutationPhase !== "precommit") return Response.json({ error: { code: "mutation_committed", message: "only an uncommitted mutation can be cancelled" } }, { status: 409 });
     if (mutationId === RESTART_RECONCILE_MUTATION_ID || before.runnerId === null) return Response.json({ error: { code: "mutation_uncertain", message: "mutation cannot be safely cancelled" } }, { status: 503 });
     const stateResponse = await this.registryRequest(before.runnerId, `/mutation-state?mutation_id=${encodeURIComponent(mutationId)}`, { method: "GET" });
-    if (!stateResponse.ok) return Response.json({ error: { code: "registry_unavailable", message: "mutation state is unavailable" } }, { status: 503 });
+    if (!stateResponse.ok) {
+      cancelBody(stateResponse);
+      return Response.json({ error: { code: "registry_unavailable", message: "mutation state is unavailable" } }, { status: 503 });
+    }
     const state = await stateResponse.json() as unknown;
     if (!isRecord(state) || typeof state.runner_exists !== "boolean" || typeof state.mutation_committed !== "boolean") {
       return Response.json({ error: { code: "mutation_uncertain", message: "mutation evidence is incomplete" } }, { status: 503 });
@@ -1070,6 +1088,7 @@ export class RunnerDO {
       return Response.json({ error: { code: "mutation_state_changed", message: "pre-mutation identity is no longer current" } }, { status: 409 });
     }
     const active = await this.registryRequest(before.runnerId, "/active-policy", { method: "GET" });
+    if (!active.ok) cancelBody(active);
     const policy = active.ok ? await active.json() as unknown : undefined;
     if (!isRunnerPolicy(policy) || policy.revision !== before.preMutationActiveRevision || policy.checksum !== before.preMutationActiveChecksum) return Response.json({ error: { code: "mutation_state_changed", message: "active policy snapshot cannot be verified" } }, { status: 409 });
     if (socket === undefined || attachment === null || attachment.runnerId !== before.runnerId || (attachment.lifecycleId ?? null) !== (before.lifecycleId ?? null) || attachment.sessionId !== before.sessionId || attachment.epoch !== before.connectionEpoch || attachment.credentialVersion !== before.credentialVersion) return Response.json({ error: { code: "runner_unavailable", message: "Runner session is no longer current" } }, { status: 503 });
@@ -1094,7 +1113,7 @@ export class RunnerDO {
     const before = await this.admission();
     if (expected !== undefined && !sameAdmissionState(before, expected)) return;
     const response = await this.registryRequest(attachment.runnerId, "/policy-readiness", { method: "GET" });
-    if (!response.ok) return;
+    if (!response.ok) { cancelBody(response); return; }
     const value = await response.json() as Record<string, unknown>;
     const revision = value.applied_revision;
     const checksum = value.active_checksum;
@@ -1109,7 +1128,8 @@ export class RunnerDO {
       && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum);
     if (!ready) return;
     const active = await this.registryRequest(attachment.runnerId, "/active-policy", { method: "GET" });
-    const policy = active.ok ? await active.json() as unknown : undefined;
+    if (!active.ok) { cancelBody(active); return; }
+    const policy = await active.json() as unknown;
     if (!isRunnerPolicy(policy) || policy.revision !== revision || policy.checksum !== checksum) return;
     const next: AdmissionState = {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
@@ -1144,7 +1164,8 @@ export class RunnerDO {
   private async markSocket(ws: WebSocket, state: "offline" | "stale"): Promise<void> {
     const attachment = ws.deserializeAttachment() as ConnectionAttachment | null;
     if (attachment === null || attachment.epoch === 0) return;
-    await this.registryRequest(attachment.runnerId, "/disconnect", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), state, now_ms: Date.now() }) });
+    const response = await this.registryRequest(attachment.runnerId, "/disconnect", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), state, now_ms: Date.now() }) });
+    cancelBody(response);
   }
 
   private async scheduleHelloDeadline(): Promise<void> {
@@ -1182,6 +1203,7 @@ export class RunnerDO {
 
   private async isCurrent(attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
     const response = await this.sessionResponse(attachment, requireOnline);
+    cancelBody(response);
     if (response.status === 204) return true;
     if (registryRejectedSession(response)) return false;
     throw new ControlPlaneUnavailableError();

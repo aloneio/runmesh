@@ -1,5 +1,6 @@
 import type { CliDependencies } from "./contracts.js";
 import type { ExecutionMode } from "../service.js";
+import { ensureManagedUserLaunch } from "../services/user-launch.js";
 import { hostServiceManifestFilesystem } from "../service.js";
 import { isManagedService } from "../service.js";
 import { managedServiceManifestFromContent } from "../service.js";
@@ -96,7 +97,8 @@ export async function serviceManifestFor(parsed: ParsedCommand, store: ProfileSt
       // existing command and all other service settings remain untouched.
       return rewriteManagedServiceExecutionMode(desired, existing, desired.executionMode);
     }
-    return managedServiceManifestFromContent(desired, existing, desired.executionMode);
+    const preserved = managedServiceManifestFromContent(desired, existing, desired.executionMode);
+    return parsed.command === "install" ? ensureManagedUserLaunch(preserved) : preserved;
   }
 
   // An explicit executable path is an intentional service-definition update,

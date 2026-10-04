@@ -106,6 +106,7 @@ export function isDefaultSystemProfile(layout: ServiceLayout, profilePath: strin
 
 export function serviceInvocation(options: ServiceAdapterOptions, layout: ServiceLayout, profile: string, stateDir: string, platform: ServicePlatform): readonly string[] {
   const legacy = options.command === undefined ? undefined : options.command.trim().split(/\s+/).filter(Boolean);
+  if (legacy?.some(part => part === "--user" || part.startsWith("--user="))) throw new Error("service command cannot override --user; select the service mode instead");
   // `command` is retained only for source compatibility with the pre-product
   // adapter.  Profile/state arguments are security-critical: allowing a
   // caller-supplied value here could make a privileged service load credentials
@@ -119,6 +120,7 @@ export function serviceInvocation(options: ServiceAdapterOptions, layout: Servic
   if (!isAbsoluteForPlatform(executable, platform)) throw new Error("service executable path must be absolute");
   const command = legacy === undefined ? [executable, "start"] : [executable, ...legacy.slice(1)];
   if (!command.includes("start")) command.push("start");
+  if (serviceMode(options) === "user") command.push("--user");
   // Always append the canonical paths. The legacy command may carry unrelated
   // compatibility flags, but it can never replace these two boundaries.
   // Normalize again at the final command boundary so future callers that use

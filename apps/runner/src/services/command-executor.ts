@@ -19,7 +19,7 @@ export const hostServiceCommandExecutor: ServiceCommandExecutor = {
       // defense in depth. The executable itself has already been resolved to
       // an allow-listed absolute System32 path on Windows.
       cwd: trustedServiceWorkingDirectory(),
-      env: trustedServiceEnvironment(),
+      env: trustedServiceEnvironment(file, args),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -31,12 +31,20 @@ export const hostServiceCommandExecutor: ServiceCommandExecutor = {
   }),
 };
 
-function trustedServiceEnvironment(): NodeJS.ProcessEnv {
+function trustedServiceEnvironment(file: string, args: readonly string[]): NodeJS.ProcessEnv {
   if (process.platform === "win32") {
     const systemRoot = trustedWindowsRoot();
     return trustedWindowsEnvironment(systemRoot);
   }
-  return { PATH: process.platform === "darwin" ? "/usr/bin:/bin:/usr/sbin:/sbin" : "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" };
+  const environment: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" };
+  if (process.platform === "linux" && file === "systemctl" && args.includes("--user")) {
+    // systemctl needs this directory to locate the user manager's local bus.
+    // Derive it from the effective UID: inherited runtime directories or
+    // DBUS_SESSION_BUS_ADDRESS could target another user or a remote bus.
+    const uid = process.geteuid?.();
+    if (uid !== undefined) environment.XDG_RUNTIME_DIR = `/run/user/${uid}`;
+  }
+  return environment;
 }
 
 function trustedServiceWorkingDirectory(): string {

@@ -13,6 +13,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
       const arg = rest[index];
       if (arg === undefined) continue;
       if (arg === "--json") { values.json = true; continue; }
+      if (arg === "--user") { values.user = true; continue; }
       if (arg === "--profile") {
         const value = rest[index + 1];
         if (value === undefined || value.startsWith("--")) throw new Error("unknown or incomplete option: --profile");
