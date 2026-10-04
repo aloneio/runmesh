@@ -467,7 +467,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   it("R07 escaped Job output keeps real byte cursors after the MCP context envelope is added", async () => {
     const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write(String.fromCharCode(0).repeat(25000))"), background: true });
     const jobId = started.structuredContent?.job_id as string;
-    await waitFor(async () => (await mcpTool("job", { action: "get", job_id: jobId })).structuredContent?.status === "succeeded", 10000);
+    await waitForJobSuccess(jobId);
     let cursor: string | undefined, bytes = 0, pages = 0;
     do {
       const result = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 65536, ...(cursor === undefined ? {} : { cursor }) });
@@ -490,7 +490,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     });
     const jobId = job.structuredContent?.job_id as string;
     expect(jobId).toEqual(expect.any(String));
-    await waitFor(async () => (await mcpTool("job", { action: "get", job_id: jobId })).structuredContent?.status === "succeeded", 10_000);
+    await waitForJobSuccess(jobId);
     let cursor: string | undefined;
     let output = "";
     do {
@@ -1049,6 +1049,23 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
         return pending.size === 0;
       }, options.timeoutMs));
     }
+  }
+
+  async function waitForJobSuccess(jobId: string): Promise<void> {
+    let status = "absent", exitCode: number | null = null;
+    const diagnostic = (outcome: "timeout" | "terminal_failure" | "tool_error") => `RUNMESH_E2E_JOB_COMPLETION_DIAGNOSTIC=${JSON.stringify({ outcome, status, exit_code: exitCode })}`;
+    await waitFor(async () => {
+      const response = await mcpMessage("job", { action: "get", job_id: jobId });
+      const job = response.result?.structuredContent;
+      status = job?.status === undefined ? "absent" : typeof job.status === "string" && ["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(job.status) ? job.status : "other";
+      const code = job?.exit_code;
+      exitCode = typeof code === "number" && Number.isSafeInteger(code) && code >= -(2 ** 31) && code < 2 ** 31 ? code : null;
+      if (response.error !== undefined || response.result?.isError === true) throw new Error(`Job did not complete successfully\n${diagnostic("tool_error")}`);
+      // A terminal process failure is evidence now, not another ten seconds
+      // of waiting. Arguments, IDs and Runner-authored text remain private.
+      if (["failed", "cancelled", "interrupted"].includes(status)) throw new Error(`Job did not complete successfully\n${diagnostic("terminal_failure")}`);
+      return status === "succeeded";
+    }, 10_000, () => diagnostic("timeout"));
   }
 
   async function mcpTool(name: string, args: Record<string, unknown>, client = clientA): Promise<ToolResult> {

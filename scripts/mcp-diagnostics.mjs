@@ -17,6 +17,7 @@ const stages = ["handler_dispatch", "server_factory", "sdk_transport"];
 const reasons = ["invalid_auth_context", "conflicting_auth_context", "already_connected", "unknown"];
 const HTTP_MARKER = "RUNMESH_E2E_MCP_HTTP_DIAGNOSTIC=";
 const WORKER_MARKER = "RUNMESH_E2E_MCP_WORKER_EVENT=";
+const jobStatuses = ["queued", "running", "cancelling", "succeeded", "failed", "cancelled", "interrupted", "unknown", "absent", "other"];
 const clean = value => value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "");
 const record = value => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -90,6 +91,18 @@ export function mcpHttpDiagnostic(text) {
       || (value.runtime_signature !== undefined && !runtimeSignatures.has(value.runtime_signature))) return undefined;
     return { content_type: value.content_type, phase: value.phase, body_kind: value.body_kind, rpc_code: value.rpc_code, rpc_id: value.rpc_id,
       ...(value.runtime_signature === undefined ? {} : { runtime_signature: value.runtime_signature }) };
+  } catch { return undefined; }
+}
+
+export function jobCompletionDiagnostic(text) {
+  if (typeof text !== "string") return undefined;
+  const raw = /^RUNMESH_E2E_JOB_COMPLETION_DIAGNOSTIC=(\{[^\r\n]{1,256}\})\r?$/mu.exec(text)?.[1];
+  try {
+    const value = JSON.parse(raw);
+    if (!record(value) || !["timeout", "terminal_failure", "tool_error"].includes(value.outcome)
+      || !jobStatuses.includes(value.status) || !(value.exit_code === null
+        || (Number.isInteger(value.exit_code) && value.exit_code >= -2147483648 && value.exit_code <= 2147483647))) return undefined;
+    return { outcome: value.outcome, status: value.status, exit_code: value.exit_code };
   } catch { return undefined; }
 }
 
