@@ -2,7 +2,9 @@
 
 [简体中文](dev-runner-prereleases.zh-CN.md) · [Upgrade guide](upgrading.md)
 
-Use a development Runner on a separate test host to try upcoming changes. Open the development Worker's administrator page and check the exact version offered before installing. The latest published stable release is **0.1.4**; development downloads are determined by the verified prerelease channel.
+Use a development Runner on a separate test host to try upcoming changes. Open the development Worker's administrator page and check the exact version offered before installing. Development downloads use the verified prerelease channel; the current production version is listed in [release status](release-readiness.md).
+
+Copy the install command from the development panel to enroll with that development Worker. Commands from the production panel use its stable release and production address. Keep the two installations in their intended environments.
 
 Updating a test environment has three steps: publish the Runner package, deploy the Worker, and install the selected package on the host. Plan service restarts around active Jobs.
 

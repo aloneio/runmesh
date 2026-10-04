@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "8b2996ac84bc7f040b46c38886a2685d0c097f01ae0629b3ca0d4668922ca09b",
-      "bytes": 128657,
+      "sha256": "0123fec8205eafe5b48fa4b56b809327f25a991e8ff444e18bd5dd04618e7b8e",
+      "bytes": 129224,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "62fb6a83b8ccbbbab7cc5460d7c6454af275a592da06f977a1d4caead400989c",
-      "bytes": 129245,
+      "sha256": "4da7dcb19110ff6eee8a4eb5491fe5a6c33cd4d54e2708922b33d108e770cf48",
+      "bytes": 129812,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "42aec00cf81398bf9fc15db19760da0a6cc9979054afa4bb7a2064ce84cd1698",
-      "bytes": 130393,
+      "sha256": "6ab1be8cec903d93a65cd48a5122a927c407f63996d457e956933bf03145f95b",
+      "bytes": 130960,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "b969bd64f8de5720fa76c538af81934a373a993db8427d2e392c5ad87e27dc1f",
-      "bytes": 130742,
+      "sha256": "74b4bf2d1291a4142848f495a3e4299ca82b401cedbbfd046ec317fc2031836d",
+      "bytes": 131309,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -626,5 +626,16 @@
     ],
     "reviewed_change": "Discard a superseded navigation response before mounting controllers or updating history. The final queued page owns its URL and content; existing failure and locale fallbacks are unchanged. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
     "non_script_markup_unchanged": true
+  },
+  "navigation_layout_review": {
+    "source_base": "a4213f95816afc2f5a13730da6f301f20e8594eb",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Restore fragment focus and scrolling below the sticky header after soft navigation; move newly opened pages to their heading while preserving same-page refresh position. Let mounted pages use their content height instead of retaining the previous page height. Reset measured command-panel heights before resize. Reset the mobile enrollment action form flex basis. Describe OAuth recovery with direct next steps in both languages. Independently rebuilding and substituting only the prior bundle and style block reproduces every original hash and byte count.",
+    "other_markup_unchanged": true
   }
 }

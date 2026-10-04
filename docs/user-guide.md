@@ -2,7 +2,7 @@
 
 [简体中文](user-guide.zh-CN.md) · [Documentation](README.md)
 
-Runmesh lets an MCP-compatible AI client use computers and workspaces approved by an administrator. You need a complete MCP URL, a client that supports Streamable HTTP, and permission to use at least one Runner and workspace.
+Runmesh connects an MCP-compatible AI client to your instance's shared MCP tools, Skills and approved computers. Start with the complete MCP URL from your administrator and a client that uses Streamable HTTP. The steps for computer access also use a Runner and an approved workspace.
 
 ## Connect your client
 
@@ -14,7 +14,13 @@ https://your-host.example/<generated-secret>/mcp
 
 The URL is the credential. Copy it exactly, including its secret path, and remove accidental spaces or line breaks. Use URL authentication without an additional Bearer token. Keep the real URL out of chats, screenshots, tickets and repositories; it is shown only when created or rotated.
 
-## Choose the machine and workspace
+## Use shared MCP tools and Skills
+
+On the 0.1.6 candidate and development channel, active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory tools include `remote_profiles`, `remote_tools`, `skill_list` and `skill_read`.
+
+This workflow runs through the control plane. Continue to the machine-selection steps when your connection also has computer access. Administrators connect MCPs and install Skills in the [MCP and Skill guide](central-administration.md).
+
+## Choose a machine and workspace for computer access
 
 1. Call `runner_current` to check your current selection, and `runner_list` to find the intended machine.
 2. If no Runner is selected, call `runner_select` even when the list shows only one machine. Switching an existing selection requires `confirm_switch: true`. Confirm the result with `runner_current`.

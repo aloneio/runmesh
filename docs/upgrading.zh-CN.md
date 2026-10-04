@@ -6,7 +6,7 @@
 
 ## 选择目标版本
 
-当前开发版中央能力库升级后，所有现有有效客户端共享已启用、已审核的 MCP 工具和当前 Skill。逐客户端规则、toolset 分配及相关管理 API 均已删除，旧路径按普通未知路由返回 HTTP 404。该开发功能不保留旧兼容层。部署后需刷新缓存目录与 Skill 摘要。撤回单个客户端时撤销其凭证；撤回能力时全局禁用该能力。Runner 原生权限仍独立生效。曾使用逐客户端能力分配的实例，部署前请阅读[共享库访问规则](central-administration.zh-CN.md)。
+0.1.6 候选版本将已启用的 MCP 工具与当前 Skill 共享给实例中的所有有效客户端。升级开发实例前，请核对共享内容与客户端范围；部署后刷新客户端目录和 Skill 版本。停止某个客户端的访问时，撤销其凭据；停止共享某个 MCP 或 Skill 时，在控制端暂停它。计算机访问保留原有 Runner 和工作区权限，具体操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
 
 先读[版本说明](release-notes.zh-CN.md)和[发行状态](release-readiness.md)。生产升级使用已发布、独立验签的正式包；候选版和开发预发布放在独立测试环境。
 
@@ -20,7 +20,7 @@
 | Runner | 在每台主机上，按适用的服务更新流程安装已验证包 |
 | MCP 客户端 | Worker 更新后刷新缓存的工具定义 |
 
-功能取决于整套组件是否兼容。例如 Context `storage` 和 `prune` 需要 Runner 0.1.4 提供的能力。兼容 Worker 对未支持的动作返回 `runner_upgrade_required`；支持该能力的 Runner 若在 Worker 更新前已连接，可能需要重新连接以识别能力。
+功能取决于整套组件是否兼容。例如 Context `storage` 和 `prune` 从 Runner 0.1.4 开始提供。动作返回 `runner_upgrade_required` 时，安装兼容 Runner 并重新连接，使 Worker 读取其当前能力。
 
 ## 准备维护窗口
 

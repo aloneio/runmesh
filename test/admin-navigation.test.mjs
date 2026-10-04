@@ -133,7 +133,35 @@ test("mounting a page removes obsolete forms and sensitive DOM through the view 
   view.mount(element(), "Fresh", "/admin", false, new URL("https://worker.test/admin"));
   assert.equal(viewport.children.length, 1); assert.notEqual(viewport.children[0], stale);
   assert.equal(viewport.children[0], bound[0]); assert.equal(document.title, "Fresh"); assert.equal(history.length, 0);
-  assert.equal(viewport.style.minHeight, "240px");
+  assert.equal(viewport.style.minHeight, undefined);
+});
+
+for (const [fragment, push, expected] of [["#add-client", true, "fragment"], ["#add%2Dclient", false, "fragment"], ["", true, "main"], ["#missing", true, "main"], ["#%invalid", true, "main"], ["", false, "preserved"]])
+test("mounted navigation places focus and scroll at " + (fragment || "the page") + " (push " + push + ")", () => {
+  const scrolled = [], focused = [], viewport = {
+    children: [], style: {}, appendChild(node) { this.children.push(node); }, querySelectorAll() { return this.children; },
+  };
+  const main = { id: "main-content", style: {}, focus: () => focused.push("main"), scrollIntoView: options => scrolled.push(["main", options]) };
+  const target = element(); target.tabIndex = -1;
+  target.focus = options => focused.push(["fragment", options]);
+  target.scrollIntoView = options => scrolled.push(["fragment", options]);
+  const make = () => {
+    const node = element();
+    node.appendChild = () => { node.querySelector = () => main; };
+    node.remove = () => viewport.children.splice(viewport.children.indexOf(node), 1);
+    return node;
+  };
+  const document = { title: "Previous", createElement: make, querySelectorAll: () => [],
+    querySelector: selector => selector === "[data-admin-viewport]" ? viewport : selector === ".app-header" ? { offsetHeight: 124 } : null,
+    getElementById: id => id === "add-client" ? target : null,
+  };
+  const url = new URL("https://worker.test/admin/clients" + fragment);
+  const view = createAdminPages({ document, location: { href: "https://worker.test/admin/central" }, history: { pushState() {} }, bindPage() {}, locale: { applyLocale() {}, requestedLocale: () => "en" } });
+  view.mount(element(), "Clients", "/admin/clients", push, url);
+  assert.deepEqual(scrolled, expected === "preserved" ? [] : [[expected, { block: "start" }]]);
+  assert.deepEqual(focused, expected === "fragment" ? ["main", ["fragment", { preventScroll: true }]] : ["main"]);
+  assert.equal(target.getAttribute("tabindex"), expected === "fragment" ? "-1" : null);
+  assert.equal((expected === "fragment" ? target : main).style.scrollMarginTop, expected === "preserved" ? undefined : "140px");
 });
 test("server-selected locale is independent of navigator preferences and unrelated cookies", () => {
   for (const lang of ["en", "zh-CN"]) assert.equal(createLocale({ document: { documentElement: { lang }, cookie: "fake_runmesh_lang=zh-CN" } }).requestedLocale(), lang);
@@ -144,6 +172,20 @@ function controlsFixture() {
   const root = entries => ({ querySelectorAll: selector => entries[selector] ?? [], querySelector: () => null });
   return { controls, copied, root };
 }
+
+test("command panel heights shrink after a wider resize and retain the selected operating system", () => {
+  const h = controlsFixture();
+  const panels = [false, true, true].map((hidden, index) => ({ hidden, style: {}, naturalHeight: 500 + 100 * index,
+    get offsetHeight() { return Math.max(this.naturalHeight, Number.parseFloat(this.style.minHeight) || 0); },
+  }));
+  const root = h.root({ ".enrollment-command-panels": [{ querySelectorAll: () => panels }] });
+  h.controls.stabilizeTabPanels(root);
+  assert.deepEqual(panels.map(panel => panel.style.minHeight), ["700px", "700px", "700px"]);
+  panels.forEach((panel, index) => { panel.naturalHeight = 200 + 50 * index; });
+  h.controls.stabilizeTabPanels(root);
+  assert.deepEqual(panels.map(panel => panel.style.minHeight), ["300px", "300px", "300px"]);
+  assert.deepEqual(panels.map(panel => panel.hidden), [false, true, true]);
+});
 test("initial and dynamic controls share an idempotent clipboard handler", async () => {
   const h = controlsFixture(), initial = element(), dynamic = element(); initial.setAttribute("data-copy", "initial"); dynamic.setAttribute("data-copy", "dynamic");
   for (const button of [initial, dynamic]) { const root = h.root({ "[data-copy],[data-copy-source]": [button] }); h.controls.bindPageControls(root); h.controls.bindPageControls(root); button.dispatch("click"); }

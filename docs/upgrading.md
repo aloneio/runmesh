@@ -6,7 +6,7 @@ For a compatible protocol-v2 upgrade, keep the current Worker, Durable Object na
 
 ## Choose the target version
 
-Current development central-library upgrade: all existing valid clients share enabled, reviewed MCP tools and active Skills. Per-client grants, toolset assignment and their management APIs are removed; their former routes return the ordinary HTTP 404 unknown-route response. This development feature has no legacy compatibility layer. Refresh cached catalogs and Skill digests after deployment. To withdraw one client, revoke its credential; to withdraw a capability, disable it globally. Native Runner permissions remain separate. Review [shared-library access rules](central-administration.md) before deploying this behavior change to an instance that previously used per-client capability assignments.
+The 0.1.6 candidate shares enabled MCP tools and active Skills with every valid client in the instance. Review the shared collection and intended client access before upgrading a development instance. After deployment, refresh client catalogs and Skill versions. To stop one client's access, revoke its credential; to stop sharing an MCP or Skill, pause it in the control panel. Computer access keeps its Runner and workspace permissions. See the [MCP and Skill guide](central-administration.md).
 
 Read the [release notes](release-notes.md) and [release status](release-readiness.md). Production upgrades use published, independently verified signed packages; candidate and development prereleases belong in a separate test environment.
 
@@ -20,7 +20,7 @@ Plan these updates separately:
 | Runner | Install the verified package on each host using its applicable service-update procedure |
 | MCP client | Refresh cached tool definitions after the Worker update |
 
-Capabilities depend on the complete combination. For example, Context `storage` and `prune` require support available in Runner 0.1.4. A compatible Worker returns `runner_upgrade_required` for an unsupported action. A supported Runner already connected during a Worker update may need to reconnect so its capabilities are recognized.
+Capabilities depend on the complete combination. For example, Context `storage` and `prune` are available from Runner 0.1.4. If an action returns `runner_upgrade_required`, install a compatible Runner and reconnect it so the Worker can read its current capabilities.
 
 ## Prepare a maintenance window
 

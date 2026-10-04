@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "15149028abcd81e406b3c9d050c53838837e98f4dd7fa4f7b727ad13472a6bfc",
+      "sha256": "47948c1cc69d5ceae88a834779a38c8aeb9f73b3e3eed57e714ea38585d10a14",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "c14c22f27af6e8abbb3a80ac5d65203b7621a88b3923c5575f39ce9a15af6967",
+      "sha256": "f6285c32b8e15f0b8f36500921a7d1d3331f7186aa5fbba31cfc58c9a7d56d4b",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -103,5 +103,16 @@
     ],
     "reviewed_change": "Discard a superseded navigation response before mounting controllers or updating history. The final queued page owns its URL and content; existing failure and locale fallbacks are unchanged. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
     "non_script_markup_unchanged": true
+  },
+  "navigation_layout_review": {
+    "source_base": "a4213f95816afc2f5a13730da6f301f20e8594eb",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Restore fragment focus and scrolling below the sticky header after soft navigation; move newly opened pages to their heading while preserving same-page refresh position. Let mounted pages use their content height instead of retaining the previous page height. Reset measured command-panel heights before resize. Reset the mobile enrollment action form flex basis. Describe OAuth recovery with direct next steps in both languages. Independently rebuilding and substituting only the prior bundle and style block reproduces every original hash and byte count.",
+    "other_markup_unchanged": true
   }
 }

@@ -26,7 +26,7 @@ For production, use protected `main` after its signed release has been verified 
 npm run deploy:worker -- --env production
 ```
 
-**0.1.4** is the published stable release. Use the reviewed activation commit on `main` for production deployment; test upcoming changes with development. Verify the deployed source using the checks below.
+Use the published stable version listed in [release status](release-readiness.md) and its reviewed activation commit on `main` for production deployment. Test upcoming changes with development. Verify the deployed source using the checks below.
 
 Build from a clean Git checkout and keep it unchanged until bundling finishes. The build checks the actual commit and tree against Cloudflare, GitHub and GitLab declarations. Tracked edits, untracked application files, source symlinks, hidden index flags or unverified submodules prevent a clean source declaration. Use a Git checkout, rather than a source-only archive, for a deployment that needs verified source identity.
 

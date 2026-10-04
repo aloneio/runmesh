@@ -68,4 +68,4 @@ CapabilitiesDOv1 拥有中央状态。CentralSchema 只初始化命名空间标�
 
 回归覆盖两个独立客户端无 grant 行使用共享库、不创建旧授权存储、Skill 当前版本切换、超过 128 个 head、较大远程目录、凭证撤销和轮换、禁用服务、schema 变化、OAuth 边界、退役接口，以及不变的 Runner 准入。浏览器检查覆盖产品流程且不截图。完整验证计划、架构门禁和精确提交 CI 仍是发布要求。
 
-细节参见[控制台管理](central-administration.zh-CN.md)、[目录审核](central-catalog.zh-CN.md)、[远程 MCP](central-remote-mcp.zh-CN.md)、[Skill](central-skills.zh-CN.md) 和 [OAuth](central-oauth.zh-CN.md)。
+接口细节参见[控制台管理](maintainers/central-administration.zh-CN.md)、[目录审核](central-catalog.zh-CN.md)、[远程 MCP](maintainers/central-remote-mcp.zh-CN.md)、[Skill](maintainers/central-skills.zh-CN.md) 和 [OAuth](maintainers/central-oauth.zh-CN.md)。用户操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。

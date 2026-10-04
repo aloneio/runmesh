@@ -11,6 +11,7 @@ import { clientsPage, clientDetailPage } from '../apps/worker/dist/admin/client-
 import { runnersPage } from '../apps/worker/dist/admin/runner-list-view.js';
 import { runnerDetailPage } from '../apps/worker/dist/admin/runner-detail-view.js';
 import { centralPage } from '../apps/worker/dist/admin/central-view.js';
+import { enrollmentDocument } from '../apps/worker/dist/admin/enrollment-view.js';
 import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
 
 // Reuse public render fixtures; measurements exercise the shipped CSS and browser bundle.
@@ -30,6 +31,12 @@ async function fixtureDocuments() {
     documents.set('/layout/' + fixture.name, body.startsWith('<!doctype') ? body : adminDocument('Layout fixture', body, 'clients'));
   }
   documents.set('/layout/central', adminDocument('MCP & Skill', centralPage('fixture-csrf', true, true), 'central'));
+  for (const [name, bootstrap, executionMode] of [
+    ['one-command', true, 'dedicated_user'], ['privileged', true, 'privileged_host'], ['manual', false, 'dedicated_user'],
+  ]) documents.set('/layout/enrollment-' + name, enrollmentDocument({
+    publicBase: 'https://fixture.example', runnerId: 'fixture-runner', code: 'fixture-example-code', csrf: 'fixture-csrf',
+    reEnroll: false, bootstrap, executionMode, maxValidityDays: 3650, enrollment: undefined,
+  }));
   return documents;
 }
 
@@ -80,6 +87,12 @@ async function layoutIssues(page) {
       const input = rect(label.querySelector('input')), title = rect(label.querySelector('strong'));
       if (Math.abs(input.top + input.height / 2 - title.top - title.height / 2) > 3) issues.push('scope checkbox is not aligned with its title');
       if (input.right > title.left) issues.push('scope checkbox overlaps its text');
+    }
+    const enrollmentForm = document.querySelector('.enrollment-dialog .dialog-actions form');
+    if (enrollmentForm && getComputedStyle(enrollmentForm).flexDirection === 'column') {
+      const button = enrollmentForm.querySelector('button');
+      const padding = Number.parseFloat(getComputedStyle(enrollmentForm).paddingBottom) || 0;
+      if (rect(enrollmentForm).bottom - rect(button).bottom > padding + 2) issues.push('enrollment form retains unused height below its action');
     }
     const form = document.querySelector('.add-client-grid');
     if (form) {
@@ -143,7 +156,21 @@ export async function checkAdminLayout(executable) {
         for (const summary of await page.locator('.row-actions-more summary').all()) await summary.click();
         await measure('actions-open');
       }
+      if (path.includes('/enrollment-')) {
+        await page.getByRole('tab', { name: 'Windows', exact: true }).click();
+        await measure('windows-command');
+      }
     }
+    // A resized command panel must return to its natural wide-layout height.
+    await page.setViewportSize({ width: 390, height: 1000 });
+    await page.goto(origin + '/layout/enrollment-manual');
+    await page.setViewportSize({ width: 1365, height: 1000 });
+    const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await settle();
+    const resizedHeight = await page.locator('.enrollment-command-panels').evaluate(node => node.getBoundingClientRect().height);
+    await page.reload(); await settle();
+    const freshHeight = await page.locator('.enrollment-command-panels').evaluate(node => node.getBoundingClientRect().height);
+    assert.ok(Math.abs(resizedHeight - freshHeight) <= 1, 'Command panels must release the height measured on a narrow viewport');
     assert.deepEqual(errors, [], 'Layout fixtures must not throw browser errors');
     assert.deepEqual(failures, [], 'UI geometry regressions: ' + JSON.stringify(failures));
     return { state: 'passed', measurements, locales: ['en', 'zh-CN'], viewports: [320, 390, 768, 900, 1024, 1365], screenshots: 0 };

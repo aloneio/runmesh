@@ -4,30 +4,35 @@
 
 ## 0.1.6 — release candidate
 
-This candidate is being prepared for release; the current stable package remains 0.1.5.
+This candidate is being prepared for release; the current stable package remains 0.1.5. Try the candidate in the development environment and follow [release status](release-readiness.md) for publication.
 
-- Connect MCP services from the control panel using a URL and either no authentication or OAuth. Connected AI clients can use the enabled tools immediately.
-- Install Skills from SKILL.md and supporting text files or a folder, and confirm updates directly in the control panel.
-- Production configuration now includes shared MCP and Skill storage. OAuth encryption automatically uses the existing deployment secret and needs no additional variable.
-- Local development now initializes shared MCP and Skill storage alongside Miniflare runtime metadata. End-to-end checks cover library access without selecting a Runner.
-- Preparing a stable candidate keeps development downloads on the current prerelease series; the next patch series starts after stable publication is recorded.
+### MCP and Skill
 
-- Console navigation now recovers from stalled page requests after 25 seconds. When a full page load is needed, it opens your most recently selected destination.
-- Development release cache recovery now stops its Registry request and response reader when the recovery deadline ends, including when the request is still waiting for headers.
-- Cold development downloads use the remaining 20-second refresh budget to recover a release being verified by another instance. Cache reads retain a one-second limit, retries back off, and a spent refresh deadline permits at most one additional second for storage recovery. Verified cache expiry stays unchanged and recovery does not repeat upstream discovery.
-- Failed development release refreshes recover the most recently verified usable cache record, including updates from another instance, while retaining its original expiry. Foreground and background regressions cover recovery over older in-memory values.
-- The Runner Git library validates timeout options before starting a process, so invalid configuration cannot leave an unmanaged child. Lifecycle regressions cover startup failures, expired deadlines, and snapshot cleanup.
-- Runner baseline checks use one isolated index for status and flag inspection, preventing concurrent flag changes from hiding uncommitted edits. Fewer snapshots and Git processes retain the 1.5-second observation budget and a fresh final commit check.
-- Concurrent development downloads now wait for cache recovery to finish before reporting a failed refresh. Registry cache reads and writes have deadlines, so stalled storage cannot indefinitely delay a verified download.
-- Development release discovery now recovers from a failed refresh using a verified release saved by another instance. Runner pages and downloads use the same release state for their Registry binding.
-- Adding an AI connection now opens computer permissions automatically when you select “MCP, Skills and computer access”. Switching access types keeps your permission choices.
-- Development installers now wait for an ongoing release verification when several users download immediately after a cold start. Concurrent requests share the verified result once it is ready, within a bounded wait.
+- Connect an MCP from its URL using no authentication or OAuth. Sign-in returns to the control panel and loads the available tools automatically.
+- Start a fresh provider sign-in with **Reconnect**. Refreshing tools also opens authorization when the account needs it.
+- Install a Skill folder or SKILL.md with supporting text files. Review same-name updates and publish them to all connected clients.
+- Use shared MCP tools and Skills directly from an AI connection. Choose computer access to add Runner file and command tools; the permission choices open automatically.
+
+### Daily use and reliability
+
+- Console links open the intended section below the header, and new pages start at their heading. Switching between long and short pages fits the content to the page. Fast navigation keeps the browser address aligned with the displayed page; a stalled request reloads the last selected destination after 25 seconds.
+- The Runner installation page uses space more closely on narrow screens. Command panels readjust when the window size changes, clearing excess blank space after resizing.
+- Runner details show when workspace settings are still being applied and report stalled queries after a limited wait.
+- Development downloads and Runner pages show the same verified version. Concurrent downloads share verification, and a failed refresh can recover a still-valid verified release.
+- Git checks identify concurrent workspace changes more consistently and catch invalid timeout settings before starting a command.
+- English and Chinese guides now separate MCP/Skill setup from computer access, with direct instructions for OAuth, Skill updates and version selection.
+
+### Upgrade preparation
+
+The candidate adds shared MCP connections and Skills to production deployments. Preserve the existing deployment secrets so connected OAuth accounts retain their credentials. Install the signed release after publication and activation, then refresh client catalogs using the [upgrade guide](upgrading.md).
+
+Development downloads continue on their current prerelease series during candidate preparation. The next patch series starts after stable publication is recorded.
 
 ## 0.1.5 — published stable release
 
 Published on **September 23, 2026** as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.5) with a signed portable Runner package. The release was built from protected main commit `77e82a1b59737a42cc090064651d1b0531890f21`; the independently verified manifest SHA256 is `34da9baefabddd882aeef79151b132b1de4086fce54de7a46fe853a7e8dac18a`.
 
-This release includes a Windows installation fix: on localized Windows hosts, a missing `RunmeshRunner` Task Scheduler task is now recognized through the locale-independent COM API. Permission and Task Scheduler failures remain fail-closed.
+This release includes a Windows installation fix: on localized Windows hosts, a missing `RunmeshRunner` Task Scheduler task is now recognized through the locale-independent COM API. Permission or Task Scheduler errors stop installation and report the cause for the administrator to resolve.
 
 Follow the [upgrade guide](upgrading.md) to update an existing installation while preserving its credentials and configuration.
 

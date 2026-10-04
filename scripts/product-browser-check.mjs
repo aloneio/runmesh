@@ -481,7 +481,7 @@ export async function checkGuidedProduct(executable) {
   await form.locator('[name=name]').fill('Failed sign-in service');
   await form.locator('[name=endpoint]').fill('https://unavailable.provider.com/mcp');
   await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
-  await status.filter({hasText:'Could not set up OAuth. Check the MCP URL and its support for automatic client registration.'}).waitFor();
+  await status.filter({hasText:'Check the MCP URL and its OAuth client registration settings, then reconnect.'}).waitFor();
   const savedOAuth=profiles.at(-1);
   const savedOAuthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByText(savedOAuth.endpoint,{exact:true})});
   assert.equal(await savedOAuthCard.count(),1,'A saved service must remain visible when OAuth setup fails');
@@ -491,7 +491,7 @@ export async function checkGuidedProduct(executable) {
   const retryStart=requests.length;
   savedOAuth.revision++;
   await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
-  await status.filter({hasText:'Could not set up OAuth. Check the MCP URL and its support for automatic client registration.'}).waitFor();
+  await status.filter({hasText:'Check the MCP URL and its OAuth client registration settings, then reconnect.'}).waitFor();
   const retry=requests.slice(retryStart),beginIndex=retry.findIndex(r=>r.path==='/admin/central/connections/begin');
   assert.ok(retry.slice(0,beginIndex).some(r=>r.path==='/admin/central/profiles'&&r.method==='GET'),'An explicit reconnect must reconcile an earlier failure first');
   assert.equal(retry[beginIndex].body.expected_revision,savedOAuth.revision,'Use the refreshed profile revision');

@@ -70,9 +70,6 @@ function createAdminPages({
         if (main2) main2.id = "main-content";
       } else if (main2) main2.removeAttribute("id");
     });
-    viewport.style.minHeight = Math.max.apply(Math, [0].concat(containers.map(function (item) {
-      return item.offsetHeight || 0;
-    }))) + "px";
     if (focus) {
       var main = container.id === "main-content" ? container : container.querySelector("#main-content") || container.querySelector("main");
       if (main && typeof main.focus === "function") main.focus({
@@ -97,7 +94,25 @@ function createAdminPages({
     Array.prototype.slice.call(viewport.querySelectorAll("[data-page-container]")).forEach(function (item) {
       if (item !== container) item.remove();
     });
-    viewport.style.minHeight = (container.offsetHeight || 0) + "px";
+    function scrollToTarget(target) {
+      var header = document.querySelector(".app-header");
+      target.style.scrollMarginTop = ((header ? header.offsetHeight : 0) + 16) + "px";
+      target.scrollIntoView({ block: "start" });
+    }
+    var target;
+    if (url.hash) {
+      try {
+        target = document.getElementById(decodeURIComponent(url.hash.slice(1)));
+      } catch {}
+    }
+    if (target) {
+      if (target.tabIndex < 0 && !target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+      scrollToTarget(target);
+    } else if (shouldPush) {
+      var main = container.querySelector("#main-content");
+      if (main) scrollToTarget(main);
+    }
   }
   return {
     pageRoot,

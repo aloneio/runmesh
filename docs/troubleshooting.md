@@ -29,7 +29,7 @@ For an online Runner with rejected policy, check workspace existence and the ser
 
 Use the administrator enrollment page's command in the appropriate elevated terminal. Resolve `RMI_*` errors with [installer prerequisites](installer-prerequisites.md).
 
-Check [release status](release-readiness.md) when hosted distribution is unavailable. The reviewed 0.1.4 source enables stable hosted distribution. Check the deployed Worker commit, its release descriptor and any explicit installer-disable override. An applicable verified package can be installed through the [portable procedure](portable-runner-installation.md), keeping TLS, signature and hash checks enabled.
+Check [release status](release-readiness.md) and the deployed Worker's release descriptor when the enrollment page offers portable installation. Production uses the stable channel; the development panel supplies its own verified prerelease and points enrollment at that development instance. Use a command copied from the instance you intend to join. The [portable procedure](portable-runner-installation.md) also provides installation with TLS, signature and hash verification.
 
 If another install or removal is active, wait for it to finish. After a crash, have the administrator inspect processes and remaining files before handling a stale lock. If enrollment may have completed, check the dashboard and local profile before obtaining a replacement code.
 
@@ -43,9 +43,25 @@ After a Worker update, refresh the client's Runmesh tool catalog. If a Job follo
 
 ## Workspace missing or permission denied
 
+For shared MCP or Skill access, use the connection checks below. For computer access, follow these Runner and workspace checks.
+
 Confirm `runner_current` and the workspace ID from `workspace_list`. Ask the administrator to check client scopes and Runner restrictions, the authorization period, workspace permissions and policy acknowledgement. The Runner's service account also needs OS access.
 
 Use the [permission runbook](runbooks/permission-denial.md) to identify the denying layer before changing access. An unavailable dependency leaves that part of the diagnosis unresolved.
+
+## Connected MCP or OAuth needs attention
+
+Open **MCP & Skill** and find the affected card. Select **Enable** if paused. **Refresh tools** reloads its catalog and opens authorization when sign-in is needed; **Reconnect** starts a new provider authorization flow directly.
+
+After authorization, Runmesh returns to the panel and continues loading tools. If the provider's page reports an error, record its message and time, then check its session and service status. The [OAuth guide](central-oauth.md) explains reconnection and the deployment-secret recovery for `oauth_configuration_required`.
+
+Refresh the AI client's Runmesh catalog after changing a connection. If an upstream tool timed out after dispatch, check its effect at the provider before repeating it.
+
+## Skill upload or update needs attention
+
+Select a folder with `SKILL.md` at its root. Check that it has single-line `name` and `description` metadata and that the selected files use UTF-8 text. Extract archives before selecting their Skill folder. The [Skill guide](central-skills.md) includes a complete example and current file limits.
+
+For a same-name replacement, review the files and select **Update Skill**. If another administrator changed the Skill while you were reviewing it, refresh the list and select your files again. After publication, refresh the AI client's Skill list so its reads use the current version.
 
 ## Job still running or absent from cloud history
 

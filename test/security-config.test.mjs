@@ -79,10 +79,17 @@ test("first setup has no extra token contract, while documentation preserves res
   const environment = await readFile(new URL("../apps/worker/src/runner-do.ts", import.meta.url), "utf8");
   assert.ok(!worker.includes("ADMIN_SETUP_TOKEN") && !environment.includes("ADMIN_SETUP_TOKEN"));
   assert.ok(!worker.includes('name="setup_token"'));
-  for (const file of ["README.md", "README.zh-CN.md", "docs/architecture.md", "docs/runner-transport.md", "docs/adr-0001-architecture.md"]) {
+  // User entry points describe the selected permission using the UI label;
+  // technical references retain the corresponding protocol scope identifier.
+  const defaults = [
+    ["README.md", /computer permissions start with Read selected/u],
+    ["README.zh-CN.md", /计算机权限初始勾选读取/u],
+    ...["docs/architecture.md", "docs/runner-transport.md", "docs/adr-0001-architecture.md"].map(file => [file, /coding:read/u]),
+  ];
+  for (const [file, readDefault] of defaults) {
     const document = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
     assert.ok(document.includes("dedicated_user"), file);
-    assert.ok(document.includes("coding:read"), file);
+    assert.match(document, readDefault, file);
   }
 });
 
