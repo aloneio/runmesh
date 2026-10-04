@@ -27,6 +27,9 @@ type FormFields = Record<string, string | readonly string[]>;
 
 const workerPort = await freePort();
 const workerUrl = `http://127.0.0.1:${workerPort}`;
+// Both fixtures launch Wrangler and build the Worker before serving requests.
+const WORKER_READINESS_TIMEOUT_MS = 60_000;
+const WORKER_FIXTURE_TIMEOUT_MS = 90_000;
 const runnerId = "e2e-runner";
 // Invoke the checked-in workspace CLIs through Node directly. npm/npx are
 // platform-specific shell shims on Windows and can leave a detached wrapper
@@ -137,7 +140,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
     worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
     worker.once("close", (code, signal) => recordWorkerEvent("close", code, signal));
-    await waitForWorker(workerUrl, 60_000, workerDiagnosticState);
+    await waitForWorker(workerUrl, WORKER_READINESS_TIMEOUT_MS, workerDiagnosticState);
     const createdClients = await setupAdminAndClients();
     enrollmentCode = await createBrowserRunnerEnrollment();
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -197,7 +200,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
     setupComplete = true;
-  }, 90_000);
+  }, WORKER_FIXTURE_TIMEOUT_MS);
 
   afterAll(async () => {
     if (!setupComplete || testFailed || unexpectedWorkerExit) {
@@ -1138,13 +1141,13 @@ describe.sequential("real local SQLite Runner sessions", () => {
       cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     const logs = collectOutput(worker);
-    await waitForWorker(origin, 20_000, logs);
+    await waitForWorker(origin, WORKER_READINESS_TIMEOUT_MS, logs);
     const registration = await fetch(`${origin}/admin/runners`, { method: "POST", signal: AbortSignal.timeout(5_000),
       headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
       body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
     await registration.body?.cancel();
     expect(registration.status).toBe(200);
-  });
+  }, WORKER_FIXTURE_TIMEOUT_MS);
 
   afterAll(async () => {
     await stop(worker);
