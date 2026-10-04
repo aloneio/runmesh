@@ -10,6 +10,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES } from "../scripts/ui-browser-contract.mjs";
+import { createMcpWorkerDiagnosticForwarder, mcpHttpFailure, mcpHttpDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -144,6 +145,126 @@ test("MCP HTTP failures retain only a bounded status from the exact fixed marker
   for (const marker of ["99", "600", "0503", "5030", "503.1", "503 private-token", "503?cookie=private-token", "private-response"])
     assert.deepEqual(browserErrorDiagnostic({ message: "RUNMESH_E2E_MCP_HTTP_STATUS=" + marker }), { kind: "unclassified" });
   assert.deepEqual(browserErrorDiagnostic({ message: "private-response RUNMESH_E2E_MCP_HTTP_STATUS=503" }), { kind: "unclassified" });
+});
+
+test("MCP HTTP response evidence retains fixed RPC classifications and the read phase", async () => {
+  for (const [id, rpc_id] of [[123, "matches"], [null, "null"], ["private-id", "other"], [undefined, "absent"]]) {
+    const response = Response.json({ jsonrpc: "2.0", id, error: { code: -32603, message: "private-token" }, private: "private-body" }, { status: 500 });
+    const error = await mcpHttpFailure(response, 123, "read", { cursor: "private-cursor", path: "private-path" });
+    const diagnostic = { content_type: "json", phase: "read_continuation", body_kind: "json_rpc_error", rpc_code: -32603, rpc_id };
+    assert.deepEqual(browserErrorDiagnostic(error), { kind: "mcp_http_failure", http_status: 500, mcp_response: diagnostic });
+    assert.ok(!JSON.stringify(browserErrorDiagnostic(error)).includes("private"));
+    assert.ok(!error.message.includes("private"));
+  }
+  for (const code of [-32700, -32600, -32601, -32602, -32000, -32999]) {
+    const error = await mcpHttpFailure(Response.json({ jsonrpc: "2.0", id: 123, error: { code, message: "private" } }, { status: 500 }), 123, "read", {});
+    assert.equal(browserErrorDiagnostic(error).mcp_response.rpc_code, code === -32999 ? "other" : code);
+    assert.equal(browserErrorDiagnostic(error).mcp_response.phase, "read_initial");
+  }
+});
+
+test("MCP HTTP classification does not publish custom media types, IDs, bodies or malformed RPC fields", async () => {
+  for (const [type, body, content_type, body_kind] of [
+    ["text/html", "<p>private-token</p>", "html", "non_json"], ["text/plain", "private", "text", "non_json"],
+    ["text/event-stream", "data: private\n\n", "sse", "non_json"], ["application/private-token", "private", "other", "non_json"],
+    ["application/json", "{private", "json", "invalid_json"], ["application/json", "null", "json", "not_rpc_error"],
+    ["application/json", '{"jsonrpc":"2.0","id":"private","error":{"code":"private","message":"private"}}', "json", "not_rpc_error"],
+    ["application/json", '{"jsonrpc":"2.0","id":"private","error":{"code":-32603}}', "json", "not_rpc_error"],
+  ]) {
+    const error = await mcpHttpFailure(new Response(body, { status: 500, headers: { "content-type": type } }), 123, "private-tool", { path: "private" });
+    assert.deepEqual(browserErrorDiagnostic(error).mcp_response, { content_type, phase: "other", body_kind, rpc_code: "absent", rpc_id: "absent" });
+    assert.ok(!error.message.includes("private"));
+  }
+  const empty = await mcpHttpFailure(new Response(null, { status: 500 }), 1, "read", {});
+  assert.deepEqual(browserErrorDiagnostic(empty).mcp_response, { content_type: "absent", phase: "read_initial", body_kind: "empty", rpc_code: "absent", rpc_id: "absent" });
+});
+
+test("MCP error body diagnostics bound bytes, chunks and stalled reads without waiting for cancellation", async () => {
+  let cancelled = 0;
+  const response = new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(4097)); },
+    cancel() { cancelled++; return new Promise(() => {}); } }), { status: 500 });
+  assert.equal(browserErrorDiagnostic(await mcpHttpFailure(response, 1, "read", {})).mcp_response.body_kind, "oversized");
+  assert.equal(cancelled, 1);
+  const stalled = new Response(new ReadableStream({ cancel() { cancelled++; return new Promise(() => {}); } }), { status: 503 });
+  assert.equal(browserErrorDiagnostic(await mcpHttpFailure(stalled, 1, "read", {})).mcp_response.body_kind, "read_timeout");
+  assert.equal(cancelled, 2);
+  const broken = new Response(new ReadableStream({ start(controller) { controller.error(new Error("private-error")); } }), { status: 500 });
+  assert.equal(browserErrorDiagnostic(await mcpHttpFailure(broken, 1, "read", {})).mcp_response.body_kind, "read_error");
+  const invalid = new Response(new Uint8Array([0xff]), { status: 500, headers: { "content-type": "application/json" } });
+  assert.equal(browserErrorDiagnostic(await mcpHttpFailure(invalid, 1, "read", {})).mcp_response.body_kind, "invalid_json");
+  let pulled = 0;
+  const emptyChunks = new Response(new ReadableStream({ pull(controller) { pulled++; controller.enqueue(new Uint8Array()); } }), { status: 500 });
+  const emptyOutcome = browserErrorDiagnostic(await mcpHttpFailure(emptyChunks, 1, "read", {})).mcp_response.body_kind;
+  // Either existing bound can stop a stream of empty chunks first; CPU speed
+  // must not decide whether the diagnostic test passes.
+  assert.ok(["oversized", "read_timeout"].includes(emptyOutcome));
+  assert.ok(pulled <= 4098);
+});
+
+test("MCP safe summaries validate every classification and never copy additional fields", () => {
+  const value = { content_type: "json", phase: "read_initial", body_kind: "json_rpc_error", rpc_code: -32603, rpc_id: "matches" };
+  const marker = data => "RUNMESH_E2E_MCP_HTTP_DIAGNOSTIC=" + JSON.stringify(data);
+  assert.deepEqual(mcpHttpDiagnostic(marker({ ...value, private: "private" })), value);
+  for (const key of Object.keys(value)) assert.equal(mcpHttpDiagnostic(marker({ ...value, [key]: "private" })), undefined);
+  assert.equal(mcpHttpDiagnostic("private " + marker(value)), undefined);
+  assert.equal(mcpHttpDiagnostic(marker(value) + "private"), undefined);
+  assert.equal(mcpHttpDiagnostic(marker({ ...value, private: "x".repeat(513) })), undefined);
+  const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
+    "Error: RUNMESH_E2E_MCP_HTTP_STATUS=500\n" + marker({ ...value, private: "private" }),
+  ] }] }] });
+  assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "mcp_http_failure", http_status: 500, mcp_response: value }]);
+});
+
+test("MCP Worker diagnostics cross fragmented process output into the final safe evidence", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  forward("private-token\n\u001b[33m[WARNING]\u001b[0m RUNMESH_MCP_HANDLER_ERROR kind=type_");
+  forward("error stage=server_factory reason=unknown\r\nprivate-cookie\n");
+  forward("RUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown\n");
+  const expected = [{ event: "mcp_handler_error", kind: "type_error", stage: "server_factory", reason: "unknown" },
+    { event: "mcp_handler_error", kind: "error", stage: "sdk_transport", reason: "unknown" }];
+  assert.deepEqual(mcpWorkerFailureEvidence("private stderr\n" + emitted.join("") + "x".repeat(70000)), expected);
+  assert.ok(!emitted.join("").includes("private"));
+  assert.equal(emitted.length, 2);
+});
+
+test("MCP Worker diagnostics accept the observed Wrangler warning prefix without accepting arbitrary prefixes", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  const marker = "RUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown\n";
+  // Observed from the pinned Wrangler CLI: U+25B2, space, [WARNING], space.
+  forward("\u001b[33m\u25b2 [WARNING]\u001b[0m " + marker);
+  for (const prefix of ["private ", "\u25b2 private [WARNING] ", "\u25b2 [private] ", "\u25b2 [ERROR] "]) forward(prefix + marker);
+  assert.equal(emitted.length, 1);
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), [{ event: "mcp_handler_error", kind: "error", stage: "sdk_transport", reason: "unknown" }]);
+});
+
+test("MCP Worker diagnostics reject partial, oversized and private event fields and cap output", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  for (const line of ["private RUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown\n",
+    "RUNMESH_MCP_HANDLER_ERROR kind=private stage=sdk_transport reason=unknown\n", "RUNMESH_MCP_HANDLER_ERROR kind=error stage=private\n",
+    "RUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown private\n", "x".repeat(1025)]) forward(line);
+  forward("RUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown\n");
+  assert.deepEqual(emitted, []);
+  for (let index = 0; index < 30; index++) forward("RUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown\n");
+  assert.equal(emitted.length, 16);
+  assert.equal(mcpWorkerFailureEvidence(emitted.join("").repeat(3)).length, 16);
+  for (const value of [{ event: "private", kind: "error", stage: "sdk_transport", reason: "unknown" }, { event: "mcp_handler_error", kind: "private", stage: "sdk_transport", reason: "unknown" },
+    { event: "mcp_handler_error", kind: "error", stage: "private", reason: "unknown" }, { event: "mcp_handler_error", kind: "error", stage: "sdk_transport", reason: "private" }])
+    assert.deepEqual(mcpWorkerFailureEvidence("RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n"), []);
+});
+
+test("a failed E2E subprocess preserves only forwarded Worker events in its CI summary", () => {
+  const helper = new URL("../scripts/mcp-diagnostics.mjs", import.meta.url).href;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import { createMcpWorkerDiagnosticForwarder } from ${JSON.stringify(helper)};
+    const forward = createMcpWorkerDiagnosticForwarder(line => process.stderr.write(line));
+    forward("private worker output\\nRUNMESH_MCP_HANDLER_ERROR kind=type_error stage=server_factory reason=unknown\\n");
+    process.stderr.write("private assertion details\\n");
+    process.exitCode = 1;
+  `], { encoding: "utf8", timeout: 10000 });
+  assert.equal(child.status, 1);
+  const summary = { error: browserErrorDiagnostic({ code: child.status }), worker_events: mcpWorkerFailureEvidence(child.stderr) };
+  assert.deepEqual(summary, { error: { kind: "process_exit" }, worker_events: [{ event: "mcp_handler_error", kind: "type_error", stage: "server_factory", reason: "unknown" }] });
+  assert.ok(!JSON.stringify(summary).includes("private"));
 });
 
 test("direct browser failures use optional error stacks and retain only allowlisted source coordinates", () => {

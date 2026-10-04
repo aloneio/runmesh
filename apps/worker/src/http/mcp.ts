@@ -2,7 +2,7 @@ import { MAX_MCP_BODY_BYTES } from "./constants.js";
 import { readRejectedMcpRequestId } from "./mcp-errors.js";
 import { MCP_SECRET_RE } from "./constants.js";
 import type { McpAuth } from "../mcp/server.js";
-import { mcpHttpError } from "./mcp-errors.js";
+import { mcpHttpError, reportMcpHandlerError, type McpHandlerStage } from "./mcp-errors.js";
 import { primeMcpResponse } from "./mcp-response.js";
 import { readCappedBytes } from "../body.js";
 import { sha256Hex } from "../security.js";
@@ -86,8 +86,12 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
     } catch { directory = { state: "unavailable" }; }
     finally { if (timer !== undefined) clearTimeout(timer); }
   }
+  // Record the last entered boundary; this is diagnostic state for this call,
+  // never a request identifier or shared lifecycle state.
+  let handlerStage: McpHandlerStage = "handler_dispatch";
   const handler = createMcpHandler(
     () => {
+      handlerStage = "server_factory";
       // Stateless calls need only their selected native tool. Discovery still
       // publishes the full catalog; unknown calls retain an SDK tool handler
       // even when central providers are disabled. This never caches auth.
@@ -109,6 +113,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
         remote.registerRemoteTools(server, { profiles: () => owner().listRemoteProfiles(principal), list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) });
         direct?.registerDirectRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) }, directory);
       }
+      handlerStage = "sdk_transport";
       return server;
     },
     {
@@ -116,6 +121,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
       // Safe identity only. The raw secret is intentionally absent.
       authContext: { props: { client_id: verified.client_id, client_label: verified.label, scopes: [...verified.scopes], secret_version: verified.secret_version } },
       legacy: "stateless",
+      onerror: error => reportMcpHandlerError(error, handlerStage),
     },
   );
   const response = await primeMcpResponse(await handler.fetch(forwarded, { authInfo: auth, ...(parsedBody !== undefined ? { parsedBody } : {}) }), parsedBody);

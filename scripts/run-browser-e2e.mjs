@@ -6,6 +6,7 @@ import { mkdtemp, readFile, lstat, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic } from "./browser-evidence.mjs";
+import { mcpWorkerFailureEvidence } from "./mcp-diagnostics.mjs";
 import { writeSupplement } from "./ci-supplement.mjs";
 import { ROOT, gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
 
@@ -45,7 +46,9 @@ try {
     const stat = await lstat(path);
     if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8 * 1024 * 1024) failure = browserFailureEvidence(JSON.parse(await readFile(path, "utf8")));
   } catch { /* A missing or malformed private report remains unavailable. */ }
-  const diagnostics = { stage, error: browserErrorDiagnostic(error), subprocess_exit_code: stage === "test_execution" && Number.isSafeInteger(error?.code) ? error.code : null, ...failure };
+  const workerEvents = mcpWorkerFailureEvidence(error?.stderr);
+  const diagnostics = { stage, error: browserErrorDiagnostic(error), subprocess_exit_code: stage === "test_execution" && Number.isSafeInteger(error?.code) ? error.code : null,
+    ...failure, ...(workerEvents.length > 0 ? { worker_events: workerEvents } : {}) };
   await writeSupplement("browser-tests", { schema_version: 1, state: "failed", source, ...diagnostics });
   console.error(JSON.stringify({ browser_gate: "failed", ...diagnostics }));
   console.error("browser_gate_failed: missing, skipped or failing real browser evidence; inspect the CI job");
