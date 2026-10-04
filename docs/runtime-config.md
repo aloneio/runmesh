@@ -11,9 +11,9 @@ Start with the source defaults and the Worker secrets prepared by the initializa
 | `INTERNAL_CONTROL_SECRET` | Authenticates internal control-plane messages and derives the OAuth encryption key | Preserve the current value; replacement requires OAuth reconnection |
 | `RUNNER_TOKEN_PEPPER` | Protects stored Runner token verifiers | Preserve the current value; replacement invalidates current tokens |
 
-The helper generates these two secrets from at least 32 cryptographically random bytes each. OAuth encryption derives its key automatically from `INTERNAL_CONTROL_SECRET`; no additional variable is required. Store both values as Cloudflare secrets and keep them out of source, logs and conversations. Set the administrator password through the first-setup page.
+The helper generates these two secrets from at least 32 cryptographically random bytes each. OAuth encryption derives its key automatically from `INTERNAL_CONTROL_SECRET`. Store both values as Cloudflare secrets and keep them out of source, logs and conversations. Set the administrator password through the first-setup page.
 
-For programmatic Runner administration, also configure `ADMIN_TOKEN`. Dashboard administration does not require `ADMIN_TOKEN`.
+Dashboard administration uses your administrator session. Configure `ADMIN_TOKEN` when you need programmatic Runner administration.
 
 ## Defaults and overrides
 

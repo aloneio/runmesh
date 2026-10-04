@@ -2,7 +2,7 @@
 
 [English](admin-guide.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
-将 Runmesh 控制端部署到 Cloudflare Workers，连接 MCP、安装 Skill，再接入 AI 客户端。需要访问计算机时，注册执行任务的 Linux、macOS 或 Windows 主机。Runmesh 0.1.6 提供 MCP 和 Skill 共享。
+将 Runmesh 控制端部署到 Cloudflare Workers，连接 MCP、安装 Skill，再接入 AI 客户端。需要访问计算机时，注册执行任务的 Linux、macOS 或 Windows 主机。
 
 ## 准备部署
 
@@ -28,7 +28,7 @@ npm run deploy:worker -- --env production
 
 在「Skill」中选择 Skill 文件夹，或 `SKILL.md` 及配套文本文件，点击「安装 Skill」。已启用的 MCP 工具和 Skill 共享给实例中的所有有效 AI 客户端。
 
-通过「连接 AI 客户端」或「MCP 客户端」创建连接。使用共享内容时选择「MCP 和 Skill」，需要访问机器时选择「MCP、Skill 和计算机访问」，再将一次性地址复制到 AI 客户端的 MCP 设置中。日常连接、更新和暂停操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
+通过「连接 AI 客户端」或「MCP 客户端」创建连接。使用共享内容时选择「MCP 和 Skill」，需要访问机器时选择「MCP、Skill 和计算机访问」，再将创建时显示的地址复制到 AI 客户端的 MCP 设置中。日常连接、更新和暂停操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
 
 ## 注册主机
 
@@ -38,7 +38,7 @@ npm run deploy:worker -- --env production
 4. 生成一次性注册命令，在目标主机的管理员终端执行。
 5. 返回控制台，确认 Runner 在线。
 
-Runner 授权从保存时生效，`0` 表示永久。注册码立即生效且只能兑换一次，生成替代码会使旧的未使用代码失效。注册码与完整复制命令都应保密。
+Runner 授权从保存时生效，`0` 表示永久。注册码立即生效且只能兑换一次，生成新注册码后，旧的未使用注册码随即失效。注册码与完整复制命令都应保密。
 
 托管分发可用时，安装器验证固定版本的签名包、提供运行时并安装服务。其他情况按[便携安装流程](portable-runner-installation.md)验证发行物，再通过 `runmesh enroll --code-stdin` 注册。
 
@@ -50,7 +50,7 @@ Runner 授权从保存时生效，`0` 表示永久。注册码立即生效且只
 
 MCP 工作区和诊断元数据省略主机根路径。文件内容、命令输出仍可能含有路径或其他私有数据，分享前应检查。
 
-使用计算机的客户端，在「MCP 客户端」中选择「MCP、Skill 和计算机访问」并勾选所需权限。可在客户端详情页限定可用 Runner。将一次性地址交给指定使用者，地址泄露时及时轮换或撤销。
+使用计算机的客户端，在「MCP 客户端」中选择「MCP、Skill 和计算机访问」并勾选所需权限。可在客户端详情页限定可用 Runner。将客户端地址交给指定使用者，地址泄露时及时轮换或撤销。
 
 ## 管理访问与移除主机
 

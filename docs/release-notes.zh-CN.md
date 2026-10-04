@@ -2,6 +2,28 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
+## 0.1.7 — 已发布正式版
+
+Runmesh 0.1.7 已作为[不可变正式版](https://github.com/aloneio/runmesh/releases/tag/v0.1.7)发布，提供已签名的便携 Runner 安装包。公开安装包已通过独立校验，部署与升级步骤见[发行状态](release-readiness.md)。
+
+### Runner 服务
+
+- Linux 用户级服务通过当前账号的本地服务管理器完成安装、状态检查、停止、重启和卸载。
+- Linux、macOS 和 Windows 的用户级服务均以用户模式启动。更新已有服务时，会修正启动设置并保留自定义程序路径和参数。
+
+### MCP 连接与稳定性
+
+- 控制端短暂不可用时保留现有 OAuth 连接；账号需要重新登录时再打开授权页面。
+- Runner 断开连接或遇到控制端暂时故障时，会及时释放无需继续读取的响应资源。
+
+### 安全更新
+
+- Hono 更新至 4.13.7，修复 JSX 渲染中的 GHSA-hxh3-vqpv-xpqv 漏洞。
+
+### 升级
+
+按[升级指南](upgrading.zh-CN.md)更新控制端和 Runner。用户级服务更新程序后，使用原配置执行 `install --user`，应用新的启动设置。现有账号连接、Runner 配置及工作区设置继续沿用。
+
 ## 0.1.6 — 已发布正式版
 
 Runmesh 0.1.6 已作为[不可变正式版](https://github.com/aloneio/runmesh/releases/tag/v0.1.6)发布，提供已签名的便携 Runner 安装包。公开安装包已通过独立校验，部署与升级步骤见[发行状态](release-readiness.md)。

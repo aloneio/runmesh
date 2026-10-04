@@ -2,7 +2,7 @@
 
 [简体中文](admin-guide.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-Deploy the Runmesh control plane on Cloudflare Workers, connect your MCPs and install Skills, then add AI clients. For computer access, enroll the Linux, macOS or Windows machines that will execute work. MCP and Skill sharing is available in Runmesh 0.1.6.
+Deploy the Runmesh control plane on Cloudflare Workers, connect your MCPs and install Skills, then add AI clients. For computer access, enroll the Linux, macOS or Windows machines that will execute work.
 
 ## Prepare the deployment
 
@@ -28,7 +28,7 @@ Open **MCP & Skill**. In **MCP**, enter the provider's URL, choose **No authenti
 
 In **Skill**, select a Skill folder or `SKILL.md` and its supporting text files, then select **Install Skill**. Enabled MCP tools and Skills are shared with all active AI clients in the instance.
 
-Create a client from **Connect an AI client** or **MCP Clients**. Choose **MCP and Skills** for the shared collection, or **MCP, Skills and computer access** to add machine access. Copy its one-time URL into the AI client's MCP settings. For everyday connection, update and pause actions, see the [MCP and Skill guide](central-administration.md).
+Create a client from **Connect an AI client** or **MCP Clients**. Choose **MCP and Skills** for the shared collection, or **MCP, Skills and computer access** to add machine access. Copy the URL shown when it is created into the AI client's MCP settings. For everyday connection, update and pause actions, see the [MCP and Skill guide](central-administration.md).
 
 ## Enroll a machine
 
@@ -50,7 +50,7 @@ On the Runner details page, add a stable workspace name, an absolute host path a
 
 MCP workspace and diagnostic metadata omit configured host roots. Review file contents and command output before sharing them, as those can contain paths or other private data.
 
-For a client using computers, open **MCP Clients**, choose **MCP, Skills and computer access**, and select the required permissions. Its details page lets you restrict access to selected Runners. Copy the one-time URL to the intended user; rotate or revoke it if exposed.
+For a client using computers, open **MCP Clients**, choose **MCP, Skills and computer access**, and select the required permissions. Its details page lets you restrict access to selected Runners. Share the client URL with its intended user; rotate or revoke it if exposed.
 
 ## Manage access and retire machines
 

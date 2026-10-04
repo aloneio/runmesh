@@ -29,7 +29,7 @@ Runmesh 把 ChatGPT、Claude、Cursor 等支持 MCP 的客户端连接到你自�
 - 运行测试、构建和其他可能持续数分钟甚至数小时的任务；
 - 管理多个 Runner 及其工作区，按客户端设置计算机权限，并可按需限定 Runner 访问。
 
-Runmesh 0.1.6 将 MCP 连接与 Skill 安装集成到控制端。填写 MCP 地址并选择身份验证方式，或安装一个 Skill 文件夹，即可通过 AI 客户端使用共享内容。详见[MCP 和 Skill 指南](docs/central-administration.zh-CN.md)与[发行状态](docs/release-readiness.md)。
+在控制端管理 MCP 连接与 Skill。填写 MCP 地址并选择身份验证方式，或安装一个 Skill 文件夹，即可通过 AI 客户端使用共享内容。详见[MCP 和 Skill 指南](docs/central-administration.zh-CN.md)与[发行状态](docs/release-readiness.md)。
 
 ## 开始使用
 
@@ -50,7 +50,7 @@ MCP 地址本身就是凭据，在创建或轮换时显示。请妥善保存，�
 2. 需要计算机访问时，在「Runner」页面添加机器。保留默认的 `dedicated_user` 模式，只有确实需要并接受主机高权限时才改选；
 3. 复制一次性注册命令，在目标机器上运行；
 4. 在 Runner 详情中添加允许访问的工作区和权限；
-5. 在「MCP 客户端」页面创建客户端并复制一次性 MCP 地址。启用共享 MCP 和 Skill 的实例，可选择仅使用共享内容或增加计算机访问；计算机权限初始勾选读取；
+5. 在「MCP 客户端」页面创建客户端，复制创建时显示的 MCP 地址。启用共享 MCP 和 Skill 的实例，可选择仅使用共享内容或增加计算机访问；计算机权限初始勾选读取；
 6. 将地址交给使用者，并在需要时轮换或撤销。
 
 托管安装器会下载并验证固定版本的 Runner 发行物、补齐运行环境、注册 Runner 并配置守护服务。安装器不可用时，管理后台会自动显示可离线校验的便携安装流程。完整步骤见[管理员指南](docs/admin-guide.zh-CN.md)。

@@ -2,7 +2,7 @@
 
 [简体中文](central-administration.zh-CN.md) · [Documentation](README.md)
 
-Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. Then add your AI client to use the shared collection. These features are available in Runmesh 0.1.6; see [release status](release-readiness.md) for signed packages and deployment and upgrade steps.
+Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. Then add your AI client to use the shared collection. See [release status](release-readiness.md) for signed packages and deployment and upgrade steps.
 
 ## Set up your collection
 
@@ -10,7 +10,7 @@ Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. 
 | --- | --- |
 | Connect an MCP | Open **MCP**, enter its public HTTPS MCP URL, choose **No authentication** or **OAuth**, and select **Connect**. For OAuth, sign in on the provider's page and complete consent. |
 | Install a Skill | Open **Skill**, select its folder or `SKILL.md` and supporting text files, then select **Install Skill**. |
-| Connect an AI client | Select **Connect an AI client**, enter a label, choose the access type, and create the connection. Copy the one-time URL into your client's MCP settings. |
+| Connect an AI client | Select **Connect an AI client**, enter a label, choose the access type, and create the connection. Copy the URL shown when it is created into your client's MCP settings. |
 
 Connected MCP tools and installed Skills are shared with every active AI client in this instance. MCP connections load their tools automatically; the MCP card's **View tools** button shows the available tools. Skill cards provide **View files** to read the installed content.
 

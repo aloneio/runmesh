@@ -2,7 +2,7 @@
 
 [简体中文](central-remote-mcp.zh-CN.md) · [MCP and Skill guide](central-administration.md)
 
-Add an MCP once in the control panel, then use its enabled tools from your connected AI clients. This guide covers Runmesh 0.1.6.
+Add an MCP once in the control panel, then use its enabled tools from your connected AI clients.
 
 ## Add the connection
 

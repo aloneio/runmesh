@@ -24,7 +24,7 @@ Each execution machine runs a Runmesh Runner, which connects to the control plan
 
 Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, and running builds and operational tasks. Manage workspaces on each Runner, set client computer permissions, and add Runner access restrictions where needed.
 
-Runmesh 0.1.6 brings MCP connections and Skills into the control panel. Connect an MCP with its URL and authentication choice, or install a Skill folder, then use the shared collection from your AI clients. See the [MCP and Skill guide](docs/central-administration.md) and [release status](docs/release-readiness.md).
+Manage MCP connections and Skills from the control panel. Connect an MCP with its URL and authentication choice, or install a Skill folder, then use the shared collection from your AI clients. See the [MCP and Skill guide](docs/central-administration.md) and [release status](docs/release-readiness.md).
 
 ## Get started
 
@@ -45,7 +45,7 @@ Use the signed stable release listed in [release status](docs/release-readiness.
 2. For computer access, add a machine on the **Runner** page. Keep the default `dedicated_user` execution mode unless you need and accept host-level privileges.
 3. Copy the one-time enrollment command and run it on the target machine.
 4. Add approved workspaces and permissions in the Runner details page.
-5. Create an MCP client and copy its one-time URL. On instances with shared MCP and Skills, choose that access type for the shared collection or add computer access; computer permissions start with Read selected.
+5. Create an MCP client and copy the URL shown when it is created. On instances with shared MCP and Skills, choose that access type for the shared collection or add computer access; computer permissions start with Read selected.
 6. Share the URL with its intended user, and rotate or revoke it when necessary.
 
 The standard installer downloads a fixed, verified release, supplies the runtime, enrolls the Runner, and configures its service. If hosted installation is unavailable, the dashboard shows the offline-verifiable portable procedure. See the [administrator guide](docs/admin-guide.md).

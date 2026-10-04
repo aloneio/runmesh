@@ -16,7 +16,7 @@ The URL is the credential. Copy it exactly, including its secret path, and remov
 
 ## Use shared MCP tools and Skills
 
-In Runmesh 0.1.6, active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory tools include `remote_profiles`, `remote_tools`, `skill_list` and `skill_read`.
+Active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory tools include `remote_profiles`, `remote_tools`, `skill_list` and `skill_read`.
 
 This workflow runs through the control plane. Continue to the machine-selection steps when your connection also has computer access. Administrators connect MCPs and install Skills in the [MCP and Skill guide](central-administration.md).
 
@@ -83,7 +83,7 @@ After a Runner restart, unstarted queued Jobs become `interrupted`; recovered pr
 
 ## Logs, input and cancellation
 
-Foreground output may contain only a tail. A positive `offset` means earlier bytes were omitted from that response; use the `job` tool's `logs` action to request retained bytes in pages. Copy returned cursors unchanged and do not combine a cursor with a new offset or tail mode when the catalog forbids it.
+Foreground output may contain only a tail. A positive `offset` means earlier bytes were omitted from that response; use the `job` tool's `logs` action to request retained bytes in pages. For the next page, use the returned cursor unchanged with the same Job ID and stream. To read from a new offset or from the tail, start a fresh request using the tool catalog's parameters.
 
 Stored logs have size limits. `output_truncated` can indicate permanently discarded bytes. If your application collects its own logs, ask the administrator to check those as well.
 

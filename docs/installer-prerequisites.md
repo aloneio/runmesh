@@ -16,7 +16,7 @@ Hidden interactive enrollment-code input requires `stty` and a terminal on POSIX
 
 ## Existing installations
 
-A complete managed installation can refresh enrollment only when its Runner version exactly matches the selected installer. This refresh uses the installed runtime, updates enrollment and service configuration, and restarts the service. The package remains at its installed version, and download-only tools are unnecessary for this path. Drain Jobs first. For a different version, follow the [upgrade guide](upgrading.md).
+To refresh enrollment for a complete managed installation, select an installer matching the installed Runner version. It uses the existing runtime, updates enrollment and service configuration, and restarts the service while retaining the installed package. Drain Jobs before refreshing enrollment. To change the package version, follow the [upgrade guide](upgrading.md).
 
 Hosted installation, refresh and uninstall share a lock. Wait for an active operation to finish. After interruption, inspect running processes before handling a stale lock, and keep manual filesystem changes outside the maintenance window.
 

@@ -11,9 +11,9 @@
 | `INTERNAL_CONTROL_SECRET` | 验证控制面内部请求，并派生 OAuth 加密密钥 | 保留现有值；替换后需重新连接 OAuth |
 | `RUNNER_TOKEN_PEPPER` | 保护 Runner 凭据校验值 | 保留现有值；替换会使已有凭据失效 |
 
-初始化工具使用至少 32 字节的密码学安全随机数分别生成这两个密钥。OAuth 加密密钥自动从 `INTERNAL_CONTROL_SECRET` 派生，无需增加变量。两个值保存在 Cloudflare secrets 中，应避开源码、日志和对话。管理员密码通过首次设置页面填写。
+初始化工具使用至少 32 字节的密码学安全随机数分别生成这两个密钥。OAuth 加密密钥自动从 `INTERNAL_CONTROL_SECRET` 派生。两个值保存在 Cloudflare secrets 中，应避开源码、日志和对话。管理员密码通过首次设置页面填写。
 
-需要通过 API 管理 Runner 时，再配置 `ADMIN_TOKEN`；仅通过管理页面操作无需配置 ADMIN_TOKEN。
+管理页面使用管理员登录会话。需要通过 API 管理 Runner 时，再配置 `ADMIN_TOKEN`。
 
 ## 默认值与覆盖项
 
