@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWiring } from "../scripts/verification-plan.mjs";
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
+import { UI_BROWSER_STAGES } from "../scripts/ui-browser-contract.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -100,6 +101,34 @@ test("colored browser failure stacks retain safe assertion locations", () => {
   assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind: "assertion_failed",
     location: { file: "scripts/ui-browser-check.mjs", line: 63, column: 17 } }]);
   assert.ok(!JSON.stringify(summary).includes("private"));
+});
+
+test("browser stages retain only shared fixed labels from complete diagnostic markers", () => {
+  for (const stage of UI_BROWSER_STAGES) {
+    const error = new Error(`Browser operation timed out: Runtime.evaluate (stage: ${stage})`);
+    assert.deepEqual(browserErrorDiagnostic(error), { kind: "browser_operation_timeout", operation: "Runtime.evaluate", stage });
+  }
+  for (const stage of ["private_token", "dashboard_initial?private-token", "dashboard_initial private-token", "dashboard_initial/secret", ""])
+    assert.deepEqual(browserErrorDiagnostic({ message: `Browser operation timed out: Runtime.evaluate (stage: ${stage})` }),
+      { kind: "browser_operation_timeout", operation: "Runtime.evaluate" });
+  for (const message of ["private-token (stage: dashboard_initial)", "Browser closed (stage: dashboard_initial)private-token"])
+    assert.equal(browserErrorDiagnostic({ message }).stage, undefined);
+});
+
+test("browser lifecycle summaries keep classified stages without private failure payloads", () => {
+  for (const [message, kind] of [
+    ["Browser connection timed out", "browser_connection_timeout"], ["Browser connection closed", "browser_connection_closed"],
+    ["Browser process exited", "browser_process_exited"], ["Browser process failed", "browser_process_failed"],
+    ["Browser renderer crashed", "browser_renderer_crashed"], ["Browser target detached", "browser_target_detached"],
+    ["Browser socket error", "browser_socket_error"], ["Browser request send failed", "browser_send_failed"],
+    ["Browser protocol response invalid", "browser_protocol_invalid"], ["Browser closed", "browser_closed"],
+  ]) {
+    const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed",
+      failureMessages: [`Error: ${message} (stage: dashboard_initial)\nprivate-cookie private-expression`],
+    }] }] });
+    assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind, stage: "dashboard_initial" }]);
+    assert.ok(!JSON.stringify(summary).includes("private"));
+  }
 });
 
 test("MCP HTTP failures retain only a bounded status from the exact fixed marker", () => {

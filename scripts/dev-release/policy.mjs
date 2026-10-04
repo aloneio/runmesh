@@ -48,6 +48,28 @@ export function createDevPlan(input) {
 
 export function assertPlanContext(plan, env) {
   validateDevPlan(plan);
+  assertRunContext(plan, env);
+}
+
+/** A deferred batch reserves no version; its source/run decision is immutable. */
+export function validateDevDeferral(value) {
+  assert.ok(value && typeof value === "object" && !Array.isArray(value));
+  assert.deepEqual(Object.keys(value).sort(), ["schema_version", "state", "reason", "repository", "ref", "source_sha", "source_tree", "push_number", "run_id"].sort());
+  assert.equal(value.schema_version, 1); assert.equal(value.state, "deferred");
+  assert.equal(value.reason, "stable_baseline_unpublished");
+  assert.equal(value.repository, DEV_RELEASE_REPOSITORY); assert.equal(value.ref, "refs/heads/dev");
+  assert.match(value.source_sha, sha); assert.match(value.source_tree, sha);
+  assert.ok(Number.isSafeInteger(value.run_id) && value.run_id > 0);
+  assert.equal(releaseCadence(value.push_number).due, true);
+  return Object.freeze({ ...value });
+}
+
+export function assertDeferralContext(value, env) {
+  validateDevDeferral(value);
+  assertRunContext(value, env);
+}
+
+function assertRunContext(plan, env) {
   assert.equal(env.GITHUB_REPOSITORY, DEV_RELEASE_REPOSITORY);
   assert.equal(env.GITHUB_REF, "refs/heads/dev"); assert.equal(env.GITHUB_EVENT_NAME, "push");
   assert.equal(env.GITHUB_SHA, plan.source_sha);

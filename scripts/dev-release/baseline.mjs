@@ -9,7 +9,7 @@ import { readBoundedReleaseFile } from "../release-io.mjs";
 import { assertSource, command, git, mainModule, readPlan } from "./io.mjs";
 import { githubJson } from "./github.mjs";
 import { assertPlanContext } from "./policy.mjs";
-import { assertBaselineUnchanged, baselineError, stableBaseline } from "./baseline-policy.mjs";
+import { assertBaselineUnchanged, baselineError, requirePublishedStableState, stableBaseline } from "./baseline-policy.mjs";
 
 const evidenceFiles = ["manifest.json", "manifest.sig", "manifest.signature.json"];
 
@@ -45,9 +45,7 @@ export async function observeStableBaseline(sourceSha, io = { git, api: githubJs
   const pkg = JSON.parse(await io.git("show", `${mainSha}:package.json`));
   assert.match(pkg.version, /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/u);
   const state = JSON.parse(await io.git("show", `${mainSha}:release/release-state.json`));
-  if (state.version !== pkg.version || state.state !== "released" || state.release_branch !== "main") {
-    throw baselineError("stable_baseline_unpublished", "main has not completed reviewed stable publication");
-  }
+  requirePublishedStableState(pkg.version, state);
   // A release-version string never substitutes for actual code ancestry.
   try { await io.git("merge-base", "--is-ancestor", mainSha, sourceSha); }
   catch { throw baselineError("stable_baseline_not_in_dev", "the fixed dev source must contain the observed main commit; sync main through normal review"); }

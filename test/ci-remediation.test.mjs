@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,7 +11,7 @@ import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, LTS_COMMANDS, GI
 import { gateEvidence, gateJUnit, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
 import { browserEvidence, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
-import { waitForUiNavigation } from "../scripts/ui-browser-check.mjs";
+import { closeUiBrowserSocket, createUiBrowserProtocol, waitForUiBrowserEndpoint, waitForUiBrowserSocket, waitForUiNavigation } from "../scripts/ui-browser-check.mjs";
 
 function fixture() {
   const pkg = { scripts: { "test:unit": "npm run test:domain && npm run test:contracts && npm run test --workspaces", "test:release-tools": "node --test test/x.test.mjs", "test:e2e": "node ./scripts/run-e2e.mjs", "test:package:e2e": "node scripts/run-package-e2e.mjs", "test:browser": "node scripts/run-browser-e2e.mjs" } };
@@ -187,6 +188,102 @@ function navigationFixture() {
   };
   return fixture;
 }
+
+function browserProtocolFixture() {
+  const socket = new EventEmitter(), child = new EventEmitter(), sent = [];
+  child.exitCode = null; child.signalCode = null; child.stderr = new EventEmitter();
+  socket.send = (payload, callback) => { sent.push(JSON.parse(payload)); callback?.(); };
+  const protocol = createUiBrowserProtocol(socket, child, { stage: () => "dashboard_initial" });
+  protocol.setTarget("owned-target", "owned-session");
+  return { socket, child, sent, protocol };
+}
+
+test("CI04 browser lifecycle failures reject pending and future calls without another send", async () => {
+  for (const [event, expected] of [
+    [h => h.socket.emit("close"), "Browser connection closed"],
+    [h => h.socket.emit("error", new Error("private socket details")), "Browser socket error"],
+    [h => h.child.emit("exit", 1, null), "Browser process exited"],
+    [h => h.child.emit("error", new Error("private process details")), "Browser process failed"],
+    [h => h.socket.emit("message", JSON.stringify({ method: "Inspector.targetCrashed", sessionId: "owned-session" })), "Browser renderer crashed"],
+    [h => h.socket.emit("message", JSON.stringify({ method: "Target.detachedFromTarget", params: { sessionId: "owned-session" } })), "Browser target detached"],
+  ]) {
+    const h = browserProtocolFixture();
+    try {
+      const pending = h.protocol.call("Runtime.evaluate", { expression: "private fixture" }, "owned-session");
+      const rejected = assert.rejects(pending, { message: `${expected} (stage: dashboard_initial)` });
+      event(h); await rejected;
+      await assert.rejects(h.protocol.call("Runtime.evaluate"), { message: `${expected} (stage: dashboard_initial)` });
+      assert.equal(h.sent.length, 1);
+    } finally { h.protocol.dispose(); }
+    assert.equal(h.socket.listenerCount("message"), 0);
+    assert.equal(h.child.listenerCount("exit"), 0);
+  }
+});
+
+test("CI04 unrelated browser targets and remote context errors preserve the live connection", async () => {
+  const h = browserProtocolFixture();
+  try {
+    const first = h.protocol.call("Runtime.evaluate", {}, "owned-session");
+    h.socket.emit("message", JSON.stringify({ method: "Inspector.targetCrashed", sessionId: "other-session" }));
+    h.socket.emit("message", JSON.stringify({ method: "Target.detachedFromTarget", params: { sessionId: "other-session" } }));
+    const rejected = assert.rejects(first, error => error.code === -32000 && error.message === "Execution context was destroyed.");
+    h.socket.emit("message", JSON.stringify({ id: h.sent[0].id, error: { code: -32000, message: "Execution context was destroyed." } }));
+    await rejected;
+    const second = h.protocol.call("Page.getFrameTree");
+    h.socket.emit("message", JSON.stringify({ id: h.sent[1].id, result: { ready: true } }));
+    assert.deepEqual(await second, { ready: true });
+    assert.equal(h.sent.length, 2);
+  } finally { h.protocol.dispose(); }
+});
+
+test("CI04 browser request timeouts keep the initiating stage and never replay a request", async () => {
+  const h = browserProtocolFixture(); h.protocol.dispose();
+  let stage = "dashboard_initial";
+  const protocol = createUiBrowserProtocol(h.socket, h.child, { stage: () => stage });
+  try {
+    const pending = protocol.call("Runtime.evaluate", { expression: "private fixture" }, undefined, 5);
+    stage = "browser_close";
+    await assert.rejects(pending, { message: "Browser operation timed out: Runtime.evaluate (stage: dashboard_initial)" });
+    assert.equal(h.sent.length, 1);
+  } finally { protocol.dispose(); }
+});
+
+test("CI04 failed browser sends expose controlled diagnostics and settle all pending calls", async () => {
+  const h = browserProtocolFixture();
+  try {
+    h.socket.send = (_payload, callback) => callback(new Error("private socket details"));
+    await assert.rejects(h.protocol.call("Runtime.evaluate"), { message: "Browser request send failed (stage: dashboard_initial)" });
+  } finally { h.protocol.dispose(); }
+});
+
+test("CI04 browser startup and socket connection reject process exit before their deadline", async () => {
+  const h = browserProtocolFixture(); h.protocol.dispose();
+  const endpoint = waitForUiBrowserEndpoint(h.child);
+  const startupRejected = assert.rejects(endpoint, { message: "Browser process exited (stage: browser_startup)" });
+  h.child.emit("exit", 1, null); await startupRejected;
+  assert.equal(h.child.stderr.listenerCount("data"), 0);
+  assert.equal(h.child.listenerCount("error"), 0);
+  const opening = waitForUiBrowserSocket(h.socket, h.child);
+  const connectionRejected = assert.rejects(opening, { message: "Browser connection closed (stage: browser_connect)" });
+  h.socket.emit("close"); await connectionRejected;
+  assert.equal(h.socket.listenerCount("open"), 0);
+  assert.equal(h.socket.listenerCount("error"), 0);
+  assert.equal(h.child.listenerCount("exit"), 0);
+});
+
+test("CI04 cleanup absorbs a connecting socket's asynchronous close error until it closes", async () => {
+  const h = browserProtocolFixture(); h.protocol.dispose();
+  h.socket.close = () => queueMicrotask(() => {
+    h.socket.emit("error", new Error("WebSocket was closed before the connection was established"));
+    h.socket.emit("close");
+  });
+  await assert.rejects(waitForUiBrowserSocket(h.socket, h.child, 5), /Browser connection timed out/u);
+  const closed = new Promise(resolve => h.socket.once("close", resolve));
+  closeUiBrowserSocket(h.socket);
+  await closed;
+  assert.equal(h.socket.listenerCount("error"), 0);
+  assert.equal(h.socket.listenerCount("close"), 0);
+});
 
 test("CI04 full navigation waits beyond a ready old document for the requested loader and locale", async () => {
   const h = navigationFixture(), expected = { url: h.state.url, locale: h.state.locale, frameId: "main-frame", loaderId: "new-document" };
