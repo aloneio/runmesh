@@ -20,8 +20,8 @@ function releaseTarget(descriptor: RunnerReleaseDescriptor) {
 }
 function unavailableScript(channel: "dev" | "stable", windows: boolean): string {
   const message = channel === "dev"
-    ? "No immutable signed Runmesh development Runner prerelease is currently available. Development never falls back to the stable Runner."
-    : "The fixed signed Runmesh stable Runner release is not enabled on this deployment.";
+    ? "Development Runner download failed. Check the release status in your Runmesh administrator page, then try again."
+    : "Runner download failed. Check the release status in your Runmesh administrator page, then try again.";
   return windows
     ? `$ErrorActionPreference = 'Stop'\nSet-StrictMode -Version Latest\nWrite-Error '${message}'\nexit 1\n`
     : `#!/usr/bin/env sh\nset -eu\nprintf '%s\\n' '${message}' >&2\nexit 1\n`;

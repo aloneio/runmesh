@@ -81,7 +81,7 @@ it("disabled hosted installers fail closed without advertising a fallback releas
     const response = await worker.fetch(new Request(`https://ga.invalid${path}`), { ...env, RUNMESH_SIGNED_RELEASE_AVAILABLE: "" }, {} as ExecutionContext);
     expect(response.status).toBe(200);
     const body = await response.text();
-    expect(body).toContain("The fixed signed Runmesh stable Runner release is not enabled on this deployment.");
+    expect(body).toContain("Runner download failed. Check the release status in your Runmesh administrator page, then try again.");
     expect(body).not.toContain(`v${FIXED_RELEASE_VERSION}`);
     expect(body).toContain("exit 1");
   }

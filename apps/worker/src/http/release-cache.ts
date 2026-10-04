@@ -1,6 +1,6 @@
 import type { DevelopmentReleaseDependencies, DevelopmentReleaseRuntime, DevelopmentReleaseCache } from "../contracts/runner-release.js";
 import { createDevelopmentReleaseRuntime } from "../domain/release-selection.js";
-import { verifyDevelopmentRunnerRelease } from "../distribution/release-io.js";
+import { verifyDevelopmentRunnerRelease, safeDevelopmentReleaseFailure } from "../distribution/release-io.js";
 import { registryRequest } from "../platform/control-plane.js";
 import { boundedJsonResponse } from "../bounded-json.js";
 import type { WorkerEnv } from "../platform/env.js";
@@ -54,5 +54,6 @@ export function developmentReleaseDependencies(env: WorkerEnv): DevelopmentRelea
   let runtime = scopedRuntimes.get(env.REGISTRY);
   if (runtime === undefined) { runtime = createDevelopmentReleaseRuntime(); scopedRuntimes.set(env.REGISTRY, runtime); }
   // Native workerd fetch must not receive the dependency object as its receiver.
-  return { fetch: (input, init) => fetch(input, init), verify: verifyDevelopmentRunnerRelease, cache: registryDevelopmentReleaseCache(env), now: () => Date.now(), runtime };
+  return { fetch: (input, init) => fetch(input, init), verify: verifyDevelopmentRunnerRelease, cache: registryDevelopmentReleaseCache(env), now: () => Date.now(), runtime,
+    onRefreshFailure: failure => { console.warn({ event: "dev_runner_release_refresh_failed", ...safeDevelopmentReleaseFailure(failure) }); } };
 }

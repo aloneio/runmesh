@@ -9,8 +9,8 @@ independently usable review/snapshot path.
 See [release status](release-readiness.md) for deployment and upgrade steps.
 All authenticated instance clients share the enabled published selection. The
 control panel connects MCP URLs with no authentication or OAuth, then discovers
-and automatically publishes every discovered tool in one revision. No manual
-approval is needed. This page describes the underlying snapshot contract.
+and automatically publishes every discovered tool in one revision. This page
+describes the underlying snapshot contract.
 
 ## Snapshot administration
 
@@ -20,8 +20,8 @@ connection is disabled; a disabled connection exposes no tools to clients.
 
 Use the administrator session, same-origin request and matching CSRF cookie and
 `x-csrf-token` header for POST requests to `/admin/central/catalogs/{profile_id}`.
-Never put credentials in tool descriptions or schemas: approved descriptive
-content is not encrypted secret storage.
+Tool descriptions and schemas are shared with authorized readers. Store account
+credentials through the connection's authentication settings.
 
 | Operation | Body or query | Effect |
 | --- | --- | --- |
@@ -37,10 +37,10 @@ conflict instead of overwriting another review. An identical imported snapshot
 reuses its body, but still advances the observation revision. No directory read
 polls an upstream server or creates a native Job.
 
-The imported capture is administrator-supplied evidence, **not proof of a live
-upstream response**. The controlled HTTP discovery adapter uses atomic publication. Failure to contact an upstream must never stage an empty
-capture. An explicitly imported empty array represents a genuinely empty catalog
-and quarantines previously available tools.
+Manual imports record administrator-supplied definitions. Live discovery records
+the upstream response and publishes it atomically; a connection failure preserves
+the existing catalog. An explicitly imported empty array represents an empty
+catalog and quarantines previously available tools.
 
 ## Identity and changes
 
@@ -51,9 +51,11 @@ upstream server display name as a unique identifier. A metadata change preserves
 the public name but changes the tool content version and snapshot digest.
 
 Titles, descriptions, accepted schemas and annotations are part of that content.
-Annotations are untrusted hints, not execution permissions. Field ordering and
-upstream list ordering are normalized; array semantics within schemas are not
-reordered. Unsupported descriptor fields are rejected, not silently stripped.
+Annotations provide hints; execution permissions are checked separately. Field
+ordering and upstream list ordering are normalized, while arrays within schemas
+retain their order. Tool definitions accept `name`, `title`, `description`,
+`inputSchema`, `outputSchema` and `annotations`. An additional descriptor field
+causes the complete capture to fail validation.
 
 Live discovery publishes the complete observed snapshot and all tool names in a
 single transaction, including an empty catalog. The lower-level staged-import
@@ -76,12 +78,13 @@ and size bounds, compositions, conditionals, local definitions and acyclic local
 references. Literal property names and default/example data are not mistaken for
 schema instructions.
 
-Patterns, patternProperties, formats, remote references, recursive references,
-dynamic references, IDs/anchors, custom headers and unknown keywords/dialects are
-not supported. Tool icons and arbitrary `_meta` are also not yet imported. These
-limits intentionally reject some valid broader MCP definitions. Nothing is
-silently converted into a weaker schema. Catalog ingestion checks structure and budgets. The remote invocation adapter
-validates arguments against the reviewed subset before dispatch.
+Definitions containing `pattern`, `patternProperties`, `format`, remote,
+recursive or dynamic references, IDs/anchors, custom headers, or keywords and
+dialects outside this subset fail validation. The same applies to tool icons and
+arbitrary `_meta`. Prepare definitions using the accepted fields and schema subset
+above; validation applies to the complete capture. Catalog ingestion checks
+structure and budgets. The remote invocation adapter validates arguments against
+the accepted schema before dispatch.
 
 ## Shared directory views
 
@@ -119,10 +122,10 @@ arguments, Runner state or external results are copied into these tables.
 | Total snapshot body storage | 16 MiB |
 | Page tools / cursor size / cursor expiry | 20 / 2 KiB / 5 minutes |
 
-Capacity errors never trigger automatic deletion of reviewed content; existing
-catalogs can still be disabled. These are safety ceilings, not measured
-production throughput. The 100-profile/2,000-tool test is a synthetic local
-inventory test, not 100 real connected MCPs or a production load benchmark.
+At capacity, reviewed content is retained and existing catalogs can still be
+disabled. The table defines admission and storage limits. The local inventory
+test uses 100 synthetic profiles and 2,000 tools; measure throughput and connected
+MCP capacity in the target environment.
 
 Production activation remains separate. Runner code, Worker–Runner wire
 contracts and native tool definitions are unchanged. The optional feature's absence does not

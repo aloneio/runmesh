@@ -1,6 +1,6 @@
-import type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler, CachedDevelopmentReleaseRecord } from "../contracts/runner-release.js";
+import type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler, CachedDevelopmentReleaseRecord, DevelopmentReleaseFailure } from "../contracts/runner-release.js";
 import { DEV_RELEASE_CACHE_MS, DEV_RELEASE_STALE_MS, DEV_RELEASE_REFRESH_BUDGET_MS, developmentDescriptor, usableCacheAge, isDevelopment, unavailableDevelopmentRelease, releaseGateDiagnostics, runnerReleaseDescriptor } from "../domain/release-selection.js";
-import { DEV_RELEASE_DISCOVERY_URL, releaseFetch, boundedJson, readDevelopmentReleaseCache, writeDevelopmentReleaseCache } from "./release-io.js";
+import { DEV_RELEASE_DISCOVERY_URL, releaseFetch, boundedJson, readDevelopmentReleaseCache, writeDevelopmentReleaseCache, DevelopmentReleaseError, developmentReleaseFailure } from "./release-io.js";
 
 export type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, ReleaseGateDiagnostics, DevelopmentReleaseCache, DevelopmentReleaseVerifier, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler } from "../contracts/runner-release.js";
 export { releaseGateDiagnostics, runnerReleaseDescriptor, createDevelopmentReleaseRuntime } from "../domain/release-selection.js";
@@ -49,9 +49,10 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
     headers: { accept: "application/vnd.github+json", "user-agent": "runmeshdev-release-discovery/1", "x-github-api-version": "2026-03-10" },
   }, boundedFetch);
   const releases = await boundedJson(response);
-  if (!Array.isArray(releases)) throw new Error("development release discovery response is invalid");
+  if (!Array.isArray(releases)) throw new DevelopmentReleaseError("development release discovery response is invalid", { phase: "discovery", reason: "invalid_response" });
   const candidates = releases.flatMap(value => { const descriptor = developmentDescriptor(value); return descriptor === undefined ? [] : [descriptor]; });
   candidates.sort((a, b) => Number(b.package_version.split("-dev.")[1]) - Number(a.package_version.split("-dev.")[1]));
+  let candidateFailure: DevelopmentReleaseFailure | undefined;
   for (const descriptor of candidates) {
     try {
       await verify(descriptor, boundedFetch);
@@ -69,9 +70,13 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
       runtime.next_refresh_at_ms = verifiedAtMs + DEV_RELEASE_CACHE_MS;
       await writeDevelopmentReleaseCache(cache, descriptor, verifiedAtMs);
       return descriptor;
-    } catch { /* A malformed or unverifiable prerelease is never advertised. */ }
+    } catch (error) {
+      const failure = developmentReleaseFailure(error, "verification");
+      if (deadline.aborted) throw new DevelopmentReleaseError("no immutable signed development Runner release is available", { phase: failure.phase, reason: "timeout" });
+      candidateFailure ??= failure;
+    }
   }
-  throw new Error("no immutable signed development Runner release is available");
+  throw new DevelopmentReleaseError("no immutable signed development Runner release is available", candidateFailure ?? { phase: "discovery", reason: "no_candidate" });
 }
 
 /** A cold miss may precede another isolate's successful verification. */
@@ -120,6 +125,9 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
       runtime.failed_sequence = sequence;
       runtime.next_refresh_at_ms = completedAtMs + FAILED_REFRESH_COOLDOWN_MS;
     }
+    // Only the refresh owner reports after recovery; waiters and HTTP retries
+    // share this outcome without producing duplicate diagnostics.
+    try { dependencies.onRefreshFailure?.(developmentReleaseFailure(error)); } catch { /* Diagnostics cannot change release availability. */ }
     if (recovered !== undefined) {
       runtime.cached = { expires_at_ms: Math.min(completedAtMs + DEV_RELEASE_CACHE_MS, recovered.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: recovered.verified_at_ms, descriptor: recovered.descriptor };
       return recovered.descriptor;

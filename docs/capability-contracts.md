@@ -14,7 +14,7 @@ Use `inspect` with `action=diagnostics` and a readable `workspace_id` to check R
 | `requires_job_check` | The action also checks the actual Job workspace |
 | `host_catalog_state` | `not_observed`: check the catalog loaded by your MCP application separately |
 
-A missing report is `not_reported`; malformed or unsupported reports are `invalid`. Both leave method support `unknown`. A valid partial list can identify unsupported methods. Use the reported method list for capability decisions and a verified release artifact for build provenance; a version label or contract hash serves a different purpose.
+A missing report is `not_reported`; a report that fails the capability schema check is `invalid`. Both leave method support `unknown`. For a valid report, methods included in the list are `supported` and omitted methods are `unsupported`. Use the reported method list to check capabilities and a verified release artifact to confirm build provenance.
 
 The native catalog contains 10 tools, 26 Runner-backed actions and 27 protected RPC methods, including the internal workspace-list method. Each native operation requires its own scope, current policy and workspace permission. Live file, execution and Context operations also require an available Runner connection. The MCP and Skill library adds its discovery and call tools, plus tools from connected MCPs; these shared capabilities do not require a selected Runner.
 
