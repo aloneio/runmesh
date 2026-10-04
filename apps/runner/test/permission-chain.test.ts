@@ -119,3 +119,45 @@ it("R05 unavailable or truncated worktree evidence stays unknown and cannot be f
     expect(result.context).toMatchObject({baseline_state:"unknown",base_worktree_state:"unknown",working_tree_state:"unknown"});
   } finally {await f.cleanup();}
 });
+
+it("R04 a non-Git workspace deduplicates completed Job evidence when only collection time changes", async () => {
+  const f = await fixture();
+  let clock: ReturnType<typeof vi.spyOn> | undefined;
+  try {
+    // Git isolation starts at this workspace's own .git entry. Its absence
+    // returns null/unknown before a Git process or its timeout is involved.
+    expect(existsSync(join(f.workspace.rootPath, ".git"))).toBe(false);
+    expect(await f.runtime.git.observeBaseline({ workspace_id: "w" })).toEqual({ commit: null, working_tree_state: "unknown" });
+    const completed = await f.runtime.dispatch("exec.run", { workspace_id: "w", command: [process.execPath, "-e", "process.stdout.write('observed')"], wait_ms: 5_000 }) as any;
+    expect(completed).toMatchObject({ completed: true, job: { status: "succeeded", exit_code: 0 } });
+    const input = { workspace_id: "w", turn_id: "observed-job", goal: "retain the completed Job", expected_revision: 0, evidence: [{ kind: "job", job_id: completed.job.job_id }] };
+    clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const first = await f.runtime.dispatch("context.checkpoint", input) as any;
+    expect(first.context).toMatchObject({ revision: 1, base_commit: null, base_commit_status: null, base_worktree_state: "unknown", evidence: [{ observed_at_ms: 1_000 }] });
+    clock.mockReturnValue(2_000);
+    const next = await f.runtime.dispatch("context.checkpoint", input) as any;
+    expect(next).toMatchObject({ deduplicated: true, context: { revision: 1 } });
+    expect(next.context).toEqual(first.context);
+  } finally { clock?.mockRestore(); await f.cleanup(); }
+});
+
+it.each([
+  { name: "commit changes", initial: { commit: "a".repeat(40), working_tree_state: "clean" }, next: { commit: "b".repeat(40), working_tree_state: "clean" } },
+  { name: "worktree changes", initial: { commit: "a".repeat(40), working_tree_state: "clean" }, next: { commit: "a".repeat(40), working_tree_state: "dirty" } },
+  { name: "worktree observation becomes unknown", initial: { commit: "a".repeat(40), working_tree_state: "clean" }, next: { commit: "a".repeat(40), working_tree_state: "unknown" } },
+  { name: "baseline becomes unavailable", initial: { commit: "a".repeat(40), working_tree_state: "clean" }, next: { commit: null, working_tree_state: "unknown" } },
+  { name: "baseline becomes available", initial: { commit: null, working_tree_state: "unknown" }, next: { commit: "a".repeat(40), working_tree_state: "clean" } },
+] as const)("R04 a repeated expected-revision write conflicts when $name", async ({ initial, next }) => {
+  const f = await fixture();
+  const baseline = vi.spyOn(f.runtime.git, "observeBaseline").mockResolvedValue(initial);
+  try {
+    const completed = await f.runtime.dispatch("exec.run", { workspace_id: "w", command: [process.execPath, "-e", "process.stdout.write('observed')"], wait_ms: 5_000 }) as any;
+    expect(completed).toMatchObject({ completed: true, job: { status: "succeeded", exit_code: 0 } });
+    const input = { workspace_id: "w", turn_id: "baseline-retry", goal: "preserve observed source facts", expected_revision: 0, evidence: [{ kind: "job", job_id: completed.job.job_id }] };
+    const first = await f.runtime.dispatch("context.checkpoint", input) as any;
+    baseline.mockResolvedValue(next);
+    await expect(f.runtime.dispatch("context.checkpoint", input)).rejects.toMatchObject({ code: "context_revision_conflict", details: { expected_revision: 0, actual_revision: 1 } });
+    const saved = await f.runtime.context.read({ workspace_id: "w", context_id: first.context.context_id }) as any;
+    expect(saved.context).toMatchObject({ revision: 1, fingerprint: first.context.fingerprint, evidence: first.context.evidence, base_commit: initial.commit, base_worktree_state: initial.working_tree_state });
+  } finally { baseline.mockRestore(); await f.cleanup(); }
+});
