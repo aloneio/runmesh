@@ -146,11 +146,11 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     const outcomeUnknown = parsed.command === "enroll" && isEnrollmentOutcomeUnknown(cause);
-    const profileRemoved = parsed.command === "enroll" && (enrolledDuringThisInvocation || outcomeUnknown)
+    const profileCleanup = parsed.command === "enroll" && (enrolledDuringThisInvocation || outcomeUnknown)
       ? await removeEnrollmentProfileIfCurrent(store, enrolledProfile ?? previousProfile)
-      : false;
+      : undefined;
     const message = parsed.command === "enroll"
-      ? enrollmentFailureMessage(detail, enrolledDuringThisInvocation, outcomeUnknown, profileRemoved)
+      ? enrollmentFailureMessage(detail, enrolledDuringThisInvocation, outcomeUnknown, profileCleanup)
       : detail;
     error(message); throw cause;
   }

@@ -336,6 +336,69 @@ describe("runner product profile and enrollment", () => {
     } finally { await test.cleanup(); }
   });
 
+  it.each(["main", "enrollment"] as const)("reports a missing profile accurately after uncertain initial enrollment through the %s CLI", async entry => {
+    const test = await fixture();
+    try {
+      const errors: string[] = [];
+      const remove = vi.spyOn(test.store, "remove");
+      const cli = entry === "main" ? runCli : runEnrollCli;
+      const argv = ["--server", "https://example.test/runner/enroll", "--code", "j".repeat(43)];
+      await expect(cli(entry === "main" ? ["enroll", ...argv] : argv, {
+        store: test.store,
+        stderr: line => errors.push(line),
+        fetch: async () => { throw new Error("socket reset"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(remove).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("no local profile was found");
+      expect(errors.join("\n")).not.toContain("could not be removed");
+      expect(errors.join("\n")).not.toContain("existing profile");
+      expect(errors.join("\n")).toContain("generate a new enrollment code");
+    } finally { await test.cleanup(); }
+  });
+
+  it.each(["main", "enrollment"] as const)("preserves and identifies a concurrent new profile through the %s CLI", async entry => {
+    const test = await fixture();
+    try {
+      const errors: string[] = [];
+      const concurrent = { ...profile(), runner_id: "concurrent-runner", token: "concurrent-token-0123456789" };
+      const remove = vi.spyOn(test.store, "remove");
+      const cli = entry === "main" ? runCli : runEnrollCli;
+      const argv = ["--server", "https://example.test/runner/enroll", "--code", "k".repeat(43)];
+      await expect(cli(entry === "main" ? ["enroll", ...argv] : argv, {
+        store: test.store,
+        stderr: line => errors.push(line),
+        fetch: async () => { await test.store.save(concurrent); throw new Error("socket reset"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toMatchObject(concurrent);
+      expect(remove).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("the updated local profile was preserved");
+      expect(errors.join("\n")).not.toContain("could not be removed");
+      expect(errors.join("\n")).not.toContain(concurrent.token);
+    } finally { await test.cleanup(); }
+  });
+
+  it.each(["main", "enrollment"] as const)("reports an actual profile removal failure through the %s CLI", async entry => {
+    const test = await fixture();
+    try {
+      const errors: string[] = [];
+      const original = profile();
+      await test.store.save(original);
+      vi.spyOn(test.store, "remove").mockRejectedValue(new Error("permission denied"));
+      const cli = entry === "main" ? runCli : runEnrollCli;
+      const argv = ["--server", "https://example.test/runner/enroll", "--code", "l".repeat(43), "--re-enroll"];
+      await expect(cli(entry === "main" ? ["enroll", ...argv] : argv, {
+        store: test.store,
+        stderr: line => errors.push(line),
+        fetch: async () => { throw new Error("socket reset"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toMatchObject(original);
+      expect(errors.join("\n")).toContain("local profile could not be removed");
+      expect(errors.join("\n")).toContain("until its credential is verified");
+      expect(errors.join("\n")).not.toContain(original.token);
+    } finally { await test.cleanup(); }
+  });
+
   it("preserves a profile written by a concurrent enrollment after an unknown response", async () => {
     const test = await fixture();
     try {

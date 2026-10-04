@@ -59,6 +59,8 @@ function readEnrollmentStdin(): Promise<string> {
   });
 }
 
+export type EnrollmentProfileCleanup = "absent" | "removed" | "changed" | "failed";
+
 /**
  * Remove a profile only when it is still the profile observed by this
  * enrollment attempt.  A second CLI process may have completed a newer
@@ -71,20 +73,18 @@ function readEnrollmentStdin(): Promise<string> {
  * required.  The identity check closes the common late-cleanup race without
  * changing ProfileStore's on-disk format.
  */
-export async function removeEnrollmentProfileIfCurrent(store: ProfileStore, expected: RunnerProfile | undefined): Promise<boolean> {
-  // An absent pre-enrollment snapshot is not an ownership proof.  There is no
-  // portable compare-and-delete primitive here, so loading `undefined` and
-  // then removing can race a concurrent enrollment that creates a profile
-  // between those two operations.  Leave the profile untouched unless this
-  // invocation can name the exact validated snapshot it wrote.
-  if (expected === undefined) return false;
+export async function removeEnrollmentProfileIfCurrent(store: ProfileStore, expected: RunnerProfile | undefined): Promise<EnrollmentProfileCleanup> {
   try {
     const current = await store.load();
-    if (!sameEnrollmentProfile(current, expected)) return false;
+    if (current === undefined) return "absent";
+    // An absent pre-enrollment snapshot is not an ownership proof.  The read
+    // above is only for reporting; never remove a profile this invocation did
+    // not observe, including one created after a stale read reported absence.
+    if (expected === undefined || !sameEnrollmentProfile(current, expected)) return "changed";
     await store.remove();
-    return true;
+    return "removed";
   } catch {
-    return false;
+    return "failed";
   }
 }
 
@@ -114,13 +114,17 @@ export function sameEnrollmentProfile(left: RunnerProfile | undefined, right: Ru
     });
 }
 
-export function enrollmentFailureMessage(detail: string, credentialsConsumed: boolean, outcomeUnknown: boolean, profileRemoved: boolean): string {
+export function enrollmentFailureMessage(detail: string, credentialsConsumed: boolean, outcomeUnknown: boolean, profileCleanup?: EnrollmentProfileCleanup): string {
   if (!credentialsConsumed && !outcomeUnknown) return detail;
-  const cleanup = profileRemoved
-    ? "the local profile was removed"
-    : "the local profile could not be removed; do not use the existing profile until its credential is verified";
-  if (credentialsConsumed) return `${detail}; enrollment credentials were consumed and ${cleanup}; generate a new enrollment code and retry`;
-  return `${detail}; ${cleanup} because the enrollment outcome is unknown; generate a new enrollment code and retry`;
+  const cleanupMessages: Record<EnrollmentProfileCleanup, string> = {
+    absent: "no local profile was found",
+    removed: "the local profile was removed",
+    changed: "the updated local profile was preserved",
+    failed: "the local profile could not be removed; do not use the existing profile until its credential is verified",
+  };
+  const cleanup = profileCleanup === undefined ? "" : `${cleanupMessages[profileCleanup]}; `;
+  const consumed = credentialsConsumed ? "enrollment credentials were consumed; " : "";
+  return `${detail}; ${consumed}${cleanup}generate a new enrollment code and retry`;
 }
 
 export async function runEnrollCli(argv: readonly string[], dependencies: EnrollCliDependencies = {}): Promise<void> {
@@ -150,10 +154,10 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     const outcomeUnknown = isEnrollmentOutcomeUnknown(cause);
-    const profileRemoved = enrolled || outcomeUnknown
+    const profileCleanup = enrolled || outcomeUnknown
       ? await removeEnrollmentProfileIfCurrent(store, enrolledProfile ?? previousProfile)
-      : false;
-    error(enrollmentFailureMessage(detail, enrolled, outcomeUnknown, profileRemoved));
+      : undefined;
+    error(enrollmentFailureMessage(detail, enrolled, outcomeUnknown, profileCleanup));
     throw cause;
   }
 }

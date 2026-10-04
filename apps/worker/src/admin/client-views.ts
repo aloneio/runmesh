@@ -89,7 +89,7 @@ export function clientDetailPage(client: Record<string, unknown>, runners: reado
       </div>
       <p class="muted scope-help">${message("text.each.base.scope.has.a.distinct.ceiling", "en")}<span class="mono">${message("text.read.2", "en")}</span>${message("text.permits.inspection", "en")}<span class="mono">${message("text.write", "en")}</span>${message("text.permits.approved.edits.and", "en")}<span class="mono">${message("text.exec", "en")}</span>${message("text.permits.host.shell.and.job.control.runner.and.workspace.policy.can.only.reduce.these.permi", "en")}</p>
       ${scopeEditor}
-      <form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/recording" class="scope-editor-form">
+      <form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/recording" class="client-recording-form">
         <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
         <label for="record-jobs">${message("text.cloud.job.history", "en")}</label>
         <select id="record-jobs" name="record_jobs">

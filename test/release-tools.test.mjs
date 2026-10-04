@@ -117,6 +117,26 @@ test("release validates source identity before installation and generates tracke
   }
 });
 
+test("stable publication uses version-scoped notes validated before tag creation", async () => {
+  const workflow = parseCi(await readFile(join(repositoryRoot, ".github/workflows/release.yml"), "utf8"));
+  const steps = workflow.jobs.release.steps;
+  const identity = steps.findIndex(step => step.name === "Validate triggering commit, release identity, and secrets");
+  const tag = steps.findIndex(step => step.name === "Create annotated release tag");
+  const draft = steps.find(step => step.name === "Create stable draft release");
+  assert.ok(identity >= 0 && identity < tag);
+  assert.ok(steps[identity].run.includes('test -s "docs/releases/${RELEASE_VERSION}.md"'));
+  assert.ok(steps[identity].run.includes('test "$(head -n 1 "docs/releases/${RELEASE_VERSION}.md")" = "# Runmesh ${RELEASE_VERSION}"'));
+  assert.ok(draft.run.includes('--notes-file "docs/releases/${RELEASE_VERSION}.md"'));
+  assert.ok(!draft.run.includes("--notes-file docs/release-notes.md"));
+
+  const notes = await readFile(join(repositoryRoot, "docs/releases", `${productVersion}.md`), "utf8");
+  assert.equal(notes.split(/\r?\n/u)[0], `# Runmesh ${productVersion}`);
+  assert.ok(!/release candidate|current stable package remains|候选版本|当前正式安装包/iu.test(notes), "publication notes must not carry the candidate ledger's status");
+  for (const match of notes.matchAll(/\[[^\]]*\]\(([^)]+)\)/gu)) {
+    assert.ok(match[1].startsWith("https://"), "publication links must work outside the repository document path");
+  }
+});
+
 test("pre-install release version, publication, and public-key checks run without installed packages", async () => {
   const f = await fixture();
   try {

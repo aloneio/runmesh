@@ -523,16 +523,20 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
   font-weight:600;
   color:var(--ink-heading);
 }
-.runner-selection-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.runner-selection-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;max-width:100%}
 .runner-selection-form{
   display:flex;
   align-items:center;
   gap:6px;
   flex-wrap:wrap;
   margin:0;
+  min-width:0;
+  max-width:100%;
+  flex:1 1 180px;
 }
-.runner-selection-form select{min-width:150px;max-width:100%;height:30px;padding:3px 8px;font-size:12px}
-.runner-selection-form .check{font-size:11px;white-space:nowrap}
+.runner-selection-form select{min-width:0;width:100%;max-width:100%;flex:1 1 150px;height:30px;padding:3px 8px;font-size:12px}
+.runner-selection-form .check{font-size:11px;white-space:normal;min-width:0;max-width:100%;margin-right:0}
+.runner-selection-form .check span{min-width:0;overflow-wrap:anywhere}
 .runner-selection-form button{height:30px}
 
 /* Action Groups & Forms */
@@ -720,6 +724,10 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
   align-items:end;
   gap:12px;
 }
+.client-recording-form{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
+.client-recording-form>label,.client-recording-form>p{margin:0}
+.client-recording-form>select{width:100%;max-width:360px;min-width:0}
+.client-recording-form>button{justify-self:start;max-width:100%}
 .scope-fieldset{
   flex:1;
   min-width:0;
@@ -1148,7 +1156,7 @@ legend{
   text-transform:uppercase;
   letter-spacing:0.04em;
 }
-.details dd{margin:0;font-weight:600;color:var(--ink-heading);overflow-wrap:anywhere}
+.details dd{margin:0;min-width:0;font-weight:600;color:var(--ink-heading);overflow-wrap:anywhere}
 
 /* Secret & Enrollment Full-Page Dialogs */
 .auth-body{
@@ -1754,7 +1762,8 @@ tbody tr:hover{background:#f8fafc}
 .runner-actions .danger-action-buttons{display:flex;align-items:flex-end;gap:5px;flex-wrap:wrap}
 .runner-actions .danger-action-buttons .small{flex:1 1 auto}
 .client-table{min-width:0;table-layout:fixed}
-.client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:16%}.client-table th:nth-child(3){width:14%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:9%}.client-table th:nth-child(6){width:27%}
+.client-table td{overflow-wrap:anywhere}
+.client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:12%}.client-table th:nth-child(3){width:16%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:11%}.client-table th:nth-child(6){width:27%}
 .client-table .actions{vertical-align:top;width:auto;min-width:0}
 .client-table .action-btn-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%}
 .client-table .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;gap:5px;min-width:0}

@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "0123fec8205eafe5b48fa4b56b809327f25a991e8ff444e18bd5dd04618e7b8e",
-      "bytes": 129224,
+      "sha256": "5bdbb656f4991aed1599789dfa7cd9fe97cac4922d40456afc8b64babd7fd135",
+      "bytes": 129838,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "4da7dcb19110ff6eee8a4eb5491fe5a6c33cd4d54e2708922b33d108e770cf48",
-      "bytes": 129812,
+      "sha256": "bcfeb03d9bfecfee6dbf6ae2b2f2d84d64ff512af64ca03707706034c9fe39f9",
+      "bytes": 130426,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "6ab1be8cec903d93a65cd48a5122a927c407f63996d457e956933bf03145f95b",
-      "bytes": 130960,
+      "sha256": "d318f9e3b22ba0b5265d09b453773349370b9cee1c7d82c5eb2f2160e80d0865",
+      "bytes": 131574,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -273,8 +273,8 @@
         [],
         "fixture-csrf-<>&\""
       ],
-      "sha256": "27a51eb97349bff5acd8407041f20a680e380ce2dfde18c03f2542809ca8accb",
-      "bytes": 7025,
+      "sha256": "b55cf0083ef646f485deef3e422752e81dbd0fe133d3557bf23be36bd82d509c",
+      "bytes": 7029,
       "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
       "original_bytes": 6638,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "74b4bf2d1291a4142848f495a3e4299ca82b401cedbbfd046ec317fc2031836d",
-      "bytes": 131309,
+      "sha256": "0c4e8bea2f2b3f8c2da77d3880356e7cea434789e63e047d957d294f06c94b10",
+      "bytes": 131923,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -636,6 +636,18 @@
       "admin-document"
     ],
     "reviewed_change": "Restore fragment focus and scrolling below the sticky header after soft navigation; move newly opened pages to their heading while preserving same-page refresh position. Let mounted pages use their content height instead of retaining the previous page height. Reset measured command-panel heights before resize. Reset the mobile enrollment action form flex basis. Describe OAuth recovery with direct next steps in both languages. Independently rebuilding and substituting only the prior bundle and style block reproduces every original hash and byte count.",
+    "other_markup_unchanged": true
+  },
+  "client_layout_review": {
+    "source_base": "b03254512e2feda19140c6572121716d45ba9cd9",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "client-detail",
+      "admin-document"
+    ],
+    "reviewed_change": "Constrain client Runner selectors and long values to their table cells. Give recording preferences an independent single-column form. Replacing only the reviewed CSS and recording form class reproduces all 20 prior rendered hashes and byte counts.",
     "other_markup_unchanged": true
   }
 }
