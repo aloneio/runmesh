@@ -16,7 +16,7 @@ The URL is the credential. Copy it exactly, including its secret path, and remov
 
 ## Use shared MCP tools and Skills
 
-On the 0.1.6 candidate and development channel, active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory tools include `remote_profiles`, `remote_tools`, `skill_list` and `skill_read`.
+In Runmesh 0.1.6, active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory tools include `remote_profiles`, `remote_tools`, `skill_list` and `skill_read`.
 
 This workflow runs through the control plane. Continue to the machine-selection steps when your connection also has computer access. Administrators connect MCPs and install Skills in the [MCP and Skill guide](central-administration.md).
 

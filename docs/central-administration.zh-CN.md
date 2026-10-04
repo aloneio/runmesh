@@ -2,7 +2,7 @@
 
 [English](central-administration.md) · [文档目录](README.zh-CN.md)
 
-在「MCP 和 Skill」页面（`/admin/central`）连接 MCP、安装 Skill，再接入 AI 客户端即可使用。这些功能已提供于 0.1.6 候选版本与开发渠道；当前生产版本见[发行状态](release-readiness.md)。
+在「MCP 和 Skill」页面（`/admin/central`）连接 MCP、安装 Skill，再接入 AI 客户端即可使用。Runmesh 0.1.6 提供这些功能；已签名安装包、部署和升级步骤见[发行状态](release-readiness.md)。
 
 ## 配置共享内容
 

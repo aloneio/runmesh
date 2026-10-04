@@ -2,7 +2,7 @@
 
 [English](central-skills.md) · [MCP 和 Skill 指南](central-administration.zh-CN.md)
 
-安装一份 Skill 的说明与配套文本文件，已连接的 AI 客户端即可使用。本指南适用于 0.1.6 候选版本与开发渠道。
+安装一份 Skill 的说明与配套文本文件，已连接的 AI 客户端即可使用。本指南适用于 Runmesh 0.1.6。
 
 ## 准备文件
 

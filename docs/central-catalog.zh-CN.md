@@ -1,11 +1,11 @@
-# 中央工具目录发布（开发版）
+# 中央工具目录发布
 
 W05 可选实时发现／调用适配器及其明确限制见[受控中央 HTTP MCP](maintainers/central-remote-mcp.zh-CN.md)。
 本文介绍可独立使用的目录审核与快照流程。
 
 [English](central-catalog.md)
 
-**状态：开发环境已启用共享目录，生产另行验收。**
+**Runmesh 0.1.6 提供共享目录。** 部署与升级步骤见[发行状态](release-readiness.md)。
 所有凭据有效的客户端共享已启用且发布的工具。控制端输入 MCP URL，选择无认证
 或 OAuth，连接成功即原子发布全部工具，无需单独审核。本文介绍其底层快照契约。
 

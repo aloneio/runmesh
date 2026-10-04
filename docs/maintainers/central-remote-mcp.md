@@ -1,4 +1,4 @@
-# Controlled central HTTP MCP (development)
+# Controlled central HTTP MCP
 
 > Maintainer reference: interfaces, protocol and verification boundaries. For everyday use, see the [user guide](../central-remote-mcp.md).
 
@@ -8,14 +8,13 @@ All deployment activation remains explicit.
 
 [简体中文](central-remote-mcp.zh-CN.md)
 
-**Development implementation; no production activation.** Central HTTP discovery
-and invocation connect control-panel profiles to the reviewed catalog.
-The development configuration now has an independent central binding and explicit
-Skills, direct-directory and governance opt-ins. Managed connections store their
-endpoint policy through the control panel. OAuth encryption derives its key from
-the existing deployment secret without an additional variable.
-Production remains unchanged. This is not a published release or evidence of
-successful public-network acceptance.
+**Included in Runmesh 0.1.6.** Central HTTP discovery and invocation connect
+control-panel profiles to the reviewed catalog. Development and production source
+configurations include the independent central binding and enable Skills,
+direct-directory and governance. Managed connections store their endpoint policy
+through the control panel. OAuth encryption derives its key from the existing
+deployment secret. See [release status](../release-readiness.md) for deployment
+and upgrade steps, and the [rollout ledger](../central-rollout.md) for acceptance evidence.
 
 ## What is implemented
 

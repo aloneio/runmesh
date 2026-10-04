@@ -2,13 +2,13 @@
 
 [English](admin-guide.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
-将 Runmesh 控制端部署到 Cloudflare Workers，连接 MCP、安装 Skill，再接入 AI 客户端。需要访问计算机时，注册执行任务的 Linux、macOS 或 Windows 主机。MCP 和 Skill 共享已提供于 0.1.6 候选版本与开发渠道。
+将 Runmesh 控制端部署到 Cloudflare Workers，连接 MCP、安装 Skill，再接入 AI 客户端。需要访问计算机时，注册执行任务的 Linux、macOS 或 Windows 主机。Runmesh 0.1.6 提供 MCP 和 Skill 共享。
 
 ## 准备部署
 
 准备 Cloudflare 账号、公网 HTTPS Worker 地址、至少 12 个字符的管理员密码，以及每台主机和工作区的最小权限方案。
 
-当前已签名正式版与候选版本见[发行状态](release-readiness.md)。生产环境从 `main` 上包含对应发行激活记录的已审核源码部署。安装包的可用情况见[发行状态](release-readiness.md)；测试后续改动时，使用独立的 `dev` Worker 和资源。
+已签名安装包、部署和升级步骤见[发行状态](release-readiness.md)。生产环境从 `main` 上包含对应发行激活记录的已审核源码部署。测试后续改动时，使用独立的 `dev` Worker 和资源。
 
 已激活的正式版本在 Cloudflare Workers Builds 中连接仓库并选择 `main`，仓库根目录构建命令设为 `npm run build`，部署命令为：
 

@@ -2,7 +2,7 @@
 
 [English](central-remote-mcp.md) · [MCP 和 Skill 指南](central-administration.zh-CN.md)
 
-在控制端添加一次 MCP，即可通过已连接的 AI 客户端使用其启用的工具。本指南适用于 0.1.6 候选版本与开发渠道。
+在控制端添加一次 MCP，即可通过已连接的 AI 客户端使用其启用的工具。本指南适用于 Runmesh 0.1.6。
 
 ## 添加连接
 

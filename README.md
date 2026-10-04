@@ -22,9 +22,9 @@ Runmesh connects ChatGPT, Claude, Cursor, and other MCP-compatible clients to co
 
 Each execution machine runs a Runmesh Runner, which connects to the control plane over an encrypted outbound connection. Files and commands are handled on the machine, and requested output passes through the control plane to the authenticated client. The control plane stores configuration, bounded audit metadata and optional recent Job metadata.
 
-Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, running builds and operational tasks, and giving each client a precise set of machines, workspaces, and capabilities.
+Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, and running builds and operational tasks. Manage workspaces on each Runner, set client computer permissions, and add Runner access restrictions where needed.
 
-The 0.1.6 candidate also brings MCP connections and Skills into the control panel. Connect an MCP with its URL and authentication choice, or install a Skill folder, then use the shared collection from your AI clients. See the [MCP and Skill guide](docs/central-administration.md) and [release status](docs/release-readiness.md).
+Runmesh 0.1.6 brings MCP connections and Skills into the control panel. Connect an MCP with its URL and authentication choice, or install a Skill folder, then use the shared collection from your AI clients. See the [MCP and Skill guide](docs/central-administration.md) and [release status](docs/release-readiness.md).
 
 ## Get started
 

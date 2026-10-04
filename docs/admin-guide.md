@@ -2,13 +2,13 @@
 
 [简体中文](admin-guide.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-Deploy the Runmesh control plane on Cloudflare Workers, connect your MCPs and install Skills, then add AI clients. For computer access, enroll the Linux, macOS or Windows machines that will execute work. MCP and Skill sharing is available in the 0.1.6 candidate and development channel.
+Deploy the Runmesh control plane on Cloudflare Workers, connect your MCPs and install Skills, then add AI clients. For computer access, enroll the Linux, macOS or Windows machines that will execute work. MCP and Skill sharing is available in Runmesh 0.1.6.
 
 ## Prepare the deployment
 
 Prepare a Cloudflare account, a public HTTPS Worker origin, an administrator password of at least 12 characters, and a least-privilege plan for each machine and workspace.
 
-See [release status](release-readiness.md) for the current signed stable release and candidate. For production, deploy the reviewed `main` source containing its release activation. Check [release status](release-readiness.md) for package availability; test upcoming changes with a separate `dev` Worker and resources.
+See [release status](release-readiness.md) for signed packages and deployment and upgrade steps. For production, deploy the reviewed `main` source containing its release activation. Test upcoming changes with a separate `dev` Worker and resources.
 
 For an activated production release, connect the repository to Cloudflare Workers Builds, choose `main`, and set the repository-root build command to `npm run build`. Deploy with:
 

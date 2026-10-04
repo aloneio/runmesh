@@ -2,23 +2,23 @@
 
 [Documentation](README.md) · [Chinese](README.zh-CN.md) · [Release notes](release-notes.md) · [Upgrade guide](upgrading.md)
 
-## Current status: 0.1.6 candidate; 0.1.5 stable
+## Current release: 0.1.6
 
 | Version | Status | Use |
 | --- | --- | --- |
-| `0.1.6` | CANDIDATE; signing and publication pending | Release preparation and development verification |
-| `0.1.5` | RELEASED; signed stable distribution verified | Current production installation and recovery |
+| `0.1.6` | RELEASED; signed public package independently verified | Installation and upgrades with the reviewed control-plane activation |
+| `0.1.5` | RELEASED; previous signed stable distribution | Existing installations and recovery |
 | `0.1.4` | RELEASED; previous stable distribution | Existing installations and historical recovery |
 
-The deployed stable channel serves 0.1.5. The 0.1.6 candidate aligns the package, lockfile and installer identities without reusing the prior release signature or activation record. Candidate commits preserve the running production Worker until independent signed-asset verification and a reviewed activation are complete.
+The 0.1.6 signed Runner package is published and independently verified. Deploy the reviewed release activation to select this version for stable installations. Check the deployed Worker at `/health` and its signed package descriptor at `/runner/releases/stable` before updating Runners.
 
-The candidate includes production bindings and exports for MCP connections and shared Skills, alongside the existing Registry and Runner namespaces. Run `npm run setup:secrets -- --env production` to inspect initialization requirements; its explicit `--apply` action creates only missing values for the two existing secrets. OAuth encryption derives its key from `INTERNAL_CONTROL_SECRET`. Retain both existing secrets during upgrades.
+Runmesh 0.1.6 includes production bindings and exports for MCP connections and shared Skills, alongside the existing Registry and Runner namespaces. Run `npm run setup:secrets -- --env production` to inspect initialization requirements; its explicit `--apply` action creates only missing values for the two existing secrets. OAuth encryption derives its key from `INTERNAL_CONTROL_SECRET`. Retain both existing secrets during upgrades.
 
-Before promotion, complete the real-client and supplier checks in the [central rollout ledger](central-rollout.md), obtain exact-source evidence from both CI providers, and record the development deployment separately from the release acceptance results.
+For each promotion, record real-client and supplier checks in the [central rollout ledger](central-rollout.md), obtain exact-source evidence from both CI providers, and distinguish development deployment, signed publication and production acceptance.
 
 ## Choosing an installation or upgrade
 
-Choose a verified signed release containing the changes you need. During a compatible upgrade, preserve existing resources, credentials and profiles. Use the candidate in a test environment; production installation follows completion of its signed release and activation record.
+Choose the verified 0.1.6 package and follow the [upgrade guide](upgrading.md) to deploy the reviewed activation, update Runners and refresh client catalogs. Preserve existing resources, credentials and profiles. Rehearse the full combination in a test environment before applying it to production.
 
 ## Maintainer publication checklist
 

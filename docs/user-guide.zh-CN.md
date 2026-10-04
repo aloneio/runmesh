@@ -16,7 +16,7 @@ https://your-host.example/<generated-secret>/mcp
 
 ## 使用共享 MCP 工具和 Skill
 
-0.1.6 候选版本与开发渠道中，有效客户端共享实例内启用的 MCP 工具和 Skill。在客户端刷新 Runmesh 连接即可加载当前内容。你可以让 AI 查找可用工具或阅读 Skill；目录工具包括 `remote_profiles`、`remote_tools`、`skill_list` 和 `skill_read`。
+在 Runmesh 0.1.6 中，有效客户端共享实例内启用的 MCP 工具和 Skill。在客户端刷新 Runmesh 连接即可加载当前内容。你可以让 AI 查找可用工具或阅读 Skill；目录工具包括 `remote_profiles`、`remote_tools`、`skill_list` 和 `skill_read`。
 
 这些操作由控制端处理。连接同时具有计算机访问权限时，再按下面的步骤选择机器。管理员连接 MCP 和安装 Skill 的方法见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
 
