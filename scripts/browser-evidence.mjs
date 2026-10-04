@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { summarizeVitest } from "./test-evidence.mjs";
 import { UI_BROWSER_STAGES } from "./ui-browser-contract.mjs";
-import { mcpHttpDiagnostic } from "./mcp-diagnostics.mjs";
+import { jobCompletionDiagnostic, mcpHttpDiagnostic } from "./mcp-diagnostics.mjs";
 
 export const REQUIRED_BROWSER_TEST = "renders stable single-locale dashboard and navigation in Chromium";
 const browserSources = ["ui-browser-check.mjs", "product-browser-check.mjs", "product-browser-fixture.mjs",
@@ -40,6 +40,11 @@ function failureDetails(messages) {
     details.kind = "mcp_http_failure"; details.http_status = Number(httpStatus);
     const diagnostic = mcpHttpDiagnostic(text);
     if (diagnostic !== undefined) details.mcp_response = diagnostic;
+  }
+  const jobCompletion = jobCompletionDiagnostic(text);
+  if (jobCompletion !== undefined) {
+    if (httpStatus === undefined) details.kind = "job_completion_failure";
+    details.job_completion = jobCompletion;
   }
   const source = /(?:^|[\s(/])((?:scripts\/[a-z-]+\.mjs|test\/e2e\/mcp-runner\.e2e\.test\.ts)):(\d{1,7}):(\d{1,5})(?=$|[\s)])/gmu;
   for (const match of text.matchAll(source)) {

@@ -10,7 +10,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES } from "../scripts/ui-browser-contract.mjs";
-import { createMcpWorkerDiagnosticForwarder, mcpHttpFailure, mcpHttpDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
+import { createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -250,6 +250,28 @@ test("MCP safe summaries validate every classification and never copy additional
     "Error: RUNMESH_E2E_MCP_HTTP_STATUS=500\n" + marker({ ...value, private: "private" }),
   ] }] }] });
   assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "mcp_http_failure", http_status: 500, mcp_response: value }]);
+});
+
+test("Job completion evidence distinguishes terminal failures from timeouts without private fields", () => {
+  const marker = value => "RUNMESH_E2E_JOB_COMPLETION_DIAGNOSTIC=" + JSON.stringify(value);
+  for (const value of [
+    { outcome: "timeout", status: "running", exit_code: null },
+    { outcome: "terminal_failure", status: "failed", exit_code: 1 },
+    { outcome: "tool_error", status: "absent", exit_code: null },
+  ]) {
+    const text = "Job did not complete successfully\n" + marker({ ...value, command: "private-command", job_id: "private-job" });
+    assert.deepEqual(jobCompletionDiagnostic(text), value);
+    assert.deepEqual(browserErrorDiagnostic(new Error(text)), { kind: "job_completion_failure", job_completion: value });
+    assert.ok(!JSON.stringify(browserErrorDiagnostic(new Error(text))).includes("private"));
+  }
+  const valid = { outcome: "timeout", status: "running", exit_code: null };
+  for (const patch of [
+    { outcome: "private" }, { status: "private" }, { exit_code: "private" }, { exit_code: 0.5 },
+    { exit_code: 2147483648 }, { exit_code: -2147483649 },
+  ]) assert.equal(jobCompletionDiagnostic(marker({ ...valid, ...patch })), undefined);
+  assert.equal(jobCompletionDiagnostic("private " + marker(valid)), undefined);
+  assert.equal(jobCompletionDiagnostic(marker(valid) + "private"), undefined);
+  assert.equal(jobCompletionDiagnostic(marker({ ...valid, private: "x".repeat(257) })), undefined);
 });
 
 test("MCP Worker diagnostics cross fragmented process output into the final safe evidence", () => {
