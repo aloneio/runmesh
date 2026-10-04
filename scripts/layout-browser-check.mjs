@@ -16,6 +16,7 @@ import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
 
 // Reuse public render fixtures; measurements exercise the shipped CSS and browser bundle.
 const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage, clientsPage, clientDetailPage, runnersPage, runnerDetailPage };
+const viewports = [320, 390, 768, 800, 801, 900, 1024, 1051, 1365, 1440, 1787];
 async function fixtureDocuments() {
   const { cases } = JSON.parse(await readFile(new URL('../apps/worker/test/fixtures/admin-render-golden.json', import.meta.url), 'utf8'));
   const documents = new Map();
@@ -30,6 +31,14 @@ async function fixtureDocuments() {
     const body = views[fixture.fn](...args);
     documents.set('/layout/' + fixture.name, body.startsWith('<!doctype') ? body : adminDocument('Layout fixture', body, 'clients'));
   }
+  const [clientData, csrf] = structuredClone(cases.find(fixture => fixture.name === 'clients-populated').args);
+  clientData.runners[0].display_name = 'ProductionRunnerWithoutSpaces'.repeat(5);
+  clientData.runners[0].runner_id = 'runner-' + '0123456789abcdef'.repeat(2);
+  clientData.clients[0] = { ...clientData.clients[0], label: 'TeamClientWithoutSpaces'.repeat(4), active_runner_id: clientData.runners[0].runner_id,
+    scopes: ['coding:read', 'coding:write', 'coding:exec'], last_used_at_ms: Date.UTC(2026, 9, 4, 0, 50, 21, 590) };
+  clientData.clients.push({ ...clientData.clients[0], client_id: 'client-unselected', active_runner_id: null });
+  documents.set('/layout/clients-long-values', adminDocument('Client layout fixture', clientsPage(clientData, csrf), 'clients'));
+  documents.set('/layout/client-detail-long-values', adminDocument('Client detail layout fixture', clientDetailPage(clientData.clients[0], clientData.runners, [], csrf), 'clients'));
   documents.set('/layout/central', adminDocument('MCP & Skill', centralPage('fixture-csrf', true, true), 'central'));
   for (const [name, bootstrap, executionMode] of [
     ['one-command', true, 'dedicated_user'], ['privileged', true, 'privileged_host'], ['manual', false, 'dedicated_user'],
@@ -82,6 +91,25 @@ async function layoutIssues(page) {
       const button = form.querySelector('button'), area = rect(form), control = rect(button);
       if (['top', 'bottom', 'left', 'right'].some(edge => Math.abs(area[edge] - control[edge]) > 1)) issues.push('client action button does not fill its grid cell');
     }
+    for (const cell of document.querySelectorAll('.client-table td')) {
+      const area = rect(cell), column = cell.cellIndex + 1;
+      for (const control of cell.querySelectorAll('input:not([type=hidden]),select,button,a,.runner-selection-controls,.runner-selection-form')) {
+        if (visible(control) && !inside(rect(control), area)) issues.push('client column ' + column + ' control crosses its cell boundary');
+      }
+      const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        if (!text.textContent.trim() || text.parentElement.closest('select,option') || !visible(text.parentElement)) continue;
+        const range = document.createRange(); range.selectNodeContents(text);
+        if ([...range.getClientRects()].some(line => !inside(line, area))) issues.push('client column ' + column + ' text crosses its cell boundary');
+      }
+    }
+    const recording = document.querySelector('form[action$="/recording"]');
+    if (recording) {
+      const items = [...recording.children].filter(node => node.tagName !== 'INPUT').map(rect), area = rect(recording);
+      if (items.some(item => !inside(item, area))) issues.push('recording form content crosses its boundary');
+      if (items.some((item, index) => index > 0 && item.top < items[index - 1].bottom - 1)) issues.push('recording form label, select, help and action are not in reading order');
+      if (items.some(item => Math.abs(item.left - area.left) > 1)) issues.push('recording form fields are not aligned');
+    }
     for (const label of document.querySelectorAll('.scope-selector-row .check')) {
       if (!visible(label)) continue;
       const input = rect(label.querySelector('input')), title = rect(label.querySelector('strong'));
@@ -129,7 +157,7 @@ export async function checkAdminLayout(executable) {
   try {
     browser = await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) });
     const page = await browser.newPage(); page.on('pageerror', error => errors.push(error.message));
-    for (const locale of ['en', 'zh-CN']) for (const width of [320, 390, 768, 900, 1024, 1365]) for (const path of documents.keys()) {
+    for (const locale of ['en', 'zh-CN']) for (const width of viewports) for (const path of documents.keys()) {
       await page.setViewportSize({ width, height: 1000 });
       await page.goto(origin + path + '?lang=' + locale);
       if (path.endsWith('/central')) await page.locator('[data-central-product][aria-busy="false"]').waitFor();
@@ -173,7 +201,7 @@ export async function checkAdminLayout(executable) {
     assert.ok(Math.abs(resizedHeight - freshHeight) <= 1, 'Command panels must release the height measured on a narrow viewport');
     assert.deepEqual(errors, [], 'Layout fixtures must not throw browser errors');
     assert.deepEqual(failures, [], 'UI geometry regressions: ' + JSON.stringify(failures));
-    return { state: 'passed', measurements, locales: ['en', 'zh-CN'], viewports: [320, 390, 768, 900, 1024, 1365], screenshots: 0 };
+    return { state: 'passed', measurements, locales: ['en', 'zh-CN'], viewports, client_cell_content_contained: true, recording_form_order_and_alignment: true, screenshots: 0 };
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 }
 

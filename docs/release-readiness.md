@@ -24,6 +24,8 @@ Choose a verified signed release containing the changes you need. During a compa
 
 For each new release, keep package and lockfile versions, installer identity and release notes aligned at the selected version. Promote reviewed changes from `dev` to protected `main` through the [main promotion policy](main-promotion-policy.md).
 
+Prepare the publication notes in `docs/releases/<version>.md`, starting with `# Runmesh <version>`. The release workflow uses this version's notes; the documentation index and release status track the candidate, publication and activation separately.
+
 The exact main candidate must pass GitHub `verify-all`, native-platform/Node LTS/browser verification and the required cross-provider checks. Execute candidate-bound security regressions, verify the exact portable archive end to end, and bind the signed manifest and annotated tag to that candidate. Independently verify draft and public assets before recording the new RELEASED/ENABLED state. Keep existing immutable releases intact.
 
 After activation, deploy the Worker, verify its build provenance and release descriptor, then verify the installed Runner service lifecycle and permissions. The protected GitHub and GitLab main branches must point to the same reviewed source commit before signing.
