@@ -503,6 +503,8 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
 .sub-id,small{display:block;color:var(--muted);font-size:12px;font-family:var(--font-mono)}
 .num-cell{font-variant-numeric:tabular-nums;font-weight:600}
 .time-cell{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+.timestamp{display:inline-flex;flex-direction:column;line-height:1.5}
+.timestamp>span{white-space:nowrap;overflow-wrap:normal;word-break:normal}
 .platform-tag{
   display:inline-block;
   padding:2px 7px;
@@ -1763,6 +1765,7 @@ tbody tr:hover{background:#f8fafc}
 .runner-actions .danger-action-buttons .small{flex:1 1 auto}
 .client-table{min-width:0;table-layout:fixed}
 .client-table td{overflow-wrap:anywhere}
+.client-table .credential-badge{white-space:nowrap;overflow-wrap:normal;word-break:normal}
 .client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:12%}.client-table th:nth-child(3){width:16%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:11%}.client-table th:nth-child(6){width:27%}
 .client-table .actions{vertical-align:top;width:auto;min-width:0}
 .client-table .action-btn-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%}
@@ -1798,9 +1801,9 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
   .runner-table td,.client-table td{padding:5px 0;border:0}
   .runner-table td::before,.client-table td::before{display:block;margin-bottom:3px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
   .runner-table td:nth-child(1)::before{content:"Runner"}.runner-table td:nth-child(2)::before{content:"Status"}.runner-table td:nth-child(3)::before{content:"Platform"}.runner-table td:nth-child(4)::before{content:"Execution mode"}.runner-table td:nth-child(5)::before{content:"Last seen"}.runner-table td:nth-child(6)::before{content:"Actions"}
-  .client-table td:nth-child(1)::before{content:"Client"}.client-table td:nth-child(2)::before{content:"Scopes"}.client-table td:nth-child(3)::before{content:"Active runner"}.client-table td:nth-child(4)::before{content:"Last used"}.client-table td:nth-child(5)::before{content:"Status"}.client-table td:nth-child(6)::before{content:"Actions"}
+  .client-table td:nth-child(1)::before{content:"Client"}.client-table td:nth-child(2)::before{content:"Scopes"}.client-table td:nth-child(3)::before{content:"Active runner"}.client-table td:nth-child(4)::before{content:"Last used"}.client-table td:nth-child(5)::before{content:"Credential status"}.client-table td:nth-child(6)::before{content:"Actions"}
   html[lang="zh-CN"] .runner-table td:nth-child(1)::before{content:"Runner"}html[lang="zh-CN"] .runner-table td:nth-child(2)::before{content:"状态"}html[lang="zh-CN"] .runner-table td:nth-child(3)::before{content:"平台"}html[lang="zh-CN"] .runner-table td:nth-child(4)::before{content:"执行模式"}html[lang="zh-CN"] .runner-table td:nth-child(5)::before{content:"最后在线"}html[lang="zh-CN"] .runner-table td:nth-child(6)::before{content:"操作"}
-  html[lang="zh-CN"] .client-table td:nth-child(1)::before{content:"客户端"}html[lang="zh-CN"] .client-table td:nth-child(2)::before{content:"权限范围"}html[lang="zh-CN"] .client-table td:nth-child(3)::before{content:"活跃 Runner"}html[lang="zh-CN"] .client-table td:nth-child(4)::before{content:"最后使用"}html[lang="zh-CN"] .client-table td:nth-child(5)::before{content:"状态"}html[lang="zh-CN"] .client-table td:nth-child(6)::before{content:"操作"}
+  html[lang="zh-CN"] .client-table td:nth-child(1)::before{content:"客户端"}html[lang="zh-CN"] .client-table td:nth-child(2)::before{content:"权限范围"}html[lang="zh-CN"] .client-table td:nth-child(3)::before{content:"活跃 Runner"}html[lang="zh-CN"] .client-table td:nth-child(4)::before{content:"最后使用"}html[lang="zh-CN"] .client-table td:nth-child(5)::before{content:"凭据状态"}html[lang="zh-CN"] .client-table td:nth-child(6)::before{content:"操作"}
   .runner-actions,.client-table .action-btn-group{grid-template-columns:1fr}
   .runner-actions .inline-action-form:first-of-type,.client-table .inline-action-form:first-of-type{grid-column:auto}
   .enrollment-dialog{padding:22px 18px}

@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "a7d0a3e4c0aa2b28a8dded3921b9dc67219d0f563ee302777d9efba43c1a47c8",
-      "bytes": 131382,
+      "sha256": "1cdf8b64a5da77791950fef2cebbf5830467255bbf5c4ed6691b0f46eb5c2ac0",
+      "bytes": 131635,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "db151b22ecf90d785d907dca6036803e5e31c708488f9e8f177f744a499a5738",
-      "bytes": 131970,
+      "sha256": "b1a1d34daa766cad44baf59f07d9055ef4dd5af8935080b6462f94a046e5fa3e",
+      "bytes": 132223,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "e7e424a79f8db9d0676a05f9011ab33e50ec7d801897b14d31b4880c0de22026",
-      "bytes": 133118,
+      "sha256": "8c1f4c3ae50723df625e56f75c0521cc5c62c42f01dc5577825ae4e9e158d4dd",
+      "bytes": 133371,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -217,8 +217,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "3a9b5f797b74f097975101112db7405f86b62614c7c668166a94a9d71695006a",
-      "bytes": 4732,
+      "sha256": "e93e35d3ae5f68d0ccfc78bd4c1af2851e4e29a22ee7a886edab9df427cfe41f",
+      "bytes": 4738,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "b69b2050641116fccf76ceaa8bf7a6a98c70f632b4ca7a5b519c771b37b65316",
-      "bytes": 133467,
+      "sha256": "dd5cf3d1a403b76146794f8ef2eb825677127d140c591c16a5786a6e4d666af5",
+      "bytes": 133720,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",

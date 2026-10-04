@@ -4,10 +4,11 @@ import type { HistoryView } from "../history-ui.js";
 import { adminJobUrl } from "./job-views.js";
 import { escapeHtml, time, statusClass } from "./format.js";
 
-export function clientCredentialBadge(revoked: boolean): string {
+export function clientCredentialBadge(revoked: boolean, format: "full" | "compact" = "full"): string {
   const style = revoked ? "offline" : "online";
-  const label = message(revoked ? "client.credential.revoked" : "client.credential.active", "en");
-  return '<span class="badge ' + style + '"><span class="status-dot ' + style + '"></span>' + label + '</span>';
+  const key = format === "compact" ? (revoked ? "text.revoked" : "client.credential.active.short") : (revoked ? "client.credential.revoked" : "client.credential.active");
+  const label = message(key, "en");
+  return '<span class="badge ' + style + (format === "compact" ? ' credential-badge' : '') + '"><span class="status-dot ' + style + '"></span>' + label + '</span>';
 }
 
 export function jobTable(jobs: readonly Record<string, unknown>[], runnerId?: string): string {
