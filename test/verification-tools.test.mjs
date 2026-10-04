@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWiring } from "../scripts/verification-plan.mjs";
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
-import { UI_BROWSER_STAGES } from "../scripts/ui-browser-contract.mjs";
+import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
 import { createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
@@ -130,6 +130,22 @@ test("browser lifecycle summaries keep classified stages without private failure
     assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind, stage: "dashboard_initial" }]);
     assert.ok(!JSON.stringify(summary).includes("private"));
   }
+});
+
+test("browser navigation diagnostics retain only complete fixed condition markers", () => {
+  for (const state of UI_BROWSER_NAVIGATION_STATES) {
+    const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed",
+      failureMessages: [`Browser navigation readiness timed out after 5000 ms\nRUNMESH_E2E_UI_NAVIGATION_STATE=${state} (stage: clients_navigation)\nprivate-cookie private-response`],
+    }] }] });
+    assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind: "browser_navigation_timeout", stage: "clients_navigation", navigation_state: state }]);
+    assert.doesNotMatch(JSON.stringify(summary), /private/u);
+  }
+  for (const marker of ["private_token", "navigation_busy?private-token", "navigation_busy private-token", "navigation_busy/secret", ""])
+    assert.equal(browserErrorDiagnostic({ message: `Browser navigation readiness timed out\nRUNMESH_E2E_UI_NAVIGATION_STATE=${marker} (stage: clients_navigation)` }).navigation_state, undefined);
+  for (const message of ["private-response\nRUNMESH_E2E_UI_NAVIGATION_STATE=navigation_busy (stage: clients_navigation)",
+    "Browser navigation readiness timed out\nprivate-response RUNMESH_E2E_UI_NAVIGATION_STATE=navigation_busy (stage: clients_navigation)",
+    "Browser navigation readiness timed out\nRUNMESH_E2E_UI_NAVIGATION_STATE=navigation_busy (stage: clients_navigation)private-response"])
+    assert.equal(browserErrorDiagnostic({ message }).navigation_state, undefined);
 });
 
 test("MCP HTTP failures retain only a bounded status from the exact fixed marker", () => {

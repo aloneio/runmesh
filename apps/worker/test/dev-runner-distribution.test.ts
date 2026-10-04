@@ -5,8 +5,7 @@ import { developmentReleaseDependencies, registryDevelopmentReleaseCache } from 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerReleaseDescriptor as resolveRelease, createDevelopmentReleaseRuntime, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
-import { REVIEWED_RELEASE_VERSION } from "../src/generated-release.js";
-import { matchesDevelopmentRelease } from "../src/domain/release-selection.js";
+import { isDevelopmentReleaseVersion } from "../src/domain/release-selection.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
 import { boundedJson, readDevelopmentReleaseCache, releaseFetch } from "../src/distribution/release-io.js";
 
@@ -18,10 +17,8 @@ function resolveRunnerReleaseDescriptor(environment: RunnerReleaseEnvironment, f
   return resolveRelease(environment, { fetch: fetchImpl, verify: verifyDevelopmentRunnerRelease, cache: undefined, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
 }
 
-// A candidate is the next stable core already; a released source advances it.
-const [releaseMajor, releaseMinor, releasePatch] = FIXED_RELEASE_VERSION.split(".");
-const devPatch = Number(releasePatch) + (REVIEWED_RELEASE_VERSION ? 1 : 0);
-const devCore = `${releaseMajor}.${releaseMinor}.${devPatch}`;
+// Development fixtures remain independent of the Worker's stable activation.
+const devCore = "0.1.8";
 const devVersion = (sequence: number | string): string => `${devCore}-dev.${sequence}`;
 
 const staticAssets = ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json"];
@@ -156,14 +153,28 @@ it("stalled cancellation does not block a trusted release redirect", async () =>
 });
 
 describe("development Runner distribution", () => {
+  it("keeps the published development release available across a stable activation", async () => {
+    const verify = vi.fn(async () => undefined);
+    const descriptor = await discoverDevelopmentRunnerRelease(responseFetch([
+      release("0.1.6-dev.35", "2026-10-04T00:49:02Z"),
+    ]), verify);
+    expect(descriptor).toMatchObject({ channel: "dev", distributable: true, package_version: "0.1.6-dev.35" });
+    expect(descriptor.package_spec).toBe("https://github.com/aloneio/runmesh/releases/download/v0.1.6-dev.35/runmesh-runner-0.1.6-dev.35.tgz");
+    expect(verify).toHaveBeenCalledExactlyOnceWith(descriptor, expect.any(Function));
+  });
+
   it.each([
-    ["0.1.5", true, "0.1.6-dev.26", true],
-    ["0.1.6", false, "0.1.6-dev.26", true],
-    ["0.1.6", false, "0.1.7-dev.0", false],
-    ["0.1.6", true, "0.1.7-dev.0", true],
-    ["0.1.6", true, "0.1.6-dev.26", false],
-  ] as const)("matches source %s with published=%s against %s", (source, published, version, expected) => {
-    expect(matchesDevelopmentRelease(version, source, published)).toBe(expected);
+    ["0.1.6-dev.35", true],
+    ["0.1.8-dev.38", true],
+    ["2.0.0-dev.40", true],
+    ["0.1.7", false],
+    ["0.1.8-rc.38", false],
+    ["0.1.8-dev.038", false],
+    ["0.1.8-dev.38+local", false],
+    ["9007199254740992.0.0-dev.38", false],
+    ["0.1.8-dev.9007199254740992", false],
+  ] as const)("validates development release version %s", (version, expected) => {
+    expect(isDevelopmentReleaseVersion(version)).toBe(expected);
   });
   it("HTTP composition invokes native workerd fetch with its correct receiver", async () => {
     const dependencies = developmentReleaseDependencies({ ...env, REGISTRY: {} } as never);
@@ -178,7 +189,7 @@ describe("development Runner distribution", () => {
   it("selects the newest complete immutable dev prerelease and ignores unsafe candidates", async () => {
     const fetchImpl = responseFetch([
       release(devVersion(0), "2026-09-16T08:00:00Z"),
-      release("0.1.0-dev.5", "2026-09-16T14:00:00Z"),
+      release("0.1.0-rc.5", "2026-09-16T14:00:00Z"),
       release(devVersion(4), "2026-09-16T12:00:00Z", { immutable: false }),
       release(devVersion(3), "2026-09-16T11:00:00Z", { assets: [{ name: "manifest.json" }] }),
       release(devVersion(2), "2026-09-16T10:00:00Z", { draft: true }),
@@ -191,18 +202,20 @@ describe("development Runner distribution", () => {
     expect(descriptor.package_spec).toBe(`https://github.com/aloneio/runmesh/releases/download/v${devVersion(1)}/runmesh-runner-${devVersion(1)}.tgz`);
   });
 
-  it("rejects prereleases from the old baseline and a later patch core", async () => {
-    for (const version of [`${releaseMajor}.${releaseMinor}.${devPatch - 1}-dev.0`, `${releaseMajor}.${releaseMinor}.${devPatch + 1}-dev.0`]) {
-      const verify = vi.fn(async () => undefined);
-      await expect(discoverDevelopmentRunnerRelease(responseFetch([release(version, "2026-09-16T08:00:00Z")]), verify)).rejects.toThrow("no immutable signed development Runner release");
-      expect(verify).not.toHaveBeenCalled();
-    }
+  it("selects the latest development batch across stable version cores", async () => {
+    const verify = vi.fn(async () => undefined);
+    const descriptor = await discoverDevelopmentRunnerRelease(responseFetch([
+      release("0.1.6-dev.35", "2026-10-04T10:00:00Z"),
+      release("0.1.8-dev.38", "2026-10-04T09:00:00Z"),
+    ]), verify);
+    expect(descriptor.package_version).toBe("0.1.8-dev.38");
+    expect(verify).toHaveBeenCalledExactlyOnceWith(descriptor, expect.any(Function));
   });
 
-  it("verifies the dev manifest with Ed25519 before advertising the release", async () => {
-    const metadataFetch = responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]);
+  it.each(["0.1.6-dev.35", "0.1.8-dev.38"])("verifies the signature and protocol of development release %s", async version => {
+    const metadataFetch = responseFetch([release(version, "2026-09-16T08:00:00Z")]);
     const descriptor = await discoverDevelopmentRunnerRelease(metadataFetch, async () => undefined);
-    const target = installerReleaseTarget(devVersion(0), "dev");
+    const target = installerReleaseTarget(version, "dev");
     const manifest = { schema_version: 1, project: "runmesh", version: target.version, tag: target.tag, channel: "dev", prerelease: true, commit_sha: "a".repeat(40), protocol_min: 2, protocol_max: 2, published_at: "2026-09-16T08:00:00Z", artifacts: [{ name: target.artifact_name, platform: "node", architecture: "portable", node_major_min: 22, url: target.artifact_url, size: 123, sha256: "b".repeat(64) }] };
     const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
     const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]) as CryptoKeyPair;
@@ -227,6 +240,30 @@ describe("development Runner distribution", () => {
       throw new Error(`unexpected release URL: ${url}`);
     }) as unknown as typeof fetch;
     await expect(verifyDevelopmentRunnerRelease(descriptor, tamperedFetch, { key_id: "test-dev-key", public_key_pem: publicKeyPem })).rejects.toThrow("signature does not verify");
+
+    const incompatibleBytes = new TextEncoder().encode(JSON.stringify({ ...manifest, protocol_min: 3, protocol_max: 3 }));
+    const incompatibleSignature = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, keyPair.privateKey, incompatibleBytes));
+    const incompatibleFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === target.manifest_url) return new Response(incompatibleBytes);
+      if (url === target.signature_url) return new Response(toBase64(incompatibleSignature));
+      if (url === target.signature_descriptor_url) return new Response(signatureDescriptor);
+      throw new Error(`unexpected release URL: ${url}`);
+    }) as unknown as typeof fetch;
+    await expect(verifyDevelopmentRunnerRelease(descriptor, incompatibleFetch, { key_id: "test-dev-key", public_key_pem: publicKeyPem })).rejects.toThrow("development release manifest is invalid");
+  });
+
+  it("preserves a verified cached development batch after stable activation", async () => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([
+      release("0.1.6-dev.35", "2026-10-04T00:49:02Z"),
+    ]), async () => undefined);
+    const cache = { match: vi.fn(async () => Response.json({ schema_version: 1, verified_at_ms: Date.now(), descriptor: seed })), put: vi.fn(async () => undefined) };
+    const offline = responseFetch({}, 503), verify = vi.fn(async () => undefined);
+    const descriptor = await discoverDevelopmentRunnerRelease(offline, verify, cache);
+    expect(descriptor).toEqual(seed);
+    expect(offline).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    expect(cache.put).not.toHaveBeenCalled();
   });
 
   it("retries bounded transient GitHub failures but does not weaken release validation", async () => {

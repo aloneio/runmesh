@@ -82,7 +82,7 @@ MCP 地址本身就是凭据，在创建或轮换时显示。请妥善保存，�
 
 ## 版本与升级
 
-当前正式版本和安装可用情况见[发行状态](docs/release-readiness.md)，后续改进见[版本说明](docs/release-notes.zh-CN.md)。开发环境使用单独验证的预发布渠道。
+当前正式版本和安装可用情况见[发行状态](docs/release-readiness.md)，版本变化与升级指引见[版本说明](docs/release-notes.zh-CN.md)。开发环境使用单独验证的预发布渠道。
 
 升级分为三步：部署 Worker、安装目标 Runner 包、刷新 MCP 客户端工具目录。完成后按[升级指南](docs/upgrading.zh-CN.md)验证一个代表性任务。
 

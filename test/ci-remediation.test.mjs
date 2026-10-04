@@ -10,7 +10,7 @@ import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
 import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, LTS_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, checkCommand } from "../scripts/ci-contract.mjs";
 import { gateEvidence, gateJUnit, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
-import { browserEvidence, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
+import { browserEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { closeUiBrowserSocket, createUiBrowserProtocol, waitForUiBrowserEndpoint, waitForUiBrowserSocket, waitForUiNavigation } from "../scripts/ui-browser-check.mjs";
 
 function fixture() {
@@ -315,6 +315,62 @@ test("CI04 an unmet browser navigation deadline fails instead of inspecting the 
   const h = navigationFixture();
   await assert.rejects(waitForUiNavigation(h.tab, { url: h.state.url, locale: "en" }, h.clock), /navigation readiness timed out after 5000 ms/u);
   assert.equal(h.elapsed, 5000);
+});
+
+test("CI04 navigation timeout retains its stage and last unmet condition without private browser state", async () => {
+  for (const [changed, condition] of [
+    [{ url: "http://127.0.0.1:1234/private?token=secret" }, "frame_pending"],
+    [{ locale: "private-locale" }, "locale_pending"],
+    [{ readyState: "loading" }, "document_pending"],
+    [{ initialized: false }, "initialization_pending"],
+    [{ loading: true }, "navigation_busy"],
+  ]) {
+    const h = navigationFixture(), expected = { url: h.state.url, locale: h.state.locale };
+    Object.assign(h.state, changed);
+    await assert.rejects(waitForUiNavigation(h.tab, expected, { ...h.clock, stage: "clients_navigation" }), error => {
+      const diagnostic = browserErrorDiagnostic(error);
+      assert.equal(diagnostic.kind, "browser_navigation_timeout");
+      assert.equal(diagnostic.stage, "clients_navigation");
+      assert.equal(diagnostic.navigation_state, condition);
+      assert.doesNotMatch(error.message, /private|secret|127\.0\.0\.1/u);
+      return true;
+    });
+    assert.equal(h.elapsed, 5000);
+  }
+});
+
+test("CI04 navigation timeout distinguishes a changed frame from readiness returned after the deadline", async () => {
+  for (const condition of ["frame_changed", "deadline_exhausted"]) {
+    const h = navigationFixture(), expected = { url: h.state.url, locale: h.state.locale }, read = h.tab;
+    let frameReads = 0;
+    const tab = async (...args) => {
+      const result = await read(...args);
+      if (args[0] === "Page.getFrameTree" && ++frameReads % 2 === 0) {
+        if (condition === "frame_changed") result.frameTree.frame.loaderId = "private-loader";
+        else h.elapsed = 5000;
+      }
+      return result;
+    };
+    await assert.rejects(waitForUiNavigation(tab, expected, { ...h.clock, stage: "dashboard_return" }), error => {
+      assert.equal(browserErrorDiagnostic(error).navigation_state, condition);
+      assert.equal(browserErrorDiagnostic(error).stage, "dashboard_return");
+      assert.doesNotMatch(error.message, /private/u);
+      return true;
+    });
+    assert.equal(h.elapsed, 5000);
+  }
+});
+
+test("CI04 context changes remain transient and report their condition only if navigation exhausts its budget", async () => {
+  const h = navigationFixture(), expected = { url: h.state.url, locale: h.state.locale };
+  const changed = () => { h.evaluateError = Object.assign(new Error("Execution context was destroyed."), { code: -32000 }); };
+  changed(); h.onPause = changed;
+  await assert.rejects(waitForUiNavigation(h.tab, expected, { ...h.clock, stage: "locale_navigation" }), error => {
+    assert.equal(browserErrorDiagnostic(error).navigation_state, "context_changed");
+    assert.equal(browserErrorDiagnostic(error).stage, "locale_navigation");
+    return true;
+  });
+  assert.equal(h.elapsed, 5000); assert.equal(h.polls, 100);
 });
 
 test("CI04 only recognized destroyed-context CDP errors are retried during navigation", async () => {

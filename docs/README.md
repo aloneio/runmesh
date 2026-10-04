@@ -15,7 +15,7 @@ Choose a guide for the task you want to complete. Start with the user guide to c
 | Prepare a Skill folder and update its contents | [Skill installation](central-skills.md) |
 | Update an existing installation and preserve its data | [Upgrade guide](upgrading.md) |
 | Resolve connection, permission, installation or Job problems | [Troubleshooting](troubleshooting.md) |
-| Check shipped changes versus upcoming improvements | [Release notes](release-notes.md) |
+| Read version changes and upgrade guidance | [Release notes](release-notes.md) |
 
 ## Installation and safe operation
 

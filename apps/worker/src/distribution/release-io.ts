@@ -1,6 +1,6 @@
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 import { FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS, FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, MAX_RELEASE_ASSET_BYTES, installerReleaseTarget } from "../domain/release-config.js";
-import { isRecord, isCurrentDevelopmentVersion, validatedCachedDevelopmentRelease } from "../domain/release-selection.js";
+import { isRecord, isDevelopmentReleaseVersion, validatedCachedDevelopmentRelease } from "../domain/release-selection.js";
 import { releaseManifestProblem } from "../domain/release-manifest.js";
 import type { RunnerReleaseDescriptor, DevelopmentReleaseCache, CachedDevelopmentReleaseRecord } from "../contracts/runner-release.js";
 import { boundedJsonResponse } from "../bounded-json.js";
@@ -110,7 +110,7 @@ export interface DevelopmentReleaseTrust { readonly key_id: string; readonly pub
 const FIXED_DEVELOPMENT_TRUST: DevelopmentReleaseTrust = { key_id: FIXED_RELEASE_KEY_ID, public_key_pem: FIXED_RELEASE_PUBLIC_KEY_PEM };
 
 export async function verifyDevelopmentRunnerRelease(descriptor: RunnerReleaseDescriptor, fetchImpl: typeof fetch = fetch, trust: DevelopmentReleaseTrust = FIXED_DEVELOPMENT_TRUST): Promise<void> {
-  if (descriptor.channel !== "dev" || !descriptor.distributable || !isCurrentDevelopmentVersion(descriptor.package_version)) throw new Error("development release descriptor is invalid");
+  if (descriptor.channel !== "dev" || !descriptor.distributable || !isDevelopmentReleaseVersion(descriptor.package_version)) throw new Error("development release descriptor is invalid");
   const target = installerReleaseTarget(descriptor.package_version, "dev");
   // Fetch sequentially: three concurrent unauthenticated GitHub asset requests
   // multiplied transient edge failures and made a valid dev release intermittently

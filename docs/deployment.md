@@ -90,7 +90,7 @@ For hidden code entry, follow the platform instructions in [installer prerequisi
 
 If hosted distribution is unavailable, use the [portable verification and installation procedure](portable-runner-installation.md). Enrollment obtains the Runner ID and credential from the server and creates a centrally managed profile. Configure workspaces in the administrator page after enrollment.
 
-Production installation uses the activated stable release. Development discovers a complete, immutable signed prerelease in the current series. An unavailable dev selection closes that channel's installer. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` disables hosted installation. Details and retry handling are in [development prereleases](dev-runner-prereleases.md).
+Production installation uses the activated stable release. Development discovers a complete, immutable signed prerelease compatible with the Worker protocol. An unavailable dev selection closes that channel's installer. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` disables hosted installation. Details and retry handling are in [development prereleases](dev-runner-prereleases.md).
 
 ## Host profiles and services
 

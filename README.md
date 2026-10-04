@@ -77,7 +77,7 @@ Effective permission is the intersection of the client, Runner, and workspace po
 
 ## Versions and upgrades
 
-See [release status](docs/release-readiness.md) for the current stable release and installation availability, and [release notes](docs/release-notes.md) for upcoming improvements. Development uses a separate verified prerelease channel.
+See [release status](docs/release-readiness.md) for the current stable release and installation availability, and [release notes](docs/release-notes.md) for changes and upgrade guidance. Development uses a separate verified prerelease channel.
 
 An upgrade has three steps: deploy the Worker, install the target Runner package, and refresh the MCP client's tool catalog. Verify a representative task afterward using the [upgrade guide](docs/upgrading.md).
 

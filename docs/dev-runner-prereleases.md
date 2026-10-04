@@ -10,13 +10,13 @@ Updating a test environment has three steps: publish the Runner package, deploy 
 
 ## Choose and verify a package
 
-The development Worker selects complete, public, immutable GitHub prereleases in the current dev version series. Its installer is pinned to that exact tag and verifies the signed manifest, channel, artifact URL and checksum using the embedded trusted Ed25519 key. For a manual install, follow [portable verification](portable-runner-installation.md) with a separately trusted keyring.
+The development Worker selects complete, public, immutable GitHub prereleases with a verified signature and a protocol compatible with the Worker. Its installer is pinned to that exact tag and verifies the signed manifest, channel, artifact URL and checksum using the embedded trusted Ed25519 key. For a manual install, follow [portable verification](portable-runner-installation.md) with a separately trusted keyring.
 
 After installation, compare the package and CLI `--version` with the selected tag, then verify Runner connectivity, policy acknowledgement and the required MCP operations.
 
 The release selection is fresh for 60 seconds and remains usable for up to one hour from signature verification while background refresh runs. Refreshes have a 20-second deadline. Failed refreshes retain the original expiry; expired, future-dated or unavailable selections close the installation entry point. Check the release offered by the installer when verifying a new publication, allowing for this cache window.
 
-Versions are ordered by dev sequence. A delayed older batch therefore leaves a newer selected version in place. Production uses its separately reviewed stable release.
+Versions are ordered by dev sequence. A delayed older batch therefore leaves a newer selected version in place. During Worker updates, a verified compatible dev package can remain available until a new batch is published and verified. Check the displayed package version and its changes before installation. Production uses its separately reviewed stable release.
 
 ## Configure upstream automation
 
