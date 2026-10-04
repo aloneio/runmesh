@@ -69,7 +69,7 @@
   },
   "overrides": {
     "sharp": "0.35.4",
-    "hono": "4.13.5",
+    "hono": "4.13.7",
     "undici": "7.29.1"
   },
   "dependencies": {
