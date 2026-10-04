@@ -12,6 +12,7 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
+import { createMcpWorkerDiagnosticForwarder, mcpHttpFailure } from "../../scripts/mcp-diagnostics.mjs";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -131,7 +132,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc", "--port", String(workerPort), "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
       cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
-    workerLog = collectOutput(worker);
+    workerLog = collectOutput(worker, true);
     worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
     worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
     worker.once("close", (code, signal) => recordWorkerEvent("close", code, signal));
@@ -1002,14 +1003,14 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   async function mcpMessage(name: string, args: Record<string, unknown>, client = clientA): Promise<JsonRpc> {
     if (client === undefined) throw new Error("MCP client setup did not complete");
+    const id = requestId++;
     const response = await fetch(client.endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/call", params: { name, arguments: args } }),
+      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
     });
     if (response.status !== 200) {
-      void response.body?.cancel().catch(() => undefined);
-      throw new Error(`RUNMESH_E2E_MCP_HTTP_STATUS=${response.status}`);
+      throw await mcpHttpFailure(response, id, name, args);
     }
     return readMcp(response);
   }
@@ -1194,10 +1195,16 @@ async function waitForExit(child: ChildProcess, timeout: number, detail: () => s
   ]);
 }
 
-function collectOutput(child: ChildProcess): () => string {
+function collectOutput(child: ChildProcess, diagnostics = false): () => string {
   let output = "";
-  const collect = (chunk: Buffer | string): void => { output = `${output}${chunk.toString()}`.slice(-8_192); };
-  child.stdout?.on("data", collect); child.stderr?.on("data", collect);
+  for (const stream of [child.stdout, child.stderr]) {
+    // Each pipe owns its line buffer, so interleaved stdout/stderr cannot join
+    // private fragments into a diagnostic marker.
+    const forward = diagnostics ? createMcpWorkerDiagnosticForwarder((line: string) => process.stderr.write(line)) : undefined;
+    stream?.on("data", (chunk: Buffer | string) => {
+      const text = chunk.toString(); forward?.(text); output = `${output}${text}`.slice(-8_192);
+    });
+  }
   return () => output;
 }
 function diagnosticErrorCode(error: unknown): string {

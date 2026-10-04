@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { handleMcpSecret } from "../src/http/mcp.js";
 import { MCP_TOOL_NAMES } from "../src/mcp/server.js";
 import type { WorkerEnv } from "../src/platform/env.js";
+import { createMcpWorkerDiagnosticForwarder, mcpWorkerFailureEvidence } from "../../../scripts/mcp-diagnostics.mjs";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -38,6 +39,38 @@ function fixture(central = true, scopes: string[] = ["coding:read"], clientId = 
   }
   return { rpc, rpcBody, registry, principals };
 }
+
+it.each(["factory", "transport"] as const)("SDK %s errors keep HTTP 500 and reach safe CI evidence without exception details", async boundary => {
+  const f = fixture(false), lines: string[] = [];
+  const forward = createMcpWorkerDiagnosticForwarder((line: string) => lines.push(line));
+  const log = vi.spyOn(console, "warn").mockImplementation((line: unknown) => { forward(String(line) + "\n"); });
+  if (boundary === "factory") vi.spyOn(McpServer.prototype, "registerTool").mockImplementation(() => { throw new TypeError("private-factory-token"); });
+  else vi.spyOn(McpServer.prototype, "connect").mockRejectedValue(new Error("private-transport-token"));
+  const response = await f.rpcBody(JSON.stringify({ jsonrpc: "2.0", id: 123, method: "tools/call", params: { name: "read", arguments: {} } }));
+  expect(response.status).toBe(500);
+  expect(await response.json()).toEqual({ jsonrpc: "2.0", id: 123, error: { code: -32603, message: "Internal server error" } });
+  expect(log).toHaveBeenCalledOnce();
+  expect(mcpWorkerFailureEvidence(lines.join(""))).toEqual([{ event: "mcp_handler_error",
+    kind: boundary === "factory" ? "type_error" : "error", stage: boundary === "factory" ? "server_factory" : "sdk_transport", reason: "unknown" }]);
+  expect(JSON.stringify(log.mock.calls)).not.toContain("private");
+});
+
+it.each([
+  ["Invalid verified OAuth request context", "invalid_auth_context"],
+  ["Conflicting verified OAuth client identity", "conflicting_auth_context"],
+  ["Cannot register capabilities after connecting to transport", "already_connected"],
+  ["Invalid verified OAuth request context private-token", "unknown"],
+])("SDK diagnostics classify only an exact known reason: %s", async (message, reason) => {
+  const f = fixture(false), lines: string[] = [];
+  const forward = createMcpWorkerDiagnosticForwarder((line: string) => lines.push(line));
+  const log = vi.spyOn(console, "warn").mockImplementation((line: unknown) => { forward(String(line) + "\n"); });
+  vi.spyOn(McpServer.prototype, "connect").mockRejectedValue(new Error(message));
+  const response = await f.rpcBody(JSON.stringify({ jsonrpc: "2.0", id: 123, method: "tools/call", params: { name: "read", arguments: {} } }));
+  expect(response.status).toBe(500);
+  await response.body?.cancel();
+  expect(mcpWorkerFailureEvidence(lines.join(""))).toEqual([{ event: "mcp_handler_error", kind: "error", stage: "sdk_transport", reason }]);
+  expect(JSON.stringify(log.mock.calls)).not.toContain(message);
+});
 
 it.each(["{", "null", "42", "[]", '{"jsonrpc":"invalid","id":1,"method":"tools/call","params":{"name":"read"}}'])("preparsed body %s still receives an SDK protocol error", async body => {
   const f = fixture(), response = await f.rpcBody(body);

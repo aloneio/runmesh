@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { summarizeVitest } from "./test-evidence.mjs";
 import { UI_BROWSER_STAGES } from "./ui-browser-contract.mjs";
+import { mcpHttpDiagnostic } from "./mcp-diagnostics.mjs";
 
 export const REQUIRED_BROWSER_TEST = "renders stable single-locale dashboard and navigation in Chromium";
 const browserSources = ["ui-browser-check.mjs", "product-browser-check.mjs", "product-browser-fixture.mjs",
@@ -35,7 +36,11 @@ function failureDetails(messages) {
     .filter(value => typeof value === "string").map(value => value.slice(0, 16384)).join("\n")).replaceAll("\\", "/");
   const details = { kind: failureKinds.find(([pattern]) => pattern.test(text))?.[1] ?? "unclassified" };
   const httpStatus = /^(?:Error: )?RUNMESH_E2E_MCP_HTTP_STATUS=([1-5]\d{2})\r?$/mu.exec(text)?.[1];
-  if (httpStatus !== undefined) { details.kind = "mcp_http_failure"; details.http_status = Number(httpStatus); }
+  if (httpStatus !== undefined) {
+    details.kind = "mcp_http_failure"; details.http_status = Number(httpStatus);
+    const diagnostic = mcpHttpDiagnostic(text);
+    if (diagnostic !== undefined) details.mcp_response = diagnostic;
+  }
   const source = /(?:^|[\s(/])((?:scripts\/[a-z-]+\.mjs|test\/e2e\/mcp-runner\.e2e\.test\.ts)):(\d{1,7}):(\d{1,5})(?=$|[\s)])/gmu;
   for (const match of text.matchAll(source)) {
     if ((match[1] === "test/e2e/mcp-runner.e2e.test.ts" || browserSources.some(name => match[1] === "scripts/" + name))
