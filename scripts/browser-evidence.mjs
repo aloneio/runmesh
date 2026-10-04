@@ -23,6 +23,8 @@ function failureDetails(messages) {
   const text = stripVTControlCharacters((Array.isArray(messages) ? messages : [messages]).slice(0, 8)
     .filter(value => typeof value === "string").map(value => value.slice(0, 16384)).join("\n")).replaceAll("\\", "/");
   const details = { kind: failureKinds.find(([pattern]) => pattern.test(text))?.[1] ?? "unclassified" };
+  const httpStatus = /^(?:Error: )?RUNMESH_E2E_MCP_HTTP_STATUS=([1-5]\d{2})\r?$/mu.exec(text)?.[1];
+  if (httpStatus !== undefined) { details.kind = "mcp_http_failure"; details.http_status = Number(httpStatus); }
   const source = /(?:^|[\s(/])((?:scripts\/[a-z-]+\.mjs|test\/e2e\/mcp-runner\.e2e\.test\.ts)):(\d{1,7}):(\d{1,5})(?=$|[\s)])/gmu;
   for (const match of text.matchAll(source)) {
     if ((match[1] === "test/e2e/mcp-runner.e2e.test.ts" || browserSources.some(name => match[1] === "scripts/" + name))
