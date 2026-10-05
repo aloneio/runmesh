@@ -796,7 +796,9 @@ export class JobManager {
       }
       try { await this.files.appendJobLog(this.logPath(jobId, stream), reserved.data); }
       catch {
-        this.releaseLogBytes(jobId, reserved.data.byteLength);
+        // A write or close error can follow a partial or complete append.
+        // Keep that reservation until Job retention removes the files or
+        // startup measures them; releasing it here would admit excess bytes.
         // The write chain is also detached from the stream callback.  A
         // metadata persistence failure must not turn the chain into an
         // unhandled rejected promise (or block subsequent log writes).

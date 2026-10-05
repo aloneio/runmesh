@@ -29,9 +29,7 @@ export function wireResponseBytes(result: Record<string, unknown>): number {
 export async function utf8AlignedStart(handle: Awaited<ReturnType<typeof open>>, requested: number, size: number, preferBackward: boolean): Promise<number> {
   if (requested === 0 || requested >= size) return requested;
   const begin = Math.max(0, requested - 3);
-  const bytes = Buffer.alloc(Math.min(7, size - begin));
-  const { bytesRead } = await handle.read(bytes, 0, bytes.length, begin);
-  const data = bytes.subarray(0, bytesRead);
+  const data = await readPageBytes(handle, begin, Math.min(7, size - begin), "log_changed");
   const relative = requested - begin;
   return begin + (preferBackward ? utf8BackwardBoundary(data, relative) : utf8ForwardBoundary(data, relative));
 }
@@ -78,13 +76,16 @@ export class JobLogReader {
         await verifyLogGeneration(handle, await handle.stat(), live.value);
         if (observation.size > live.value.size) Object.assign(live.value, observation);
       }
-      const maxByLimit = utf8SafePrefixLength(data, Math.min(limit, data.length));
-      const firstCodePoint = maxByLimit === 0 && data.length > 0 ? utf8SafePrefixLength(data, Math.min(4, data.length)) : maxByLimit;
-      const used = this.fitLogResponse(job.job_id, stream, offset, info.size, data, firstCodePoint, entry);
+      const tail = params.tail === true;
+      // Tail alignment can include up to three bytes before the requested
+      // range. Keep that complete character together with the observed EOF.
+      const maxByLimit = utf8SafePrefixLength(data, tail ? data.length : Math.min(limit, data.length));
+      const pageLength = maxByLimit === 0 && data.length > 0 ? utf8SafePrefixLength(data, Math.min(4, data.length)) : maxByLimit;
+      const used = this.fitLogResponse(job.job_id, stream, offset, info.size, data, pageLength, tail, entry);
       // A partial final code point stops automatic paging. Preserve its byte
       // offset for an explicit later refresh: appending the remaining bytes
       // must not lose a character merely because an earlier read saw EOF.
-      const page = logResult(job.job_id, stream, offset, info.size, data.subarray(0, used).toString("utf8"), offset + used, used < firstCodePoint, job.output_truncated);
+      const page = logResult(job.job_id, stream, offset + used.start, info.size, data.subarray(used.start, used.end).toString("utf8"), offset + used.end, used.end - used.start < pageLength, job.output_truncated);
       if (entry === undefined) return page;
       const finalPath = await this.files.lstat(this.scope.logPath(job.job_id, stream));
       if (!finalPath.isFile() || finalPath.isSymbolicLink() || finalPath.dev !== info.dev || finalPath.ino !== info.ino) throw changedLog();
@@ -100,9 +101,13 @@ export class JobLogReader {
     }
   }
 
-  private fitLogResponse(jobId: string, stream: "stdout" | "stderr", offset: number, size: number, data: Buffer, initial: number, entry?: { id: string; expiresAt: number }): number {
+  private fitLogResponse(jobId: string, stream: "stdout" | "stderr", offset: number, size: number, data: Buffer, initial: number, tail: boolean, entry?: { id: string; expiresAt: number }): { start: number; end: number } {
+    const rangeFor = (length: number) => tail
+      ? { start: Math.min(initial, utf8ForwardBoundary(data, initial - length)), end: initial }
+      : { start: 0, end: utf8SafePrefixLength(data, length) };
     const pageFor = (length: number) => {
-      const page = logResult(jobId, stream, offset, size, data.subarray(0, length).toString("utf8"), offset + length, true);
+      const range = rangeFor(length);
+      const page = logResult(jobId, stream, offset + range.start, size, data.subarray(range.start, range.end).toString("utf8"), offset + range.end, true);
       return entry === undefined ? page : bindBytePage(page, entry, "log", entry.id);
     };
     let low = 0;
@@ -110,10 +115,9 @@ export class JobLogReader {
     let best = 0;
     while (low <= high) {
       const midpoint = Math.floor((low + high) / 2);
-      const length = utf8SafePrefixLength(data, midpoint);
-      const candidate = pageFor(length);
+      const candidate = pageFor(midpoint);
       if (wireResponseBytes(candidate) <= MAX_LOG_RESPONSE_BYTES) {
-        best = length;
+        best = midpoint;
         low = midpoint + 1;
       } else {
         high = midpoint - 1;
@@ -121,6 +125,6 @@ export class JobLogReader {
     }
     // A valid UTF-8 character always fits in a 64 KiB response; the fallback
     // protects this invariant even for hostile/corrupt raw log bytes.
-    return best === 0 && initial > 0 && wireResponseBytes(pageFor(initial)) <= MAX_LOG_RESPONSE_BYTES ? initial : best;
+    return rangeFor(best === 0 && initial > 0 && wireResponseBytes(pageFor(initial)) <= MAX_LOG_RESPONSE_BYTES ? initial : best);
   }
 }

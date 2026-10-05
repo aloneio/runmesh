@@ -15,6 +15,7 @@ export function createAdminNavigation({
   let activeController;
   const boundLinks = new WeakSet();
   const pageKey = url => url.pathname + url.search;
+  let renderedPageKey = pageKey(new URL(location.href));
   function retire() {
     generation++;
     leaving = true;
@@ -72,6 +73,7 @@ export function createAdminNavigation({
       const root = view.pageRoot(next);
       if (!root) throw new Error("page root missing");
       view.mount(root, parsed.title || "", pageKey(url), shouldPush, url);
+      renderedPageKey = pageKey(url);
     } catch (error) {
       if (!leaving) {
         onError(error);
@@ -106,6 +108,12 @@ export function createAdminNavigation({
   }
   return {
     open,
+    restore(url) {
+      // Native fragment navigation owns its focus, scroll and history. Keep
+      // the current forms unless a pending transition already retired them.
+      if (!loading && !leaving && pageKey(url) === renderedPageKey) return;
+      return open(url, false);
+    },
     navigate,
     retire,
     bind,

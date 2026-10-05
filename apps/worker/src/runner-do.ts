@@ -938,6 +938,12 @@ export class RunnerDO {
       return this.persistAdmissionIfCurrent(expected, reset);
     }
     if (state.runner_exists !== true || state.mutation_committed !== true) return false;
+    // Enrollment issuance has no policy/credential transition to ACK. Its
+    // atomic Registry receipt lets a later request settle this exact owner
+    // after a lost cleanup response, using the same identity checks as cancel.
+    if (state.enrollment_mutation_committed === true && state.credential_mutation_committed === false) {
+      return (await this.releasePolicyNeutralMutation(expected, state)).ok;
+    }
     // A revocation may have committed before its transport cleanup response
     // was lost. Finalize only this proven owner before accepting a delete;
     // an uncommitted operation or a creation still issuing enrollment stays
@@ -1066,7 +1072,15 @@ export class RunnerDO {
         ? new Response(null, { status: 204 })
         : Response.json({ error: { code: "mutation_state_changed", message: "mutation changed while cancelling" } }, { status: 409 });
     }
-    if (state.runner_exists !== true || state.mutation_committed === true) return Response.json({ error: { code: "mutation_committed", message: "mutation has committed or Runner is gone" } }, { status: 409 });
+    const enrollmentCompleted = state.enrollment_mutation_committed === true && state.credential_mutation_committed === false;
+    if (state.runner_exists !== true || (state.mutation_committed === true && !enrollmentCompleted)) return Response.json({ error: { code: "mutation_committed", message: "mutation has committed or Runner is gone" } }, { status: 409 });
+    return this.releasePolicyNeutralMutation(before, state);
+  }
+
+  /** Release only an uncommitted write or a proven completed enrollment.
+   * Every caller retains the exact admission snapshot across all awaits. */
+  private async releasePolicyNeutralMutation(before: AdmissionState, state: Record<string, unknown>): Promise<Response> {
+    if (before.runnerId === null) return Response.json({ error: { code: "mutation_uncertain", message: "Runner identity is unavailable" } }, { status: 503 });
     if (!validLifecycleId(state.lifecycle_id) || !isSafeNonnegativeInteger(state.credential_version)
       || !isSafeNonnegativeInteger(state.connection_epoch) || !["online", "offline", "stale", "revoked"].includes(String(state.runner_state))
       || (state.session_id !== null && !validSessionId(state.session_id))) {

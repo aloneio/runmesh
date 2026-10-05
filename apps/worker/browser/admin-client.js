@@ -28,4 +28,4 @@ bindPage(document);
 navigation.initialize();
 window.addEventListener("beforeunload", () => navigation.retire());
 window.addEventListener("resize", () => controls.stabilizeTabPanels(document));
-window.addEventListener("popstate", () => { void navigation.open(new URL(location.href), false); });
+window.addEventListener("popstate", () => { void navigation.restore(new URL(location.href)); });

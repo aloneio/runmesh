@@ -355,11 +355,12 @@ async function readPrivateProfile(path: string, platform: HostPlatform, enforceO
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    // A final descriptor stat closes the size-growth/shrink window after the
-    // read. Without it, a concurrent writer could append one byte (the extra
-    // sentinel slot) and have that mixed snapshot parsed as a profile.
+    // Bind the complete read to one observed version. Equal-size in-place
+    // writes can mix a former server URL with a replacement credential just
+    // as growth/shrink can splice records; size and inode alone miss them.
     const final = await handle.stat();
-    if (!final.isFile() || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size || offset !== opened.size) {
+    if (!final.isFile() || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size
+      || final.mtimeMs !== opened.mtimeMs || final.ctimeMs !== opened.ctimeMs || offset !== opened.size) {
       throw new Error("runner profile changed while being read");
     }
     if (ownershipRequired) assertRootOwnedFile(final);
