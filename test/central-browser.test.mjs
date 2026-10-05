@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createCentralApi } from "../apps/worker/browser/central/api.js";
 import { createCentralTranslator } from "../apps/worker/browser/central/messages.js";
+import { bindCentralProduct } from "../apps/worker/browser/central/controller.js";
 
 function deferred() {
   let resolve;
@@ -17,6 +18,98 @@ function client(t, send, translate = key => key) {
   return { ...api, requests, detach: () => { current = false; }, refreshRequired: () => refresh };
 }
 const unexpected = /unexpectedResponseRefreshBeforeMakingAnotherChange/u;
+const writtenProfile = { state: "written", profile: { profile_id: "service", revision: 2, enabled: true, authentication: "none" } };
+const installedSkill = { state: "installed", skill_id: "research", name: "Research", digest: "a".repeat(64) };
+function successReceipt(path, state) {
+  if (state === "written" && path.startsWith("profiles/")) return writtenProfile;
+  if (state === "installed") return installedSkill;
+  if (state === "started") return { state, authorization_url: "https://provider.example/authorize" };
+  return { state };
+}
+
+for (const [name, path, body, receipt] of [
+  ["missing created profile", "profiles/service", { action: "connect" }, { state: "written" }],
+  ["missing updated profile", "profiles/service", { action: "enable", expected_revision: 1 }, { state: "written", profile: null }],
+  ["different profile identity", "profiles/service", { action: "connect" }, { ...writtenProfile, profile: { ...writtenProfile.profile, profile_id: "another-service" } }],
+  ["missing profile revision", "profiles/service", { action: "connect" }, { ...writtenProfile, profile: { ...writtenProfile.profile, revision: undefined } }],
+  ["invalid profile revision", "profiles/service", { action: "enable", expected_revision: 1 }, { ...writtenProfile, profile: { ...writtenProfile.profile, revision: "2" } }],
+  ["ambiguous enabled state", "profiles/service", { action: "disable", expected_revision: 1 }, { ...writtenProfile, profile: { ...writtenProfile.profile, enabled: "false" } }],
+  ["unknown authentication", "profiles/service", { action: "connect" }, { ...writtenProfile, profile: { ...writtenProfile.profile, authentication: "unsupported" } }],
+  ["missing OAuth URL", "connections/begin", { profile_id: "service", expected_revision: 1 }, { state: "started" }],
+  ["empty OAuth URL", "connections/begin", { profile_id: "service", expected_revision: 1 }, { state: "started", authorization_url: "" }],
+  ["malformed OAuth URL", "connections/begin", { profile_id: "service", expected_revision: 1 }, { state: "started", authorization_url: "https://[" }],
+  ["missing installed Skill identity", "skill-installations", { files: [], expected_revision: 0 }, { ...installedSkill, skill_id: undefined }],
+  ["missing installed Skill digest", "skill-installations", { files: [], expected_revision: 0 }, { ...installedSkill, digest: undefined }],
+  ["invalid installed Skill name", "skill-installations", { files: [], expected_revision: 0 }, { ...installedSkill, name: {} }],
+]) test("incomplete success receipt blocks another write: " + name, async t => {
+  const api = client(t, () => Response.json(receipt));
+  await assert.rejects(api.request(path, body), unexpected);
+  assert.equal(api.refreshRequired(), true);
+  await assert.rejects(api.request(path, body), /refreshTheLibraryBeforeMakingAnotherChange/u);
+  assert.equal(api.requests.length, 1, "A receipt missing required workflow fields must not admit a repeat mutation");
+});
+
+test("a committed create with an incomplete receipt cannot create a duplicate from the same form", async t => {
+  function element() {
+    const events = new Map();
+    return { isConnected: true, disabled: false, textContent: "", style: {}, children: [],
+      addEventListener: (name, action) => events.set(name, action), dispatch(name, event) { events.get(name)?.(event); },
+      setAttribute() {}, getAttribute() {}, append(...nodes) { this.children.push(...nodes); }, appendChild(node) { this.children.push(node); }, replaceChildren() { this.children = []; },
+      querySelector: () => null, querySelectorAll: () => [], classList: { toggle() {} }, scrollIntoView() {},
+    };
+  }
+  const original = new Map(["document", "location"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  t.after(() => { for (const [key, descriptor] of original) descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete globalThis[key]; });
+  const status = element(), form = element(), refresh = element(), list = element(), app = element();
+  const fields = { endpoint: { value: "https://public.example/mcp" }, authentication: { value: "none" }, name: { value: "Unsaved service", maxLength: 64 } };
+  form.elements = fields; form.reset = () => assert.fail("The incomplete creation cannot finish the form workflow");
+  app.getAttribute = name => name === "data-skills" ? "false" : "fixture-csrf";
+  app.querySelector = selector => ({ "[data-product-status]": status, "[data-service-create]": form,
+    "[data-product-refresh]": refresh, "[data-service-list]": list })[selector] ?? null;
+  Object.assign(globalThis, { document: { documentElement: { lang: "en" }, createElement: element }, location: { href: "https://worker.test/admin/central" } });
+  let creates = 0, reads = 0;
+  const profiles = [];
+  t.mock.method(globalThis, "fetch", async (path, options) => {
+    if (options.method === "GET") { reads++; return Response.json({ state: "listed", profiles, next_after: null }); }
+    const body = JSON.parse(options.body);
+    assert.equal(body.action, "connect"); creates++;
+    profiles.push({ profile_id: path.split("/").at(-1), connector_id: body.connector_id, display_name: body.display_name,
+      endpoint: body.endpoint, authentication: body.authentication, revision: 1, enabled: false });
+    return Response.json({ state: "written" });
+  });
+  bindCentralProduct({ querySelector: () => app }, { isCurrent: () => true, navigate() {}, replaceCurrentUrl() {} });
+  await new Promise(setImmediate);
+  const submit = async () => { form.dispatch("submit", { preventDefault() {}, currentTarget: form }); await new Promise(setImmediate); };
+  await submit();
+  assert.equal(status.textContent, "Unexpected response. Refresh before making another change.");
+  await submit();
+  assert.equal(creates, 1);
+  assert.equal(reads, 1);
+  assert.equal(fields.name.value, "Unsaved service");
+  assert.equal(status.textContent, "Refresh before making another change.");
+  refresh.dispatch("click"); await new Promise(setImmediate);
+  assert.equal(reads, 2, "The existing explicit refresh remains available to reconcile the committed create");
+  assert.equal(creates, 1, "Refresh never automatically repeats the creation");
+  const labels = node => [node.textContent, ...node.children.flatMap(labels)];
+  assert.ok(labels(list).includes("Unsaved service"), "Refresh renders the already-created service for recovery");
+});
+
+test("complete profile, OAuth and Skill receipts remain unchanged and admit the next workflow step", async t => {
+  const cases = [
+    ["profiles/service", { action: "connect" }, { ...writtenProfile, profile: { ...writtenProfile.profile, revision: 1, enabled: false, authentication: "oauth" } }],
+    ["profiles/service", { action: "enable", expected_revision: 1 }, writtenProfile],
+    ["profiles/service", { action: "disable", expected_revision: 2 }, { ...writtenProfile, profile: { ...writtenProfile.profile, revision: 3, enabled: false } }],
+    ["connections/begin", { profile_id: "service", expected_revision: 2 }, { state: "started", authorization_url: "https://provider.example/authorize?state=opaque" }],
+    ["connections/begin", { profile_id: "service", expected_revision: 2 }, { state: "started", authorization_url: "/oauth-fixture" }],
+    ["skill-installations", { files: [], expected_revision: 0 }, installedSkill],
+    ["skill-installations", { files: [], expected_revision: 7 }, { ...installedSkill, digest: "b".repeat(64) }],
+  ];
+  let index = 0;
+  const api = client(t, () => Response.json(cases[index++][2]));
+  for (const [path, body, receipt] of cases) assert.deepEqual(await api.request(path, body), receipt);
+  assert.equal(api.requests.length, cases.length);
+  assert.equal(api.refreshRequired(), false);
+});
 
 for (const locale of ["en", "zh-CN"]) test("OAuth deployment configuration failures give specific " + locale + " guidance", async t => {
   const translate = createCentralTranslator(locale);
@@ -49,7 +142,7 @@ test("central browser accepts only the expected receipt for each operation", asy
     ["skill-installations", { files: [] }, "installed"], ["connections/begin", {}, "started"], ["connections/revoke", {}, "revoked"],
   ];
   let index = 0;
-  const api = client(t, () => Response.json({ state: cases[index++][2] }));
+  const api = client(t, () => { const [path, , state] = cases[index++]; return Response.json(successReceipt(path, state)); });
   for (const [path, body, state] of cases) assert.equal((await api.request(path, body)).state, state);
   assert.equal(api.requests.length, cases.length);
   assert.equal(api.refreshRequired(), false);
@@ -133,7 +226,7 @@ for (const [path, body, code, state] of [
   ["skill-installations", { files: [] }, "central_invalid_request", "installed"],
 ]) test("confirmed " + code + " input rejection on " + path + " permits an explicit correction", async t => {
   let rejected = true;
-  const api = client(t, () => rejected ? Response.json({ error: { code, operation_state: "not_started" } }, { status: 400 }) : Response.json({ state }));
+  const api = client(t, () => rejected ? Response.json({ error: { code, operation_state: "not_started" } }, { status: 400 }) : Response.json(successReceipt(path, state)));
   await assert.rejects(api.request(path, body));
   assert.equal(api.requests.length, 1, "Do not retry automatically");
   assert.equal(api.refreshRequired(), false);
@@ -159,7 +252,7 @@ for (const locale of ['en', 'zh-CN']) test('confirmed Skill capacity rejection k
   let full = true;
   const api = client(t, () => full
     ? Response.json({ error: { code: 'skill_capacity', operation_state: 'not_started' } }, { status: 429 })
-    : Response.json({ state: 'installed' }), translate);
+    : Response.json(installedSkill), translate);
   await assert.rejects(api.request('skill-installations', { files: [], expected_revision: 32 }), {
     message: translate('skillLibraryLimitReached'),
   });

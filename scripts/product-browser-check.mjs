@@ -520,6 +520,8 @@ export async function checkGuidedProduct(executable) {
    assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'true');
   }finally{releaseDiscovery();controls.discovery.delayed=undefined;}
   await status.filter({hasText:'Connected.'}).waitFor();
+  // Connected describes one service; later catalog reads still own the operation lock.
+  await page.locator('[data-central-product][aria-busy="false"]').waitFor();
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isEnabled(),true);

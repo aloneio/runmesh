@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "9fff7e750cd6e98df717dfb86deadcbb09544a8d9d0b6cfb1f874e0bfddb3957",
+      "sha256": "afa1cfa0a59cde78f7a0b1b9b0bd684a6fb0b8acbe47d36edc2e218ddd283ab2",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "946e89ed47caaf7b2b31797fb544c33011438ae444cc7370938af5981275221c",
+      "sha256": "98c7b0d877eeaa3999172df54cf6e96c43c0cc17662310c0f78708b8f42b57f7",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -186,6 +186,17 @@
       "admin-document"
     ],
     "reviewed_change": "Route OAuth callback URL cleanup through the existing navigation and page-view owners so rendered page keys match native history. Same-page history preserves live forms; pending and cross-page navigation retains its lifecycle. Independently rebuilding and substituting the prior browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes.",
+    "non_script_markup_unchanged": true
+  },
+  "mutation_receipt_review": {
+    "source_base": "3480fee2acf91999f57b9483a9983e83660ad8db",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Validate the fields consumed from successful profile, OAuth and Skill mutation receipts before continuing. Incomplete receipts use the existing refresh-required recovery without replaying writes. Independently rebuilding the source-base browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes; substituting only that bundle restores every prior output.",
     "non_script_markup_unchanged": true
   }
 }

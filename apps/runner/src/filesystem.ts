@@ -65,6 +65,11 @@ export class FilesystemService {
       await this.policy.verifySnapshot(resolved, snapshot);
       if (!info.isFile() || !sameIdentity(info, snapshot)) throw symlinkEscape();
       const utf8 = await readSample(handle, info.size);
+      const after = await handle.stat();
+      await this.policy.verifySnapshot(resolved, snapshot);
+      if (!sameIdentity(after, snapshot) || fileObservation(after) !== fileObservation(info)) {
+        throw new RpcRuntimeError("file_changed", "The file changed while its metadata was being read; request it again");
+      }
       const binary = !utf8;
       return { workspace_id: workspace.workspaceId, path: relativePath, type: "file", size: info.size, modified_at_ms: info.mtimeMs, encoding: binary ? "binary" : "utf-8", binary };
     } finally { await handle.close(); }
@@ -300,9 +305,7 @@ export class FilesystemService {
 async function readSample(handle: Awaited<ReturnType<typeof open>>, fileSize: number): Promise<boolean> {
   const size = Math.min(fileSize, 4 * 1024);
   if (size === 0) return true;
-  const buffer = Buffer.alloc(size);
-  const { bytesRead } = await handle.read(buffer, 0, size, 0);
-  const sample = buffer.subarray(0, bytesRead);
+  const sample = await readPageBytes(handle, 0, size, "file_changed");
   if (sample.includes(0)) return false;
   // A bounded sample can end inside one UTF-8 character. Streaming decode
   // retains that partial suffix while still rejecting invalid interior bytes.

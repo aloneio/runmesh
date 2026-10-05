@@ -66,6 +66,7 @@ export { RUNNER_ENROLLMENT_TTL_OPTIONS_MS } from './registry/records.js';
 export { REGISTRY_HISTORY_CLEANUP_INTERVAL_MS } from './registry/records.js';
 
 const VERIFIED_DEV_RELEASE_STORAGE_KEY = "distribution:verified-dev-runner-release:v1";
+type MaintenanceSchedule = "routine" | "alarm" | "heartbeat";
 
 /** Public Registry facade: platform lifecycle, schema and existing HTTP routes.
  * Domain ports are synchronous closures, not remote RPCs or cached grants. */
@@ -309,21 +310,28 @@ export class RegistryDO {
       if (this.ctx.storage.sql.exec("SELECT 1 FROM runner_enrollments WHERE expires_at_ms <= ? LIMIT 1", enrollmentRetentionCutoff).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", enrollmentRetentionCutoff);
       await this.ctx.storage.put(HISTORY_CLEANUP_DEADLINE_KEY, nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
     }
-    await this.scheduleMaintenanceAlarm(nowMs, true);
+    await this.scheduleMaintenanceAlarm(nowMs, "alarm");
   }
 
-  private scheduleMaintenanceAlarm(nowMs: number, required = false): Promise<void> {
-    const work = this.maintenanceQueue.then(() => this.scheduleMaintenanceAlarmNow(nowMs, required));
+  private scheduleMaintenanceAlarm(nowMs: number, source: MaintenanceSchedule = "routine"): Promise<void> {
+    const work = this.maintenanceQueue.then(() => this.scheduleMaintenanceAlarmNow(nowMs, source));
     this.maintenanceQueue = work.catch(() => undefined);
     return work;
   }
 
-  private async scheduleMaintenanceAlarmNow(nowMs: number, required: boolean): Promise<void> {
+  private async scheduleMaintenanceAlarmNow(nowMs: number, source: MaintenanceSchedule): Promise<void> {
     // An alarm consumes its prior wakeup. Its replacement must either persist
     // or reject the alarm turn so the platform retries. Such a retry can arrive
     // before the optional-feature cooldown and still needs a future deadline.
-    if (!required && this.featureHealthDisabled("maintenance_alarm", nowMs)) return;
+    if (source !== "alarm" && this.featureHealthDisabled("maintenance_alarm", nowMs)) return;
     try {
+      if (source === "heartbeat") {
+        // A late heartbeat can revive the last stale Runner after its alarm
+        // was removed, or when only a later history cleanup remains. Healthy
+        // heartbeats need just this read, not another SQL scan or alarm write.
+        const current = await this.ctx.storage.getAlarm();
+        if (current !== null && current <= nowMs + 45_000) return;
+      }
       const nextStale = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
         "SELECT MIN(COALESCE(last_heartbeat_ms, 0) + 45000) AS next_ms FROM runners WHERE state = 'online'",
       ).toArray()[0]?.next_ms;
@@ -348,7 +356,7 @@ export class RegistryDO {
       if (current === null || current <= nowMs || current > deadline) await this.ctx.storage.setAlarm(deadline);
       this.clearFeatureHealth("maintenance_alarm");
     } catch (error) {
-      if (required) throw error;
+      if (source === "alarm") throw error;
       this.disableFeatureHealth("maintenance_alarm", error, nowMs);
     }
   }
@@ -658,7 +666,12 @@ export class RegistryDO {
     if (runnerId === undefined || segments.length > 4) return new Response("not found", { status: 404 });
     const route = { method: request.method, runnerId, action, itemId, input, nowMs: now, url };
     const synchronous = this.runnerLifecycleRoutes(route) ?? this.runnerPolicyReadRoutes(route);
-    if (synchronous !== undefined) return synchronous;
+    if (synchronous !== undefined) {
+      // Keep the accepted heartbeat mutation synchronous. Scheduling belongs
+      // to this facade and an optional alarm failure does not reject it.
+      if (replaySafeHeartbeat && synchronous.status === 204) await this.scheduleMaintenanceAlarm(now, "heartbeat");
+      return synchronous;
+    }
     if (["auth", "connect", "disconnect"].includes(action ?? "")) return await this.runnerTransportRoutes(route) ?? new Response("not found", { status: 404 });
     if (["history-settings", "sync", "event", "jobs", "mcp-calls"].includes(action ?? "")) return await this.runnerHistoryRoutes(route) ?? new Response("not found", { status: 404 });
 
