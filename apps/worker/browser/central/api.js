@@ -78,6 +78,21 @@ export function createCentralApi({
       }
       var expected = body === undefined ? (['profiles', 'skills'].includes(path.split('?')[0]) ? 'listed' : 'found') : path === 'skill-installations' ? 'installed' : path === 'connections/begin' ? 'started' : path === 'connections/revoke' ? 'revoked' : body.action === 'preview' ? 'previewed' : 'written';
       if (value.state !== expected) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      // A successful state alone cannot supply the identity/revision needed by
+      // the next workflow step. An incomplete write still requires reconciliation.
+      if (body && path.startsWith('profiles/') && (value.profile?.profile_id !== decodeURIComponent(path.slice('profiles/'.length))
+        || !Number.isSafeInteger(value.profile?.revision) || value.profile.revision < 1
+        || typeof value.profile.enabled !== 'boolean' || !['none', 'oauth'].includes(value.profile.authentication))) {
+        throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      }
+      if (body && path === 'connections/begin') {
+        if (typeof value.authorization_url !== 'string' || !value.authorization_url.trim()) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+        try { new URL(value.authorization_url, 'https://runmesh.invalid'); }
+        catch { throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange')); }
+      }
+      if (body && path === 'skill-installations' && ['skill_id', 'name', 'digest'].some(key => typeof value[key] !== 'string' || !value[key])) {
+        throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      }
       return value;
     } catch (error) {
       if (body && body.action !== 'preview' && !confirmedRejection) requireRefresh();
