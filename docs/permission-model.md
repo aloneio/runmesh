@@ -1,6 +1,6 @@
 # Understand permissions and diagnose access
 
-A native Runner operation needs the appropriate MCP scope, effective Runner/workspace permission and host access. Use this page to identify the specific requirement behind an authorization error. Central MCP tools and active Skills use the instance-wide shared library instead: a valid client credential, enabled publication and upstream authentication where required. They do not grant native Runner access. See [central administration](central-administration.md).
+A computer operation needs the appropriate MCP scope, Runner/workspace permission and host access. Use this page to identify the requirement behind an authorization error. Enabled MCP tools and active Skills are shared with every client that has a valid credential; MCP accounts use upstream authentication where required. Configure computer access separately through Runner scopes and workspace permissions. See the [MCP and Skill guide](central-administration.md).
 
 ## Choose the required access
 

@@ -18,7 +18,7 @@ The URL is the credential. Copy it exactly, including its secret path, and remov
 
 Active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory tools include `remote_profiles`, `remote_tools`, `skill_list` and `skill_read`.
 
-This workflow runs through the control plane. Continue to the machine-selection steps when your connection also has computer access. Administrators connect MCPs and install Skills in the [MCP and Skill guide](central-administration.md).
+Runmesh manages these connections and content reads. Continue to the machine-selection steps when your connection also has computer access. Administrators connect MCPs and install Skills in the [MCP and Skill guide](central-administration.md).
 
 ## Choose a machine and workspace for computer access
 
@@ -56,7 +56,7 @@ An already-started process continues across browser closure and brief connection
 
 ## Follow the same Job
 
-Replace `job-from-shell` with the exact ID from your receipt. On instances with the workspace-bound Job contract, use:
+Replace `job-from-shell` and `work` with the Job ID and workspace ID from your receipt. Use the `job` tool to check its status and read its output:
 
 ```json
 {"action":"get","job_id":"job-from-shell","workspace_id":"work"}
@@ -73,7 +73,7 @@ Use `list` with the workspace ID to inspect recent local Jobs, including Jobs wi
 | `queued` | Waiting for a slot; access is checked again before starting. |
 | `running` | The process is supervised by the Runner. |
 | `cancelling` | Cancellation is in progress. Wait for the final status. |
-| `cancelled` | A queued task was withdrawn, or cancellation evidence supports the observed termination. |
+| `cancelled` | A queued task was withdrawn, or the process ended after the Runner delivered a cancellation request. |
 | `succeeded` | The Runner observed a successful process exit. |
 | `failed` | Launch or execution failed. Read available output and error details. |
 | `unknown` | A recovered process may still be alive. Inspect it before submitting related work. |
@@ -95,9 +95,9 @@ Cloud history stores optional recent Job snapshots; output is read from the Runn
 
 The `context` tool stores explicit handoff notes on the selected Runner. Use `bootstrap` to find available context, `read` or `search` to retrieve it, and `checkpoint` to save a goal, decisions, evidence and next actions. A checkpoint requires write permission and contains the notes you explicitly submit.
 
-On a compatible Worker and Runner, `storage` reports local Context usage and `prune` previews removal of older revisions. Applying a preview requires its plan hash and an explicit `apply: true`; the latest revision is retained. See [Context storage](context-storage.md) before deleting anything. For these storage-management actions, upgrade from 0.1.3 to a verified release that includes them.
+With a compatible Worker and Runner, `storage` reports local Context usage and `prune` previews removal of older revisions. Both actions are available from 0.1.4. Applying a preview requires its plan hash and `apply: true`; the latest revision is retained. Review the preview and [Context storage](context-storage.md) before applying a deletion.
 
-## Get help safely
+## Get help
 
 For permission errors, check the client, Runner and workspace settings together. For an offline Runner, restore that machine or explicitly select a different one for new work. For a dependency outage, wait for service recovery and inspect the original operation.
 

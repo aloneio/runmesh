@@ -69,7 +69,7 @@ Production uses independent, stable `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_
 
 During normal updates, preserve Worker names, v2 namespaces, D1 bindings, credentials and registered services. Investigate incompatible schemas against the target revision and use the [upgrade guide](upgrading.md). The [legacy migration](migration.md) procedure applies to its named pre-v2 boundary.
 
-New Runners default to `dedicated_user`; privileged host execution requires an explicit choice. New MCP clients default to `coding:read`. First administrator setup uses CSRF, same-origin and atomic first-success-wins checks; initialize the instance before opening it to untrusted visitors. Shell processes run with the service account's operating-system privileges, so workspace policy must be paired with appropriate host permissions.
+New Runners default to `dedicated_user`; privileged host execution requires an explicit choice. With the shared library enabled, new control-panel MCP clients default to **MCP and Skills**. Selecting computer access initially selects `coding:read`; the administrator can choose further scopes and workspace permissions. First administrator setup uses CSRF, same-origin and atomic first-success-wins checks; initialize the instance before opening it to untrusted visitors. Shell processes run with the service account's operating-system privileges, so workspace policy must be paired with appropriate host permissions.
 
 Retained logs and Context records remain on the Runner and are relayed when authorized clients request them. Cloud history holds bounded metadata. Recording preferences govern optional uploads; authorization records remain required. Snapshot, cursor and cleanup operations each have byte, count and time budgets.
 

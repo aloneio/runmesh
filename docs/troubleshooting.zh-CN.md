@@ -19,7 +19,7 @@
 
 ## Runner 一直离线
 
-检查主机服务、到 Worker 的 HTTPS/WebSocket 出站连接和系统时间。使用服务实际程序单独运行 `runmesh --version`，再运行 `runmesh doctor --json`。给 `doctor` 加 `--profile` 检查自定义配置，加 `--user` 检查用户级服务；已安装版本支持时，可用 `--shareable` 生成适合支持反馈的报告。
+检查主机服务、到 Worker 的 HTTPS/WebSocket 出站连接和系统时间。使用服务实际程序单独运行 `runmesh --version`，再运行 `runmesh doctor --json`。给 `doctor` 加 `--profile` 检查自定义配置，加 `--user` 检查用户级服务。反馈问题时，可用 `runmesh doctor --json --shareable` 生成诊断报告。
 
 在控制台检查 Runner 授权期限和凭据状态。仍需访问的过期授权可以延期；已撤销或替换的凭据按管理员提供的恢复注册流程处理；网络和依赖故障则恢复相应连接或服务。
 
@@ -29,7 +29,7 @@ Runner 在线但策略被拒绝时，检查工作区是否存在、服务账号�
 
 在相应系统的管理员终端使用注册页面的命令，按[安装依赖](installer-prerequisites.zh-CN.md)处理 `RMI_*` 错误。
 
-注册页提供便携安装时，检查[发行状态](release-readiness.md)与已部署 Worker 的发行描述。生产环境使用正式渠道，开发面板提供独立验证的预发布包，并将注册指向该开发实例。请从准备接入的实例复制安装命令。[便携安装流程](portable-runner-installation.md)同样提供 TLS、签名和哈希校验。
+注册页提供便携安装时，检查[发行状态](release-readiness.zh-CN.md)与已部署 Worker 的发行描述。生产环境使用正式渠道，开发面板提供独立验证的预发布包，并将注册指向该开发实例。请从准备接入的实例复制安装命令。[便携安装流程](portable-runner-installation.md)同样提供 TLS、签名和哈希校验。
 
 已有安装或卸载正在运行时，等待它结束。异常退出后，请管理员先检查进程与残留文件，再处理残留锁。注册可能已完成时，先核对控制台和本地配置，再决定是否生成新注册码。
 
@@ -39,7 +39,7 @@ Runner 在线但策略被拒绝时，检查工作区是否存在、服务账号�
 
 Worker 更新后刷新 Runmesh 工具目录。任务后续查询拒绝 `workspace_id` 时，按[目录刷新说明](mcp-connector-refresh.md)核对 Worker、Runner 和客户端定义。
 
-`runner_upgrade_required` 表示需要兼容的已安装 Runner。Context `storage` 和 `prune` 需要从 0.1.3 升级到包含这些动作的已验证版本，再重新连接以识别能力。具体操作见[升级指南](upgrading.zh-CN.md)。
+`runner_upgrade_required` 表示需要兼容的已安装 Runner。Context `storage` 和 `prune` 从 0.1.4 开始提供。检查已安装版本，按需升级 Worker 和 Runner，再重新连接 Runner 以刷新可用动作。具体操作见[升级指南](upgrading.zh-CN.md)。
 
 ## 工作区缺失或权限不足
 
@@ -47,7 +47,7 @@ Worker 更新后刷新 Runmesh 工具目录。任务后续查询拒绝 `workspac
 
 用 `runner_current` 确认机器，用 `workspace_list` 核对工作区 ID。请管理员检查客户端 scope、Runner 限制、授权期限、工作区权限和策略确认；Runner 服务账号还需要对应的操作系统权限。
 
-按[权限排查流程](runbooks/permission-denial.md)确定拒绝发生在哪一层，再调整访问设置。所需服务暂不可用时，先恢复服务并重新检查权限，再调整访问设置。
+按[权限排查流程](runbooks/permission-denial.md)找到需要调整的设置。所需服务暂不可用时，先恢复服务并重新检查权限。
 
 ## MCP 连接或 OAuth 需要处理
 
@@ -67,11 +67,11 @@ Worker 更新后刷新 Runmesh 工具目录。任务后续查询拒绝 `workspac
 
 保留原 `job_id`、`workspace_id` 和 Runner 选择。前台调用可以在命令结束前返回，应继续使用带工作区 ID 的在线查询。云端历史被关闭、延迟、过期或暂不可用时，Runner 仍可能保留任务。
 
-遇到 `job_history_unavailable` 或旧版 `not_found`，请管理员恢复原任务查询链路。发起另一条命令前，先核实原任务状态。
+遇到 `job_history_unavailable` 或旧版 `not_found`，恢复原 Runner 在线，使用 shell 回执中的 `job_id` 和 `workspace_id` 重新查询 `job`。客户端缺少 `workspace_id` 参数时，刷新工具目录。仍然查询失败时，请管理员检查原 Runner 上的本地任务记录。发起另一条命令前，先核实原任务状态。
 
 ## 取消、恢复或输入结果不确定
 
-发出取消后，等待任务进入最终状态。恢复为 `unknown` 的进程由管理员在主机上核实身份，状态核对完成前会继续占用执行槽。
+发出取消后，等待任务进入最终状态。恢复为 `unknown` 的进程由管理员在主机上核实；Runner 确认该进程结束后，才会释放执行槽。
 
 输入送达错误或超时后，先检查原进程，再发送数据或输入结束信号。结合 `operation_state`、`next_action` 和 `recovery_hint` 判断后续操作。完整状态说明见[用户指南](user-guide.zh-CN.md)。
 

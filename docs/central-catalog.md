@@ -1,12 +1,13 @@
-# Central catalog publication
+# MCP catalog implementation
 
-For the optional W05 live discovery/call adapter and its explicit limits, see
-[Controlled central HTTP MCP](maintainers/central-remote-mcp.md). This guide covers the
-independently usable review/snapshot path.
+[简体中文](central-catalog.zh-CN.md) · [Maintainer documentation](maintainers/README.md)
 
-[简体中文](central-catalog.zh-CN.md)
+This reference describes catalog APIs, snapshot storage and schema validation.
+To connect an MCP and refresh its tools from the control panel, follow the
+[MCP and Skill guide](central-administration.md). The
+[HTTP MCP implementation](maintainers/central-remote-mcp.md) covers live discovery
+and invocation.
 
-See [release status](release-readiness.md) for deployment and upgrade steps.
 All authenticated instance clients share the enabled published selection. The
 control panel connects MCP URLs with no authentication or OAuth, then discovers
 and automatically publishes every discovered tool in one revision. This page
@@ -14,7 +15,7 @@ describes the underlying snapshot contract.
 
 ## Snapshot administration
 
-Create a connection profile through the W03 administrator API first. Its ID,
+Create a connection profile through the [administrator API](maintainers/central-administration.md) first. Its ID,
 Connector ID and endpoint bind the catalog. A catalog can be reviewed while the
 connection is disabled; a disabled connection exposes no tools to clients.
 
@@ -127,10 +128,9 @@ disabled. The table defines admission and storage limits. The local inventory
 test uses 100 synthetic profiles and 2,000 tools; measure throughput and connected
 MCP capacity in the target environment.
 
-Production activation remains separate. Runner code, Worker–Runner wire
-contracts and native tool definitions are unchanged. The optional feature's absence does not
-resolve its storage or credential ports. The old catalog/host mismatch acceptance
-items are not closed by local tests.
+Catalog storage and credential ports are resolved when the central feature is
+enabled. For release acceptance, verify catalog refresh and invocation with a
+real MCP client using the [central rollout checklist](central-rollout.md).
 
 Protocol references (checked 2026-09-24):
 `https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/server/tools.mdx`

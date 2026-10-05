@@ -11,9 +11,9 @@ node --version                  # must print v22.23.2
 npm install --global npm@10.9.3
 npm --version                   # must print 10.9.3
 npm ci
-npm test
 npm run typecheck
 npm run build
+npm test
 npm run validate:worker
 npm run pack:runner
 ```
@@ -27,7 +27,7 @@ npm run pack:runner
 | Production | `main` | `runmesh` | Signed stable release verified and activated |
 | Development | `dev` | `runmeshdev` | Candidate source; hosted installation uses its verified dev prerelease channel |
 
-The [release status](release-readiness.md) records the current signed stable release and candidate. Deploy the activated `main` source for production, then verify the live commit through [build provenance](build-provenance.md). See [release status](release-readiness.md) for package availability.
+The [release status](release-readiness.md) lists the current stable package and installation options. Deploy the activated `main` source for production, then verify the live commit through [build provenance](build-provenance.md).
 
 In Cloudflare Workers Builds, select the repository root and set the build command to `npm run build`. Use the matching deploy command:
 
@@ -43,7 +43,7 @@ Cloudflare manages build-connection authentication. The deployment wrapper check
 
 For candidate commits on `main`, Workers Builds completes these checks and keeps the active production Worker in place. Its log records `production_preserved` and `uploaded: false` while the signed release is prepared and verified. Pushing the reviewed release activation then deploys that source automatically with its commit tag. A manual production deployment requires the activated release record.
 
-For the maintained GitLab deployment path, configure the host-side `scripts/sync-gitlab-dev.mjs` bridge separately. It waits for GitHub `verify-all` on the exact dev SHA, checks ancestry and fast-forwards GitLab dev. A connected Cloudflare Worker then builds that push. Supply the bridge's authentication and schedule as part of your deployment configuration; divergence requires operator reconciliation.
+If you deploy through a GitLab mirror, configure `scripts/sync-gitlab-dev.mjs` on your automation host with the required authentication and schedule. It copies a dev commit after that commit passes GitHub `verify-all`; the connected Cloudflare Worker then builds the GitLab push. Resolve any branch divergence before resuming synchronization.
 
 ## Provision resources and secrets
 
@@ -61,7 +61,7 @@ npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env producti
 
 Use the appropriate environment for your Worker, and retain both values during updates. MCP OAuth automatically derives its encryption key from `INTERNAL_CONTROL_SECRET` and needs no additional setup. Replacing `RUNNER_TOKEN_PEPPER` invalidates enrolled Runner credentials; replacing `INTERNAL_CONTROL_SECRET` requires OAuth reconnection. The [runtime configuration guide](runtime-config.md) includes a helper that initializes only missing secrets.
 
-The default public origin is the validated HTTPS request URL with a matching Host. A reverse proxy that supplies an internal URL needs an explicit `RUNMESH_PUBLIC_ORIGIN`: an HTTPS origin without path, query, fragment, credentials or whitespace. An empty or invalid override rejects requests requiring a trusted public origin.
+The default public origin comes from the Worker's HTTPS request URL and matching Host. For a reverse proxy that supplies an internal URL, set `RUNMESH_PUBLIC_ORIGIN` to the public scheme and hostname, such as `https://runmesh.example.com`. Include a port only when needed; leave out paths, query strings, fragments, credentials and whitespace. Use a valid origin or remove the override to restore automatic selection.
 
 History defaults to the production D1 binding. Installation availability comes from the reviewed release record. Use intentional overrides only for the cases described in [runtime configuration](runtime-config.md).
 
@@ -90,7 +90,7 @@ For hidden code entry, follow the platform instructions in [installer prerequisi
 
 If hosted distribution is unavailable, use the [portable verification and installation procedure](portable-runner-installation.md). Enrollment obtains the Runner ID and credential from the server and creates a centrally managed profile. Configure workspaces in the administrator page after enrollment.
 
-Production installation uses the activated stable release. Development discovers a complete, immutable signed prerelease compatible with the Worker protocol. An unavailable dev selection closes that channel's installer. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` disables hosted installation. Details and retry handling are in [development prereleases](dev-runner-prereleases.md).
+Production installation uses the activated stable release. Development offers a signed prerelease compatible with the Worker protocol. The panel shows the available version; when a new development package is pending, follow [development prereleases](dev-runner-prereleases.md). Set `RUNMESH_SIGNED_RELEASE_AVAILABLE` to an empty value when you need to pause hosted installation.
 
 ## Host profiles and services
 
@@ -102,7 +102,7 @@ Production installation uses the activated stable release. Development discovers
 
 The default `dedicated_user` mode requires explicit OS access to approved workspaces. `runmesh install` provisions Runmesh-owned accounts/directories and starts the service; administrators grant project-directory access separately. Privileged execution requires `--execution-mode privileged_host --confirm-privileged-host`.
 
-POSIX owner-only profiles use directory/file modes `0700`/`0600`. A dedicated system service uses the controlled root/group boundary with `0750`/`0640` for its configuration. Runtime state, including policies and Jobs, remains private to the service identity with `0700`/`0600`, including after upgrades and reinstalls. Windows provisioning applies Local Service ACLs to Runmesh-owned paths. Protect profiles as long-lived credentials.
+POSIX owner-only profiles use directory/file modes `0700`/`0600`. Dedicated system-service configuration uses `0750`/`0640`, allowing root and the service group to access it. Runtime state, including policies and Jobs, uses `0700`/`0600` for the service account. These permissions also apply after upgrades and reinstalls. Windows applies Local Service ACLs to Runmesh-owned paths. Store profiles with the same care as other long-lived credentials.
 
 Use the actual service executable for `runmesh --version`, with no additional arguments. Use `doctor --json` for configuration and host-service checks; add `--profile` for a custom profile or `--user` for the current user's service. `status --json` shows the redacted profile summary. Check Windows ACLs separately when diagnosing access.
 

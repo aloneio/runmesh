@@ -2,7 +2,7 @@
 
 [English](central-administration.md) · [文档目录](README.zh-CN.md)
 
-在「MCP 和 Skill」页面（`/admin/central`）连接 MCP、安装 Skill，再接入 AI 客户端即可使用。已签名安装包、部署和升级步骤见[发行状态](release-readiness.md)。
+在「MCP 和 Skill」页面（`/admin/central`）连接 MCP、安装 Skill，再接入 AI 客户端即可使用。已签名安装包、部署和升级步骤见[发行状态](release-readiness.zh-CN.md)。
 
 ## 配置共享内容
 
@@ -16,7 +16,7 @@
 
 ## 选择客户端的使用方式
 
-「MCP 和 Skill」用于访问共享内容，由控制端处理连接和内容读取。
+「MCP 和 Skill」用于访问共享内容，由 Runmesh 处理连接和内容读取。
 
 需要读写机器上的文件或执行命令时，选择「MCP、Skill 和计算机访问」。页面会自动展开计算机权限，初始勾选读取，可按需要选择写入和执行。再按[管理员指南](admin-guide.zh-CN.md)添加 Runner、配置工作区。
 
@@ -29,8 +29,8 @@
 | MCP：「刷新工具」 | 为所有客户端加载提供方的最新工具；需要登录时自动进入授权。 |
 | MCP：「暂停」/「启用」 | 停止或恢复共享；启用时自动刷新工具。 |
 | OAuth MCP：「重新授权」 | 进入提供方页面，开始新的授权流程。 |
-| OAuth MCP：「断开账号连接」 | 移除本地保存的账号连接；再次使用时点击「重新授权」。 |
-| Skill：安装同名文件 | 展示替换内容，确认「更新 Skill」后对所有客户端生效。 |
+| OAuth MCP：「断开账号连接」 | 移除保存在 Runmesh 中的账号连接；再次使用时点击「重新授权」。 |
+| Skill：上传更新，保持 `SKILL.md` 中的 `name` 相同 | 展示替换内容，确认「更新 Skill」后对所有客户端生效。 |
 | Skill：「暂停」 | 停止后续读取，保留已安装文件。 |
 | 已暂停的 Skill：「查看文件 → 启用 Skill」 | 恢复使用当前展示的版本。 |
 

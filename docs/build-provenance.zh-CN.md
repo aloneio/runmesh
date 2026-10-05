@@ -26,9 +26,9 @@ npm run deploy:worker -- --env development
 npm run deploy:worker -- --env production
 ```
 
-生产部署使用[发行状态](release-readiness.md)列出的正式版本及 `main` 上对应的已审核发行激活提交，测试后续改动时使用 development。部署后按下文核对实际运行的源码。
+生产部署使用已通过测试、包含[发行状态](release-readiness.zh-CN.md)所列正式版本激活记录的 `main` 提交。后续控制端更新可以继续使用同一正式 Runner 包。新改动先在 development 测试，再按下文核对部署后实际运行的源码。
 
-从干净的 Git 工作区构建，并在打包完成前保持源码不变。构建会核对实际提交、文件树与 Cloudflare、GitHub、GitLab 的声明。已修改文件、未跟踪的应用文件、源码符号链接、隐藏索引标记或未核实的子模块会阻止确认来源。需要已核实源码身份的部署，应使用 Git 检出目录，而非仅有源码的压缩包。
+从干净的 Git 工作区构建，并在打包完成前保持源码不变。部署前提交应用改动，确认子模块位于记录的版本。构建会将这些源码与 Cloudflare、GitHub 或 GitLab 报告的提交比较。出现来源不一致时，可重新检出目标提交，再执行构建和部署。
 
 ## 部署后核验
 
@@ -38,7 +38,7 @@ npm run deploy:worker -- --env production
 npm run check:deployment -- https://your-worker.example <实际40位提交> main
 ```
 
-填写实际的 40 位提交；开发环境将最后一个参数改为 `dev`。核验器发送一次只读 HTTPS 请求，要求来源已确认、源码干净，且提交和分支符合预期。请求期限为 10 秒，覆盖响应头和正文，响应上限为 16 KiB。
+填写实际的 40 位提交；开发环境将最后一个参数改为 `dev`。核验器读取 `/health`，确认编译来源的提交和分支符合预期。请求超时时，先检查 Worker 是否可访问，再重新运行。
 
 | 返回结果 | 含义与处理 |
 | --- | --- |
@@ -64,8 +64,8 @@ npm run check:deployment -- https://your-worker.example <实际40位提交> main
 
 ## 提供商配置与来源记录
 
-维护中的开发环境通过单独配置的宿主同步程序，在精确提交的 GitHub `verify-all` 成功后快进 GitLab `dev`，再由连接的 Cloudflare Worker 构建这次推送。自己的部署应按[部署说明](deployment.md)配置相应连接。
+使用 GitLab 镜像时，按[部署说明](deployment.md)配置同步程序和 Cloudflare 构建连接。记录该次部署选用的提交，再用上面的命令与线上 Worker 比较。
 
-健康记录的 `attestation=self_reported` 表示来源由构建主机按受跟踪的 Git 源码报告，因此需要信任构建主机及其 Git 元数据。依赖和构建环境验证随 CI 记录，Runner 签名验证随发行证据记录。升级记录中一并保留 Worker 提交、Cloudflare 版本 ID 和已安装 Runner 的版本。
+健康记录中的 `attestation=self_reported` 表示 Git 来源由构建主机记录。使用可信的构建环境并保留 CI 结果。在升级记录中一并保存 Worker 提交、Cloudflare 版本 ID 和已安装 Runner 的版本，安装时核验 Runner 包的签名。
 
 参考：[Workers Builds 配置](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[Git 元数据变量](https://developers.cloudflare.com/changelog/post/2025-06-10-default-env-vars/)、[版本元数据](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/)。

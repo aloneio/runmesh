@@ -4,7 +4,7 @@
 
 ## 0.1.7 — 已发布正式版
 
-Runmesh 0.1.7 已作为[不可变正式版](https://github.com/aloneio/runmesh/releases/tag/v0.1.7)发布，提供已签名的便携 Runner 安装包。公开安装包已通过独立校验，部署与升级步骤见[发行状态](release-readiness.md)。
+[Runmesh 0.1.7](https://github.com/aloneio/runmesh/releases/tag/v0.1.7) 已发布，提供签名便携 Runner 安装包。安装与升级步骤见[发行状态](release-readiness.zh-CN.md)。
 
 ### Runner 服务
 
@@ -30,7 +30,7 @@ Runmesh 0.1.7 已作为[不可变正式版](https://github.com/aloneio/runmesh/r
 
 ## 0.1.6 — 已发布正式版
 
-Runmesh 0.1.6 已作为[不可变正式版](https://github.com/aloneio/runmesh/releases/tag/v0.1.6)发布，提供已签名的便携 Runner 安装包。公开安装包已通过独立校验，部署与升级步骤见[发行状态](release-readiness.md)。
+[Runmesh 0.1.6](https://github.com/aloneio/runmesh/releases/tag/v0.1.6) 已发布，提供签名便携 Runner 安装包。更新已有实例至当前版本时，按[升级指南](upgrading.zh-CN.md)操作。
 
 ### MCP 和 Skill
 
@@ -66,7 +66,7 @@ Runmesh 0.1.6 加入共享 MCP 连接和 Skill。升级时保留现有部署密�
 
 于 **2026 年 9 月 20 日**发布为[不可变正式版](https://github.com/aloneio/runmesh/releases/tag/v0.1.4)，提供已签名的便携 Runner 安装包。
 
-**0.1.4** 改进了任务控制、MCP 恢复、工作区 Context 管理和安装流程。已验证安装包的可用情况及托管安装状态见[发行状态](release-readiness.md)；更新 Worker、Runner 和客户端时，请按[升级指南](upgrading.zh-CN.md)操作。
+**0.1.4** 改进了任务控制、MCP 恢复、工作区 Context 管理和安装流程。已验证安装包的可用情况及托管安装状态见[发行状态](release-readiness.zh-CN.md)；更新 Worker、Runner 和客户端时，请按[升级指南](upgrading.zh-CN.md)操作。
 
 ### 升级兼容组件后可获得的改进
 

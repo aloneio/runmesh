@@ -10,7 +10,7 @@
 **Runmesh 0.1.6 已包含这些能力。** 中央 HTTP 发现和调用接入控制台连接及审核目录。
 开发与生产源码配置均包含独立中央绑定，并启用 Skills、直接目录和治理开关。
 受管连接通过控制端保存目标策略，OAuth 加密密钥从现有部署密钥派生。
-部署与升级步骤见[发行状态](../release-readiness.md)，验收证据见[发布记录](../central-rollout.md)。
+部署与升级步骤见[发行状态](../release-readiness.zh-CN.md)，验收证据见[发布记录](../central-rollout.md)。
 
 ## 已实现能力
 

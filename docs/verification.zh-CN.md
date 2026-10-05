@@ -1,6 +1,6 @@
 # 测试与发行验证
 
-[English](verification.md) · [文档目录](README.zh-CN.md) · [发行状态](release-readiness.md)
+[English](verification.md) · [文档目录](README.zh-CN.md) · [发行状态](release-readiness.zh-CN.md)
 
 验证源码修改或准备发行时，可按本文选择检查。在仓库根目录使用固定工具链执行 `npm ci` 安装依赖，再运行相应命令。本地修改选择与改动相关的检查；发行候选仍须通过全部必需 CI。验收已经部署的实例，请先阅读[升级指南](upgrading.zh-CN.md)。
 
@@ -51,4 +51,4 @@ GitHub 的 Linux/macOS/Windows 原生任务运行领域、契约、Runner 与适
 
 为签名资产、已部署 Worker/Runner、账号用量和 MCP 客户端目录刷新分别保存记录。本地安装包报告将这些外部检查保留为 `not_run`。每项实际完成的观测都应附时间、准确版本或提交、环境和结果。
 
-发行验收时，保留每项必需检查对应的提交、CI 运行、平台、跳过项和结果。发布要求见[发行状态](release-readiness.md)；核对线上 Worker 与源码的对应关系见[构建来源](build-provenance.zh-CN.md)。
+发行验收时，保留每项必需检查对应的提交、CI 运行、平台、跳过项和结果。发布要求见[发布流程](maintainers/release-process.md)；核对线上 Worker 与源码的对应关系见[构建来源](build-provenance.zh-CN.md)。

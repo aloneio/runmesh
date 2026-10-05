@@ -11,7 +11,7 @@ Start with the source defaults and the Worker secrets prepared by the initializa
 | `INTERNAL_CONTROL_SECRET` | Authenticates internal control-plane messages and derives the OAuth encryption key | Preserve the current value; replacement requires OAuth reconnection |
 | `RUNNER_TOKEN_PEPPER` | Protects stored Runner token verifiers | Preserve the current value; replacement invalidates current tokens |
 
-The helper generates these two secrets from at least 32 cryptographically random bytes each. OAuth encryption derives its key automatically from `INTERNAL_CONTROL_SECRET`. Store both values as Cloudflare secrets and keep them out of source, logs and conversations. Set the administrator password through the first-setup page.
+The helper generates these two secrets from at least 32 cryptographically random bytes each. OAuth encryption derives its key automatically from `INTERNAL_CONTROL_SECRET`. Cloudflare secrets holds the deployed values; follow the backup guidance below if you need a separate recovery copy. Set the administrator password through the first-setup page.
 
 Dashboard administration uses your administrator session. Configure `ADMIN_TOKEN` when you need programmatic Runner administration.
 
@@ -24,17 +24,17 @@ Dashboard administration uses your administrator session. Configure `ADMIN_TOKEN
 | `RUNMESH_AUDIT_BACKEND` | D1 in production; preserve an intentional backend override |
 | `RUNMESH_JOB_HISTORY_BACKEND` | Packed D1 in production; keep the `HISTORY_DB` binding available |
 | `RUNMESH_SIGNED_RELEASE_AVAILABLE` | The reviewed stable release in production, or disabled for a candidate; `dev` discovery in development. An explicit empty value disables hosted installation |
-| `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Deployment identity comes from verified build-time Git source and is compared with provider metadata; use [provenance checks](build-provenance.md) to inspect it |
+| `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Build tools read the branch and commit from Git and check any supplied values against it; use [provenance checks](build-provenance.md) to inspect the deployed source |
 
-A public-origin override must be a complete HTTPS origin, without a path, query, fragment, credentials or whitespace. An empty or invalid override rejects requests that require a public origin. Runmesh validates the request itself rather than using forwarded host headers.
+A public-origin override contains the scheme, hostname and optional port, for example `https://runmesh.example.com`. Leave out paths, query strings, fragments, credentials and whitespace. Use a valid value or remove the override to restore automatic selection. Runmesh derives the default from the direct request URL and Host header; configure the override when a proxy uses a different internal address.
 
 Development uses `RUNMESH_ENVIRONMENT=development`. Keep test variables in the local test environment. Preserve the Registry/Runner Durable Object namespaces, `HISTORY_DB`, static assets and `CF_VERSION_METADATA` bindings when updating an existing instance.
 
 ## Release and environment selection
 
-The [release status](release-readiness.md) identifies the current stable package and candidate. A `released` record in `release/release-state.json` enables the independently verified stable package; a `candidate` record keeps its hosted stable installer disabled. Deploy the activated `main` source, then check your Worker's release descriptor for installation availability. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override still disables hosted installation.
+The [release status](release-readiness.md) identifies the current stable package. A `released` record in `release/release-state.json` enables the independently verified stable package; a `candidate` record keeps its hosted stable installer disabled while publication is being prepared. Deploy the activated `main` source, then check your Worker's release descriptor for installation availability. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override disables hosted installation.
 
-Production uses protected `main`; candidate testing uses the separate `dev` Worker. Development selects a verified signed prerelease from its own channel and closes hosted installation when that selection is unavailable. See [development prereleases](dev-runner-prereleases.md).
+Production uses protected `main`; candidate testing uses the separate `dev` Worker. The development panel offers a verified signed prerelease from its own channel. Check the version shown in that panel before installation. See [development prereleases](dev-runner-prereleases.md) for publication and refresh timing.
 
 ## Initialize missing secrets
 
@@ -50,7 +50,7 @@ Create missing required values:
 npm run setup:secrets -- --env production --apply
 ```
 
-The helper rechecks the inventory, generates independent values in memory and uploads missing keys through Wrangler stdin. Existing values remain intact. Keep initialization to one operator at a time. If inventory fails, resolve the Cloudflare access problem; if an upload result is uncertain, check the secret inventory before another attempt.
+The helper creates and uploads the missing secrets while preserving existing values. Run initialization with one operator at a time. If the command reports a Cloudflare access or upload error, check the account connection and secret inventory before retrying.
 
 Cloudflare retains the generated keys. If you require an independently recoverable backup, generate and retain values through your secret-management process before uploading them.
 

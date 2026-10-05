@@ -8,9 +8,9 @@ Deploy the Runmesh control plane on Cloudflare Workers, connect your MCPs and in
 
 Prepare a Cloudflare account, a public HTTPS Worker origin, an administrator password of at least 12 characters, and a least-privilege plan for each machine and workspace.
 
-See [release status](release-readiness.md) for signed packages and deployment and upgrade steps. For production, deploy the reviewed `main` source containing its release activation. Test upcoming changes with a separate `dev` Worker and resources.
+See [release status](release-readiness.md) for the current version, signed packages and upgrade steps. Deploy production from `main`. Test upcoming changes with a separate `dev` Worker and resources.
 
-For an activated production release, connect the repository to Cloudflare Workers Builds, choose `main`, and set the repository-root build command to `npm run build`. Deploy with:
+In Cloudflare Workers Builds, connect the repository, choose `main`, and set the repository-root build command to `npm run build`. Set the deploy command to:
 
 ```sh
 npm run deploy:worker -- --env production
@@ -46,7 +46,7 @@ A restricted service account needs OS access to the workspaces you approve. Comm
 
 ## Configure workspaces and clients
 
-On the Runner details page, add a stable workspace name, an absolute host path and the required read, edit, shell and Job-control permissions. Save and wait for policy acknowledgement, then verify with `workspace_list` from the intended MCP client.
+On the Runner details page, add a stable workspace name, an absolute host path and the required read, edit, shell and Job-control permissions. Save and wait for the Runner to apply the policy revision, then verify with `workspace_list` from the intended MCP client.
 
 MCP workspace and diagnostic metadata omit configured host roots. Review file contents and command output before sharing them, as those can contain paths or other private data.
 
@@ -67,7 +67,7 @@ To retire the host installation, use the enrollment page's maintenance uninstall
 
 ## Set Job recording and retention
 
-In **MCP Clients → client details → Cloud Job history**, choose whether new Jobs should record cloud snapshots and related Job-tool audit. Local Jobs and retained output remain available. Existing cloud records keep their retention policy; enabling recording later applies to future recorded work. Required authorization and replay-prevention data is retained.
+In **MCP Clients → client details → Cloud Job history**, choose whether new Jobs should save cloud snapshots and records of Job-tool calls. Local Jobs and retained output remain available. Existing cloud records keep their retention policy; enabling recording later applies to future recorded work. Required authorization and replay-prevention data is retained.
 
 For an unrecorded Job, pass its `workspace_id` when following it on the online Runner. This requires Runner 0.1.1 or newer. See [quota isolation](quota-resilience.md) for history settings and storage behavior.
 
@@ -77,11 +77,11 @@ Default history upload is every five minutes and cloud retention is seven days. 
 
 ## Configure shared execution
 
-Runner 0.1.4 defaults to two execution slots, with an explicit configurable limit of 1–64. Check each installed Runner's effective setting; existing explicit limits are preserved.
+Runners from 0.1.4 onward default to two execution slots, configurable from 1 to 64. Check each installed Runner's effective setting; existing explicit limits are preserved.
 
 Compatible queues hold up to 32 waiting Jobs and eight per client, schedule clients in turn, and check authorization again before starting. A shell request with `queue: false` returns immediately when no slot is available. See [queue behavior](job-queue-and-localization.md).
 
-Change-driven history reporting in 0.1.4 uploads changed snapshots while retaining ordinary heartbeats, authorization and maintenance. It requires a compatible Worker and Runner. See [release notes](release-notes.md) and [history reporting](demand-job-history.md) when upgrading from 0.1.3.
+From 0.1.4 onward, history reporting uploads snapshots when they change while heartbeats, authorization and maintenance continue as usual. This requires a compatible Worker and Runner. See [release notes](release-notes.md) and [history reporting](demand-job-history.md) for upgrade steps and reporting settings.
 
 ## Back up and upgrade
 

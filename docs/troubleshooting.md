@@ -19,7 +19,7 @@ Complete first administrator setup before exposing a new instance to untrusted v
 
 ## Runner stays offline
 
-Check the host service, outbound HTTPS/WebSocket access to the Worker, and system time. Use the service's actual executable to run `runmesh --version` alone, then `runmesh doctor --json`. Add `--profile` to `doctor` for a custom profile or `--user` for a user service. Where supported, `--shareable` provides a report suitable for support.
+Check the host service, outbound HTTPS/WebSocket access to the Worker, and system time. Use the service's actual executable to run `runmesh --version` alone, then `runmesh doctor --json`. Add `--profile` to `doctor` for a custom profile or `--user` for a user service. Use `runmesh doctor --json --shareable` to prepare a report for support.
 
 Check the dashboard's Runner authorization period and credential status. Extend an expired authorization period if access is still intended. A revoked or replaced credential needs the administrator's recovery enrollment procedure; network and dependency failures need connectivity or service recovery.
 
@@ -39,7 +39,7 @@ Use the complete authorized URL ending in `/mcp` with a Streamable HTTP client. 
 
 After a Worker update, refresh the client's Runmesh tool catalog. If a Job follow-up rejects `workspace_id`, compare the Worker, Runner and client definitions using [catalog refresh](mcp-connector-refresh.md).
 
-`runner_upgrade_required` calls for a compatible installed Runner. For Context `storage` and `prune`, upgrade from 0.1.3 to a verified release containing those actions, then reconnect so the Worker can recognize support. Follow the [upgrade guide](upgrading.md).
+`runner_upgrade_required` calls for a compatible installed Runner. Context `storage` and `prune` are available from 0.1.4. Check the installed version, upgrade the Worker and Runner as needed, and reconnect the Runner to refresh its available actions. Follow the [upgrade guide](upgrading.md).
 
 ## Workspace missing or permission denied
 
@@ -47,7 +47,7 @@ For shared MCP or Skill access, use the connection checks below. For computer ac
 
 Confirm `runner_current` and the workspace ID from `workspace_list`. Ask the administrator to check client scopes and Runner restrictions, the authorization period, workspace permissions and policy acknowledgement. The Runner's service account also needs OS access.
 
-Use the [permission runbook](runbooks/permission-denial.md) to identify the denying layer before changing access. If a required service is unavailable, restore it and repeat the permission checks before changing access.
+Use the [permission runbook](runbooks/permission-denial.md) to identify which setting needs attention. If a required service is unavailable, restore it and repeat the permission checks.
 
 ## Connected MCP or OAuth needs attention
 
@@ -67,11 +67,11 @@ For a same-name replacement, review the files and select **Update Skill**. If an
 
 Keep the original `job_id`, `workspace_id` and Runner selection. A foreground call can return while the command continues. Follow it with workspace-bound live queries; the Runner can retain a Job whose cloud history is disabled, delayed, expired or unavailable.
 
-For `job_history_unavailable` or an older `not_found`, ask the administrator to recover the original follow-up chain. Check that Job's state before launching another command.
+For `job_history_unavailable` or an older `not_found`, bring the original Runner online and repeat the `job` query with the `job_id` and `workspace_id` from the shell receipt. Refresh the client's tool catalog if it omits `workspace_id`. If the query still fails, ask the administrator to check the original Runner's local Job record. Check that Job's state before launching another command.
 
 ## Cancellation, recovery or input is uncertain
 
-Wait for a final Job status after cancellation. For recovered `unknown` processes, have an administrator verify process identity on the host; the execution slot remains reserved until reconciliation.
+Wait for a final Job status after cancellation. For recovered `unknown` processes, have an administrator verify the process on the host. The execution slot remains reserved until the Runner confirms that the process has ended.
 
 After an input delivery error or timeout, inspect the process before sending the data or end-of-input again. Read `operation_state`, `next_action` and `recovery_hint` together. See the [user guide](user-guide.md) for the full state list.
 

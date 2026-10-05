@@ -9,7 +9,7 @@ Choose **OAuth** when an MCP uses an account at its provider. Runmesh opens the 
 1. Open **MCP & Skill → MCP**, enter the public HTTPS MCP URL, and choose **OAuth**.
 2. Select **Connect**. Runmesh saves the connection and opens the provider's authorization page.
 3. Sign in to the intended account, review the requested access, and complete consent.
-4. Wait for the Runmesh callback to finish. The panel then loads the MCP's tools and shows the connection.
+4. Wait to return to Runmesh. The panel loads the MCP's tools and shows the connection automatically.
 
 The account connection is shared by the instance's active AI clients. Review which account and provider permissions you select with that shared use in mind.
 
@@ -19,7 +19,7 @@ Runmesh discovers the provider settings from the MCP endpoint. The provider need
 
 Select **Reconnect** on an enabled MCP card to start a fresh authorization flow. It opens the provider even if you authorized this MCP previously. An existing provider session may take you directly to consent or back to Runmesh.
 
-When you explicitly refresh tools and the connection needs sign-in, Runmesh opens authorization automatically. On returning from OAuth, tool discovery continues in the panel.
+When you select **Refresh tools** and the connection needs sign-in, Runmesh opens authorization automatically. On returning from OAuth, the panel continues loading tools.
 
 If you leave the flow before finishing, return to **MCP & Skill** and select **Reconnect** on the saved card. For a paused MCP, select **Enable** first.
 
@@ -43,6 +43,6 @@ These actions control future access. Check the provider for the result of any ac
 
 ## Administrator notes
 
-OAuth credentials are encrypted through the shared secret-storage module using the existing `INTERNAL_CONTROL_SECRET`. Preserve that value during upgrades. Changing it requires connected MCP accounts to authorize again.
+Runmesh encrypts stored OAuth credentials using the existing `INTERNAL_CONTROL_SECRET`. Preserve that value during upgrades. Changing it requires connected MCP accounts to authorize again.
 
 Keep callback URLs, authorization codes and tokens out of shared logs and support attachments. For deployment setup, see [runtime configuration](runtime-config.md); for implementation details, see the [OAuth reference](maintainers/central-oauth.md).

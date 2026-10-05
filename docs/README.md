@@ -17,26 +17,24 @@ Choose a guide for the task you want to complete. Start with the user guide to c
 | Resolve connection, permission, installation or Job problems | [Troubleshooting](troubleshooting.md) |
 | Read version changes and upgrade guidance | [Release notes](release-notes.md) |
 
-## Installation and safe operation
+## Install and manage your instance
 
-Start a new Runner installation from the administrator's enrollment page, which supplies a version-pinned installer when a verified release is available. For an existing installation, follow the upgrade guide to preserve its credentials, configuration and data.
+To add a computer, open **Runner → Add Runner** and run the generated installation command on that machine. To update an existing installation, follow the [upgrade guide](upgrading.md).
 
-Advanced installation references: [portable archive verification](portable-runner-installation.md), [installer prerequisites](installer-prerequisites.md), [runtime configuration](runtime-config.md), [deployment](deployment.md), and [complete uninstall](runner-uninstall.md).
+Installation references: [portable installation](portable-runner-installation.md), [system requirements](installer-prerequisites.md), [runtime configuration](runtime-config.md), [deployment](deployment.md), and [uninstall](runner-uninstall.md).
 
-Read the [security model](security.md) and [permission model](permission-model.md) to choose suitable access. Commands use the Runner service account's OS privileges; run untrusted code in a container or virtual machine. Store MCP URLs, enrollment commands and Runner profiles securely.
+Use the [permission guide](permission-model.md) to choose access for each client and workspace. The [security guide](security.md) covers credentials, service accounts and host isolation.
 
 ## Versions and features
 
-Runmesh shares enabled MCP tools and Skills with connected clients. Deploy the compatible Worker and refresh the client's tool catalog to use them. For computer access, install the appropriate Runner package on each execution machine.
+Runmesh shares enabled MCP tools and Skills with connected clients. After adding or updating them, refresh your AI client's tool catalog. To work with files or run commands, add computer access and install a Runner on the target machine.
 
 Check [release status](release-readiness.md) for package availability and [build provenance](build-provenance.md) for your deployed Worker. [Development prereleases](dev-runner-prereleases.md) provide a separate testing channel.
 
-## Advanced and maintainer references
+## Integration and maintenance
 
-The [central MCP and Skill architecture](central-capabilities-architecture.md) describes shared publication, client identity and module boundaries. Implementation references cover [administration](maintainers/central-administration.md), [HTTP transport](maintainers/central-remote-mcp.md), [OAuth](maintainers/central-oauth.md) and [versioned Skill storage](maintainers/central-skills.md). Maintainers use the [rollout ledger](central-rollout.md) to track release acceptance.
+For custom integrations, start with the [tool examples](tool-examples.md), [MCP call contract](mcp-agent-call-contract.md) and [catalog refresh guide](mcp-connector-refresh.md).
 
-For integrations, use the [MCP call contract](mcp-agent-call-contract.md), [tool examples](tool-examples.md), [catalog refresh guide](mcp-connector-refresh.md), [capability contracts](capability-contracts.md) and [workspace Context storage](context-storage.md). For maintenance, see [architecture](architecture.md), [verification](verification.md) and [main promotion policy](main-promotion-policy.md).
-
-[Historical release notes](maintainers/release-history.md) and [dated audit evidence](maintainers/release-evidence.md) record the versions and review periods named in each document. [Legacy migration](migration.md) covers early development and pre-v2 transitions; use the upgrade guide for a current v2 installation.
+The [maintainer documentation](maintainers/README.md) covers architecture, development, publication and historical review records.
 
 Security reports follow the private process in [SECURITY.md](../.github/SECURITY.md). For other issues, include the version, operation, time and redacted error code. Review attachments for credentials and private output before sharing.

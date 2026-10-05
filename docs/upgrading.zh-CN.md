@@ -2,15 +2,15 @@
 
 [English](upgrading.md) · [文档目录](README.zh-CN.md)
 
-兼容的协议 v2 升级保留现有 Worker、Durable Object 命名空间、D1 数据库、密钥、Runner 配置和服务布局。[旧版本迁移](migration.md)仅用于其中明确说明的旧数据边界。
+兼容的协议 v2 升级保留现有 Worker、Durable Object 命名空间、D1 数据库、密钥、Runner 配置和服务布局。较早的安装请先核对[旧版本迁移](migration.md)说明中的适用版本。
 
 ## 选择目标版本
 
-Runmesh 将已启用的 MCP 工具与当前 Skill 共享给实例中的所有有效客户端。升级前，请核对共享内容与客户端范围；部署后刷新客户端目录和 Skill 版本。停止某个客户端的访问时，撤销其凭据；停止共享某个 MCP 或 Skill 时，在控制端暂停它。计算机访问保留原有 Runner 和工作区权限，具体操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
+升级前核对实例向客户端共享的 MCP 和 Skill，部署后刷新客户端目录和 Skill 版本。共享内容和客户端访问可在控制端管理，具体操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。计算机访问继续使用已配置的 Runner 和工作区权限。
 
-先读[版本说明](release-notes.zh-CN.md)和[发行状态](release-readiness.md)。生产升级使用已发布、独立验签的正式包；候选版和开发预发布放在独立测试环境。
+先读[版本说明](release-notes.zh-CN.md)和[发行状态](release-readiness.zh-CN.md)。生产升级使用已发布、独立验签的正式包；候选版和开发预发布放在独立测试环境。
 
-控制端应包含 MCP、Skill 生产绑定，并保留现有 Registry 和 Runner 命名空间。已有的两个密钥和资源标识保持不变；OAuth 加密使用 `INTERNAL_CONTROL_SECRET`。先部署经过审核的发行激活版本，核对运行中的 Worker，再更新 Runner。下文的受管系统服务流程用于将 Runner 0.1.6 更新到 0.1.7。
+保留 MCP、Skill 绑定，以及现有 Registry 和 Runner 命名空间。资源标识和已有的两个密钥保持不变；OAuth 加密使用 `INTERNAL_CONTROL_SECRET`。先部署正式版本，核对运行中的 Worker，再更新 Runner。下文的受管系统服务流程用于将 Runner 0.1.6 更新到 0.1.7。
 
 分别安排以下更新：
 
@@ -28,7 +28,7 @@ Runmesh 将已启用的 MCP 工具与当前 Skill 共享给实例中的所有有
 
 备份部署配置、密钥、控制面数据、Runner 配置与状态、服务清单、已验证包和项目数据，并在独立实例演练恢复。
 
-重启 Runner 前暂停新任务，处理完运行中和排队工作。恢复后为 `unknown` 或 `cancelling` 的进程应在主机上核对，并保留任务 ID。浏览器关闭或访问撤销后，已有进程的执行结果仍需另行检查。
+重启 Runner 前暂停新任务，并完成或取消运行中和排队的任务。恢复后的任务若显示 `unknown` 或 `cancelling`，请在主机上核对进程，并保留任务 ID 以便跟进。撤销访问时也要检查这些运行中的任务。
 
 ## 执行升级
 
@@ -109,7 +109,7 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 
 验收失败时，按同一平台步骤暂停服务。POSIX 将 `current.next` 指向记录的 `OLD` 目录，再用相同 Node 命令替换 `current`；此时传入的预期旧目标应为当前 0.1.7 目录。Windows 在任务禁用且停止后，把新的 `current` junction 改名为一个尚未使用的 `current.failed-0.1.7`，再把 `current.previous-0.1.6` 改回 `current`。使用原服务定义启动，并恢复任务原启用状态。
 
-保留配置、状态和经过验证的安装包，直到确认恢复组合可用。验收完成后，清理本次创建的维护暂存、npm 配置文件，按备份策略保留上一版本。
+保留配置、状态和经过验证的安装包，直到恢复后的服务通过检查。验收完成后，清理本次升级创建的暂存目录和 npm 配置文件，按备份策略保留上一版本。
 
 ## 验收结果
 
@@ -128,4 +128,4 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 | 服务或兼容性失败 | 保留日志和状态，恢复经过演练的兼容程序、部署与状态组合 |
 | 凭据丢失、到期或撤销 | 使用对应的授权延期、轮换或恢复注册流程 |
 
-按演练方案一起恢复数据与程序；旧程序对新版状态或历史设置的理解可能不同。调查期间保留持久状态和不可变发行资产。
+按演练方案一起恢复相互匹配的程序、配置和数据版本。排查升级问题期间，保留当前状态和已验证安装包的副本。

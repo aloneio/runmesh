@@ -4,7 +4,7 @@ Runmesh combines MCP client scopes, Runner policy, workspace permissions and the
 
 ## Shared central library
 
-In the current development configuration, every authenticated client shares enabled, reviewed MCP tools and active Skills. Per-client central capability assignments are retired. Client credentials, upstream OAuth, publication checks and global capability disabling remain enforced; native Runner scopes and workspace policies remain separate. Revoke a client credential to withdraw that client, disable a capability to withdraw it instance-wide, or use separate instances for separate capability libraries. See [central administration](central-administration.md) for upgrade behavior.
+Every client with a valid credential can use the instance's enabled MCP tools and active Skills. Administrators connect MCP accounts and install Skills in the control panel. Revoke a client credential to end that client's access, or pause an MCP or Skill to stop sharing it across the instance. Use separate instances for separate shared libraries. Computer access has its own Runner scopes and workspace permissions. See the [MCP and Skill guide](central-administration.md).
 
 ## Protect each credential
 
@@ -15,7 +15,7 @@ In the current development configuration, every authenticated client shares enab
 | MCP URL secret | A 256-bit base64url path credential at `/<secret>/mcp`; Registry stores its SHA-256 verifier and short prefix |
 | Enrollment code | A 43-character single-use code for `POST /runner/enroll`; Registry stores its verifier, validity window and use state |
 | Runner token | Returned once at enrollment and kept in the private local profile; Registry stores a peppered HMAC verifier |
-| Internal control secret | HMAC protection for method/path/body between the Worker and Durable Objects |
+| Internal control secret | HMAC protection between the Worker and Durable Objects; key derivation for encrypted upstream OAuth credentials |
 
 Complete first administrator setup before exposing an uninitialized instance to untrusted visitors: the first successful setup owns it. Setup uses password confirmation, CSRF and same-origin checks. Once initialized, the setup route is closed.
 
@@ -41,7 +41,7 @@ The Runner's file tools accept relative paths and check traversal, links/junctio
 
 Host shell uses the Runner's OS identity. The workspace sets its initial directory; the command can access whatever that account's host permissions allow. New Runners default to `dedicated_user`: Linux uses `runmesh:runmesh`, macOS uses `UserName=runmesh`, and Windows uses `NT AUTHORITY\LOCAL SERVICE`. Grant that identity the required workspace access. Use VM/container isolation for commands that need an additional host boundary.
 
-The advanced `privileged_host` mode runs as root/SYSTEM and requires explicit confirmation, including `--confirm-privileged-host` in the CLI. Existing service identities and native client permissions retain their configured values. When the central library is enabled, new control-panel connections default to Services and Skills only, with no native computer scopes. Selecting computer access uses the chosen native scopes, initially `coding:read`; when the central library is disabled, the form offers only computer access.
+The advanced `privileged_host` mode runs as root/SYSTEM and requires explicit confirmation, including `--confirm-privileged-host` in the CLI. Existing service identities and native client permissions retain their configured values. New control-panel connections default to **MCP and Skills**. Choose **MCP, Skills and computer access** to select Runner scopes; **Read** (`coding:read`) is initially selected. When the central library is disabled, new connections use computer access.
 
 ## Protect the local profile and installation
 
@@ -51,7 +51,7 @@ Keep the Runner profile private because it contains its long-lived token. Ordina
 
 Centrally managed workspace roots are configured in the administrator interface and delivered in authenticated policy frames. Public metadata omits them. File content and command/log output can still contain paths that an authorized client requests.
 
-Hosted installation requires a verified release in the selected channel and a validated HTTPS origin. Production follows reviewed release state; the **0.1.4** activation enables stable hosted distribution in source. Development uses verified signed prereleases. Ordinary Cloudflare routing derives the origin from a matching request URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override.
+Hosted installation uses a verified release in the selected channel and a validated HTTPS origin. Production selects the signed stable package recorded in [release status](release-readiness.md); development selects a verified signed prerelease. Ordinary Cloudflare routing derives the origin from a matching request URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override.
 
 The hosted script and embedded Ed25519 key form the one-command installer trust path. Use [portable artifact verification](portable-runner-installation.md) when you need an independently trusted artifact/keyring. Hosted commands contain a single-use code that can enter shell history or process arguments. To use a hidden prompt on Windows, remove `-NonInteractive` and run in an interactive administrator terminal.
 
