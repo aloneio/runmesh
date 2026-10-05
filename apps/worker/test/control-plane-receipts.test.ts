@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { runnerEnvironment, runnerExecutionSnapshot } from "../src/application/runner-queries.js";
 import { authThrottlePorts, runnerQueryPorts } from "../src/platform/control-plane-receipts.js";
 import type { WorkerEnv } from "../src/platform/env.js";
+import { loadAdminPageData } from "../src/http/admin-query.js";
 
 const checksum = "a".repeat(64);
 const ready = { ok: true, policy_status: "applied", desired_revision: 1, applied_revision: 1, runner_reported_policy_revision: 1,
@@ -52,4 +53,70 @@ it("hashes edge sources consistently and omits raw addresses from Registry reque
   expect(payloads[0]?.source_hash).not.toBe(payloads[2]?.source_hash);
   expect(JSON.stringify(payloads)).not.toMatch(/2001|DB8|invalid/);
   expect(payloads[1]).toMatchObject({ kind: "login", success: true });
+});
+
+const adminClient = { client_id: "client-1", label: "Retained client", scopes: ["coding:read"], revoked_at_ms: null, last_used_at_ms: null, active_runner_id: null };
+const adminRunner = { runner_id: "runner-1", display_name: "Retained runner", state: "online", last_heartbeat_ms: null, configured_execution_mode: "dedicated_user", public_info: null };
+function adminFeatureEnvironment(feature: (request: Request) => Response | Promise<Response>) {
+  const calls: string[] = [];
+  const env = environment(request => {
+    const path = new URL(request.url).pathname; calls.push(path);
+    if (path === "/auth/clients") return Response.json({ clients: [adminClient] });
+    if (path === "/runners") return Response.json({ runners: [adminRunner] });
+    if (path === "/status/features") return feature(request);
+    throw new Error("Unexpected Registry path: " + path);
+  });
+  return { env, calls };
+}
+
+it.each(["headers", "body"] as const)("retains populated Admin data when optional feature %s stall", async phase => {
+  vi.useFakeTimers();
+  let entered!: () => void, release!: (response: Response) => void;
+  const requested = new Promise<void>(resolve => { entered = resolve; });
+  const pending = new Promise<Response>(resolve => { release = resolve; });
+  let stream!: ReadableStreamDefaultController<Uint8Array>, signal: AbortSignal | undefined;
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({ start(controller) { stream = controller; }, cancel });
+  const { env, calls } = adminFeatureEnvironment(request => { signal = request.signal; entered(); return phase === "headers" ? pending : new Response(body); });
+  let settled = false;
+  const operation = loadAdminPageData(env, "clients").then(value => { settled = true; return value; });
+  try {
+    await requested;
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(settled, "optional feature must not hold completed core data open past the existing read budget").toBe(true);
+    expect(await operation).toMatchObject({ clients: [adminClient], runners: [adminRunner], notices: [{ title: "Feature health status unavailable" }] });
+    expect(signal?.aborted).toBe(true);
+    expect(calls.sort()).toEqual(["/auth/clients", "/runners", "/status/features"].sort());
+    if (phase === "headers") { release(new Response(body)); await vi.advanceTimersByTimeAsync(0); }
+    expect(cancel).toHaveBeenCalledOnce();
+  } finally {
+    if (phase === "headers") release(new Response(null, { status: 503 }));
+    if (!cancel.mock.calls.length) stream.close();
+    await operation;
+    vi.useRealTimers();
+  }
+});
+
+it.each(["malformed", "missing-features", "oversized", "non-success"] as const)("keeps feature health %s visible as unavailable without losing clients", async failure => {
+  const { env, calls } = adminFeatureEnvironment(() => failure === "malformed" ? new Response("{")
+    : failure === "missing-features" ? Response.json({})
+    : failure === "oversized" ? Response.json({ features: [], untrusted: "x".repeat(16384) })
+    : new Response("unavailable", { status: 503 }));
+  expect(await loadAdminPageData(env, "clients")).toMatchObject({ clients: [adminClient], runners: [adminRunner], notices: [{ title: "Feature health status unavailable" }] });
+  expect(calls).toHaveLength(3);
+});
+
+it.each([{ features: [] }, { features: [{ feature: "mcp_audit", disabled_until_ms: null, failure_count: 0, last_failure_at_ms: null, last_error: null }] }])("preserves healthy optional feature snapshots (%#)", async snapshot => {
+  const { env } = adminFeatureEnvironment(() => Response.json(snapshot));
+  expect(await loadAdminPageData(env, "clients")).toMatchObject({ clients: [adminClient], runners: [adminRunner], notices: [] });
+});
+
+it("accepts every producer feature with a maximum escaped error within the shared byte bound", async () => {
+  const keys = ["job_recording", "mcp_audit", "mcp_usage_tracking", "auth_throttle", "maintenance_alarm"];
+  const features = keys.map(feature => ({ feature, disabled_until_ms: Number.MAX_SAFE_INTEGER, failure_count: Number.MAX_SAFE_INTEGER, last_failure_at_ms: Number.MAX_SAFE_INTEGER, last_error: "\u0001".repeat(240) }));
+  const { env } = adminFeatureEnvironment(() => Response.json({ features }));
+  expect(new TextEncoder().encode(JSON.stringify({ features })).byteLength).toBeLessThan(16384);
+  const data = await loadAdminPageData(env, "clients");
+  expect(data?.clients).toEqual([adminClient]); expect(data?.runners).toEqual([adminRunner]); expect(data?.notices).toHaveLength(5);
+  expect(data?.notices.some(notice => notice.title === "Feature health status unavailable")).toBe(false);
 });

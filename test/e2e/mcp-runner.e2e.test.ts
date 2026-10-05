@@ -937,10 +937,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const logs = collectOutput(rootRunner);
     try {
       const permissions = await submitForm(`/admin/runners/${rootRunnerId}/permissions`, { csrf_token: csrf, read: "true", edit: "false", shell: "false", job_control: "false" }, adminJar);
+      if (permissions.status !== 303) console.error(await adminSetupHttpDiagnostic(permissions, "runner_permissions"));
       expect(permissions.status).toBe(303);
       const created = await submitForm(`/admin/runners/${rootRunnerId}/workspace-create`, { csrf_token: csrf, workspace_id: workspaceId,
         display_name: "Read-only root Git regression", root_path: parse(root).root, confirm_full_host: "true", enabled: "true", profile: "read_only",
         read: "true", edit: "false", shell: "false", job_control: "false" }, adminJar);
+      if (created.status !== 303) console.error(await adminSetupHttpDiagnostic(created, "workspace_create"));
       expect(created.status).toBe(303);
       await waitFor(async () => {
         const response = await fetch(`${workerUrl}/admin/runners/${rootRunnerId}`, { headers: { cookie: cookieHeader(adminJar) } });
