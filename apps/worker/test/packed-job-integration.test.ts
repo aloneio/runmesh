@@ -110,6 +110,43 @@ it("empty and entirely opted-out snapshots never open the D1 archive", async () 
   });
 });
 
+it.each([7, 1])("overlapping settings requests keep the latest retention after an initial %s-day policy", async initialDays => {
+  await fixture(async (instance, _state, send, _identity, prepare) => {
+    const initial = { ...DEFAULT_JOB_HISTORY, retention_days: initialDays };
+    expect((await send("history-settings", initial)).status).toBe(200);
+    let paused = false, release!: () => void, reached!: () => void, changed!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { reached = resolve; });
+    const latestStored = new Promise<void>(resolve => { changed = resolve; });
+    const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, { get(target, key) {
+      if (key === "bind") return (...args: any[]) => wrap(target.bind(...args), sql);
+      if (key === "run") return async () => {
+        if (!paused && sql.startsWith("UPDATE runmesh_job_snapshots_v1 SET retention_days=")) { paused = true; reached(); await gate; }
+        return target.run();
+      };
+      const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    prepare.mockImplementation(sql => wrap(db.prepare(sql), sql));
+    const update = instance.setJobHistorySettings.bind(instance);
+    const observe = vi.spyOn(instance, "setJobHistorySettings").mockImplementation((id, settings) => {
+      const saved = update(id, settings);
+      if (saved && instance.jobHistorySettings(id).retention_days === 1) changed();
+      return saved;
+    });
+    try {
+      const earlier = send("history-settings", { ...initial, retention_days: initialDays === 1 ? 7 : 3 });
+      await waiting;
+      const latest = send("history-settings", { ...initial, retention_days: 1 });
+      await latestStored; release();
+      const responses = await Promise.all([earlier, latest]);
+      for (const response of responses) { expect(response.status).toBe(200); expect(await response.json()).toMatchObject({ retention_days: 1 }); }
+      expect(instance.jobHistorySettings("r").retention_days).toBe(1);
+      const row = await db.prepare("SELECT retention_days FROM runmesh_job_snapshots_v1 WHERE namespace=? AND runner_id='r'").bind(_state.id.toString()).first();
+      expect(row).toEqual({ retention_days: 1 });
+    } finally { release(); observe.mockRestore(); }
+  });
+});
+
 it.each([true, false])("reporting capability negotiation is explicit, new peer=%s", async capable => {
   await fixture(async (_instance, _state, send, identity) => {
     const response = await send("connect", { session_id: "new-reporting-session", credential_version: identity.credential_version,

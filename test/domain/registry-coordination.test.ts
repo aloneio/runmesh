@@ -104,6 +104,22 @@ function syncRequest(sequence = 2, acknowledge = true) {
       ...(acknowledge ? { extensions: { runmesh_history_ack: true } } : {}) }
   });
 }
+
+it.each(["current", "replaced", "unavailable"] as const)("history settings use current lifecycle authority after %s persistence", async outcome => {
+  const h = history();
+  let settings = { ...DEFAULT_JOB_HISTORY, retention_days: 7 };
+  const ports: RunnerHistoryPorts = { ...h.ports, setJobHistorySettings: () => true, jobHistorySettings: () => settings,
+    packedJobs: { ...h.ports.packedJobs, setRetention: async (_id, _lifecycle, currentSettings) => {
+      expect(currentSettings()).toEqual(settings);
+      settings = { ...settings, retention_days: 1 };
+      expect(currentSettings()).toEqual(settings);
+      if (outcome === "replaced") { h.replace(); expect(currentSettings()).toBeUndefined(); }
+      if (outcome === "unavailable") throw new Error("D1 unavailable");
+    } } };
+  const response = await createRunnerHistoryRoutes(ports)(request("history-settings", "POST", settings));
+  expect(response?.status).toBe(outcome === "replaced" ? 409 : outcome === "unavailable" ? 202 : 200);
+  if (outcome !== "replaced") expect(await response?.json()).toMatchObject({ retention_days: 1 });
+});
 function sqliteHistory(overrides: Partial<RunnerHistoryPorts> = {}) {
   const syncRunner = vi.fn(() => true);
   const ports: RunnerHistoryPorts = {
