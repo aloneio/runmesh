@@ -1,7 +1,8 @@
 import { runnerSummary, clientSummary } from "../application/admin-projections.js";
 import type { AdminData, AdminNotice, ClientViewModel, RunnerSummaryViewModel } from "../contracts/admin-views.js";
 import { arrayField, record } from "../values.js";
-import { json, registryGet } from "../platform/control-plane.js";
+import { registryGet, registryRequest } from "../platform/control-plane.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 import type { RegistryFeatureHealth } from "../contracts/feature-health.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { recordArray, registryArray, registryRecord } from "./admin-read.js";
@@ -85,9 +86,12 @@ export async function loadClientDetailData(env: WorkerEnv, clientId: string): Pr
 }
 
 export async function loadFeatureNotices(env: WorkerEnv): Promise<readonly AdminNotice[]> {
-  const response = await registryGet(env, "/status/features");
-  if (!response.ok) return [FEATURE_STATUS_UNAVAILABLE_NOTICE];
-  try { return registryFeatureNotices(record(await json(response))); } catch { return [FEATURE_STATUS_UNAVAILABLE_NOTICE]; }
+  // Optional health must not keep completed management reads open. The five
+  // produced feature entries each carry at most a 240-code-unit error summary.
+  const response = await boundedJsonResponse(signal => registryRequest(env, "/status/features", "GET", "", signal));
+  const value = record(response?.value);
+  if (response?.status !== 200 || !Array.isArray(value?.features)) return [FEATURE_STATUS_UNAVAILABLE_NOTICE];
+  return registryFeatureNotices(value);
 }
 
 function registryFeatureNotices(value: Record<string, unknown> | undefined): readonly AdminNotice[] {
