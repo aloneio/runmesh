@@ -81,7 +81,9 @@ Read-only Git inspection requires a dedicated workspace and a trusted executable
 
 Linux directory enumeration uses a verified `O_DIRECTORY|O_NOFOLLOW` descriptor through `/proc/self/fd`, so procfs is required. Windows/macOS use pathname revalidation, which has a local replace-and-restore race limitation. Protect the host from concurrent untrusted filesystem mutation. Ordinary file reads additionally check descriptor identity.
 
-Search limits are **4 MiB** total bytes, **256 KiB** per file, **1,000** candidate files, **10,000** entries, **1,000** directories, depth **16** and a five-second deadline checked between I/O operations. Reaching a bound sets `truncated`; individual OS calls can exceed the checked deadline.
+Content search scans readable files up to **256 KiB**. Filename search uses directory metadata and matches names independently of target-file size. Both modes can read `.gitignore` files and share limits of **4 MiB** total bytes read, **1,000** candidate files (including ignore-rule reads), **10,000** entries, **1,000** directories, depth **16**, **1,000** collected matches and a five-second deadline checked between I/O operations. Individual OS calls can exceed that deadline.
+
+`truncated: true` means a shared search limit stopped the scan or the response contains only part of the collected results, including pagination or response-size trimming. Check `truncated_reason` and use a returned cursor to continue through available results. This flag tracks shared scan and response limits; content-search file selection follows the size and readability rules above.
 
 ## Data and audit retention
 

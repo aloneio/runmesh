@@ -94,7 +94,7 @@ export class RunnerRuntime {
       case "git.blame": this.policy.assertPermission(params.workspace_id, "read"); return this.git.blame(params);
       case "exec.start": return this.startJob(params);
       case "exec.run": return this.run(params);
-      case "job.list": this.assertJobsReadable(params.workspace_id); return this.jobs.listReconciled(params);
+      case "job.list": return this.jobs.listReconciled(params, this.readableJobWorkspaces(params.workspace_id));
       case "job.get": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.getReconciled(params.job_id); }
       case "job.logs": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.logs(job.job_id, params); }
       case "job.cancel": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.cancel(job.job_id); }
@@ -132,12 +132,9 @@ export class RunnerRuntime {
     await this.jobs.flushPersistence();
     return jobs.filter(job => job.record_history !== false).map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), ...(job.request_id === undefined || job.request_id === null ? {} : { request_id: job.request_id }), runner_id: this.config.runnerId }));
   }
-  private assertJobsReadable(workspaceId: unknown): void {
-    if (workspaceId === undefined) {
-      for (const workspace of this.policy.list()) this.policy.assertPermission(workspace.workspaceId, "read");
-      return;
-    }
-    this.policy.assertPermission(workspaceId, "read");
+  private readableJobWorkspaces(workspaceId: unknown): ReadonlySet<string> {
+    if (workspaceId !== undefined) return new Set([this.policy.assertPermission(workspaceId, "read").workspaceId]);
+    return new Set(this.policy.list().filter(workspace => workspace.permissions?.read !== false).map(workspace => workspace.workspaceId));
   }
   private assertJobControl(workspaceId: string): void {
     const workspace = this.policy.assertPermission(workspaceId, "read");
