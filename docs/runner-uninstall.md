@@ -2,7 +2,7 @@
 
 Export any local Job history and logs you need before complete removal. **`--purge --yes` deletes that data immediately, without another confirmation.** Project workspaces are preserved.
 
-Use a local console or SSH session outside the Runner being removed, as stopping the service interrupts its connection.
+Run the removal from a local console or an independent SSH session, so you can finish the operation after the Runner service stops.
 
 ## Choose the removal method
 
@@ -43,9 +43,9 @@ Project workspaces, other services and installations, system accounts/groups and
 
 ## Handle an interrupted cleanup
 
-Hosted install, enrollment refresh and uninstall share one lock. Let the current operation finish and keep manual filesystem changes outside that window. After interruption, verify the remaining processes before handling a stale lock.
+Run one installation, enrollment refresh or uninstall at a time. These operations share a lock. After an interruption, check for running maintenance processes before removing a stale lock or changing installation files.
 
-Cleanup stops for unexpected symlink ancestors, unknown same-named services or mounted data filesystems. Inspect the reported path or service and resolve its ownership/layout before retrying. Symlinks selected for removal are removed as links, preserving their targets.
+If cleanup reports a symlinked parent directory, a same-named service from another installation, or a mounted data filesystem, inspect that path or service and confirm its ownership before retrying. Removing a selected symlink preserves its target.
 
 A failed step returns a nonzero status and lists remaining items. Inspect that list; the maintenance CLI is retained where possible for diagnosis. Retry with the same verified maintenance release after correcting the cause.
 

@@ -2,15 +2,15 @@
 
 [简体中文](upgrading.zh-CN.md) · [Documentation](README.md)
 
-For a compatible protocol-v2 upgrade, keep the current Worker, Durable Object namespaces, D1 database, secrets, Runner profiles and service layout. Use [legacy migration](migration.md) only for the older data boundary it names.
+For a compatible protocol-v2 upgrade, keep the current Worker, Durable Object namespaces, D1 database, secrets, Runner profiles and service layout. For earlier installations, check the starting version covered by [legacy migration](migration.md).
 
 ## Choose the target version
 
-Runmesh shares enabled MCP tools and active Skills with every valid client in the instance. Review the shared collection and intended client access before upgrading. After deployment, refresh client catalogs and Skill versions. To stop one client's access, revoke its credential; to stop sharing an MCP or Skill, pause it in the control panel. Computer access keeps its Runner and workspace permissions. See the [MCP and Skill guide](central-administration.md).
+Review the MCPs and Skills shared with the instance's clients before upgrading. After deployment, refresh client catalogs and Skill versions. Manage sharing and client access in the control panel as described in the [MCP and Skill guide](central-administration.md). Computer access continues to use the configured Runner and workspace permissions.
 
 Read the [release notes](release-notes.md) and [release status](release-readiness.md). Production upgrades use published, independently verified signed packages; candidate and development prereleases belong in a separate test environment.
 
-Include the MCP and Skill production bindings alongside the existing Registry and Runner namespaces. Retain both existing secrets and resource identities; OAuth encryption uses `INTERNAL_CONTROL_SECRET`. Deploy the reviewed release activation and verify the running Worker before updating Runners. The managed system-service procedure below updates Runner 0.1.6 to 0.1.7.
+Keep the MCP and Skill bindings alongside the existing Registry and Runner namespaces. Preserve resource identities and both existing secrets; OAuth encryption uses `INTERNAL_CONTROL_SECRET`. Deploy the production release and verify the running Worker before updating Runners. The managed system-service procedure below updates Runner 0.1.6 to 0.1.7.
 
 Plan these updates separately:
 
@@ -28,7 +28,7 @@ Record the expected Worker commit, each installed Runner version, service execut
 
 Back up deployment configuration, secrets, control-plane data, Runner profile/state, service manifests, verified packages and project data. Rehearse restoration in a separate test instance.
 
-Pause new submissions and drain queued/running Jobs before restarting a Runner. Inspect recovered `unknown` or `cancelling` processes on the host, and retain their Job IDs for follow-up. After revoking access, inspect running Jobs and their effects on the host.
+Pause new submissions and finish or cancel queued/running Jobs before restarting a Runner. If a recovered Job reports `unknown` or `cancelling`, inspect its process on the host and retain its Job ID for follow-up. Include running Jobs in this check when revoking access.
 
 ## Apply the upgrade
 
@@ -219,7 +219,7 @@ An originally disabled task stays disabled; its operator chooses when to start i
 
 If acceptance fails, pause the service using the same platform steps. On POSIX, create `current.next` pointing to the recorded `OLD` directory and rename it over `current` with the same Node command, supplying the current 0.1.7 target as the expected old argument. On Windows, while the task is disabled and stopped, rename the new `current` junction to an unused `current.failed-0.1.7` name, then rename `current.previous-0.1.6` back to `current`. Start through the unchanged service definition and restore the task's previous enabled state.
 
-Keep profile, state and verified packages until the compatible recovery combination is confirmed. Once acceptance is complete, remove only the maintenance staging/config files that you created and retain the previous package according to your backup policy.
+Keep the profile, state and verified packages until the restored service passes its checks. Once acceptance is complete, remove the maintenance staging/config files created for this upgrade and retain the previous package according to your backup policy.
 
 ## Accept the result
 
@@ -238,4 +238,4 @@ If your workflow uses input, cancellation, queueing or optional history, exercis
 | Service or compatibility failure | Preserve logs and state, then restore a tested compatible package/deployment/state combination |
 | Credential loss, expiry or revocation | Use the appropriate access-extension, rotation or recovery enrollment procedure |
 
-Restore data and binaries together according to the rehearsed plan. Older binaries may interpret newer state or history settings differently. Keep durable state and immutable release assets intact while investigating.
+Restore the program, configuration and data versions together according to the rehearsed plan. Keep a copy of the current state and verified packages while investigating a failed upgrade.

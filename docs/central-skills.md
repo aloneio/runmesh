@@ -41,7 +41,7 @@ Skill files are delivered as text. An AI client follows the instructions through
 
 ## Update, pause and resume
 
-To update, select the new files with the same Skill name and select **Install Skill**. Review the displayed files, then select **Update Skill**. The new version becomes active for every client.
+To update, keep the same `name` in `SKILL.md`, select the updated folder or files, and select **Install Skill**. Review the displayed files, then select **Update Skill**. The new version becomes active for every client.
 
 **Pause** stops subsequent reads and retains the files. To resume, select **View files → Enable Skill**. Content already read into a conversation remains in that conversation; begin a fresh conversation when the task should use only the new version.
 
@@ -53,12 +53,13 @@ After an update, clients should call `skill_list` again and use the returned dig
 | --- | --- |
 | Files per Skill | 256 |
 | One file | 1 MiB |
+| File path length | 200 characters |
 | Upload bundle, including encoded paths and metadata | 8 MiB |
 | Retained versions per Skill | 32 |
 | Skills per instance | 1,000 |
 | Stored Skill bundles per instance | 256 MiB |
 
-Sizes use UTF-8 bytes. Keep the selected folder focused on the Skill's instructions and references; leave out dependency directories, generated output and unrelated files. Use relative paths with forward slashes and distinct filenames, including when compared without case. When a storage limit is reached, existing content is retained and the panel reports the limit.
+Sizes use UTF-8 bytes. Keep the selected folder focused on the Skill's instructions and references; leave out dependency directories, generated output and unrelated files. Use relative paths with forward slashes and names made of English letters, digits, periods, underscores and hyphens, such as `references/checklist.md`. Choose names valid on Windows, and keep file paths unique when letter case is ignored. When a storage limit is reached, existing content is retained and the panel reports the limit.
 
 If an upload needs correction, follow the panel's message, select the revised files and submit again. See [troubleshooting](troubleshooting.md) for common upload and update issues.
 

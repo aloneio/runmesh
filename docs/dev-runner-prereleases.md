@@ -6,7 +6,7 @@ Use a development Runner on a separate test host to try upcoming changes. Open t
 
 Copy the install command from the development panel to enroll with that development Worker. Commands from the production panel use its stable release and production address. Keep the two installations in their intended environments.
 
-Updating a test environment has three steps: publish the Runner package, deploy the Worker, and install the selected package on the host. Plan service restarts around active Jobs.
+For a test host, install the version offered by the development panel and finish or cancel active Jobs before restarting its service. Administrators who publish their own development channel can follow the automation steps below.
 
 ## Choose and verify a package
 
@@ -14,13 +14,13 @@ The development Worker selects complete, public, immutable GitHub prereleases wi
 
 After installation, compare the package and CLI `--version` with the selected tag, then verify Runner connectivity, policy acknowledgement and the required MCP operations.
 
-The release selection is fresh for 60 seconds and remains usable for up to one hour from signature verification while background refresh runs. Refreshes have a 20-second deadline. Failed refreshes retain the original expiry; expired, future-dated or unavailable selections close the installation entry point. Check the release offered by the installer when verifying a new publication, allowing for this cache window.
+The Worker normally refreshes its selection after 60 seconds and can continue offering a verified package for up to one hour while refreshing in the background. A refresh can take up to 20 seconds. Check the version displayed in the panel after a new publication. If installation is temporarily unavailable, check the release workflow and try the panel again after the next refresh.
 
 Versions are ordered by dev sequence. A delayed older batch therefore leaves a newer selected version in place. During Worker updates, a verified compatible dev package can remain available until a new batch is published and verified. Check the displayed package version and its changes before installation. Production uses its separately reviewed stable release.
 
-## Configure upstream automation
+## Configure development release automation
 
-The upstream GitHub workflow `Dev Runner Prerelease` attempts publication on every fifth dev push that creates a workflow run. Publication requires the same run's verification and signing checks. Fork administrators must configure their own release automation and signing environment; the upstream workflow is restricted to its repository.
+The maintained GitHub workflow `Dev Runner Prerelease` runs in `aloneio/runmesh` and attempts publication on every fifth dev push that creates a workflow run. Each release completes verification and signing in that run. To publish from your own repository, configure its release workflow and signing environment.
 
 Configure the GitHub environment `dev-release` for **branch dev only**, using `RELEASE_SIGNING_KEY`, `RELEASE_SIGNING_KEY_ID` and the checked-in public keyring. Keep the stable `release` environment restricted to main. Only the publish job's signing step receives the private key.
 
@@ -41,9 +41,9 @@ The batch index continues across stable releases. If the verified stable baselin
 
 Each new batch verifies that main's version, latest immutable stable release, signed manifest and reviewed release-state record agree. The selected main commit must be an ancestor of the fixed dev source. Synchronize main into dev through a reviewed merge when this ancestry check fails.
 
-When a verified stable baseline is available, the first attempt records the source SHA/tree, main baseline, release identity, manifest hash, run ID, planned version and timestamp in a frozen plan. Actions retains each planning outcome—plan or deferral—for 90 days. Retries reuse that outcome. An expired or missing record requires maintainer investigation.
+The first attempt saves a release plan with the source commit, stable baseline and planned version. Actions retains that plan, or a recorded deferral, for 90 days so retries can continue the same batch. If the record is missing or expired, review the workflow and existing release assets before proceeding.
 
-While main prepares a stable release, a due batch records a **deferred** outcome. Retries retain that decision, and independent CI continues to verify the source. After main's signed release completes verification and activation, the next due dev push can plan a new batch. Follow the [release status and publication checklist](release-readiness.md) for the stable release.
+While main prepares a stable release, a due batch records a **deferred** outcome. After the stable release is verified and activated, the next due dev push can plan a new batch. A retry keeps the original batch's decision. Maintainers can use the [publication checklist](maintainers/release-process.md) for the stable release.
 
 ## Build and publish
 
@@ -53,7 +53,7 @@ The exact archive is installed offline and tested through the local MCP → Work
 
 Publication creates an annotated tag and prerelease draft, uploads the established signed assets, verifies the downloaded bytes, then publishes and checks immutability and signatures again. The assets include the portable archive, manifest, signatures, SHA256SUMS, keyring and notices. The stable Latest selection stays with the stable release.
 
-For installations that deploy through GitLab, configure the [host synchronization bridge](deployment.md) separately. It can mirror the exact dev SHA after GitHub `verify-all`, allowing the connected Cloudflare Worker to build that push. Stable publication follows its own cross-provider checks.
+For installations that deploy through GitLab, configure the [synchronization and build connection](deployment.md) so the Worker updates after the dev commit passes GitHub `verify-all`.
 
 ## Recover a failed batch
 
@@ -61,7 +61,7 @@ For installations that deploy through GitLab, configure the [host synchronizatio
 | --- | --- |
 | Temporary CI, API or signing-environment failure | Correct the cause and use Actions **Re-run failed jobs** |
 | Successful build reused by a publish-job retry | The job retrieves that build's recorded attempt and original artifact |
-| Missing or expired frozen plan | Preserve the remaining evidence and ask a maintainer to reconcile the batch |
+| Missing or expired release plan | Keep the workflow records and release assets, then ask a maintainer to review the batch |
 | `dev_release_superseded` | The stable baseline changed; preserve the old draft and use a later batch based on the new baseline |
 | Existing tag, draft or asset conflicts with the plan | Stop publication and inspect the exact source, plan and asset bytes |
 | Already published immutable release | The retry verifies the existing release read-only |

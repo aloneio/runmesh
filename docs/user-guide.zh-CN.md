@@ -18,7 +18,7 @@ https://your-host.example/<generated-secret>/mcp
 
 有效客户端共享实例内启用的 MCP 工具和 Skill。在客户端刷新 Runmesh 连接即可加载当前内容。你可以让 AI 查找可用工具或阅读 Skill；目录工具包括 `remote_profiles`、`remote_tools`、`skill_list` 和 `skill_read`。
 
-这些操作由控制端处理。连接同时具有计算机访问权限时，再按下面的步骤选择机器。管理员连接 MCP 和安装 Skill 的方法见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
+这些连接和内容读取由 Runmesh 处理。连接同时具有计算机访问权限时，再按下面的步骤选择机器。管理员连接 MCP 和安装 Skill 的方法见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
 
 ## 为计算机访问选择机器与工作区
 
@@ -56,7 +56,7 @@ https://your-host.example/<generated-secret>/mcp
 
 ## 跟踪同一个任务
 
-将 `job-from-shell` 替换为回执中的真实 ID。支持工作区绑定任务查询的实例使用：
+将 `job-from-shell` 和 `work` 分别替换为回执中的任务 ID 和工作区 ID。使用 `job` 工具查询状态和读取输出：
 
 ```json
 {"action":"get","job_id":"job-from-shell","workspace_id":"work"}
@@ -73,7 +73,7 @@ https://your-host.example/<generated-secret>/mcp
 | `queued` | 正在等待执行槽，启动前会重新检查权限。 |
 | `running` | 进程正在受 Runner 监督。 |
 | `cancelling` | 正在处理取消，请等待最终状态。 |
-| `cancelled` | 排队任务已撤回，或已观察到的终止有取消送达证据支持。 |
+| `cancelled` | 排队任务已撤回，或进程在 Runner 送达取消请求后结束。 |
 | `succeeded` | Runner 观察到进程成功退出。 |
 | `failed` | 启动或执行失败，应查看已有输出和错误详情。 |
 | `unknown` | 恢复的进程可能仍存活，提交相关工作前先检查它。 |
@@ -95,9 +95,9 @@ Runner 重启后，尚未启动的排队任务会变为 `interrupted`，恢复�
 
 `context` 工具将你明确提交的交接记录保存在所选 Runner 上。用 `bootstrap` 查找已有记录，`read` 或 `search` 读取记录，再用 `checkpoint` 保存目标、决策、证据和后续步骤。创建检查点需要写入权限，内容来自你明确提交的记录。
 
-Worker 和 Runner 均兼容时，`storage` 可查看本地 Context 用量，`prune` 可预览要删除的旧版本。执行删除必须提供预览返回的计划哈希和明确的 `apply: true`，每条记录的最新版本会保留。删除前请阅读 [Context 存储说明](context-storage.zh-CN.md)。需要使用这两个存储管理动作时，请从 0.1.3 升级到包含它们的已验证发行版本。
+Worker 和 Runner 均兼容时，`storage` 可查看本地 Context 用量，`prune` 可预览要删除的旧版本。这两个动作从 0.1.4 开始提供。执行删除必须提供预览返回的计划哈希和 `apply: true`，每条记录的最新版本会保留。执行前请核对预览结果，并阅读 [Context 存储说明](context-storage.zh-CN.md)。
 
-## 安全求助
+## 获取帮助
 
 权限错误需要同时检查客户端、Runner 和工作区设置。Runner 离线时先恢复原机器，也可为新工作明确选择另一台机器。依赖服务故障时，等待服务恢复并检查原操作。
 

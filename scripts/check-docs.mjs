@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { reviewedReleaseSource } from "./runtime-config-tools.mjs";
 const root = new URL("../", import.meta.url);
 const pkg = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
-const current = ["README.md", "README.zh-CN.md", "docs/admin-guide.md", "docs/admin-guide.zh-CN.md", "docs/deployment.md", "docs/portable-runner-installation.md", "docs/architecture.md", "docs/adr-0001-architecture.md", "docs/protocol.md", "docs/runner-transport.md", "docs/release-readiness.md"];
+const current = ["README.md", "README.zh-CN.md", "docs/admin-guide.md", "docs/admin-guide.zh-CN.md", "docs/deployment.md", "docs/portable-runner-installation.md", "docs/architecture.md", "docs/adr-0001-architecture.md", "docs/protocol.md", "docs/runner-transport.md", "docs/release-readiness.md", "docs/release-readiness.zh-CN.md", "docs/maintainers/release-process.md"];
 for (const file of current) {
   const text = await readFile(new URL(file, root), "utf8");
   for (const match of text.matchAll(/RUNMESH_SIGNED_RELEASE_AVAILABLE=([0-9A-Za-z.+-]+)/g)) {
@@ -14,7 +14,10 @@ for (const file of current) {
 }
 const readiness = await readFile(new URL("docs/release-readiness.md", root), "utf8");
 assert.ok(readiness.includes(pkg.version));
-assert.ok(readiness.includes("verify-all") && readiness.includes("RELEASED") && readiness.includes("ENABLED"));
+const localizedReadiness = await readFile(new URL("docs/release-readiness.zh-CN.md", root), "utf8");
+assert.ok(localizedReadiness.includes(pkg.version));
+const publication = await readFile(new URL("docs/maintainers/release-process.md", root), "utf8");
+assert.ok(publication.includes("verify-all") && publication.includes("RELEASED") && publication.includes("ENABLED"));
 const config = JSON.parse((await readFile(new URL("apps/worker/wrangler.jsonc", root), "utf8")).replace(/^\s*\/\/.*$/gm, ""));
 const releaseState = JSON.parse(await readFile(new URL("release/release-state.json", root), "utf8"));
 assert.equal(releaseState.version,pkg.version);

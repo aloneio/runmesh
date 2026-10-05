@@ -49,4 +49,4 @@ GitHub native jobs run domain/contract tests, Runner tests and applicable toolin
 
 Collect separate records for signed release assets, deployed Worker/Runner behavior, account usage and MCP client catalog refresh. The local package report leaves these external checks as `not_run`. Attach each completed observation with its timestamp, exact version or commit, environment and result.
 
-For release decisions, retain the exact commit, CI run, platform, skips and result for each required check. Use [release status](release-readiness.md) for publication requirements and [build provenance](build-provenance.md) to compare a deployed Worker with its source.
+For release decisions, retain the exact commit, CI run, platform, skips and result for each required check. Use the [publication workflow](maintainers/release-process.md) for release requirements and [build provenance](build-provenance.md) to compare a deployed Worker with its source.

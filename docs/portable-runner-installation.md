@@ -4,7 +4,7 @@ Use this page to transfer a package from another machine, verify it independentl
 
 Choose a package using [release status](release-readiness.md), then check your Worker's release descriptor below before installing. Production uses the verified stable channel, and development has its own verified prerelease channel. Manual installation needs an external Node runtime: 22.23.2+ within 22.x, or 24.21.0+ within 24.x.
 
-Ordinary HTTPS deployments use the validated request address. For a reverse proxy, configure the optional `RUNMESH_PUBLIC_ORIGIN` as described in [runtime configuration](runtime-config.md). An invalid origin closes hosted installation.
+Ordinary HTTPS deployments use the Worker's request address. For a reverse proxy, configure the public HTTPS origin through `RUNMESH_PUBLIC_ORIGIN` as described in [runtime configuration](runtime-config.md).
 
 For hosted installation, check `channel` and `distributable` in `/runner/releases/latest`. The `/runner/releases/stable` and `/runner/releases/dev` descriptors show the separate channels. When the public origin and verified release are available, the matching `/runner/install.sh` or `/runner/install.ps1` can be used.
 
@@ -23,7 +23,7 @@ The installer fetches the signed manifest, signature metadata, checksums and fix
 
 For verification independent of the Worker-delivered script and its embedded key, use the offline path below with a separately trusted source keyring.
 
-## Enabled hosted-bootstrap commands
+## Install from your Worker's enrollment page
 
 Use these commands when the authenticated enrollment page shows the release as available, and replace the hostname with your configured public origin. The snippets prompt for the enrollment code; dashboard convenience commands include it. Scripts also accept `--code CODE` and `--code=CODE`, then pass the code to the Runner through standard input. Keep commands containing a code private, including shell history and process arguments.
 
@@ -47,7 +47,6 @@ $ErrorActionPreference = 'Stop'
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N') + '.ps1')
 try {
   Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -OutFile $installer -Uri 'https://your-runmesh.example/runner/install.ps1?execution_mode=dedicated_user'
-  # HTTP errors terminate with ErrorAction Stop; OutFile does not return a response object.
   if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Installer download did not produce a file.' }
   $length = (Get-Item -LiteralPath $installer).Length
   if ($length -le 0 -or $length -gt 262144) { throw 'Installer download size is invalid.' }
@@ -64,7 +63,7 @@ so the hidden prompt can read input.
 
 Run the installer with administrator privileges. A new installation downloads and verifies the host-specific Node.js `22.23.2` runtime into the versioned Runmesh directory. It checks the staged CLI before enrollment and installs with private npm configuration/cache paths, `--offline` and `--ignore-scripts`. The service uses that private runtime. Existing paths, profiles or service conflicts require inspection before proceeding.
 
-A complete managed installation of the **same exact version** uses the installed runtime to refresh enrollment and service configuration, then **restarts the service**. For a version change, follow the [upgrade guide](upgrading.md). Drain Jobs before either operation.
+A complete managed installation of the same version uses the installed runtime to refresh enrollment and service configuration, then restarts the service. For a version change, follow the [upgrade guide](upgrading.md). Finish or cancel active Jobs before either operation.
 
 Hosted installation, enrollment refresh and hosted uninstall share one lock. Wait for the active operation to finish, and inspect interrupted processes before handling a stale lock.
 
@@ -98,7 +97,7 @@ Keep the source checkout outside the download directory. After signature verific
 
 ## Verify the signature and checksums
 
-From the trusted source checkout, set the download directory and expected key ID. The POSIX commands below are intended for Linux, macOS, `bash`, or `zsh`:
+From the trusted source checkout, set the download directory and expected key ID. The POSIX commands below use Bash or Zsh on Linux or macOS:
 
 ```bash
 set -eu
@@ -176,7 +175,7 @@ node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync(process
 
 ## Install from the verified local tarball
 
-These examples create a fresh installation. Keep their existing-installation checks: if one fails, preserve the current layout and use the [upgrade guide](upgrading.md).
+These examples create a fresh installation. For an existing installation, use the [upgrade guide](upgrading.md) to retain its enrollment and service layout.
 
 Use Node 22.23.2+ within 22.x or 24.21.0+ within 24.x. Install the verified local tarball under the Runmesh service layout. The examples use a private temporary directory and empty npm configuration files; preserve the `--offline` and `--ignore-scripts` flags.
 
@@ -246,6 +245,7 @@ sudo "/opt/runmesh/current/bin/runmesh" --help
 Run an elevated PowerShell session:
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 $Download = 'C:\path\to\runmesh-release-download'
 $Version = '<version>'
 $Artifact = Join-Path $Download "runmesh-runner-$Version.tgz"
@@ -347,5 +347,5 @@ For a new installation, the script downloads and verifies the runtime and signed
 Runner, enrolls it, installs the selected service identity, and starts the service.
 A complete managed installation of the same version instead refreshes enrollment
 and restarts the existing service.
-Use the dashboard's hosted path for routine setup and the offline path when
-you need independent verification or transferred installation assets.
+Use the dashboard command for routine setup. Follow the manual steps above
+when transferring installation assets or using your own package-verification process.

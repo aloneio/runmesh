@@ -4,12 +4,6 @@
 
 Refresh the Runmesh connection when a Worker update adds an action or changes fields while your client still shows an older definition. Update the Worker, installed Runner and client catalog as separate parts of an [upgrade](upgrading.md).
 
-## Distinguish connection failures from Runner state
-
-The MCP route returns the same HTTP 404 for missing, malformed, unknown, rotated or revoked credentials. Its rejection body is a JSON-RPC error with `id: null`; it does not identify the rejected client or explain which credential check failed. The pre-SDK body-limit, relay-recursion and missing-configuration guards also return JSON error bodies while retaining HTTP 413, 508 and 503 respectively. Clients must inspect the HTTP status as well as the body. A JSON response does not make a rejected credential valid.
-
-An authenticated `runner_current` or `runner_list` call can succeed while reporting an offline or stale Runner. A client's **Credential active** status only means its stored credential has not been revoked; it does not prove that the URL configured in a caller still matches that credential or that a Runner is connected. Confirm the intended instance and client before rotating a credential. Rotation preserves that client's identity, permissions and selected Runner, but callers using the previous URL must update their connection. Record status, content type, time and deployment identity when diagnosing a rejection, without saving the secret-bearing path.
-
 ## Refresh the affected connection
 
 1. Confirm that the connection uses the administrator-supplied MCP URL for the intended instance. Check the configured origin, as a display name such as `runmesh--dev` can be chosen freely. Keep the secret URL private.
@@ -20,6 +14,14 @@ An authenticated `runner_current` or `runner_list` call can succeed while report
 Keep the same URL and credentials while refreshing metadata. Correct the configured instance or credential only if those checks identify a separate problem.
 
 For ChatGPT's supported setup options, see the [custom MCP connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt) and [developer mode guide](https://developers.openai.com/api/docs/guides/developer-mode).
+
+## Check the connection and Runner
+
+In **MCP Clients**, **Valid** under **Credential status** means the stored credential is active. Confirm that your MCP app uses the latest connection URL, then check the selected Runner's connection state. An authenticated `runner_current` or `runner_list` call can report an offline or stale Runner.
+
+Rotation preserves the client's identity, permissions and selected Runner. After rotating a credential, update each client using that connection to the new URL. Record the HTTP status, error code, time and deployment identity when diagnosing a rejection, and omit the secret-bearing path.
+
+For integration diagnostics, initial MCP authentication returns HTTP 404 for a missing, malformed, unknown, rotated or revoked credential, with a JSON-RPC error and `id: null`. The response keeps the client identity and specific credential check private. Request-size, relay-recursion and missing-configuration checks return HTTP 413, 508 and 503 respectively, also with JSON error bodies. Read the HTTP status together with the error body to select the recovery action.
 
 ## Check Job follow-up calls
 

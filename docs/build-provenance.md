@@ -26,9 +26,9 @@ For production, use protected `main` after its signed release has been verified 
 npm run deploy:worker -- --env production
 ```
 
-Use the published stable version listed in [release status](release-readiness.md) and its reviewed activation commit on `main` for production deployment. Test upcoming changes with development. Verify the deployed source using the checks below.
+For production, deploy a tested `main` commit that includes the stable release activation listed in [release status](release-readiness.md). Later control-plane updates can retain that same Runner release. Test upcoming changes with development, then verify the deployed source using the checks below.
 
-Build from a clean Git checkout and keep it unchanged until bundling finishes. The build checks the actual commit and tree against Cloudflare, GitHub and GitLab declarations. Tracked edits, untracked application files, source symlinks, hidden index flags or unverified submodules prevent a clean source declaration. Use a Git checkout, rather than a source-only archive, for a deployment that needs verified source identity.
+Build from a clean Git checkout and keep it unchanged until bundling finishes. Commit application changes before deployment and check that submodules are at their recorded revisions. The build compares this source with the commit reported by Cloudflare, GitHub or GitLab. A fresh checkout of the intended commit provides a straightforward starting point when resolving a source mismatch.
 
 ## Verify a deployment
 
@@ -38,7 +38,7 @@ From the repository, run:
 npm run check:deployment -- https://your-worker.example <expected-full-commit> main
 ```
 
-Supply the actual 40-character commit; use `dev` as the last argument for development. The checker sends one HTTPS request to `/health` and requires clean, identified source with the expected commit and branch. It is read-only, with a 10-second deadline covering headers and body and a 16 KiB response limit.
+Supply the actual 40-character commit; use `dev` as the last argument for development. The checker reads `/health` and confirms that the compiled source has the expected commit and branch. If the request times out, check Worker availability before running it again.
 
 | Result | Meaning and next step |
 | --- | --- |
@@ -64,8 +64,8 @@ After any successful retry, run the source comparison above.
 
 ## Provider setup and source records
 
-In the maintained development setup, a separately configured host bridge fast-forwards GitLab `dev` after GitHub `verify-all` passes for the exact SHA. The connected Cloudflare Worker builds that GitLab push. Configure these connections for your own deployment as described in [deployment](deployment.md).
+For a GitLab mirror, configure synchronization and the Cloudflare build connection as described in [deployment](deployment.md). Record the commit selected by that deployment, then compare it with the live Worker using the command above.
 
-The health record uses `attestation=self_reported`: it reports tracked Git source from the build host. Keep that host and its Git metadata trusted. Record dependency and build-environment verification with CI, and Runner signature verification with the release evidence. Retain the Worker commit, Cloudflare version ID and installed Runner version together when recording an upgrade.
+The health field `attestation=self_reported` means the build host recorded the Git source. Use a trusted build environment and retain its CI results. Keep the Worker commit, Cloudflare version ID and installed Runner version together in your upgrade record; verify the Runner package signature during installation.
 
 References: [Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/), [Git metadata variables](https://developers.cloudflare.com/changelog/post/2025-06-10-default-env-vars/), [version metadata](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/).

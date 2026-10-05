@@ -4,7 +4,7 @@
 
 ## 0.1.7 — published stable release
 
-Runmesh 0.1.7 is published as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.7) with a signed portable Runner package. The public package has been independently verified. See [release status](release-readiness.md) for deployment and upgrade steps.
+[Runmesh 0.1.7](https://github.com/aloneio/runmesh/releases/tag/v0.1.7) is available with a signed portable Runner package. See [release status](release-readiness.md) for installation and upgrade steps.
 
 ### Runner services
 
@@ -30,7 +30,7 @@ Follow the [upgrade guide](upgrading.md) to update the control plane and Runner.
 
 ## 0.1.6 — published stable release
 
-Runmesh 0.1.6 is published as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.6) with a signed portable Runner package. The public package has been independently verified. See [release status](release-readiness.md) for deployment and upgrade steps.
+[Runmesh 0.1.6](https://github.com/aloneio/runmesh/releases/tag/v0.1.6) is available with a signed portable Runner package. See the [upgrade guide](upgrading.md) to move an existing installation to the current release.
 
 ### MCP and Skill
 

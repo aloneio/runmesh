@@ -20,13 +20,13 @@ OAuth providers can use a client metadata document or automatic client registrat
 
 Select **View tools** on the MCP card to see tool names and descriptions. Enabled tools are shared with the instance's active AI clients. To connect a client, follow the [user guide](user-guide.md).
 
-When the provider changes its tools, select **Refresh tools**. The complete tool list is published together. If refresh fails, the saved catalog is retained; follow the panel's message to restore the connection and refresh again.
+When the provider changes its tools, select **Refresh tools**. Once the full list loads, it becomes available to all clients. If refresh fails, the saved catalog is retained; follow the panel's message to restore the connection and refresh again.
 
 Runmesh exposes direct tools for smaller collections and directory tools for browsing larger collections. An AI client can use `remote_profiles` to find MCPs, `remote_tools` to read a tool definition, and `remote_call` to invoke it with the returned tool ID and version. Refresh the client's catalog after adding or changing a connection.
 
 ## Pause or resume
 
-**Pause** stops tool access for every client and keeps the saved connection. **Enable** resumes sharing and reloads tools. For OAuth MCPs, the account connection is retained through pause/resume; **Disconnect account** removes the local account connection. Details are in the [authorization guide](central-oauth.md).
+**Pause** stops tool access for every client and keeps the saved connection. **Enable** resumes sharing and reloads tools. For OAuth MCPs, the account connection is retained through pause/resume; **Disconnect account** removes the account connection saved in Runmesh. Details are in the [authorization guide](central-oauth.md).
 
 ## Connection format and size
 

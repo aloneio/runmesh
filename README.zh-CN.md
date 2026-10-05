@@ -29,7 +29,7 @@ Runmesh 把 ChatGPT、Claude、Cursor 等支持 MCP 的客户端连接到你自�
 - 运行测试、构建和其他可能持续数分钟甚至数小时的任务；
 - 管理多个 Runner 及其工作区，按客户端设置计算机权限，并可按需限定 Runner 访问。
 
-在控制端管理 MCP 连接与 Skill。填写 MCP 地址并选择身份验证方式，或安装一个 Skill 文件夹，即可通过 AI 客户端使用共享内容。详见[MCP 和 Skill 指南](docs/central-administration.zh-CN.md)与[发行状态](docs/release-readiness.md)。
+在控制端管理 MCP 连接与 Skill。填写 MCP 地址并选择身份验证方式，或安装一个 Skill 文件夹，即可通过 AI 客户端使用共享内容。详见[MCP 和 Skill 指南](docs/central-administration.zh-CN.md)与[发行状态](docs/release-readiness.zh-CN.md)。
 
 ## 开始使用
 
@@ -44,7 +44,7 @@ MCP 地址本身就是凭据，在创建或轮换时显示。请妥善保存，�
 
 ## 管理员快速配置
 
-生产环境使用[发行状态](docs/release-readiness.md)中列出的签名正式包，并从 `main` 上包含对应发行激活记录的源码部署 Worker。测试后续改动时，按[部署参考](docs/deployment.md)使用独立的 `dev` 环境。
+生产环境使用[发行状态](docs/release-readiness.zh-CN.md)中列出的签名正式包，并从 `main` 上包含对应发行激活记录的源码部署 Worker。测试后续改动时，按[部署参考](docs/deployment.md)使用独立的 `dev` 环境。
 
 1. 从 `main` 的已发布版本部署正式 Worker，配置 `INTERNAL_CONTROL_SECRET`、`RUNNER_TOKEN_PEPPER` 两个独立密钥，并在向不可信访问者开放前完成首次管理员密码设置；
 2. 需要计算机访问时，在「Runner」页面添加机器。保留默认的 `dedicated_user` 模式，只有确实需要并接受主机高权限时才改选；
@@ -82,7 +82,7 @@ MCP 地址本身就是凭据，在创建或轮换时显示。请妥善保存，�
 
 ## 版本与升级
 
-当前正式版本和安装可用情况见[发行状态](docs/release-readiness.md)，版本变化与升级指引见[版本说明](docs/release-notes.zh-CN.md)。开发环境使用单独验证的预发布渠道。
+当前正式版本和安装可用情况见[发行状态](docs/release-readiness.zh-CN.md)，版本变化与升级指引见[版本说明](docs/release-notes.zh-CN.md)。开发环境使用单独验证的预发布渠道。
 
 升级分为三步：部署 Worker、安装目标 Runner 包、刷新 MCP 客户端工具目录。完成后按[升级指南](docs/upgrading.zh-CN.md)验证一个代表性任务。
 

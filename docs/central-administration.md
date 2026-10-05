@@ -12,11 +12,11 @@ Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. 
 | Install a Skill | Open **Skill**, select its folder or `SKILL.md` and supporting text files, then select **Install Skill**. |
 | Connect an AI client | Select **Connect an AI client**, enter a label, choose the access type, and create the connection. Copy the URL shown when it is created into your client's MCP settings. |
 
-Connected MCP tools and installed Skills are shared with every active AI client in this instance. MCP connections load their tools automatically; the MCP card's **View tools** button shows the available tools. Skill cards provide **View files** to read the installed content.
+Enabled MCP tools and Skills are shared with every active AI client in this instance. MCP connections load their tools automatically; the MCP card's **View tools** button shows the available tools. Skill cards provide **View files** to read the installed content.
 
 ## Choose the AI client's access
 
-**MCP and Skills** gives the client access to the shared collection. All processing for these connections goes through the control plane.
+**MCP and Skills** gives the client access to the shared collection. Runmesh handles these connections and content reads.
 
 Choose **MCP, Skills and computer access** when the client also needs files or commands on your machines. The computer-permission choices open automatically; select the required read, write and execution permissions. Read is selected initially. Register a Runner and configure its workspaces using the [administrator guide](admin-guide.md).
 
@@ -29,8 +29,8 @@ See the [user guide](user-guide.md) for connecting the AI client and starting wo
 | MCP: **Refresh tools** | Loads the provider's current tools for all clients. If sign-in is needed, opens authorization. |
 | MCP: **Pause** / **Enable** | Stops or resumes shared access. Enabling refreshes the tool list. |
 | OAuth MCP: **Reconnect** | Starts a new authorization flow with the provider. |
-| OAuth MCP: **Disconnect account** | Removes the locally stored account connection. Select **Reconnect** to authorize again. |
-| Skill: install files with the same name | Shows the proposed replacement; select **Update Skill** to publish it to all clients. |
+| OAuth MCP: **Disconnect account** | Removes the account connection saved in Runmesh. Select **Reconnect** to authorize again. |
+| Skill: upload an update with the same `name` in `SKILL.md` | Shows the proposed replacement; select **Update Skill** to publish it to all clients. |
 | Skill: **Pause** | Stops future reads while keeping the installed files. |
 | Paused Skill: **View files → Enable Skill** | Resumes access to the displayed version. |
 

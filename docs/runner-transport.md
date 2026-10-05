@@ -4,7 +4,7 @@ A Runner connects outbound to the Worker and executes authorized operations on i
 
 ## Authenticate and select a Runner
 
-New MCP clients start with `coding:read`. Grant additional scopes and workspace permissions as needed for editing or execution. Each client uses its own endpoint:
+For computer access, choose **MCP, Skills and computer access** when creating a control-panel connection. `coding:read` is initially selected; grant additional scopes and workspace permissions as needed for editing or execution. With the shared library enabled, the default **MCP and Skills** connection uses that library without native Runner scopes. Each client uses its own endpoint:
 
 ```text
 https://mcp.example.com/<256-bit-base64url-secret>/mcp
@@ -73,7 +73,7 @@ Production uses `wss://`; loopback `ws://` requires `--insecure-local`. Each ses
 
 ## Install or update the service
 
-Hosted installation requires a verified release in the selected channel and a valid public HTTPS origin. Ordinary HTTPS deployments derive the origin from a matching URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override. The reviewed **0.1.4** activation enables stable hosted distribution in source. Check the deployed Worker's release descriptor before installation. Development selects verified signed prereleases and test distribution stays disabled.
+Hosted installation requires a verified release in the selected channel and a valid public HTTPS origin. Ordinary HTTPS deployments derive the origin from a matching URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override. Production selects the signed stable package recorded in [release status](release-readiness.md). Check the deployed Worker's release descriptor before installation. Development selects verified signed prereleases and test distribution stays disabled.
 
 An available dashboard command carries a one-time code. Fresh installation verifies and stages the package, then enrolls through standard input. A complete managed installation of the same version instead re-enrolls and restarts its service. Keep the copied command private because its code can enter shell history and process arguments. For the hidden Windows prompt, remove `-NonInteractive` and run in an interactive administrator terminal.
 

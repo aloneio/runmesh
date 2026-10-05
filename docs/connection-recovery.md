@@ -9,9 +9,9 @@ When a Runner disconnects, keep its selection and Job receipts. Already-started 
 1. Use `runner_current` to confirm the selected Runner and keep that selection while following an existing Job.
 2. If your client exposes it, call `inspect` with `{"action":"diagnostics","workspace_id":"your-workspace-id"}`. Read the observation time and individual checks for selection, workspace access, policy alignment and live Runner RPC. An `unknown` check means the dependency could not be confirmed.
 3. On the host, check the service manager. Using the service's actual executable, run `runmesh --version` with no other arguments, then `runmesh doctor --json`. Add `--profile` to `doctor` for a custom profile or `--user` for a user service. A different CLI on `PATH` may inspect another installation.
-4. Check outbound HTTPS/WebSocket access to the Worker, system time and the configured Worker origin. Runmesh does not require a public inbound port on the Runner.
+4. Check outbound HTTPS/WebSocket access to the Worker, system time and the configured Worker origin. The Runner initiates the connection from the host to the Worker.
 
-Use `doctor` for local configuration and service state, the dashboard for Runner connectivity, and an MCP read for the complete path. If supported by your CLI, `runmesh doctor --shareable --json` keeps only the diagnostic fields suitable for sharing. Review other reports for private data before sending them.
+Use `doctor` for local configuration and service state, the dashboard for Runner connectivity, and an MCP read for the complete path. With the current Runner, `runmesh doctor --shareable --json` produces a report containing diagnostic fields suitable for sharing. Review other reports for private data before sending them.
 
 ## Interpret connection failures
 
@@ -21,7 +21,7 @@ Use `doctor` for local configuration and service state, the dashboard for Runner
 | Session replaced or stale connection | Check for another service using the same Runner profile and keep a single active instance. A compatible Runner reconnects with its existing credential. |
 | Explicit HTTP 401/403 or credential rejection | Ask the administrator to check revocation, rotation and the configured profile. Use recovery enrollment only when a new credential is actually needed. |
 | Protocol rejection | Check the supported Worker/Runner versions before changing credentials. |
-| Connected but workspace policy is not acknowledged | Check workspace existence, the service account's OS access and the saved policy. Protected work remains unavailable until the policy is valid and acknowledged. |
+| Connected but workspace policy is not acknowledged | Check workspace existence, the service account's OS access and the saved policy. Wait for the Runner to acknowledge the valid policy before resuming work. |
 | Runner authorization period expired | Extend the authorization in the dashboard if access is still intended. The connection can remain available for this recovery. |
 
 After dependency recovery, retry a read to verify access. For an edit, command, input or cancellation with an uncertain result, inspect the original operation before retrying.

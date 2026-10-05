@@ -15,7 +15,7 @@ The first three rows describe checks before tool invocation. The same code at an
 
 Writes require `coding:write`; shell, input and cancellation require `coding:exec`, together with the appropriate Runner and workspace permissions. Ask an administrator for the specific access needed. See the [permission model](permission-model.md).
 
-For an unknown outcome, inspect existing state first. **Do not automatically repeat a command, patch or input:** an already completed host effect may still be present. Follow the [call recovery guide](mcp-agent-call-contract.md).
+For an unconfirmed command, patch or input, inspect the original Job or change receipt before deciding whether to retry. The host may already have completed the action. Follow the [call recovery guide](mcp-agent-call-contract.md).
 
 ## Adapter behavior
 

@@ -1,17 +1,17 @@
-# 中央工具目录发布
+# MCP 工具目录实现
 
-W05 可选实时发现／调用适配器及其明确限制见[受控中央 HTTP MCP](maintainers/central-remote-mcp.zh-CN.md)。
-本文介绍可独立使用的目录审核与快照流程。
+[English](central-catalog.md) · [维护者文档](maintainers/README.zh-CN.md)
 
-[English](central-catalog.md)
+本文介绍目录管理接口、快照存储和 schema 校验。
+通过控制端连接 MCP、刷新工具时，按[MCP 和 Skill 指南](central-administration.zh-CN.md)操作。
+实时发现与调用的实现见[HTTP MCP 实现](maintainers/central-remote-mcp.zh-CN.md)。
 
-部署与升级步骤见[发行状态](release-readiness.md)。
 所有凭据有效的客户端共享已启用且发布的工具。控制端输入 MCP URL，选择无认证
 或 OAuth，连接成功即原子发布全部工具。本文介绍其底层快照契约。
 
 ## 快照管理
 
-先通过 W03 管理接口建立连接档案，其 ID、Connector ID 和目标地址共同绑定目录。
+先通过[管理接口](maintainers/central-administration.zh-CN.md)建立连接档案，其 ID、Connector ID 和目标地址共同绑定目录。
 连接处于停用状态时仍可审核目录，但不会向客户端提供工具。
 
 POST `/admin/central/catalogs/{profile_id}` 必须带管理员会话、同源请求和匹配的
@@ -100,8 +100,8 @@ schema 状态会拒绝，不清库恢复。不向目录表复制凭据、完整�
 达到上限时保留已审核内容，已有目录仍可停用。上表规定准入和存储限额；本地目录
 测试使用 100 个模拟档案、2,000 个工具。吞吐量和实际 MCP 连接容量需在目标环境测量。
 
-生产启用另行验收；Runner 代码、Worker–Runner 通信契约和原生工具定义保持不变。缺少可选绑定时，不解析中央存储或凭据端口。本地测试不代替真实宿主目录
-刷新与旧调用链问题的验收。
+中央功能启用时解析目录存储和凭据端口。发版验收时，按[中央功能验收清单](central-rollout.md)
+使用真实 MCP 客户端验证目录刷新与调用。
 
 协议依据（2026-09-24 核对）：
 `https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/server/tools.mdx`

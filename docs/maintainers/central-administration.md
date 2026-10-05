@@ -1,4 +1,4 @@
-# Services and Skills in the control panel (development)
+# MCP and Skills in the control panel
 
 > Maintainer reference: interfaces, protocol and verification boundaries. For everyday use, see the [user guide](../central-administration.md).
 
@@ -45,7 +45,7 @@ Clients may need to refresh their tool or Skill list after publication changes.
 All valid clients use the shared library. Per-client grants, toolset assignment,
 client-bound OAuth and manual bearer profile APIs are removed. Their routes return
 the ordinary HTTP 404 unknown-route response without resolving the state owner.
-This development feature has no legacy compatibility layer.
+The shared-library API has no compatibility layer for the former per-client assignment interfaces.
 
 Revoke or rotate a client's connection credential to stop that credential from
 being used. Pause a service or Skill to stop sharing that capability with every
