@@ -806,16 +806,21 @@ export class RunnerDO {
       return current.connectionEpoch === attachment.epoch && current.sessionId !== null && current.sessionId !== attachment.sessionId;
     };
     const apply = (current: AdmissionState): AdmissionState => {
+      // Management can acquire a fence before the Runner's first hello. Only
+      // an entirely unbound identity belongs to this first connection; a
+      // partially known or previous lifecycle must still be reconciled.
+      const firstBinding = current.runnerId === attachment.runnerId
+        && current.lifecycleId === null && current.credentialVersion === null
+        && current.connectionEpoch === null && current.sessionId === null;
       // Keep a mutation owned by this Runner/credential across a reconnect.
       // In particular, a committed_pending/offline_pending mutation's desired
       // revision is still needed for delivery/recovery and must not be cleared
       // by a delayed hello.
       const preserveMutation = current.fenced
         && current.mutationId !== null
-       && (current.runnerId === null || current.runnerId === attachment.runnerId)
-        && current.lifecycleId !== null
+        && (current.runnerId === null || current.runnerId === attachment.runnerId)
         && attachment.lifecycleId !== null
-        && current.lifecycleId === attachment.lifecycleId
+        && (firstBinding || current.lifecycleId === attachment.lifecycleId)
         && (current.credentialVersion === null || current.credentialVersion === attachment.credentialVersion);
       return {
         ...current,
