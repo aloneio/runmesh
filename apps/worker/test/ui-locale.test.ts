@@ -124,7 +124,7 @@ it("I18N07 numeric entities and streaming chunks translate without corrupting pr
 });
 
 it("I18N08 UI-like user labels and identifiers are never translated as interface copy",async()=>{
- const detail=clientDetailPage({client_id:"Settings",label:"Dashboard",revoked_at_ms:null,scopes:["coding:read","coding:exec"],active_runner_id:null},[],[],"synthetic-csrf");
+ const detail=clientDetailPage({client_id:"Settings",label:"Dashboard",revoked_at_ms:null,last_used_at_ms:null,scopes:["coding:read","coding:exec"],active_runner_id:null},[],[],"synthetic-csrf");
  const jobs=jobTable([{job_id:"running",workspace_id:"Settings",created_by_client_id:"failed",status:"cancelled"}]);
  const calls=mcpCallTable([{client_id:"Read",method:"shell",workspace_id:"Settings",job_id:"running",status:"error",error_code:"permission_denied",duration_ms:17}]);
  const translated=await localizeHtmlResponse(request("zh-CN"),new Response(`<html><body>${detail}${jobs}${calls}</body></html>`,{headers:{"content-type":"text/html"}})).text();

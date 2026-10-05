@@ -12,9 +12,9 @@ function clientLifecycleActions(clientId: string, revoked: boolean, csrf: string
     + '<form method="post" action="' + base + '/delete" class="inline-action-form danger-action" data-client-delete>' + token + '<button class="small danger" type="submit">' + message('action.delete', 'en') + '</button></form>';
 }
 
-export function clientDetailPage(client: Record<string, unknown>, runners: readonly RunnerSummaryViewModel[], overrides: readonly Record<string, unknown>[], csrf: string): string {
-  const clientId = typeof client.client_id === "string" ? client.client_id : "unknown";
-  const label = typeof client.label === "string" ? client.label : clientId;
+export function clientDetailPage(client: ClientViewModel, runners: readonly RunnerSummaryViewModel[], overrides: readonly Record<string, unknown>[], csrf: string): string {
+  const clientId = client.client_id;
+  const label = client.label;
   const isRevoked = client.revoked_at_ms !== null;
   const overrideRows = runners.map((runner) => {
     const override = overrides.find((item) => item.runner_id === runner.runner_id);
@@ -31,7 +31,7 @@ export function clientDetailPage(client: Record<string, unknown>, runners: reado
         <span class="mode-pill ${isCustom ? "custom" : "global"}">${isCustom ? "Additional restriction" : "Use global"}</span>
       </td>
       <td colspan="4">
-        <form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/${override === undefined ? "override" : "override"}" class="override-form-row">
+        <form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/override" class="override-form-row">
           <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
           <input type="hidden" name="runner_id" value="${escapeHtml(runner.runner_id)}">
           <div class="perm-selects-wrap">
@@ -48,7 +48,7 @@ export function clientDetailPage(client: Record<string, unknown>, runners: reado
       </td>
     </tr>`;
   }).join("");
-  const scopeValues = Array.isArray(client.scopes) ? client.scopes.filter((scope): scope is string => typeof scope === "string") : [];
+  const scopeValues = client.scopes;
   if (scopeValues.length === 0) return '<section class="page-heading"><div><p class="eyebrow">AI connection</p><h1 data-no-i18n>' + escapeHtml(label) + '</h1><p>MCP and Skills</p></div><a class="button secondary" href="/admin/clients">Back to clients</a></section>'
     + '<section class="panel"><h2>Available MCPs and Skills</h2><p>Use all enabled MCPs and Skills with this connection.</p><a class="button" href="/admin/central">Manage MCPs and Skills</a><p>' + clientCredentialBadge(isRevoked) + '</p><div class="actions">' + clientLifecycleActions(clientId, isRevoked, csrf) + '</div></section>';
   const scopeEditor = `<form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/scopes" class="scope-editor-form">
@@ -108,9 +108,9 @@ export function clientDetailPage(client: Record<string, unknown>, runners: reado
         <dt>${message("text.client.id", "en")}</dt>
         <dd class="mono"><span data-no-i18n>${escapeHtml(clientId)}</span></dd>
         <dt>${message("text.active.runner.2", "en")}</dt>
-        <dd>${activeRunnerSelector(client as unknown as ClientViewModel, runners, csrf)}</dd>
+        <dd>${activeRunnerSelector(client, runners, csrf)}</dd>
         <dt>${message("text.last.used.2", "en")}</dt>
-        <dd class="time-cell">${escapeHtml(time(typeof client.last_used_at_ms === "number" ? client.last_used_at_ms : null))}</dd>
+        <dd class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</dd>
         <dt>${message("client.credential.status", "en")}</dt>
         <dd>${message(isRevoked ? "client.credential.revoked" : "client.credential.active", "en")}</dd>
       </dl>
