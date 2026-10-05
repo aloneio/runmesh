@@ -74,6 +74,8 @@ function createPageControls({
     });
     root.querySelectorAll("[data-copy],[data-copy-source]").forEach(function (button) {
       if (!claim(button, "copy")) return;
+      button.setAttribute("aria-live", "polite");
+      button.setAttribute("aria-atomic", "true");
       button.addEventListener("click", function () {
         var result = copyText(copyValue(button), {
           document,
@@ -81,9 +83,15 @@ function createPageControls({
         });
         var mark = function () {
           button.textContent = document.documentElement.lang === "zh-CN" ? "已复制" : "Copied";
+          button.removeAttribute("title");
           button.classList.add("copied");
         };
-        if (result && typeof result.then === "function") result.then(mark, function () {});else mark();
+        result.then(mark, function () {
+          var isZh = document.documentElement.lang === "zh-CN";
+          button.textContent = isZh ? "重试复制" : "Retry copy";
+          button.setAttribute("title", isZh ? "复制失败，请手动复制或重试" : "Copy failed. Copy manually or retry.");
+          button.classList.remove("copied");
+        });
       });
     });
     root.querySelectorAll("[data-tab]").forEach(function (tab) {

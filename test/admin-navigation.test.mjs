@@ -243,6 +243,43 @@ test("initial and dynamic controls share an idempotent clipboard handler", async
   await new Promise(setImmediate); assert.deepEqual(h.copied, ["initial", "dynamic"]);
   assert.equal(initial.textContent, "Copied"); assert.equal(dynamic.textContent, "Copied");
 });
+for (const lang of ["en", "zh-CN"]) for (const failure of ["clipboard rejection", "legacy false", "legacy exception"])
+test(`copy controls report ${failure} in ${lang} and recover on retry`, async () => {
+  let failed = true, selected;
+  const copied = [], attached = new Set();
+  const document = { documentElement: { lang }, body: { appendChild: node => attached.add(node) },
+    createElement() {
+      const area = element(); area.select = () => { selected = area; }; area.remove = () => attached.delete(area); return area;
+    },
+    execCommand() {
+      if (failed && failure === "legacy exception") throw new Error("private clipboard error");
+      if (failed) return false;
+      copied.push(selected.value); return true;
+    },
+  };
+  const navigator = failure === "clipboard rejection" ? { clipboard: { async writeText(text) {
+    if (failed) throw new Error("private clipboard error"); copied.push(text);
+  } } } : {};
+  const controls = createPageControls({ document, navigator, window: {}, location: {}, locale: createLocale({ document }) });
+  const button = element(); button.textContent = "Copy MCP URL"; button.setAttribute("data-copy", "one-time-connection-url");
+  const root = { querySelectorAll: selector => selector === "[data-copy],[data-copy-source]" ? [button] : [], querySelector: () => null };
+  controls.bindPageControls(root); controls.bindPageControls(root);
+  assert.equal(button.getAttribute("aria-live"), "polite");
+  assert.equal(button.getAttribute("aria-atomic"), "true");
+  const failMessage = lang === "zh-CN" ? "复制失败，请手动复制或重试" : "Copy failed. Copy manually or retry.";
+  const retryLabel = lang === "zh-CN" ? "重试复制" : "Retry copy";
+  for (const reject of [true, false, true]) {
+    failed = reject; button.dispatch("click"); await new Promise(setImmediate);
+    assert.equal(button.textContent, reject ? retryLabel : lang === "zh-CN" ? "已复制" : "Copied");
+    assert.equal(button.getAttribute("title"), reject ? failMessage : null);
+    assert.equal(button.classList.contains("copied"), !reject);
+    assert.equal(attached.size, 0, "temporary clipboard content must be removed after success or failure");
+    assert.equal(button.getAttribute("data-copy"), "one-time-connection-url");
+  }
+  assert.deepEqual(copied, ["one-time-connection-url"]);
+  assert.equal(button.events.get("click").length, 1);
+});
+
 test("initial and dynamic password controls update the same icon and accessible labels once", () => {
   const h = controlsFixture(), icons = [];
   for (let i = 0; i < 2; i++) {

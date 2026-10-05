@@ -1,4 +1,4 @@
-function copyText(text, {
+async function copyText(text, {
   document,
   navigator
 }) {
@@ -9,12 +9,12 @@ function copyText(text, {
   area.style.position = "fixed";
   area.style.opacity = "0";
   document.body.appendChild(area);
-  area.select();
   try {
-    document.execCommand("copy");
-  } catch (_) {}
-  area.remove();
-  return Promise.resolve();
+    area.select();
+    if (!document.execCommand("copy")) throw new Error("Clipboard copy failed");
+  } finally {
+    area.remove();
+  }
 }
 function copyValue(button) {
   var panel = button.hasAttribute("data-copy-source") && button.closest("[role=tabpanel]");

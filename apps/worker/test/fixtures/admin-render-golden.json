@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "1cdf8b64a5da77791950fef2cebbf5830467255bbf5c4ed6691b0f46eb5c2ac0",
-      "bytes": 131635,
+      "sha256": "925472bd7cd0bb71de6f63a1a259c2123121bce11f679f70404cd3a727f2656e",
+      "bytes": 132055,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "b1a1d34daa766cad44baf59f07d9055ef4dd5af8935080b6462f94a046e5fa3e",
-      "bytes": 132223,
+      "sha256": "c14bdf57634312d6ff4f50f2fe1f05c2c967958bdab4f4e7a1e94b272649104b",
+      "bytes": 132643,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "8c1f4c3ae50723df625e56f75c0521cc5c62c42f01dc5577825ae4e9e158d4dd",
-      "bytes": 133371,
+      "sha256": "7a67b3101660106d25ca23ee0a0bb2a99028cad7d870464f417d8594e2631d7f",
+      "bytes": 133791,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "dd5cf3d1a403b76146794f8ef2eb825677127d140c591c16a5786a6e4d666af5",
-      "bytes": 133720,
+      "sha256": "c05d8509e6caa867e4567fac6fe52ca688fd05e80dec98dfed360b1085b3b3bf",
+      "bytes": 134140,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -662,5 +662,16 @@
     ],
     "reviewed_change": "Permission selectors expose dependencies derived from the shared protocol and use one browser controller for Runner, workspace and client override forms. Workspace presets share the submitted-form definition and update displayed values; manual field edits choose Custom. Version guidance describes selecting a target, installing on the Runner host and restarting the service. Restoring only the previous bundle, dependency/preset attributes and version sentence reproduces every prior rendered hash and byte count.",
     "other_markup_unchanged": true
+  },
+  "clipboard_failure_review": {
+    "source_base": "ad6b82112a9ce8e917b1e4a4cbf3714f6f725d31",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Report failed clipboard writes with short English and Chinese retry labels, keep manual-copy guidance in the button title, announce copy status with a polite live region, remove temporary clipboard content on every outcome, and allow explicit retry. Replacing only the new browser bundle with the independently rebuilt source-base bundle reproduces every prior rendered hash and byte count.",
+    "non_script_markup_unchanged": true
   }
 }
