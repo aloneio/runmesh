@@ -51,6 +51,7 @@ const messages = {
   "selectionChangedCheckTheFilesAndSelectInstallSkill": ["Files changed. Select Install Skill to continue.", "文件选择已更改，请点击“安装 Skill”继续。"],
   "skillFileLimits": ["Select 1–{files} text files, up to {fileMiB} MiB each and {bundleMiB} MiB per upload package.", "请选择 1–{files} 个文本文件，单文件不超过 {fileMiB} MiB，上传包不超过 {bundleMiB} MiB。"],
   "skillUploadTooLarge": ["The Skill upload is too large. Select fewer or smaller files.", "Skill 上传包过大，请减少文件数量或大小。"],
+  "skillLibraryLimitReached": ["Skill library limit reached. Check the storage, Skill count and version limits.", "Skill 库已达上限，请检查存储用量、Skill 数量及版本数量。"],
   "couldNotReadTheSelectedFiles": ["Could not read the selected files. Select UTF-8 text files and try again.", "无法读取所选文件，请选择 UTF-8 文本文件后重试。"],
   "theSelectedFolderMustContainSkillMdAtIts": ["The selected folder must contain SKILL.md at its root.", "所选文件夹根目录必须包含 SKILL.md。"],
   "installedReadyToUseInAllConnectedAiClients": [" installed.", " 已安装。"],

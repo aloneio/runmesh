@@ -14,7 +14,7 @@ export function createCentralApi({
     if (body && body.action !== 'preview' && refreshRequired()) throw new Error(t('refreshTheLibraryBeforeMakingAnotherChange'));
     const serviceInput = path.startsWith('profiles/') && body?.action === 'connect';
     const skillInput = path === 'skill-installations' || path.startsWith('skills/') && body?.action === 'preview';
-    var rejectedInput = false,
+    var confirmedRejection = false,
       ctl = new AbortController(),
       timer = setTimeout(function () {
         ctl.abort();
@@ -47,14 +47,18 @@ export function createCentralApi({
       if (body && path.startsWith('discovery/') && response.ok && value.state === 'authorization_required') return value;
       if (!response.ok) {
         var code = value.error && value.error.code;
-        // Only confirmed pre-validation failures allow correcting the form directly.
+        // Confirmed input and capacity rejections leave the form ready to use.
         // Conflicts, authorization failures and uncertain writes still require refresh.
-        rejectedInput = response.status === 400 && value.error?.operation_state === 'not_started'
+        confirmedRejection = response.status === 400 && value.error?.operation_state === 'not_started'
           && (serviceInput && ['central_invalid_request', 'central_invalid'].includes(code)
             || path === 'skill-installations' && ['central_invalid_request', 'skill_invalid_package', 'skill_invalid'].includes(code));
         if (response.status === 413 && skillInput && code === 'central_request_too_large' && value.error?.operation_state === 'not_started') {
-          rejectedInput = true;
+          confirmedRejection = true;
           throw new Error(t('skillUploadTooLarge'));
+        }
+        if (response.status === 429 && path === 'skill-installations' && code === 'skill_capacity' && value.error?.operation_state === 'not_started') {
+          confirmedRejection = true;
+          throw new Error(t('skillLibraryLimitReached'));
         }
         if (response.status === 409 && path === 'skill-installations' && value.state === 'conflict') {
           var conflict = new Error('skill_exists');
@@ -76,7 +80,7 @@ export function createCentralApi({
       if (value.state !== expected) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       return value;
     } catch (error) {
-      if (body && body.action !== 'preview' && !rejectedInput) requireRefresh();
+      if (body && body.action !== 'preview' && !confirmedRejection) requireRefresh();
       assertCurrent();
       if (error.name === 'AbortError') throw new Error(t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'));
       throw error;

@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "952ad2a8c07d79ca7c7bf935efbf840816ee5d6b41a2c92bb09c2ebf34cc5241",
+      "sha256": "ce00b534d3b2f0cf8601fafdf45f2f4b4702c6f786a370870221f2213231761e",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "fcfb310d8f71942a7a3b937a4919a830761dc6a5dcc26b9ad128a2491afc57a4",
+      "sha256": "4d32aa490a75cffa1f8e109c424a91005cc1201dc4f934d1398d3e5703799e08",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -137,6 +137,11 @@
       "admin-document"
     ],
     "reviewed_change": "Report failed clipboard writes with short English and Chinese retry labels, keep manual-copy guidance in the button title, announce copy status with a polite live region, remove temporary clipboard content on every outcome, and allow explicit retry. Replacing only the new browser bundle with the independently rebuilt source-base bundle reproduces every prior rendered hash and byte count.",
+    "non_script_markup_unchanged": true
+  },
+  "skill_capacity_review": {
+    "source_base": "ac4e2b8de2e0eeeb1f151b5e00b5fd6be78f0ca3",
+    "reviewed_change": "Confirmed Skill installation capacity rejections show a localized limit message and leave the form ready for an explicit next operation. Unknown outcomes and unrelated HTTP 429 errors retain refresh admission. Replacing only the updated browser bundle reproduces each previous rendered hash and byte count.",
     "non_script_markup_unchanged": true
   }
 }
