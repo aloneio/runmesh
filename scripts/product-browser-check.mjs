@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { checkRunnerActions } from './runner-browser-check.mjs';
 import { checkAdminNavigation } from './navigation-browser-check.mjs';
+import { checkNavigationHandoffs } from './navigation-handoff-browser-check.mjs';
 import { checkAdminLayout } from './layout-browser-check.mjs';
 import { checkSkillUploads } from './skill-upload-browser-check.mjs';
 
@@ -92,6 +93,7 @@ async function checkSkillFileErrors(browser, origin, requests, library) {
 export async function checkGuidedProduct(executable) {
  await checkAdminLayout(executable);
  await checkAdminNavigation(executable);
+ await checkNavigationHandoffs(executable);
  await checkRunnerActions(executable);
  const fixture = await createProductFixture();
  const { digest, toolVersion, profiles, library, requests, exceptions, catalogs, controls, origin } = fixture;

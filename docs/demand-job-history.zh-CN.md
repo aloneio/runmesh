@@ -4,7 +4,7 @@
 
 ## 启用与设置
 
-在 **管理界面 > MCP 客户端 > 客户端详情 > 云端任务记录** 中选择记录偏好，在 Runner 的 **任务记录与保留** 中设置上传模式和间隔。控制面在授权启动时提供记录决定。
+在 **管理界面 > AI 连接 > 客户端详情 > 云端任务记录** 中选择记录偏好，在 Runner 的 **任务记录与保留** 中设置上传模式和间隔。控制面在授权启动时提供记录决定。
 
 Runner 声明 `capabilities.labels.job_reporting_protocol="2"`，并在认证 welcome 中收到 `runmesh_job_reporting:2` 后，启用记录协议 2。它沿用 `job_history_protocol="1"` 的设置，详见[任务记录设置](batched-job-history.md)。
 

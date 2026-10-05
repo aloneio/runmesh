@@ -39,9 +39,11 @@ export function applyHunks(file: TextFile, hunks: readonly Hunk[], path: string)
   let cursor = 0;
   let endsWithNewline = file.endsWithNewline;
   for (const match of ordered) {
-    output.push(...file.lines.slice(cursor, match.start));
+    // Byte-bounded files may still contain hundreds of thousands of short
+    // lines. Append sequentially instead of passing them as call arguments.
+    for (let index = cursor; index < match.start; index += 1) output.push(file.lines[index]!);
     const replacement = match.hunk.lines.filter((line) => line.kind !== "delete");
-    output.push(...replacement.map((line) => line.text));
+    for (const line of replacement) output.push(line.text);
     if (match.end === file.lines.length) {
       const last = replacement[replacement.length - 1];
       // The hunk rewrites the end of the file, so it alone decides the trailing
@@ -54,7 +56,7 @@ export function applyHunks(file: TextFile, hunks: readonly Hunk[], path: string)
     }
     cursor = match.end;
   }
-  output.push(...file.lines.slice(cursor));
+  for (let index = cursor; index < file.lines.length; index += 1) output.push(file.lines[index]!);
   return renderText({ ...file, lines: output, endsWithNewline });
 }
 

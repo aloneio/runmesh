@@ -38,7 +38,7 @@ After a change, refresh the Runmesh connection in AI clients that cache their to
 
 ## Manage a client's connection
 
-Open **MCP Clients** to manage each client's credential. **Rotate** creates a replacement URL and invalidates the previous one. **Revoke** stops that client's access and retains its record. **Delete** also removes the client record. Review the displayed confirmation before deleting.
+Open **AI connections** to manage each client's credential. **Rotate** creates a replacement URL and invalidates the previous one. **Revoke** stops that client's access and retains its record. **Delete** also removes the client record. Review the displayed confirmation before deleting.
 
 Shared MCP and Skill access follows the instance's enabled collection. Computer access additionally follows the client's permissions, selected Runner and approved workspaces. Use separate instances for groups that need different shared collections.
 

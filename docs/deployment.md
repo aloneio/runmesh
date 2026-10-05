@@ -72,7 +72,7 @@ History defaults to the production D1 binding. Installation availability comes f
 3. Set the Runner authorization period and one-time enrollment-code validity, then copy the displayed command.
 4. Execute it on the intended machine in an administrator terminal.
 5. Add workspace roots and permissions in the Runner details page, and wait for policy acknowledgement.
-6. Create a least-privilege MCP client in **Admin → MCP Clients** and share the URL shown when it is created with its intended user.
+6. Create a least-privilege MCP client in **Admin → AI connections** and share the URL shown when it is created with its intended user.
 
 The MCP connection format is:
 

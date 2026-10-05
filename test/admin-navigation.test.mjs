@@ -15,7 +15,7 @@ function harness() {
     view: { pageRoot: node => node, setLoading: value => busy.push(value), initialize() {}, ready() {},
       mount: (root, title, key, push, url) => mounted.push({ root, title, key, push, url: url.href }) },
   };
-  const nav = createAdminNavigation({ ...context, fetch: (...args) => context.fetch(...args), parse: (...args) => context.parse(...args) });
+  const nav = createAdminNavigation({ ...context, fetch: (...args) => context.fetch(...args), parse: (...args) => context.parse(...args), onError: error => context.onError(error) });
   return { context, fetched, mounted, busy, nav, open: (path, push = true) => nav.open(new URL(path, location.href), push) };
 }
 test("revisiting a URL always revalidates with no-store and same-origin credentials", async () => {
@@ -83,6 +83,57 @@ test("a failed mount retires the partially bound page before full navigation", a
   assert.equal(h.context.location.href, "https://worker.test/admin/clients");
   assert.equal(h.nav.isLoading(), false);
   assert.equal(partiallyBound(), false);
+});
+
+test("explicit full navigation retires the page and cannot create another current scope", () => {
+  const h = harness(), current = h.nav.capturePage();
+  h.nav.navigate("https://provider.example/authorize");
+  assert.equal(current(), false);
+  assert.equal(h.nav.capturePage()(), false);
+  assert.equal(h.context.location.href, "https://provider.example/authorize");
+  assert.equal(h.fetched.length, 0);
+});
+
+for (const phase of ["headers", "body"]) test("full navigation discards an in-flight soft " + phase + " response and its queued destination", async () => {
+  const h = harness(), errors = []; let finish;
+  h.context.onError = error => errors.push(error);
+  h.context.fetch = (url, options) => {
+    h.fetched.push({ url, options });
+    const stalled = new Promise(resolve => { finish = resolve; });
+    return phase === "headers" ? stalled : Promise.resolve({ ok: true, text: () => stalled });
+  };
+  const first = h.open("/admin/runners");
+  await new Promise(setImmediate);
+  void h.open("/admin/settings");
+  h.nav.navigate("/admin?lang=zh-CN");
+  assert.equal(h.fetched[0].options.signal.aborted, true);
+  finish(phase === "headers" ? { ok: true, text: async () => "obsolete" } : "obsolete");
+  await first;
+  assert.equal(h.context.location.href, "https://worker.test/admin?lang=zh-CN");
+  assert.equal(h.fetched.length, 1);
+  assert.equal(h.mounted.length, 0);
+  assert.equal(h.nav.isLoading(), false);
+  assert.equal(h.nav.capturePage()(), false);
+  assert.deepEqual(errors, []);
+});
+
+test("a later explicit destination replaces a pending full navigation without mounting the old page", async () => {
+  const h = harness();
+  h.nav.navigate("/admin?lang=zh-CN");
+  await h.open("/admin/clients");
+  assert.equal(h.context.location.href, "https://worker.test/admin/clients");
+  assert.equal(h.fetched.length, 0);
+  assert.equal(h.mounted.length, 0);
+  assert.equal(h.nav.capturePage()(), false);
+});
+
+test("native page departure retires its scope without replacing the browser submission", () => {
+  const h = harness(), current = h.nav.capturePage();
+  h.nav.retire();
+  assert.equal(current(), false);
+  assert.equal(h.nav.capturePage()(), false);
+  assert.equal(h.context.location.href, "https://worker.test/admin");
+  assert.equal(h.fetched.length, 0);
 });
 test("concurrent navigation coalesces to the latest destination within one owner", async () => {
   const h = harness(); let resolveFirst;
@@ -223,6 +274,22 @@ function controlsFixture() {
   const root = entries => ({ querySelectorAll: selector => entries[selector] ?? [], querySelector: () => null });
   return { controls, copied, root };
 }
+
+test("language controls delegate the full destination to the navigation owner", () => {
+  const document = { documentElement: { lang: "en" } }, destinations = [];
+  const location = { href: "https://worker.test/admin/central?connected=example#tools" };
+  const controls = createPageControls({ document, window: {}, navigator: {}, location,
+    locale: createLocale({ document }), navigate: url => destinations.push(url) });
+  const link = element(); link.setAttribute("data-lang-toggle", "zh-CN");
+  const root = { querySelectorAll: selector => selector === "[data-lang-toggle]" ? [link] : [], querySelector: () => null };
+  controls.bindPageControls(root); controls.bindPageControls(root);
+  let prevented = false;
+  link.dispatch("click", { preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.deepEqual(destinations, ["https://worker.test/admin/central?connected=example&lang=zh-CN#tools"]);
+  assert.equal(location.href, "https://worker.test/admin/central?connected=example#tools");
+  assert.match(document.cookie, /^runmesh_lang=zh-CN;/u);
+});
 
 function permissionFormFixture(withProfile = false) {
   const form = element(), requirements = { read: "", edit: "read", shell: "read edit job_control", job_control: "read" };

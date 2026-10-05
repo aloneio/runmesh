@@ -28,7 +28,7 @@ Open **MCP & Skill**. In **MCP**, enter the provider's URL, choose **No authenti
 
 In **Skill**, select a Skill folder or `SKILL.md` and its supporting text files, then select **Install Skill**. Enabled MCP tools and Skills are shared with all active AI clients in the instance.
 
-Create a client from **Connect an AI client** or **MCP Clients**. Choose **MCP and Skills** for the shared collection, or **MCP, Skills and computer access** to add machine access. Copy the URL shown when it is created into the AI client's MCP settings. For everyday connection, update and pause actions, see the [MCP and Skill guide](central-administration.md).
+Create a client from **Connect an AI client** or **AI connections**. Choose **MCP and Skills** for the shared collection, or **MCP, Skills and computer access** to add machine access. Copy the URL shown when it is created into the AI client's MCP settings. For everyday connection, update and pause actions, see the [MCP and Skill guide](central-administration.md).
 
 ## Enroll a machine
 
@@ -50,7 +50,7 @@ On the Runner details page, add a stable workspace name, an absolute host path a
 
 MCP workspace and diagnostic metadata omit configured host roots. Review file contents and command output before sharing them, as those can contain paths or other private data.
 
-For a client using computers, open **MCP Clients**, choose **MCP, Skills and computer access**, and select the required permissions. Its details page lets you restrict access to selected Runners. Share the client URL with its intended user; rotate or revoke it if exposed.
+For a client using computers, open **AI connections**, choose **MCP, Skills and computer access**, and select the required permissions. Its details page lets you restrict access to selected Runners. Share the client URL with its intended user; rotate or revoke it if exposed.
 
 ## Manage access and retire machines
 
@@ -67,7 +67,7 @@ To retire the host installation, use the enrollment page's maintenance uninstall
 
 ## Set Job recording and retention
 
-In **MCP Clients → client details → Cloud Job history**, choose whether new Jobs should save cloud snapshots and records of Job-tool calls. Local Jobs and retained output remain available. Existing cloud records keep their retention policy; enabling recording later applies to future recorded work. Required authorization and replay-prevention data is retained.
+In **AI connections → client details → Cloud Job history**, choose whether new Jobs should save cloud snapshots and records of Job-tool calls. Local Jobs and retained output remain available. Existing cloud records keep their retention policy; enabling recording later applies to future recorded work. Required authorization and replay-prevention data is retained.
 
 For an unrecorded Job, pass its `workspace_id` when following it on the online Runner. This requires Runner 0.1.1 or newer. See [quota isolation](quota-resilience.md) for history settings and storage behavior.
 

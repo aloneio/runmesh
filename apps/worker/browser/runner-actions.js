@@ -2,7 +2,7 @@ const bound = new WeakSet();
 
 /** A failed destructive action stays beside its form. Never replay a POST:
  * successful actions and expired sessions navigate with a fresh GET only. */
-export function bindRunnerActions(root, { isCurrent }) {
+export function bindRunnerActions(root, { isCurrent, navigate }) {
   root.querySelectorAll('form[data-runner-danger-action]').forEach(form => {
     if (bound.has(form)) return;
     bound.add(form);
@@ -38,7 +38,7 @@ export function bindRunnerActions(root, { isCurrent }) {
         if (response.redirected && destination.origin === location.origin
           && ['/', '/login', '/admin', '/admin/runners'].includes(destination.pathname)) {
           // Do not mistake a failed redirected dashboard read for a failed write.
-          location.href = destination.href;
+          navigate(destination.href);
           return;
         }
         const page = new DOMParser().parseFromString(await response.text(), 'text/html');

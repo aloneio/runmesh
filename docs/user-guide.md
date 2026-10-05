@@ -40,6 +40,8 @@ For a workspace called `work`, reading a file uses:
 
 `inspect` lists files, searches text and inspects Git. Use `git_log` to find a commit, `git_show` with the required `revision` to view it, and `git_blame` with optional line bounds for attribution. `revision` belongs only to `git_show`. After a Worker update, refresh the client catalog if its actions or fields differ from the server.
 
+For search filters, `include_globs: ["*.txt"]` matches text filenames at any depth, while `include_globs: ["docs/**/*.md"]` selects Markdown files under `docs`. Patterns containing `/` match paths relative to the workspace. `*` matches within a path segment, `**` spans directories, `**/` includes zero or more directories, and `?` matches one Unicode character. Use the same pattern rules with `exclude_globs` to leave out files.
+
 Read a file before using `edit` and keep the observed baseline. On a baseline conflict, re-read the file and rebuild the patch. After a timeout or unknown outcome, inspect whether the edit already applied before retrying. Ask the administrator to resolve a permission denial.
 
 ## Start a command and keep its receipt

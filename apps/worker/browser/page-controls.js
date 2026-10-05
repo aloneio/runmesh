@@ -5,7 +5,8 @@ function createPageControls({
   window,
   navigator,
   location,
-  locale
+  locale,
+  navigate
 }) {
   const bindings = /* @__PURE__ */new WeakMap();
   const {
@@ -69,7 +70,7 @@ function createPageControls({
         var url = new URL(location.href);
         url.searchParams.set("lang", locale2);
         event.preventDefault();
-        location.href = url.toString();
+        navigate(url.toString());
       });
     });
     root.querySelectorAll("[data-copy],[data-copy-source]").forEach(function (button) {
