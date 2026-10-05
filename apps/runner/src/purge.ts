@@ -3,6 +3,7 @@ import { lstat, open, readFile, readlink, readdir, realpath, rmdir, unlink } fro
 import { dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { currentServicePlatform, hostServiceCommandExecutor, isManagedService, serviceLayout, type ServiceCommandExecutor, type ServiceMode, type ServicePlatform } from "./service.js";
+import { stopWindowsTask, windowsTaskMissingCatch } from "./services/task-scheduler.js";
 
 /** Cleanup is restricted to these application-owned locations. */
 export function purgeLayout(platform: ServicePlatform, mode: ServiceMode, home = homedir()) {
@@ -230,14 +231,13 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
         await run("launchctl", ["bootout", target]);
       } else if (![3, 113].includes(found.exitCode)) throw new Error("launchd status is unavailable");
     } else {
-      const inspect = "$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); try {$t=$s.GetFolder('\\').GetTask('RunmeshRunner')} catch {if ($_.Exception.HResult -eq -2147024894) {Write-Output 'absent'; exit 0}; throw}; Write-Output 'present'";
+      const inspect = `$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); try {$t=$s.GetFolder('\\').GetTask('RunmeshRunner')} ${windowsTaskMissingCatch("text")}; Write-Output 'present'`;
       const state = (await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", inspect])).trim();
       if (state === "present") {
         if (!manifests.length) throw new Error("task exists without its managed manifest; restore the manifest before purging");
         const xml = await run("schtasks", ["/Query", "/TN", "RunmeshRunner", "/XML"]);
         if (!xml.toLowerCase().includes(layout.installRoot.toLowerCase())) throw new Error("task executable is outside the managed installation");
-        await executor.execute("schtasks", ["/End", "/TN", "RunmeshRunner"]);
-        await run("schtasks", ["/Delete", "/TN", "RunmeshRunner", "/F"]);
+        if (await stopWindowsTask(executor) !== "absent") await run("schtasks", ["/Delete", "/TN", "RunmeshRunner", "/F"]);
       } else if (state !== "absent") throw new Error("unexpected task status");
     }
   } catch (error) { errors(layout.manifestPath, error); return result; }

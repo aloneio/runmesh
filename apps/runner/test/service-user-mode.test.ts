@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { runCli } from "../src/cli.js";
 import { ProfileStore } from "../src/profile.js";
-import { createServiceProvisioner, hashContent, isManagedService, renderService, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
+import { createServiceManager, createServiceProvisioner, hashContent, isManagedService, renderService, serviceCommands, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
 import { ensureManagedUserLaunch } from "../src/services/user-launch.js";
 
 const connection = vi.hoisted(() => ({ constructed: vi.fn(), started: vi.fn(async () => undefined) }));
@@ -31,6 +31,52 @@ async function fixture() {
 it.each(["linux", "darwin", "win32"] as const)("marks the %s user service launch as a user invocation", platform => {
   expect(renderService({ platform, mode: "user" }).content).toContain("--user");
   expect(renderService({ platform, mode: "system" }).content).not.toContain("--user");
+});
+
+it("stops and resumes a macOS KeepAlive service through the public CLI", async () => {
+  const test = await fixture();
+  const manifest = renderService({ platform: "darwin", mode: "user", profilePath: test.store.filePath });
+  expect(manifest.content).toContain("<key>KeepAlive</key><true/>");
+  const contents = new Map([[manifest.path, manifest.content]]);
+  const filesystem: ServiceManifestFilesystem = { read: async path => contents.get(path),
+    write: async (path, content) => { contents.set(path, content); }, remove: async path => { contents.delete(path); } };
+  let loaded = true, active = true;
+  const calls: string[][] = [];
+  const manager = createServiceManager({ platform: "darwin", mode: "user", filesystem, executor: {
+    execute: async (file, args) => {
+      calls.push([file, ...args]);
+      if (args[0] === "print") return loaded ? { exitCode: 0, stdout: `state = ${active ? "running" : "waiting"}\nuser = fixture\n` }
+        : { exitCode: 113, stderr: "Could not find service" };
+      if (args[0] === "kill") active = true; // KeepAlive relaunches a signalled process.
+      if (args[0] === "bootout") { loaded = false; active = false; }
+      if (args[0] === "bootstrap" || args[0] === "kickstart") { loaded = true; active = true; }
+      return { exitCode: 0 };
+    },
+  } });
+  const reports: string[] = [];
+  const dependencies = { store: test.store, stdout: (line: string) => reports.push(line), servicePlatform: "darwin" as const,
+    serviceFilesystem: filesystem, serviceManager: manager };
+  try {
+    await runCli(["stop", "--user"], dependencies);
+    expect(active).toBe(false);
+    await expect(manager.status?.(manifest)).resolves.toMatchObject({ installed: true, registered: false, active: false });
+    await runCli(["stop", "--user"], dependencies);
+    expect(calls.filter(call => call[1] === "bootout")).toHaveLength(1);
+    await runCli(["restart", "--user", "--json"], dependencies);
+    expect(active).toBe(true);
+    expect(calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+    expect(JSON.parse(reports.at(-1)!).commands).toEqual(["launchctl bootstrap gui/$(id -u) <manifest>"]);
+    await runCli(["restart", "--user", "--json"], dependencies);
+    expect(calls.filter(call => call[1] === "kickstart")).toHaveLength(1);
+    expect(JSON.parse(reports.at(-1)!).commands).toEqual(["launchctl kickstart -k gui/$(id -u)/io.alone.runmesh.runner"]);
+    await runCli(["stop", "--user"], dependencies);
+    await runCli(["uninstall", "--user"], dependencies);
+    expect(contents.has(manifest.path)).toBe(false);
+    expect(active).toBe(false);
+    expect(serviceCommands("stop", "darwin", "user")[0]).toContain("launchctl bootout");
+    expect(serviceCommands("start", "darwin", "user")[0]).toContain("launchctl kickstart ");
+    expect(serviceCommands("restart", "darwin", "user")[0]).toContain("launchctl kickstart -k ");
+  } finally { await test.cleanup(); }
 });
 
 it("keeps the public user install command and generated service execution mode aligned", async () => {

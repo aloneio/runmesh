@@ -34,7 +34,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore,
     throw new Error("service migration is only available for system Runner services; remove --user");
   }
   const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform, dependencies.serviceFilesystem);
-  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
+  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode, ...(dependencies.serviceFilesystem === undefined ? {} : { filesystem: dependencies.serviceFilesystem }) });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
   if (parsed.command === "install" || parsed.command === "migrate") {
     if (parsed.command === "migrate" && typeof parsed.values.executionMode !== "string") throw new Error("service migration requires --execution-mode dedicated_user or --execution-mode privileged_host");
@@ -342,7 +342,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore,
       }
     }
   }
-  report(output, parsed.json, { action: parsed.command, manifest: manifest.path, mode: manifest.mode, commands: serviceCommandNames(parsed.command as "install" | "stop" | "restart", manifest) });
+  report(output, parsed.json, { action: parsed.command, manifest: manifest.path, mode: manifest.mode, commands: serviceCommandNames(parsed.command as "install" | "stop" | "restart", manifest, lifecycleStatus?.registered) });
 }
 
 export async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
@@ -369,7 +369,7 @@ export async function uninstall(parsed: ParsedCommand, store: ProfileStore, outp
     return;
   }
   const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform, dependencies.serviceFilesystem);
-  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
+  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode, ...(dependencies.serviceFilesystem === undefined ? {} : { filesystem: dependencies.serviceFilesystem }) });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
   assertSystemInstallationPrivilege(manifest, dependencies);
   const managed = await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);

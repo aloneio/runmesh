@@ -89,7 +89,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
             if (existing !== undefined && isManagedService(existing)) statusManifest = managedServiceManifestFromContent(manifest, existing, "dedicated_user");
           } catch { /* status still uses the profile's safe default identity */ }
         }
-        const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
+        const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode, ...(dependencies.serviceFilesystem === undefined ? {} : { filesystem: dependencies.serviceFilesystem }) });
         if (manager.platform === manifest.platform && manager.mode === manifest.mode && manager.status !== undefined) {
           try { runtimeStatus = await manager.status(statusManifest); } catch { runtimeStatus = undefined; }
         }

@@ -120,7 +120,7 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
     catch (error) { ownershipError = errorMessage(error); }
   }
   add("profile_ownership", ownershipRequired, !ownershipRequired || ownershipCheck?.ok === true, !enrolled ? "not enrolled" : ownershipError ?? ownershipCheck?.detail ?? (ownershipCheck?.ok === true ? "canonical ownership verified" : ownershipRequired ? "canonical ownership could not be verified" : "non-system profile"));
-  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
+  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode, ...(dependencies.serviceFilesystem === undefined ? {} : { filesystem: dependencies.serviceFilesystem }) });
   let actualServiceIdentity: string | null = null;
   let privilegeState: ServicePrivilegeState = "unknown";
   const expectedIdentity = executionMode === undefined ? undefined : expectedServiceIdentity(serviceProbeManifest);

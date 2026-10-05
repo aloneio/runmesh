@@ -125,6 +125,7 @@ export interface ServiceManagerOptions {
   readonly platform?: ServicePlatform;
   readonly mode?: ServiceMode;
   readonly executor?: ServiceCommandExecutor;
+  readonly filesystem?: Pick<ServiceManifestFilesystem, "read">;
 }
 
 export interface ServiceProvisionerOptions {

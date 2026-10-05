@@ -7,6 +7,7 @@ import { currentServicePlatform, renderService } from "../src/service.js";
 function memoryHost(withManifest = true) {
   const platform = currentServicePlatform(); const layout = purgeLayout(platform, "system");
   const entries = new Map<string, { ino: number; dir: boolean; text: string }>(); let index = 1; let native = true;
+  const task = { stops: true };
   const calls: string[][] = [];
   function dir(path: string) {
     if (entries.has(path)) return;
@@ -35,14 +36,18 @@ function memoryHost(withManifest = true) {
   };
   const executor = { execute: async (program: string, args: readonly string[]) => {
     calls.push([program, ...args]);
-    if (program === "powershell.exe") return { exitCode: 0, stdout: native ? "present" : "absent" };
+    if (program === "powershell.exe") {
+      if (args.at(-1)?.includes("GetInstances(0)")) return task.stops ? { exitCode: 0, stdout: "stopped" } : { exitCode: 1, stderr: "Runner task is still active" };
+      return { exitCode: 0, stdout: native ? "present" : "absent" };
+    }
+    if (program === "schtasks" && args.includes("/End") && !task.stops) return { exitCode: 1 };
     if (program === "schtasks") { if (args.includes("/Delete")) native = false; return { exitCode: 0, stdout: layout.installRoot }; }
     if (program === "launchctl") { if (args[0] === "bootout") { native = false; return { exitCode: 0 }; } return { exitCode: native ? 0 : 113, stdout: layout.installRoot }; }
     if (args.includes("--property=ActiveState")) return { exitCode: 0, stdout: "inactive" };
     if (args.includes("--property=LoadState")) return { exitCode: 0, stdout: "not-found" };
     return { exitCode: 0, stdout: "LoadState=loaded\nActiveState=inactive\nExecStart=path=" + (withManifest ? layout.installRoot + "/bin/runmesh" : "/unrelated/service") };
   } };
-  return { platform, layout, entries, io, executor, calls };
+  return { platform, layout, entries, io, executor, calls, task };
 }
 
 it("cleans the current native layout with injected OS adapters", async () => {
@@ -58,4 +63,14 @@ it("does not stop an unrecognized native service when the manifest is missing", 
   expect(result.purged).toBe(false);
   expect(host.entries.has(host.layout.installRoot)).toBe(true);
   expect(host.calls.every((call) => !call.some((arg) => ["stop", "bootout", "/End", "/Delete"].includes(arg)))).toBe(true);
+});
+
+it.skipIf(process.platform !== "win32")("retains the Windows task and installation when its process cannot be stopped", async () => {
+  const host = memoryHost(); host.task.stops = false;
+  const result = await purgeInstallation({ platform: host.platform, filesystem: host.io, executor: host.executor });
+  expect(result.purged).toBe(false);
+  expect(result.failures).toEqual([expect.objectContaining({ reason: "Runner task could not be confirmed stopped" })]);
+  for (const root of host.layout.directories) expect(host.entries.has(root)).toBe(true);
+  expect(host.entries.has(host.layout.manifestPath)).toBe(true);
+  expect(host.calls.some(call => call.includes("/Delete"))).toBe(false);
 });
