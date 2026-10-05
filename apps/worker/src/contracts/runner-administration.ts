@@ -47,7 +47,7 @@ export type RunnerRegistrationResult = {
 };
 export interface RunnerEnrollmentPorts extends Pick<RunnerActionPorts, "mutationId" | "fence" | "cancel"> {
   snapshot(runnerId: string): Promise<RunnerSnapshot>;
-  enroll(runnerId: string, snapshot: RunnerExecutionSnapshot): Promise<EnrollmentCodeResult>;
+  enroll(runnerId: string, snapshot: RunnerExecutionSnapshot, mutationId: string): Promise<EnrollmentCodeResult>;
   release(runnerId: string, mutationId: string): Promise<{
     released: boolean;
     diagnostic?: string;

@@ -93,7 +93,7 @@ export function updateStatus(channel: RunnerUpdateChannel, desired: string | und
 }
 
 export function emptyMutationState(): RunnerMutationState {
-  return { runner_exists: false, lifecycle_id: null, runner_state: null, credential_mutation_committed: false, credential_mutation_kind: null, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
+  return { runner_exists: false, lifecycle_id: null, runner_state: null, credential_mutation_committed: false, credential_mutation_kind: null, enrollment_mutation_committed: false, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
 }
 
 export function decodeRunner(row: RunnerRow): RunnerRecord {

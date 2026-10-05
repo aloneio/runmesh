@@ -30,7 +30,7 @@ export async function regenerateRunnerEnrollment(ports: RunnerEnrollmentPorts, r
       cause: current.state === "missing" ? "missing" : "conflict"
     };
   }
-  const enrollment = await ports.enroll(runnerId, current.snapshot).catch(() => ({
+  const enrollment = await ports.enroll(runnerId, current.snapshot, mutationId).catch(() => ({
     ok: false as const,
     status: 503,
     deterministic: false

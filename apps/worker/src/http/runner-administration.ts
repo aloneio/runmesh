@@ -61,10 +61,10 @@ export function regenerateEnrollmentFromControlPlane(env: WorkerEnv, runnerId: s
         snapshot: result.snapshot
       };
     },
-    enroll: (id, snapshot) => createEnrollmentCode(enrollmentPorts(env), id, input.selection, {
+    enroll: (id, snapshot, mutation) => createEnrollmentCode(enrollmentPorts(env), id, input.selection, {
       configuredMode: snapshot.configuredMode,
       lifecycleId: snapshot.lifecycleId
-    }, input.ttlMs, input.window),
+    }, input.ttlMs, input.window, mutation),
     release: async (id, mutation) => {
       const response = await cancelRunnerPolicyMutation(env, id, mutation);
       if (response.ok) return {

@@ -35,6 +35,7 @@ function control(runner: Pick<RunnerDO, "fetch">, runnerId: string) {
   return {
     begin: (mutationId: string) => request("/begin-policy-mutation", { mutation_id: mutationId, runner_id: runnerId }),
     cancel: (mutationId: string) => request("/cancel-policy-mutation", { mutation_id: mutationId }),
+    finalize: (mutationId: string) => request("/revoke", { mutation_id: mutationId }),
     admission: async () => {
       const response = await request("/admission-state");
       expect(response.status).toBe(200);
@@ -43,9 +44,8 @@ function control(runner: Pick<RunnerDO, "fetch">, runnerId: string) {
   };
 }
 
-/** Establish and reconcile a session, then deliver its real close event.
- * The resulting historical identity is never assigned to private state. */
-async function offlineRunner(state: DurableObjectState, f: Awaited<ReturnType<typeof fixture>>, workerEnv = env) {
+/** Establish and reconcile through the existing handshake/socket port fixture. */
+async function onlineRunner(state: DurableObjectState, f: Awaited<ReturnType<typeof fixture>>, workerEnv = env) {
   const session = await runnerSession(state, workerEnv, {
     runnerId: f.runnerId, connectionEpoch: 7, credentialVersion: 3, lifecycleId: f.lifecycleId, policy: f.policy,
   });
@@ -58,10 +58,16 @@ async function offlineRunner(state: DurableObjectState, f: Awaited<ReturnType<ty
   expect((await api.begin("prepare-offline-session")).status).toBe(204);
   expect((await api.cancel("prepare-offline-session")).status).toBe(204);
   expect(await api.admission()).toMatchObject({ fenced: false, reconciled: true });
-  await session.disconnect();
-  session.registry.request = f.route;
-  expect(await api.admission()).toMatchObject({ sessionId: "session-test", connectionEpoch: 7, credentialVersion: 3 });
   return { ...session, ...api };
+}
+
+/** Deliver the close event without assigning private admission state. */
+async function offlineRunner(state: DurableObjectState, f: Awaited<ReturnType<typeof fixture>>, workerEnv = env) {
+  const target = await onlineRunner(state, f, workerEnv);
+  await target.disconnect();
+  target.registry.request = f.route;
+  expect(await target.admission()).toMatchObject({ sessionId: "session-test", connectionEpoch: 7, credentialVersion: 3 });
+  return target;
 }
 
 it("regenerates an offline Runner enrollment after its old session fields remain populated", async () => {
@@ -135,26 +141,46 @@ it("does not rewrite an unchanged owned fence on repeated reconstruction", async
   });
 });
 
-it.each(["warm", "reconstructed", "cleanup-unavailable"])("browser enrollment regeneration succeeds via actual durable objects: %s", async mode => {
+it.each(["warm", "reconstructed", "cleanup-unavailable", "cleanup-retry", "cleanup-retry-reconstructed", "issuance-unknown", "issuance-response-lost"])("browser enrollment regeneration preserves recovery evidence via actual durable objects: %s", async mode => {
   const f = await fixture(), session = randomBase64Url(), csrf = randomBase64Url();
   const sessionHash = await sha256Hex(session), csrfHash = await sha256Hex(csrf);
   await runInDurableObject(f.registry, instance => {
     expect(instance.setupAdmin("synthetic-enrollment-admin", Date.now())).toBe(true);
     expect(instance.createAdminSession(sessionHash, csrfHash, Date.now() + 60000, Date.now(), 1)).toBe(true);
   });
+  let issuanceFailed = false;
   const registryBinding = {
     idFromName: () => env.REGISTRY.idFromName(f.runnerId),
-    get: () => env.REGISTRY.get(env.REGISTRY.idFromName(f.runnerId)),
+    get: () => {
+      const registry = env.REGISTRY.get(env.REGISTRY.idFromName(f.runnerId));
+      return { fetch: async (request: Request) => {
+        if (mode.startsWith("issuance-") && !issuanceFailed && request.method === "POST" && new URL(request.url).pathname.endsWith("/enrollments")) {
+          issuanceFailed = true;
+          if (mode === "issuance-response-lost") {
+            const committed = await registry.fetch(request);
+            expect(committed.status).toBe(200);
+            await committed.body?.cancel();
+          }
+          return new Response(null, { status: 503 });
+        }
+        return registry.fetch(request);
+      } };
+    },
   } as unknown as typeof env.REGISTRY;
   await runInDurableObject(f.runner, async (_existing, state) => {
     const workerEnv = { ...env, REGISTRY: registryBinding }, target = await offlineRunner(state, f, workerEnv);
     target.registry.request = (runnerId, action, init) => requestRunnerRegistry(workerEnv, runnerId, action, init);
     let current = target.runner;
+    let cleanupFailed = false;
     const runnerBinding = {
       idFromName: env.RUNNER.idFromName.bind(env.RUNNER),
       get: () => ({ fetch: async (request: Request) => {
+        if (mode === "cleanup-retry-reconstructed" && cleanupFailed && new URL(request.url).pathname === "/begin-policy-mutation") current = runnerRegistryFaults(state, workerEnv).runner;
         if (new URL(request.url).pathname === "/cancel-policy-mutation") {
-          if (mode === "cleanup-unavailable") return Response.json({ error: { code: "mutation_state_changed", message: "PRIVATE_UPSTREAM_SENTINEL" } }, { status: 409 });
+          if (mode === "cleanup-unavailable" || (mode.startsWith("cleanup-retry") && !cleanupFailed)) {
+            cleanupFailed = true;
+            return Response.json({ error: { code: "mutation_state_changed", message: "PRIVATE_UPSTREAM_SENTINEL" } }, { status: 409 });
+          }
           if (mode === "reconstructed") current = runnerRegistryFaults(state, workerEnv).runner;
         }
         return current.fetch(request);
@@ -166,24 +192,30 @@ it.each(["warm", "reconstructed", "cleanup-unavailable"])("browser enrollment re
           cookie: "__Host-runmesh_admin_session=" + session + "; __Host-runmesh_admin_csrf=" + csrf },
         body: new URLSearchParams({ csrf_token: csrf, expected_execution_mode: "dedicated_user", execution_mode: "dedicated_user" }),
       }), { ...workerEnv, RUNNER: runnerBinding }, {} as ExecutionContext);
-      if (mode === "cleanup-unavailable") {
+      if (mode === "issuance-unknown" || (mode === "issuance-response-lost" && attempt === 0)) {
+        expect(response.status).toBe(503);
+        expect(await response.text()).not.toContain('<code class="mono" data-no-i18n>');
+      } else if (mode === "cleanup-unavailable" || (mode.startsWith("cleanup-retry") && attempt === 0)) {
         expect(response.status).toBe(503);
         expect(response.headers.get("x-runmesh-error-code")).toBe("mutation_state_changed");
         expect(response.headers.get("x-runmesh-error-phase")).toBe("enrollment_fence_release");
         const text = await response.text();
         expect(text).toContain("Generate a new enrollment code to try again.");
         expect(text).not.toContain("PRIVATE_UPSTREAM_SENTINEL");
+        expect(text).not.toContain('<code class="mono" data-no-i18n>');
       } else {
         expect(response.status).toBe(200);
-        expect(await response.text()).not.toContain("cleanup is uncertain");
+        const text = await response.text();
+        expect(text).not.toContain("cleanup is uncertain");
+        expect(text).toContain('<code class="mono" data-no-i18n>');
       }
     }
     expect(await control(current, f.runnerId).admission()).toMatchObject({ fenced: true, reconciled: false,
-      ...(mode === "cleanup-unavailable" ? { mutationPhase: "precommit" } : { mutationId: "restart-reconcile" }) });
+      ...(mode === "cleanup-unavailable" || mode === "issuance-unknown" ? { mutationPhase: "precommit" } : { mutationId: "restart-reconcile" }) });
   });
   await runInDurableObject(f.registry, (instance, state) => {
     expect(instance.getRunnerExecutionState(f.runnerId)!.runner.credential_version).toBe(3);
-    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM runner_enrollments WHERE runner_id=? AND used_at_ms IS NULL", f.runnerId).one().n).toBe(1);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM runner_enrollments WHERE runner_id=? AND used_at_ms IS NULL", f.runnerId).one().n).toBe(mode === "issuance-unknown" ? 0 : 1);
   });
 });
 
@@ -202,6 +234,136 @@ it("a delayed cancellation cannot clear a newer mutation owner", async () => {
     };
     expect((await target.cancel("old-owner")).status).toBe(409);
     expect(await target.admission()).toMatchObject({ fenced: true, mutationId: "new-owner" });
+  });
+});
+
+it("records enrollment completion atomically and rejects delayed issuance replay", async () => {
+  const f = await fixture();
+  await runInDurableObject(f.registry, instance => {
+    const issue = (id: string, verifier: string, mutation: string) => instance.createRunnerEnrollment(f.runnerId, id.repeat(43), verifier.repeat(64), Date.now(), undefined, false, "dedicated_user", f.lifecycleId, undefined, {}, mutation);
+    expect(issue("a", "b", "enrollment-first")).toBeDefined();
+    expect(instance.getRunnerMutationState(f.runnerId, "enrollment-first")).toMatchObject({
+      mutation_committed: true, enrollment_mutation_committed: true,
+      credential_mutation_committed: false, credential_mutation_kind: null, credential_version: 3,
+    });
+    expect(issue("c", "d", "enrollment-second")).toBeDefined();
+    expect(issue("e", "f", "enrollment-first")).toBeUndefined();
+    expect(instance.latestRunnerEnrollment(f.runnerId)?.enrollment_id).toBe("c".repeat(43));
+    expect(instance.lookupRunnerEnrollment("d".repeat(64), Date.now())).toEqual({ runner_id: f.runnerId });
+    expect(instance.lookupRunnerEnrollment("f".repeat(64), Date.now())).toBeUndefined();
+  });
+});
+
+it("rolls back an enrollment receipt and mode selection when code insertion fails", async () => {
+  const f = await fixture();
+  await runInDurableObject(f.registry, instance => {
+    const now = Date.now(), other = "enrollment-conflict-" + crypto.randomUUID();
+    expect(instance.registerRunner(other, "b".repeat(64), now, undefined, "dedicated_user")).toBe(true);
+    expect(instance.createRunnerEnrollment(other, "x".repeat(43), "a".repeat(64), now)).toBeDefined();
+    expect(instance.createRunnerEnrollment(f.runnerId, "y".repeat(43), "b".repeat(64), now)).toBeDefined();
+    // This primary-key conflict occurs after the receipt insert, mode update,
+    // and old-code deletion inside the transaction.
+    expect(instance.createRunnerEnrollment(f.runnerId, "x".repeat(43), "c".repeat(64), now, "privileged_host", true, "dedicated_user", f.lifecycleId, undefined, {}, "enrollment-rollback")).toBeUndefined();
+    expect(instance.getRunnerMutationState(f.runnerId, "enrollment-rollback")).toMatchObject({ mutation_committed: false, enrollment_mutation_committed: false });
+    expect(instance.getRunner(f.runnerId)?.configured_execution_mode).toBe("dedicated_user");
+    expect(instance.latestRunnerEnrollment(f.runnerId)?.enrollment_id).toBe("y".repeat(43));
+    expect(instance.lookupRunnerEnrollment("b".repeat(64), now)).toEqual({ runner_id: f.runnerId });
+  });
+});
+
+it.each(["credential", "lifecycle"])("does not reuse an enrollment receipt after its %s changes", async change => {
+  const f = await fixture();
+  await runInDurableObject(f.registry, (instance, state) => {
+    const now = Date.now(), mutation = "enrollment-old-identity";
+    expect(instance.createRunnerEnrollment(f.runnerId, "a".repeat(43), "b".repeat(64), now, undefined, false, "dedicated_user", f.lifecycleId, undefined, {}, mutation)).toBeDefined();
+    if (change === "credential") {
+      expect(instance.invalidateRunnerCredential(f.runnerId, now, "replace-credential")).toBe(true);
+    } else {
+      expect(instance.deleteRunner(f.runnerId, f.runnerId, now, "delete-lifecycle")).toBe(true);
+      expect(instance.getRunnerMutationState(f.runnerId, mutation)).toMatchObject({ runner_exists: false, mutation_committed: false, enrollment_mutation_committed: false });
+      expect(instance.registerRunner(f.runnerId, "c".repeat(64), now, undefined, "dedicated_user")).toBe(true);
+      // An equal generation in a different lifecycle must not match either.
+      state.storage.sql.exec("UPDATE runners SET credential_version=3 WHERE runner_id=?", f.runnerId);
+      expect(instance.getRunnerExecutionState(f.runnerId)!.lifecycle_id).not.toBe(f.lifecycleId);
+    }
+    expect(instance.getRunnerMutationState(f.runnerId, mutation)).toMatchObject({ mutation_committed: false, enrollment_mutation_committed: false, credential_mutation_committed: false });
+    expect(instance.createRunnerEnrollment(f.runnerId, "d".repeat(43), "e".repeat(64), now, undefined, false, undefined, undefined, undefined, {}, mutation)).toBeUndefined();
+  });
+});
+
+it("rejects malformed enrollment mutation IDs and permits issuance owned by creation or rotation", async () => {
+  const f = await fixture();
+  await runInDurableObject(f.registry, async (instance, state) => {
+    const path = "/runners/" + f.runnerId + "/enrollments";
+    const submit = async (extra: Record<string, unknown>) => {
+      const body = JSON.stringify({ enrollment_id: "a".repeat(43), verifier: "b".repeat(64), ...extra });
+      return instance.fetch(new Request("https://registry.internal" + path, { method: "POST", headers: await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body), body }));
+    };
+    for (const mutation_id of [null, "", "bad mutation", 42, {}, "a".repeat(129)]) {
+      expect((await submit({ mutation_id })).status).toBe(400);
+      expect(instance.latestRunnerEnrollment(f.runnerId)).toBeUndefined();
+    }
+    // Creation and rotation retain their separate credential-mutation owner.
+    expect((await submit({})).status).toBe(200);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM runner_mutations WHERE runner_id=?", f.runnerId).one().n).toBe(0);
+  });
+});
+
+it("an enrollment receipt cannot authorize credential finalization", async () => {
+  const f = await fixture(), mutation = "enrollment-not-credential";
+  const proof = await runInDurableObject(f.registry, instance => {
+    expect(instance.createRunnerEnrollment(f.runnerId, "a".repeat(43), "b".repeat(64), Date.now(), undefined, false, "dedicated_user", f.lifecycleId, undefined, {}, mutation)).toBeDefined();
+    return instance.getRunnerMutationState(f.runnerId, mutation);
+  });
+  await runInDurableObject(f.runner, async (_existing, state) => {
+    const target = await offlineRunner(state, f);
+    target.registry.request = async () => Response.json(proof);
+    expect((await target.begin(mutation)).status).toBe(204);
+    expect((await target.finalize(mutation)).status).toBe(409);
+    expect(await target.admission()).toMatchObject({ fenced: true, mutationId: mutation, mutationPhase: "precommit" });
+  });
+});
+
+it("a delayed enrollment recovery cannot release a newer owner", async () => {
+  const f = await fixture(), mutation = "enrollment-delayed-recovery";
+  const proof = await runInDurableObject(f.registry, instance => {
+    expect(instance.createRunnerEnrollment(f.runnerId, "a".repeat(43), "b".repeat(64), Date.now(), undefined, false, "dedicated_user", f.lifecycleId, undefined, {}, mutation)).toBeDefined();
+    return instance.getRunnerMutationState(f.runnerId, mutation);
+  });
+  await runInDurableObject(f.runner, async (_existing, state) => {
+    const target = await offlineRunner(state, f);
+    expect((await target.begin(mutation)).status).toBe(204);
+    target.registry.request = async () => {
+      target.registry.request = async (_runnerId, action) => action.includes(mutation) ? Response.json(proof) : f.route(_runnerId, action);
+      expect((await target.cancel(mutation)).status).toBe(204);
+      expect((await target.begin("new-enrollment-owner")).status).toBe(204);
+      return Response.json(proof);
+    };
+    expect((await target.begin("delayed-competitor")).status).toBe(409);
+    expect(await target.admission()).toMatchObject({ fenced: true, mutationId: "new-enrollment-owner", mutationPhase: "precommit" });
+  });
+});
+
+it("recovers a completed enrollment while preserving the live applied session", async () => {
+  const f = await fixture(), mutation = "enrollment-live-recovery";
+  const proof = await runInDurableObject(f.registry, instance => {
+    expect(instance.createRunnerEnrollment(f.runnerId, "a".repeat(43), "b".repeat(64), Date.now(), undefined, false, "dedicated_user", f.lifecycleId, undefined, {}, mutation)).toBeDefined();
+    return instance.getRunnerMutationState(f.runnerId, mutation);
+  });
+  await runInDurableObject(f.runner, async (_existing, state) => {
+    const target = await onlineRunner(state, f), request = target.registry.request;
+    target.registry.request = async (runnerId, action, init) => action.includes("/mutation-state?")
+      ? Response.json({ ...(action.includes(mutation) ? proof : f.proof), runner_state: "online", session_id: "session-test" })
+      : request(runnerId, action, init);
+    expect((await target.begin(mutation)).status).toBe(204);
+    expect((await target.begin("enrollment-next-live-owner")).status).toBe(204);
+    // A fresh pre-mutation baseline is captured only from restored live admission.
+    expect(await target.admission()).toMatchObject({ mutationId: "enrollment-next-live-owner",
+      preMutationActiveRevision: f.policy.revision, preMutationActiveChecksum: f.policy.checksum });
+    expect((await target.cancel("enrollment-next-live-owner")).status).toBe(204);
+    expect(await target.admission()).toMatchObject({ fenced: false, reconciled: true, mutationId: null,
+      activeRevision: f.policy.revision, activeChecksum: f.policy.checksum, sessionId: "session-test" });
+    expect(target.socket.close).not.toHaveBeenCalled();
   });
 });
 

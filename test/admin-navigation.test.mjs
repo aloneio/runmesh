@@ -34,6 +34,60 @@ test("history navigation also revalidates without pushing another history entry"
   assert.equal(h.fetched.length, 2); assert.equal(h.mounted[1].push, false);
 });
 
+test("native fragment history preserves the initial page and its live controller", async () => {
+  const h = harness(), original = h.nav.capturePage();
+  await h.nav.restore(new URL("/admin#main-content", h.context.location.href));
+  await h.nav.restore(new URL("/admin", h.context.location.href));
+  assert.equal(original(), true);
+  assert.equal(h.fetched.length, 0);
+  assert.equal(h.mounted.length, 0);
+});
+
+test("fragment history uses the last mounted page while query changes revalidate", async () => {
+  const h = harness();
+  await h.open("/admin/clients?limit=25");
+  const mountedPage = h.nav.capturePage();
+  await h.nav.restore(new URL("/admin/clients?limit=25#add-client", h.context.location.href));
+  assert.equal(mountedPage(), true);
+  assert.equal(h.fetched.length, 1);
+  await h.nav.restore(new URL("/admin/clients?limit=10#add-client", h.context.location.href));
+  assert.equal(mountedPage(), false);
+  assert.equal(h.fetched.length, 2);
+  assert.equal(h.mounted[1].push, false);
+});
+
+test("fragment history during pending navigation revalidates the retired page", async () => {
+  const h = harness(), original = h.nav.capturePage();
+  let release;
+  h.context.fetch = (url, options) => {
+    h.fetched.push({ url, options });
+    return h.fetched.length === 1 ? new Promise(resolve => { release = resolve; })
+      : Promise.resolve({ ok: true, text: async () => "restored" });
+  };
+  const pending = h.open("/admin/runners");
+  await h.nav.restore(new URL("/admin#main-content", h.context.location.href));
+  assert.equal(original(), false);
+  release({ ok: true, text: async () => "superseded" });
+  await pending; await new Promise(setImmediate);
+  assert.deepEqual(h.fetched.map(item => new URL(item.url).pathname), ["/admin/runners", "/admin"]);
+  assert.deepEqual(h.mounted.map(item => [item.key, item.push]), [["/admin", false]]);
+  assert.equal(original(), false);
+});
+
+for (const departure of ["native", "failed-mount"]) test("fragment history cannot revive a page after " + departure + " departure", async () => {
+  const h = harness(), original = h.nav.capturePage();
+  if (departure === "native") h.nav.retire();
+  else {
+    h.context.view.mount = () => { throw new Error("mount interrupted"); };
+    await h.open("/admin");
+  }
+  await h.nav.restore(new URL("/admin#main-content", h.context.location.href));
+  assert.equal(h.context.location.href, "https://worker.test/admin#main-content");
+  assert.equal(original(), false);
+  assert.equal(h.nav.capturePage()(), false);
+  assert.equal(h.fetched.length, departure === "native" ? 0 : 1);
+});
+
 for (const push of [true, false]) test("a page retires when navigation starts, including history (push " + push + ")", async () => {
   const h = harness(), original = h.nav.capturePage();
   let release, mountedPage;

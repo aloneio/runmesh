@@ -25,7 +25,7 @@ export interface RunnerLifecyclePorts {
   createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost?: boolean, expectedConfiguredExecutionMode?: RunnerExecutionMode | null, expectedLifecycleId?: string, enrollmentTtlMs?: number, validityWindow?: {
     not_before_ms?: number;
     expires_at_ms?: number;
-  }): {
+  }, mutationId?: string): {
     enrollment_id: string;
     runner_id: string;
     created_at_ms: number;
@@ -171,6 +171,8 @@ export function createRunnerLifecycleRoutes(ports: RunnerLifecyclePorts): Runner
       }) : Response.json(runner);
     }
     if (method === "POST" && action === "enrollments") {
+      const mutationId = mutationIdField(input);
+      if (Object.prototype.hasOwnProperty.call(input, "mutation_id") && mutationId === undefined) return new Response("invalid mutation", { status: 400 });
       const enrollmentId = stringField(input, "enrollment_id", 43);
       const verifier = stringField(input, "verifier", 64);
       const configuredExecutionMode = requestedExecutionMode(input);
@@ -203,7 +205,7 @@ export function createRunnerLifecycleRoutes(ports: RunnerLifecyclePorts): Runner
         ...(input.expires_at_ms === undefined ? {} : {
           expires_at_ms: input.expires_at_ms as number
         })
-      });
+      }, mutationId);
       return enrollment === undefined ? new Response("not found", {
         status: 404
       }) : Response.json(enrollment);

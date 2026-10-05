@@ -8,7 +8,7 @@ export async function checkAdminNavigation(executable) {
   const requests = [], errors = [];
   let phase, arrived, release;
   const pageFor = path => adminDocument('Navigation fixture', '<p data-navigation-fixture>' + path + '</p>'
-    + (path === '/admin/clients' ? '<div style="height:1800px"></div><section id="add-client"><h2>Add a client</h2></section><div style="height:1000px"></div>' : '')
+    + (path === '/admin/clients' ? '<div style="height:1800px"></div><section id="add-client"><h2>Add a client</h2><label>Connection label<input name="label"></label></section><div style="height:1000px"></div>' : '')
     + (path === '/admin/settings' ? '<a href="/admin/clients#add-client" data-fragment-link>Add a client</a>' : ''), 'dashboard');
   const server = createServer((req, res) => {
     const path = new URL(req.url, 'http://127.0.0.1').pathname;
@@ -81,9 +81,25 @@ export async function checkAdminNavigation(executable) {
         const gap = node.getBoundingClientRect().top - document.querySelector('.app-header').getBoundingClientRect().bottom;
         return { focused: document.activeElement === node, visibleBelowHeader: gap >= 0 && gap <= 32 };
       }), { focused: true, visibleBelowHeader: true }, 'Fragment navigation must focus the requested section and place it below the current header');
+      // The shipped skip link changes only the fragment. Native Back/Forward
+      // across these entries must preserve the current form and controller.
+      const label=page.locator('input[name="label"]');
+      await label.fill('Unsaved connection label');
+      const reads=requests.filter(request=>request.path==='/admin/clients').length;
+      await page.locator('.skip-link').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForURL(origin+'/admin/clients#main-content');
+      for(const action of ['skip','back','forward']){
+        if(action==='back')await page.goBack();
+        if(action==='forward')await page.goForward();
+        await page.waitForURL(origin+'/admin/clients#'+(action==='back'?'add-client':'main-content'));
+        await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+        assert.equal(await label.inputValue(),'Unsaved connection label','Same-page '+action+' preserves entered values');
+        assert.equal(requests.filter(request=>request.path==='/admin/clients').length,reads,'Same-page '+action+' does not reload the form');
+      }
     } finally { await page.close(); }
     assert.deepEqual(errors, []);
-    return { state: 'passed', scenarios: scenarios.length + 2, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, fragment_focus_and_scroll_restored: true, screenshots: 0 };
+    return { state: 'passed', scenarios: scenarios.length + 5, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, fragment_focus_and_scroll_restored: true, same_page_forms_preserved: true, screenshots: 0 };
   } finally {
     await browser?.close();
     server.closeAllConnections();

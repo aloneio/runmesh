@@ -22,11 +22,14 @@ export interface RunnerMutationState {
   readonly runner_state: RunnerConnectionState | null;
   /** True only when the requested mutation is backed by a committed
    * credential-ledger marker for the current lifecycle/generation. The
-   * broader mutation_committed field also includes policy mutations, so
+   * broader mutation_committed field also includes policy mutations and
+   * enrollment issuance, so
    * transport credential finalizers must use this narrower proof. */
   readonly credential_mutation_committed: boolean;
   /** Exact current-generation operation; null without a committed receipt. */
   readonly credential_mutation_kind: CredentialMutationKind | null;
+  /** Enrollment issuance completed without changing this lifecycle's credential generation. */
+  readonly enrollment_mutation_committed: boolean;
   readonly mutation_committed: boolean;
   readonly desired_revision: number | null;
   readonly desired_checksum: string | null;
@@ -220,7 +223,7 @@ export type PolicyMutationRow = { runner_id: string; mutation_id: string; kind: 
 
 export type CredentialMutationKind = "credential_rotate" | "credential_enroll" | "credential_revoke" | "runner_delete" | "runner_create";
 
-export type CredentialMutationRow = { kind: CredentialMutationKind; pre_credential_version: number; lifecycle_id: string };
+export type RunnerMutationRow = { kind: CredentialMutationKind | "enrollment_create"; pre_credential_version: number; lifecycle_id: string };
 
 export type ManagedWorkspaceRow = {
   runner_id: string; workspace_id: string; display_name: string; root_path: string; enabled: number;

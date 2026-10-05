@@ -9,7 +9,7 @@ import { validWindow } from "../validity.js";
 import { validityStatus } from "../validity.js";
 import type { ValidityWindow } from "../validity.js";
 import type { ValidityStatus } from "../validity.js";
-import type { RunnerExecutionMode, RunnerMutationState, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, RunnerRow, EnrollmentRow, CredentialMutationKind, CredentialMutationRow } from './records.js';
+import type { RunnerExecutionMode, RunnerMutationState, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, RunnerRow, EnrollmentRow, CredentialMutationKind, RunnerMutationRow } from './records.js';
 import { READ_ONLY_PERMISSIONS, DEFAULT_RUNNER_ENROLLMENT_TTL_MS } from './records.js';
 import { validRunnerVersion, validLifecycleId, validSessionId, validTransportIdentity, matchesTransportIdentity, validUpdateChannel, validExecutionMode, validOptionalExecutionMode, validExpectedExecutionMode, validRunnerEnrollmentTtl, protocolCompatibility, updateStatus, emptyMutationState, decodeRunner, safeNonnegativeInteger, validVerifier, validMutationId, validOptionalMutationId, validLabel, validRunnerPublicInfo, expectedRegistryConflict } from './values.js';
 import type { RegistryStorage } from './storage.js';
@@ -37,26 +37,31 @@ export class RegistryLifecycle {
       "SELECT 1 AS committed FROM runner_policy_versions WHERE runner_id = ? AND revision = ? AND mutation_id = ? LIMIT 1", runnerId, runner.desired_policy_revision, mutationId,
     ).toArray()[0] !== undefined;
     const credentialMutation = this.mutationRow(runnerId, mutationId);
+    const credentialKind = credentialMutation === undefined || credentialMutation.kind === "enrollment_create" ? null : credentialMutation.kind;
     const credentialCommitted = credentialMutation !== undefined
       && validLifecycleId(runner.lifecycle_id)
       && validLifecycleId(credentialMutation.lifecycle_id)
       && credentialMutation.lifecycle_id === runner.lifecycle_id
-      && credentialMutation.kind !== "runner_delete"
+      && credentialKind !== null && credentialKind !== "runner_delete"
       // A runner_create marker is committed at its synthetic pre-version (0)
       // only while the newly-created row is still awaiting enrollment. Once
       // an enrollment/rotation advances the credential generation, an old
       // create finalizer must no longer be able to claim the mutation or clear
       // the replacement transport fence.
-      && (credentialMutation.kind === "runner_create"
+      && (credentialKind === "runner_create"
         ? runner.credential_version === credentialMutation.pre_credential_version
         : runner.credential_version === credentialMutation.pre_credential_version + 1);
+    const enrollmentCommitted = credentialMutation?.kind === "enrollment_create"
+      && validLifecycleId(runner.lifecycle_id) && credentialMutation.lifecycle_id === runner.lifecycle_id
+      && runner.credential_version === credentialMutation.pre_credential_version;
     return {
       runner_exists: true,
       lifecycle_id: validLifecycleId(runner.lifecycle_id) ? runner.lifecycle_id : null,
       runner_state: runner.state,
       credential_mutation_committed: credentialCommitted,
-      credential_mutation_kind: credentialCommitted ? credentialMutation.kind : null,
-      mutation_committed: policyCommitted || credentialCommitted,
+      credential_mutation_kind: credentialCommitted ? credentialKind : null,
+      enrollment_mutation_committed: enrollmentCommitted,
+      mutation_committed: policyCommitted || credentialCommitted || enrollmentCommitted,
       desired_revision: runner.desired_policy_revision,
       desired_checksum: runner.desired_policy_checksum,
       applied_revision: runner.applied_policy_revision,
@@ -202,10 +207,10 @@ export class RegistryLifecycle {
     });
   }
 
-  public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false, expectedConfiguredExecutionMode?: RunnerExecutionMode | null, expectedLifecycleId?: string, enrollmentTtlMs = DEFAULT_RUNNER_ENROLLMENT_TTL_MS, window: { not_before_ms?: number; expires_at_ms?: number } = {}): { enrollment_id: string; runner_id: string; created_at_ms: number; not_before_ms: number; expires_at_ms: number } | undefined {
+  public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false, expectedConfiguredExecutionMode?: RunnerExecutionMode | null, expectedLifecycleId?: string, enrollmentTtlMs = DEFAULT_RUNNER_ENROLLMENT_TTL_MS, window: { not_before_ms?: number; expires_at_ms?: number } = {}, mutationId?: string): { enrollment_id: string; runner_id: string; created_at_ms: number; not_before_ms: number; expires_at_ms: number } | undefined {
     // The expected values are an optional compare-and-swap guard used by the
     // browser action path.
-    if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost) || !validExpectedExecutionMode(expectedConfiguredExecutionMode) || (expectedLifecycleId !== undefined && !validLifecycleId(expectedLifecycleId)) || !validRunnerEnrollmentTtl(enrollmentTtlMs)) return undefined;
+    if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost) || !validExpectedExecutionMode(expectedConfiguredExecutionMode) || (expectedLifecycleId !== undefined && !validLifecycleId(expectedLifecycleId)) || !validRunnerEnrollmentTtl(enrollmentTtlMs) || !validOptionalMutationId(mutationId)) return undefined;
     const notBeforeMs = window.not_before_ms ?? nowMs;
     const expiresAtMs = window.expires_at_ms ?? (Math.max(nowMs, notBeforeMs) + enrollmentTtlMs);
     if (!validTimestamp(notBeforeMs) || !validTimestamp(expiresAtMs) || expiresAtMs <= Math.max(nowMs, notBeforeMs) || expiresAtMs - nowMs > 365 * 24 * 60 * 60 * 1_000) return undefined;
@@ -221,6 +226,13 @@ export class RegistryLifecycle {
         // a guard.
         if (expectedConfiguredExecutionMode !== undefined && current.configured_execution_mode !== expectedConfiguredExecutionMode) throw new Error("runner execution mode changed");
         if (expectedLifecycleId !== undefined && current.lifecycle_id !== expectedLifecycleId) throw new Error("runner lifecycle changed");
+        // Issuance does not advance credentials. Record its exact owner in
+        // the existing ledger atomically with the code, and reject replay
+        // instead of replacing a newer code with a delayed request.
+        if (mutationId !== undefined) {
+          if (!validLifecycleId(current.lifecycle_id) || this.mutationRow(runnerId, mutationId) !== undefined) throw new Error("enrollment mutation conflict");
+          this.storage.sql.exec("INSERT INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, lifecycle_id, committed_at_ms) VALUES (?, ?, 'enrollment_create', ?, ?, ?)", runnerId, mutationId, current.credential_version, current.lifecycle_id, nowMs);
+        }
         // Persist the administrator's selection in the same transaction as
         // the one-time code.  A failed insert therefore cannot leave the
         // Runner advertising a mode for a code that was never issued.
@@ -233,7 +245,7 @@ export class RegistryLifecycle {
         this.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
         this.storage.sql.exec("INSERT INTO runner_enrollments (enrollment_id, runner_id, verifier, created_at_ms, not_before_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?)", enrollmentId, runnerId, verifier, nowMs, notBeforeMs, expiresAtMs);
       });
-    } catch (error) { if (expectedRegistryConflict(error, ["runner not found", "runner execution mode changed", "runner lifecycle changed", "runner execution mode compare-and-swap failed"])) return undefined; throw error; }
+    } catch (error) { if (expectedRegistryConflict(error, ["runner not found", "runner execution mode changed", "runner lifecycle changed", "runner execution mode compare-and-swap failed", "enrollment mutation conflict"])) return undefined; throw error; }
     return { enrollment_id: enrollmentId, runner_id: runnerId, created_at_ms: nowMs, not_before_ms: notBeforeMs, expires_at_ms: expiresAtMs };
   }
 
@@ -445,8 +457,8 @@ export class RegistryLifecycle {
 
   public listRunners(): RunnerRecord[] { return this.storage.sql.exec<RunnerRow>("SELECT * FROM runners ORDER BY display_name, runner_id").toArray().map(decodeRunner); }
 
-  public consumedEnrollmentMutation(mutationId: string, verifier: string): (CredentialMutationRow & { runner_id: string }) | undefined {
-    const rows = this.storage.sql.exec<CredentialMutationRow & { runner_id: string }>(
+  public consumedEnrollmentMutation(mutationId: string, verifier: string): (RunnerMutationRow & { runner_id: string }) | undefined {
+    const rows = this.storage.sql.exec<RunnerMutationRow & { runner_id: string }>(
       `SELECT m.runner_id, m.kind, m.pre_credential_version, m.lifecycle_id
        FROM runner_mutations AS m
        INNER JOIN runner_enrollments AS e ON e.runner_id = m.runner_id
@@ -461,8 +473,8 @@ export class RegistryLifecycle {
     return undefined;
   }
 
-  public mutationRow(runnerId: string, mutationId: string): CredentialMutationRow | undefined {
-    return this.storage.sql.exec<CredentialMutationRow>(
+  public mutationRow(runnerId: string, mutationId: string): RunnerMutationRow | undefined {
+    return this.storage.sql.exec<RunnerMutationRow>(
       "SELECT kind, pre_credential_version, lifecycle_id FROM runner_mutations WHERE runner_id = ? AND mutation_id = ?", runnerId, mutationId,
     ).toArray()[0];
   }
