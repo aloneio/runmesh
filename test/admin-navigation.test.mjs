@@ -33,6 +33,57 @@ test("history navigation also revalidates without pushing another history entry"
   const h = harness(); await h.open("/admin/runners"); await h.open("/admin", false);
   assert.equal(h.fetched.length, 2); assert.equal(h.mounted[1].push, false);
 });
+
+for (const push of [true, false]) test("a page retires when navigation starts, including history (push " + push + ")", async () => {
+  const h = harness(), original = h.nav.capturePage();
+  let release, mountedPage;
+  h.context.fetch = () => new Promise(resolve => { release = resolve; });
+  h.context.view.mount = () => { mountedPage = h.nav.capturePage(); };
+  const pending = h.open("/admin/clients", push);
+  assert.equal(original(), false);
+  assert.equal(h.nav.isLoading(), true);
+  release({ ok: true, text: async () => "clients" });
+  await pending;
+  assert.equal(original(), false);
+  assert.equal(mountedPage(), true);
+});
+
+test("queued destinations retire all previous page owners before the next response", async () => {
+  const h = harness(), original = h.nav.capturePage();
+  let release, finalPage;
+  let calls = 0;
+  h.context.fetch = () => ++calls === 1 ? new Promise(resolve => { release = resolve; }) : Promise.resolve({ ok: true, text: async () => "last" });
+  h.context.view.mount = () => { finalPage = h.nav.capturePage(); };
+  const pending = h.open("/admin/runners");
+  const first = h.nav.capturePage();
+  void h.open("/admin/clients");
+  const second = h.nav.capturePage();
+  void h.open("/admin/settings");
+  assert.deepEqual([original(), first(), second()], [false, false, false]);
+  release({ ok: true, text: async () => "superseded" });
+  await pending; await new Promise(setImmediate);
+  assert.equal(finalPage(), true);
+  assert.deepEqual([original(), first(), second()], [false, false, false]);
+});
+
+for (const failure of ["network", "locale"]) test("a " + failure + " fallback keeps the departed page retired after loading ends", async () => {
+  const h = harness(), original = h.nav.capturePage();
+  if (failure === "network") h.context.fetch = async () => { throw new Error("offline"); };
+  else h.context.parse = () => ({ documentElement: { lang: "zh-CN" } });
+  await h.open("/admin/clients");
+  assert.equal(h.nav.isLoading(), false);
+  assert.equal(original(), false);
+  assert.equal(h.context.location.href, "https://worker.test/admin/clients");
+});
+
+test("a failed mount retires the partially bound page before full navigation", async () => {
+  const h = harness(); let partiallyBound;
+  h.context.view.mount = () => { partiallyBound = h.nav.capturePage(); throw new Error("history update failed"); };
+  await h.open("/admin/clients");
+  assert.equal(h.context.location.href, "https://worker.test/admin/clients");
+  assert.equal(h.nav.isLoading(), false);
+  assert.equal(partiallyBound(), false);
+});
 test("concurrent navigation coalesces to the latest destination within one owner", async () => {
   const h = harness(); let resolveFirst;
   h.context.fetch = (url, options) => { h.fetched.push({ url, options }); return h.fetched.length === 1 ? new Promise(resolve => { resolveFirst = resolve; }) : Promise.resolve({ ok: true, text: async () => "latest" }); };

@@ -10,14 +10,19 @@ export function createAdminNavigation({
 }) {
   let loading = false;
   let queued;
+  let generation = 0;
   const boundLinks = new WeakSet();
   const pageKey = url => url.pathname + url.search;
   function navigateFully(url) {
+    generation++;
     const destination = queued?.url ?? url;
     queued = undefined;
     location.href = destination.href;
   }
   async function open(url, shouldPush) {
+    // A new destination retires the old page immediately, including while
+    // its DOM remains visible during loading or a full-navigation fallback.
+    generation++;
     if (loading) {
       queued = {
         url,
@@ -84,6 +89,10 @@ export function createAdminNavigation({
     open,
     bind,
     isLoading: () => loading,
+    capturePage() {
+      const pageGeneration = generation;
+      return () => pageGeneration === generation;
+    },
     initialize() {
       view.initialize();
       bind(document);

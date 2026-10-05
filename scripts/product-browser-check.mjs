@@ -382,19 +382,42 @@ export async function checkGuidedProduct(executable) {
   await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Refresh before making another change.'}).waitFor();
   assert.equal(requests.filter(r=>r.method==='POST').length,beforeInvalidReceipt+1);
   controls.discovery.invalidReceipt=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
-  // Removed page instances must not redirect or continue an old workflow.
-  let releaseOAuth;controls.oauth.delayed=new Promise(resolve=>{releaseOAuth=resolve;});
-  const pendingOAuth=page.waitForRequest(request=>request.url().endsWith('/connections/begin'));
-  await page.getByRole('button',{name:'Reconnect',exact:true}).click();await pendingOAuth;
-  assert.equal(await status.textContent(),'Opening the MCP sign-in page…','Internal reconciliation must not replace sign-in progress with List refreshed');
-  await page.locator('.control-nav a[href="/admin"]').click();await page.waitForURL(url=>url.pathname==='/admin');
-  assert.equal(await page.locator('[data-central-product]').count(),0);
-  const settledOAuth=page.waitForResponse(response=>response.url().endsWith('/connections/begin'));
-  releaseOAuth();await(await settledOAuth).finished();await page.waitForLoadState('networkidle');controls.oauth.delayed=undefined;
-  assert.equal(new URL(page.url()).pathname,'/admin');assert.equal(await page.getByRole('heading',{name:'Dashboard',exact:true}).count(),1);
-  await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
-  await page.locator('[data-central-product][aria-busy="false"]').waitFor();
-  assert.equal(await page.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
+  // Departed pages retire at navigation start, even while the next GET is pending.
+  for(const pendingDestination of [true,false]){
+   let releaseOAuth,releaseDestination=()=>{},destinationStarted;
+   const destinationRequested=new Promise(resolve=>{destinationStarted=resolve;});
+   controls.oauth.delayed=new Promise(resolve=>{releaseOAuth=resolve;});
+   if(pendingDestination){
+    const destinationReady=new Promise(resolve=>{releaseDestination=resolve;});
+    await page.route(origin+'/admin',async route=>{destinationStarted();await destinationReady;await route.continue();});
+   }
+   try{
+    const pendingOAuth=page.waitForRequest(request=>request.url().endsWith('/connections/begin'));
+    await page.getByRole('button',{name:'Reconnect',exact:true}).click();await pendingOAuth;
+    assert.equal(await status.textContent(),'Opening the MCP sign-in page…','Internal reconciliation must not replace sign-in progress with List refreshed');
+    await page.locator('.control-nav a[href="/admin"]').click();
+    if(pendingDestination){
+     await destinationRequested;
+     assert.equal(await page.locator('[data-central-product]').count(),1);
+    }else{
+     await page.waitForURL(url=>url.pathname==='/admin');
+     assert.equal(await page.locator('[data-central-product]').count(),0);
+    }
+    const settledOAuth=page.waitForResponse(response=>response.url().endsWith('/connections/begin'));
+    releaseOAuth();await(await settledOAuth).finished();
+    if(pendingDestination){
+     await page.waitForFunction(()=>document.querySelector('[data-central-product]')?.getAttribute('aria-busy')!=='true');
+     assert.equal(new URL(page.url()).pathname,'/admin/central','A late OAuth handoff must leave the selected navigation in control');
+     assert.equal(await page.locator('[data-central-product]').count(),1);
+     releaseDestination();
+    }
+    await page.waitForURL(url=>url.pathname==='/admin');await page.waitForLoadState('networkidle');
+    assert.equal(await page.getByRole('heading',{name:'Dashboard',exact:true}).count(),1);
+   }finally{releaseOAuth();releaseDestination();controls.oauth.delayed=undefined;if(pendingDestination)await page.unroute(origin+'/admin');}
+   await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
+   await page.locator('[data-central-product][aria-busy="false"]').waitFor();
+   assert.equal(await page.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
+  }
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
   assert.equal(await page.getByText('Enabled · tool review required before sharing',{exact:true}).count(),0);
   // A broken service must not strand another pending service or replay the failed write.

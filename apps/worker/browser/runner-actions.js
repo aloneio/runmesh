@@ -2,14 +2,14 @@ const bound = new WeakSet();
 
 /** A failed destructive action stays beside its form. Never replay a POST:
  * successful actions and expired sessions navigate with a fresh GET only. */
-export function bindRunnerActions(root) {
+export function bindRunnerActions(root, { isCurrent }) {
   root.querySelectorAll('form[data-runner-danger-action]').forEach(form => {
     if (bound.has(form)) return;
     bound.add(form);
     let pending = false;
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      if (pending) return;
+      if (pending || !isCurrent()) return;
       const action = new URL(event.submitter?.getAttribute('formaction') || form.action, location.href);
       // The server-rendered form owns the route, including encoded Runner IDs.
       if (action.origin !== location.origin) return;
@@ -30,7 +30,10 @@ export function bindRunnerActions(root) {
       const timer = setTimeout(() => controller.abort(), 25000);
       try {
         const response = await fetch(action.href, { method: 'POST', body, credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
-        if (!form.isConnected) return;
+        if (!form.isConnected || !isCurrent()) {
+          void response.body?.cancel().catch(() => undefined);
+          return;
+        }
         const destination = new URL(response.url, location.href);
         if (response.redirected && destination.origin === location.origin
           && ['/', '/login', '/admin', '/admin/runners'].includes(destination.pathname)) {
@@ -39,10 +42,12 @@ export function bindRunnerActions(root) {
           return;
         }
         const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+        if (!form.isConnected || !isCurrent()) return;
         const message = page.querySelector('[data-admin-error]')?.textContent?.trim();
         notice.textContent = message || unknown;
         notice.hidden = false;
       } catch {
+        if (!form.isConnected || !isCurrent()) return;
         notice.textContent = unknown;
         notice.hidden = false;
       } finally {
