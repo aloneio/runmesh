@@ -134,7 +134,7 @@ export async function rotateRunner(ports: RunnerRotationPorts, runnerId: string,
     return {
       state: "failed",
       reason: "enrollment_rejected",
-      cause: enrollment.status === 404 ? "missing" : "conflict"
+      cause: enrollment.status === 403 ? "denied" : enrollment.status === 404 ? "missing" : "conflict"
     };
   }
   try {

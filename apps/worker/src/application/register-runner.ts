@@ -56,7 +56,7 @@ export async function registerRunner(ports: RunnerRegistrationPorts, runnerId: s
       };
     }
     try {
-      if (!(await ports.cancel(runnerId, mutationId))) return {
+      if (!(await ports.cancel(runnerId, mutationId, { confirmedWriteRejection: true }))) return {
         state: "failed",
         reason: "recovery"
       };

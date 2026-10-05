@@ -1,6 +1,6 @@
 import type { EnrollmentCodeResult, RunnerExecutionSnapshot } from "./runner-admin.js";
 import type { RunnerLifecyclePorts } from "./runner-mutations.js";
-export type RunnerWriteOutcome = "accepted" | "invalid" | "missing" | "conflict" | "unknown";
+export type RunnerWriteOutcome = "accepted" | "invalid" | "denied" | "missing" | "conflict" | "unknown";
 export type RunnerActionFailure = {
   readonly state: "failed";
   readonly reason: "read" | "fence" | "write" | "commit" | "cancel" | "recovery" | "changed" | "enrollment_state" | "enrollment_rejected" | "enrollment" | "enrollment_recovery" | "finalize";

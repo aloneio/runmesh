@@ -36,7 +36,7 @@ export function adminUpstreamRedirect(upstream: Response, location: string): Res
  * Discard the upstream body without exposing diagnostics or replaying writes. */
 export function adminUpstreamError(upstream: Response, message: string, fallbackStatus = 400, render: (status: number, message: string) => Response = adminError): Response {
   void upstream.body?.cancel().catch(() => undefined);
-  const status = upstream.status < 400 || upstream.status === 429 || upstream.status >= 500 ? 503 : upstream.status === 404 ? 404 : fallbackStatus;
+  const status = upstream.status < 400 || upstream.status === 429 || upstream.status >= 500 ? 503 : upstream.status === 403 || upstream.status === 404 ? upstream.status : fallbackStatus;
   return render(status, message);
 }
 

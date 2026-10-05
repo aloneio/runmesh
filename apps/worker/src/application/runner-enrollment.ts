@@ -47,7 +47,7 @@ export async function regenerateRunnerEnrollment(ports: RunnerEnrollmentPorts, r
     return {
       state: "failed",
       reason: "enrollment_rejected",
-      cause: enrollment.status === 404 ? "missing" : "conflict"
+      cause: enrollment.status === 403 ? "denied" : enrollment.status === 404 ? "missing" : "conflict"
     };
   }
   const released = await ports.release(runnerId, mutationId).catch(() => ({

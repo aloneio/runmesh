@@ -178,7 +178,7 @@ it("releases a rejected deletion fence when the browser session is revoked after
     const rejected = await worker.fetch(new Request(`https://audit.test/admin/runners/${runnerId}/delete`, {
       method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf, confirmation: runnerId }),
     }), localEnv, {} as ExecutionContext);
-    expect(rejected.status, events.join(" -> ")).toBe(400); expect(await rejected.text()).toContain("Runner delete failed.");
+    expect(rejected.status, events.join(" -> ")).toBe(403); expect(await rejected.text()).toContain("Authentication changed. Sign in again.");
     expect(events).toEqual(["session verified", "fence acquired", "session revoked", "Registry rejected deletion", "fence cancelled"]);
     // A second authenticated mutation proves the rejected delete preserved the
     // Runner and released ownership without inspecting private admission state.
@@ -362,7 +362,7 @@ it.each([429, 500, 502, 503, 504])("SEC04 administrator mutation preserves depen
   await response.body?.cancel();
 });
 
-it.each([[400, 400, 400], [404, 400, 404], [409, 409, 409]])("SEC04 administrator mutation preserves deterministic rejection %s", async (status, fallback, expected) => {
+it.each([[400, 400, 400], [403, 400, 403], [404, 400, 404], [409, 409, 409]])("SEC04 administrator mutation preserves deterministic rejection %s", async (status, fallback, expected) => {
   const response = adminUpstreamError(new Response("PRIVATE_UPSTREAM_DIAGNOSTIC", { status }), "Runner permission profile could not be updated.", fallback);
   expect(response.status).toBe(expected); expect(await response.text()).not.toContain("PRIVATE_UPSTREAM_DIAGNOSTIC");
 });

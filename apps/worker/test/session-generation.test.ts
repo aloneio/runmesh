@@ -1,7 +1,8 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it } from "vitest";
 import worker from "../src/index.js";
-import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
+import { internalHeaders, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
+import { ADMIN_CSRF_COOKIE, ADMIN_SESSION_COOKIE } from "../src/http/constants.js";
 
 it.each(["/auth/settings", "/auth/sessions"])("rejects an in-flight old-password login when rotation overlaps %s", async (boundary) => {
   const id = env.REGISTRY.idFromName(`session-generation-${crypto.randomUUID()}`);
@@ -70,4 +71,54 @@ it("rejects stale, missing, and malformed generations after consecutive rotation
     expect(instance.createAdminSession("a".repeat(64), "b".repeat(64), now + 60_000, now + 3, 3)).toBe(true);
     expect(instance.verifyAdminSession("a".repeat(64), now + 3)).toBeDefined();
   });
+});
+
+it.each(["permissions", "revoke", "rotate", "enrollment"] as const)("releases the %s fence when its Registry write rejects an expired admin session", async action => {
+  const runnerId = "session-mutation-" + crypto.randomUUID(), id = env.REGISTRY.idFromName("registry");
+  const registry = env.REGISTRY.get(id), transport = env.RUNNER.get(env.RUNNER.idFromName(runnerId));
+  const verifier = await passwordVerifier("synthetic-fence-session-password");
+  const before = await runInDurableObject(registry, owner => {
+    const now = Date.now(); owner.setupAdmin(verifier, now);
+    owner.registerRunner(runnerId, "a".repeat(64), now, undefined, "dedicated_user");
+    return owner.getRunnerExecutionState(runnerId);
+  });
+  const session = async () => {
+    const raw = randomBase64Url(), csrf = randomBase64Url(), hash = await sha256Hex(raw), csrfHash = await sha256Hex(csrf);
+    await runInDurableObject(registry, owner => {
+      const now = Date.now(); expect(owner.createAdminSession(hash, csrfHash, now + 60_000, now, 1)).toBe(true);
+    });
+    return { raw, csrf, hash };
+  };
+  const expired = await session();
+  let rejectWrite = true, rejection: number | undefined;
+  const target = action === "permissions" ? `/auth/runners/${runnerId}/permissions`
+    : `/runners/${runnerId}/${action === "enrollment" ? "enrollments" : action}`;
+  const transportCalls: string[] = [];
+  const registryNamespace = { idFromName: () => id, get: () => ({ fetch: async (request: Request) => {
+    const url = new URL(request.url);
+    if (rejectWrite && request.method === "POST" && url.pathname === target) {
+      rejectWrite = false;
+      await runInDurableObject(registry, owner => { owner.logoutAdminSession(expired.hash); });
+      const response = await registry.fetch(request); rejection = response.status; return response;
+    }
+    return registry.fetch(request);
+  } }) };
+  const localEnv = { ...env, REGISTRY: registryNamespace, RUNNER: { idFromName: () => runnerId, get: () => ({ fetch: (request: Request) => {
+    transportCalls.push(new URL(request.url).pathname); return transport.fetch(request);
+  } }) } } as unknown as typeof env;
+  const submit = async (credentials: Awaited<ReturnType<typeof session>>, selected: string) => worker.fetch(new Request(`https://mutation.test/admin/runners/${runnerId}/${selected}`, {
+    method: "POST", headers: { origin: "https://mutation.test", cookie: `${ADMIN_SESSION_COOKIE}=${credentials.raw}; ${ADMIN_CSRF_COOKIE}=${credentials.csrf}` },
+    body: new URLSearchParams({ csrf_token: credentials.csrf, confirmation: runnerId, expected_execution_mode: "dedicated_user",
+      read: "true", edit: "false", shell: "false", job_control: "false" }),
+  }), localEnv, {} as ExecutionContext);
+  const denied = await submit(expired, action);
+  expect(rejection).toBe(403); expect(denied.status).toBe(403);
+  expect(await runInDurableObject(registry, owner => owner.getRunnerExecutionState(runnerId))).toEqual(before);
+  expect(transportCalls).toContain("/cancel-policy-mutation");
+  expect(await runInDurableObject(registry, owner => owner.verifyAdminSession(expired.hash, Date.now()))).toBeUndefined();
+  const path = "/admission-state", headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
+  const admission = await transport.fetch(new Request("https://runner.internal" + path, { headers }));
+  expect(await admission.json()).toMatchObject({ mutationId: null, mutationPhase: "idle" });
+  const fresh = await session();
+  expect((await submit(fresh, "permissions")).status).toBe(303);
 });
