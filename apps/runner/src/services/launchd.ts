@@ -4,12 +4,22 @@ import { safeServiceReportedIdentity } from "./values.js";
 import type { ServiceCommandExecutor } from "./contracts.js";
 import type { ServiceManagerAdapter } from "./contracts.js";
 import type { ServiceMode } from "./contracts.js";
+import type { ServiceManifestFilesystem } from "./contracts.js";
+import { isManagedService } from "./manifest.js";
 
-export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommandExecutor, execute: (file: string, args: readonly string[]) => Promise<void>): ServiceManagerAdapter {
+export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommandExecutor, execute: (file: string, args: readonly string[]) => Promise<void>, filesystem: Pick<ServiceManifestFilesystem, "read">): ServiceManagerAdapter {
   const platform = "darwin" as const;
 
     const domain = mode === "system" ? "system" : `gui/${process.getuid?.() ?? 0}`;
     const target = `${domain}/${MACOS_LABEL}`;
+    const loaded = async (): Promise<boolean> => {
+      const result = await executor.execute("launchctl", ["print", target]);
+      if (!nativeProbeReliable(result, "query")) throw new Error("launchd service state could not be verified");
+      return result.exitCode === 0;
+    };
+    const unload = async (): Promise<void> => {
+      if (await loaded()) await execute("launchctl", ["bootout", target]);
+    };
     return {
       platform, mode,
       install: async (manifest) => {
@@ -30,9 +40,17 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
         await execute("launchctl", ["enable", target]);
         await execute("launchctl", ["print", target]);
       },
-      stop: async () => execute("launchctl", ["kill", "SIGTERM", target]),
-      restart: async () => execute("launchctl", ["kickstart", "-k", target]),
-      uninstall: async () => execute("launchctl", ["bootout", target]),
+      // SIGTERM alone lets KeepAlive immediately respawn the process. Unload
+      // the native job while retaining its managed plist for a later restart.
+      stop: unload,
+      restart: async (manifest) => {
+        if (await loaded()) await execute("launchctl", ["kickstart", "-k", target]);
+        else {
+          if (!isManagedService(await filesystem.read(manifest.path) ?? "")) throw new Error("managed launchd service manifest is missing");
+          await execute("launchctl", ["bootstrap", domain, manifest.path]);
+        }
+      },
+      uninstall: unload,
       status: async (manifest) => {
         const result = await executor.execute("launchctl", ["print", target]);
         const match = /(?:user|UserName)\s*=\s*([^\s]+)/u.exec(result.stdout ?? "");
@@ -65,7 +83,8 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
         }
         const reliable = nativeProbeReliable(result, "query");
         const registered = reliable ? result.exitCode === 0 : undefined;
-        return { installed: result.exitCode === 0, active, ...(registered === undefined ? {} : { registered }), reliable, ...(identity === undefined ? {} : { identity }), ...(result.stderr === undefined || result.stderr.trim() === "" ? {} : { detail: result.stderr.trim().slice(0, 512) }) };
+        const installed = isManagedService(await filesystem.read(manifest.path) ?? "");
+        return { installed, active, ...(registered === undefined ? {} : { registered }), reliable, ...(identity === undefined ? {} : { identity }), ...(result.stderr === undefined || result.stderr.trim() === "" ? {} : { detail: result.stderr.trim().slice(0, 512) }) };
       },
     };
 

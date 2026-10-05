@@ -16,6 +16,7 @@ import type { ServiceManifest } from "../service.js";
 import type { ServiceManifestFilesystem } from "../service.js";
 import type { ServicePlatform } from "../service.js";
 import { servicePrivilegeState } from "../service.js";
+import { serviceCommands } from "../service.js";
 import { spawnSync } from "node:child_process";
 import { trustedWindowsEnvironment } from "../windows-tools.js";
 import { trustedWindowsRoot } from "../windows-tools.js";
@@ -132,13 +133,8 @@ export function assertSystemInstallationPrivilege(manifest: ServiceManifest, dep
   if (!elevated()) throw new Error("system Runner installation requires administrator/root privileges; rerun from an elevated administrator/root shell");
 }
 
-export function serviceCommandNames(action: "install" | "stop" | "restart" | "uninstall", manifest: ServiceManifest): readonly string[] {
-  if (manifest.platform === "linux") {
-    const prefix = manifest.mode === "user" ? "systemctl --user" : "systemctl";
-    if (action === "install") return [`${prefix} daemon-reload`, `${prefix} enable --now runmesh-runner.service`, `${prefix} is-active --quiet runmesh-runner.service`];
-    return [`${prefix} ${action === "uninstall" ? "disable --now" : action} runmesh-runner.service`];
-  }
-  return [];
+export function serviceCommandNames(action: "install" | "stop" | "restart" | "uninstall", manifest: ServiceManifest, registered?: boolean): readonly string[] {
+  return serviceCommands(action, manifest.platform, manifest.mode, registered);
 }
 
 /** Infer only the previously-installed mode when a legacy profile omitted it.

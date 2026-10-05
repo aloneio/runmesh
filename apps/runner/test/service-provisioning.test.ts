@@ -4,8 +4,118 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServiceManager, createServiceProvisioner, renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
+import { resolveTrustedWindowsTool } from "../src/windows-tools.js";
+
+function runSyntheticTaskProbe(script: string, state: "stopped" | "absent" | "running" | "queued" | "denied" | "unknown") {
+  const task = state === "absent" ? "throw [System.IO.FileNotFoundException]::new()"
+    : state === "denied" ? "throw [System.UnauthorizedAccessException]::new('synthetic access denied')"
+      : state === "unknown" ? "throw [System.InvalidOperationException]::new('synthetic unknown state')" : "$script:taskFixture";
+  // Replace COM construction inside a fresh PowerShell process. Every object
+  // below is synthetic; no host service or task is inspected.
+  const fixture = `$script:taskFixture = [pscustomobject]@{State=${state === "queued" ? 2 : state === "running" ? 4 : 3}; Definition=[pscustomobject]@{Principal=[pscustomobject]@{UserId='SYSTEM'}}};
+$script:taskFixture | Add-Member ScriptMethod GetInstances { [pscustomobject]@{Count=${state === "running" ? 1 : 0}} };
+$script:folderFixture = [pscustomobject]@{};
+$script:folderFixture | Add-Member ScriptMethod GetTask { ${task} };
+$script:serviceFixture = [pscustomobject]@{};
+$script:serviceFixture | Add-Member ScriptMethod Connect {};
+$script:serviceFixture | Add-Member ScriptMethod GetFolder { $script:folderFixture };
+function New-Object { param([string]$ComObject) if ($ComObject -ne 'Schedule.Service') { throw 'unexpected synthetic object' }; $script:serviceFixture };
+`;
+  return spawnSync(resolveTrustedWindowsTool("powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", fixture + script], {
+    encoding: "utf8", timeout: 12_000, windowsHide: true,
+  });
+}
 
 describe("native service package ownership", () => {
+  it("preserves a macOS registration when its native state probe is denied", async () => {
+    const manifest = renderService({ platform: "darwin", mode: "system" });
+    const calls: string[][] = [];
+    const manager = createServiceManager({ platform: "darwin", mode: "system", filesystem: { read: async () => manifest.content },
+      executor: { execute: async (file, args) => { calls.push([file, ...args]); return { exitCode: 1, stderr: "Operation not permitted" }; } } });
+    await expect(manager.stop(manifest)).rejects.toThrow("state could not be verified");
+    await expect(manager.restart(manifest)).rejects.toThrow("state could not be verified");
+    await expect(manager.uninstall(manifest)).rejects.toThrow("state could not be verified");
+    expect(calls.every(call => call[1] === "print")).toBe(true);
+  });
+
+  it.each([undefined, "<plist>foreign</plist>"])("keeps an unloaded macOS service stopped when its managed manifest is absent or changed", async content => {
+    const calls: string[][] = [];
+    const manager = createServiceManager({ platform: "darwin", mode: "system", filesystem: { read: async () => content },
+      executor: { execute: async (file, args) => { calls.push([file, ...args]); return { exitCode: 113, stderr: "Could not find service" }; } } });
+    const manifest = renderService({ platform: "darwin", mode: "system" });
+    await expect(manager.status?.(manifest)).resolves.toMatchObject({ installed: false, registered: false, active: false });
+    await expect(manager.restart(manifest)).rejects.toThrow("manifest is missing");
+    expect(calls.every(call => call[1] === "print")).toBe(true);
+  });
+
+  it.skipIf(process.platform !== "win32").each(["stopped", "absent", "running", "queued", "denied", "unknown"] as const)("evaluates the Windows stop probe against a synthetic %s task", async state => {
+    let script = "";
+    const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
+      execute: async (file, args) => { if (file === "powershell.exe") { script = args.at(-1)!; return { exitCode: 0, stdout: "stopped" }; } return { exitCode: 0 }; },
+    } });
+    await manager.stop(renderService({ platform: "win32", mode: "system" }));
+    const result = runSyntheticTaskProbe(script, state);
+    expect(result.error).toBeUndefined();
+    if (state === "running" || state === "queued") {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Runner task is still active");
+    } else if (state === "denied" || state === "unknown") {
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("absent");
+      expect(result.stderr).toContain(state === "denied" ? "synthetic access denied" : "synthetic unknown state");
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(state);
+    }
+  });
+
+  it.skipIf(process.platform !== "win32").each(["absent", "denied", "unknown"] as const)("classifies a synthetic Windows %s exception through public status", async state => {
+    const calls: string[][] = [];
+    const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
+      execute: async (file, args) => {
+        calls.push([file, ...args]);
+        if (file !== "powershell.exe") return { exitCode: 1, stderr: "native query unavailable" };
+        const result = runSyntheticTaskProbe(args.at(-1)!, state);
+        expect(result.error).toBeUndefined();
+        return { exitCode: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
+      },
+    } });
+    const status = await manager.status?.(renderService({ platform: "win32", mode: "system" }));
+    if (state === "absent") expect(status).toMatchObject({ installed: false, active: false, registered: false, reliable: true });
+    else {
+      expect(status).toMatchObject({ reliable: false });
+      expect(status?.registered).toBeUndefined();
+      await expect(manager.uninstall(renderService({ platform: "win32", mode: "system" }))).rejects.toThrow("confirmed stopped");
+      expect(calls.some(call => call.includes("/Delete"))).toBe(false);
+    }
+  });
+
+  it.each([0, 1])("keeps a running Windows task registered when stop returns %s but completion is unverified", async exitCode => {
+    const calls: string[][] = [];
+    const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
+      execute: async (file, args) => { calls.push([file, ...args]);
+        return file === "schtasks" ? { exitCode } : { exitCode: 1, stderr: "Runner task is still active" }; },
+    } });
+    await expect(manager.uninstall(renderService({ platform: "win32", mode: "system" }))).rejects.toThrow("confirmed stopped");
+    expect(calls.some(call => call.includes("/Delete"))).toBe(false);
+  });
+
+  it.each(["stopped", "absent"])("allows Windows task removal after an End error when native state is %s", async initial => {
+    let state = initial;
+    const calls: string[][] = [];
+    const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
+      execute: async (file, args) => { calls.push([file, ...args]);
+        if (file === "powershell.exe") return { exitCode: 0, stdout: state };
+        if (args[0] === "/End") return { exitCode: 1 };
+        if (args[0] === "/Delete") state = "absent";
+        return { exitCode: 0 }; },
+    } });
+    const manifest = renderService({ platform: "win32", mode: "system" });
+    await manager.uninstall(manifest);
+    await manager.uninstall(manifest);
+    expect(calls.filter(call => call.includes("/Delete"))).toHaveLength(initial === "stopped" ? 1 : 0);
+  });
+
   it("fails Linux installation when the process exits just after systemd accepts startup", async () => {
     vi.useFakeTimers();
     try {

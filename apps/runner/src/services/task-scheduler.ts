@@ -6,19 +6,38 @@ import type { ServiceManagerAdapter } from "./contracts.js";
 import type { ServiceMode } from "./contracts.js";
 import { WINDOWS_TASK_NAME } from "./values.js";
 
+/** PowerShell wraps COM method errors; the native HRESULT may be on an inner
+ * exception. Use one missing-task classifier for status, stop and cleanup. */
+export function windowsTaskMissingCatch(output: "json" | "text"): string {
+  const absent = output === "json" ? "[pscustomobject]@{ found=$false; absent=$true } | ConvertTo-Json -Compress" : "Write-Output 'absent'";
+  return `catch { $taskFailure=$_.Exception; while ($null -ne $taskFailure) { if ($taskFailure.HResult -eq -2147024894) { ${absent}; exit 0 }; $taskFailure=$taskFailure.InnerException }; throw }`;
+}
+
+/** Shared by service lifecycle and complete installation cleanup. Task deletion
+ * leaves running instances alive, so observe native completion before deleting. */
+export async function stopWindowsTask(executor: ServiceCommandExecutor): Promise<"stopped" | "absent"> {
+  // /End also fails for an already stopped or absent task. The COM observation
+  // distinguishes those ordinary outcomes from a task that continues to run.
+  await executor.execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
+  const script = "$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); $deadline=[DateTime]::UtcNow.AddSeconds(5); "
+    + `do { try { $t=$s.GetFolder('\\').GetTask('RunmeshRunner') } ${windowsTaskMissingCatch("text")}; `
+    + "if (([int]$t.State -eq 1 -or [int]$t.State -eq 3) -and ($t.GetInstances(0)).Count -eq 0) { Write-Output 'stopped'; exit 0 }; "
+    + "if ([DateTime]::UtcNow -ge $deadline) { throw 'Runner task is still active' }; Start-Sleep -Milliseconds 100 } while ($true)";
+  const result = await executor.execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+  const state = result.stdout?.trim();
+  if (result.exitCode !== 0 || (state !== "stopped" && state !== "absent")) throw new Error("Runner task could not be confirmed stopped");
+  return state;
+}
+
 export function createTaskSchedulerManager(mode: ServiceMode, executor: ServiceCommandExecutor, execute: (file: string, args: readonly string[]) => Promise<void>): ServiceManagerAdapter {
   const platform = "win32" as const;
 return {
     platform, mode,
     install: async (manifest) => { await execute("schtasks", ["/Create", "/TN", WINDOWS_TASK_NAME, "/XML", manifest.path, "/F"]); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); await execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]); },
-    stop: async () => execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]),
-    restart: async () => { await execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); },
+    stop: async () => { await stopWindowsTask(executor); },
+    restart: async () => { await stopWindowsTask(executor); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); },
     uninstall: async () => {
-      // `/Delete` does not terminate an already-running task. Best-effort
-      // termination prevents an old Runner from retaining a credential after
-      // uninstall; a not-running task is harmless and should not block delete.
-      await executor.execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
-      await execute("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
+      if (await stopWindowsTask(executor) !== "absent") await execute("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
     },
       status: async () => {
         const installed = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]);
@@ -31,7 +50,7 @@ return {
         // reported inactive rather than guessed active.
         let invariant: ServiceCommandResult | undefined;
         try {
-          invariant = await executor.execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); try { $task=$service.GetFolder('\\').GetTask('RunmeshRunner'); [pscustomobject]@{ found=$true; state=[int]$task.State; identity=[string]$task.Definition.Principal.UserId } | ConvertTo-Json -Compress } catch { if ($_.Exception.HResult -eq -2147024894) { [pscustomobject]@{ found=$false; absent=$true } | ConvertTo-Json -Compress; exit 0 }; throw }"]);
+          invariant = await executor.execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); try { $task=$service.GetFolder('\\').GetTask('RunmeshRunner'); [pscustomobject]@{ found=$true; state=[int]$task.State; identity=[string]$task.Definition.Principal.UserId } | ConvertTo-Json -Compress } ${windowsTaskMissingCatch("json")}`]);
         } catch {
           // Injected/older executors may not expose PowerShell. Fall through
           // to the conservative schtasks text probe below.
