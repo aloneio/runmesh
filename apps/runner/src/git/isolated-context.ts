@@ -17,6 +17,9 @@ import { tmpdir } from "node:os";
 import { trustedGitCwd } from "./trust.js";
 import { utimes } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
+import { gitMetadataValue, isGitRefName, symbolicGitRef } from "./ref-name.js";
+import type { FileHandle } from "node:fs/promises";
+import type { Stats } from "node:fs";
 
 /**
  * Build a throw-away Git directory containing only the current HEAD and
@@ -44,19 +47,19 @@ export async function createIsolatedGitContext(worktree: string, deadline?: numb
       mkdir(join(directory, "objects", "info"), { recursive: true }),
     ]);
 
-    const head = await readRegularText(join(gitDirectory, "HEAD"), 4_096);
-    const ref = /^ref:\s*(refs\/[A-Za-z0-9._/-]+)\s*$/u.exec(head.trim());
-    const safeHead = head.trim() + "\n";
-    if (ref?.[1] !== undefined) {
-      const hash = await resolveGitRef(gitDirectory, commonDirectory, ref[1]);
+    const head = gitMetadataValue(await readRefText(join(gitDirectory, "HEAD"), 4_096));
+    const ref = symbolicGitRef(head);
+    const safeHead = head + "\n";
+    if (ref !== undefined) {
+      const hash = await resolveGitRef(gitDirectory, commonDirectory, ref);
       // A branch without a commit is a valid freshly initialized repository;
       // leave its symbolic HEAD unresolved so Git reports the unborn branch.
       if (hash !== undefined) {
-        const refPath = join(directory, ref[1].replaceAll("/", "/"));
+        const refPath = join(directory, ref);
         await mkdir(dirname(refPath), { recursive: true });
         await writeFile(refPath, `${hash}\n`, { mode: 0o600 });
       }
-    } else if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/iu.test(head.trim())) {
+    } else if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/iu.test(head)) {
       throw new Error("the current Git HEAD is malformed");
     }
     await writeFile(join(directory, "HEAD"), safeHead, { mode: 0o600 });
@@ -134,27 +137,66 @@ async function locateCommonDirectory(gitDirectory: string): Promise<string> {
 }
 
 async function resolveGitRef(gitDirectory: string, commonDirectory: string, ref: string, depth = 0): Promise<string | undefined> {
-  if (depth > 4 || !/^refs\/[A-Za-z0-9._/-]+$/u.test(ref) || ref.split("/").some((part) => part === "" || part === "." || part === "..")) return undefined;
-  for (const root of [gitDirectory, commonDirectory]) {
-    const path = join(root, ref.replaceAll("/", "/"));
-    const info = await lstat(path).catch(() => undefined);
-    if (info === undefined) continue;
-    if (!info.isFile() || info.isSymbolicLink()) return undefined;
-    const value = (await readRegularText(path, 4_096)).trim();
+  if (depth > 4 || !isGitRefName(ref)) throw new Error("Git symbolic ref is malformed or cyclic");
+  for (const root of new Set([gitDirectory, commonDirectory])) {
+    const contents = await readLooseGitRef(root, ref);
+    if (contents === undefined) continue;
+    const value = gitMetadataValue(contents);
     if (/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/iu.test(value)) return value;
-    const symbolic = /^ref:\s*(refs\/[A-Za-z0-9._/-]+)$/u.exec(value);
-    return symbolic?.[1] === undefined ? undefined : resolveGitRef(gitDirectory, commonDirectory, symbolic[1], depth + 1);
+    const symbolic = symbolicGitRef(value);
+    if (symbolic === undefined) throw new Error("Git ref contents are malformed");
+    return resolveGitRef(gitDirectory, commonDirectory, symbolic, depth + 1);
   }
   const packed = join(commonDirectory, "packed-refs");
   const packedInfo = await lstat(packed).catch(() => undefined);
   if (packedInfo === undefined) return undefined;
   if (!packedInfo.isFile() || packedInfo.isSymbolicLink() || packedInfo.size > MAX_GIT_METADATA_BYTES) return undefined;
-  const lines = (await readRegularText(packed, MAX_GIT_METADATA_BYTES)).split(/\r?\n/u);
+  const lines = (await readRefText(packed, MAX_GIT_METADATA_BYTES)).split(/\r?\n/u);
   for (const line of lines) {
-    const match = /^([0-9a-f]{40}(?:[0-9a-f]{24})?)\s+(refs\/[A-Za-z0-9._/-]+)$/iu.exec(line);
+    const match = /^([0-9a-f]{40}(?:[0-9a-f]{24})?) ([\s\S]+)$/iu.exec(line);
     if (match?.[2] === ref && match[1] !== undefined) return match[1];
   }
   return undefined;
+}
+
+async function readLooseGitRef(root: string, ref: string): Promise<string | undefined> {
+  const directories: { path: string; info: Stats; handle?: FileHandle }[] = [];
+  const parts = ref.split("/");
+  let parent = root;
+  try {
+    // A regular leaf can still be reached through an outside symlink/junction.
+    // Check every directory, pin Linux lookups to open directory descriptors,
+    // and verify identities again before publishing the copied ref value.
+    for (let index = 0; index < parts.length; index += 1) {
+      const path = index === 0 ? root : join(parent, parts[index - 1]!);
+      const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (info === undefined) return undefined;
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Git ref directory is not a regular directory");
+      const handle = process.platform === "linux" ? await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) : undefined;
+      directories.push({ path, info, ...(handle === undefined ? {} : { handle }) });
+      if (handle !== undefined) {
+        const opened = await handle.stat();
+        if (opened.dev !== info.dev || opened.ino !== info.ino) throw new Error("Git ref directory changed while being opened");
+      }
+      parent = handle === undefined ? path : `/proc/self/fd/${handle.fd}`;
+    }
+    const value = await readRefText(join(parent, parts.at(-1)!), 4_096).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    for (const { path, info } of directories) {
+      const after = await lstat(path);
+      if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) {
+        throw new Error("Git ref directory changed during inspection");
+      }
+    }
+    return value;
+  } finally {
+    await Promise.all(directories.map(({ handle }) => handle?.close()));
+  }
 }
 
 async function gitObjectFormat(gitDirectory: string, commonDirectory: string): Promise<"sha1" | "sha256"> {
@@ -202,4 +244,10 @@ async function readRegularBytes(path: string, maxBytes: number): Promise<Buffer>
 
 async function readRegularText(path: string, maxBytes: number): Promise<string> {
   return (await readRegularBytes(path, maxBytes)).toString("utf8");
+}
+
+async function readRefText(path: string, maxBytes: number): Promise<string> {
+  // Ref names are identities: decoding invalid bytes as U+FFFD could select a
+  // different real ref with that name. Keep literal BOM characters as well.
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await readRegularBytes(path, maxBytes));
 }

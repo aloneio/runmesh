@@ -74,6 +74,7 @@
         "apps/runner/test/git-directory-race.test.ts",
         "apps/runner/test/git-execution.test.ts",
         "apps/runner/test/git-ownership.test.ts",
+        "apps/runner/test/git-refs.test.ts",
         "apps/runner/test/git-root-workspace.test.ts",
         "apps/runner/test/history-reporting-transport.test.ts",
         "apps/runner/test/history-upload.test.ts",
