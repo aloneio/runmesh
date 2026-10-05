@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { summarizeVitest } from "./test-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "./ui-browser-contract.mjs";
-import { jobCompletionDiagnostic, mcpHttpDiagnostic } from "./mcp-diagnostics.mjs";
+import { jobCompletionDiagnostic, mcpHttpDiagnostic, mcpToolResultFailureDiagnostic } from "./mcp-diagnostics.mjs";
 import { uiNavigationFailureDiagnostic } from "./ui-browser-diagnostics.mjs";
 
 export const REQUIRED_BROWSER_TEST = "renders stable single-locale dashboard and navigation in Chromium";
@@ -35,7 +35,10 @@ function failureDetails(messages) {
   // input, then emit fixed labels and public source coordinates only.
   const text = stripVTControlCharacters((Array.isArray(messages) ? messages : [messages]).slice(0, 8)
     .filter(value => typeof value === "string").map(value => value.slice(0, 16384)).join("\n")).replaceAll("\\", "/");
-  const details = { kind: failureKinds.find(([pattern]) => pattern.test(text))?.[1] ?? "unclassified" };
+  const toolResult = mcpToolResultFailureDiagnostic(text);
+  // A diagnostic code such as "timeout" must not reclassify its assertion.
+  const failureText = toolResult === undefined ? text : text.replace(/^RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=.*$/gmu, "");
+  const details = { kind: failureKinds.find(([pattern]) => pattern.test(failureText))?.[1] ?? "unclassified" };
   const httpStatus = /^(?:Error: )?RUNMESH_E2E_MCP_HTTP_STATUS=([1-5]\d{2})\r?$/mu.exec(text)?.[1];
   if (httpStatus !== undefined) {
     details.kind = "mcp_http_failure"; details.http_status = Number(httpStatus);
@@ -47,6 +50,7 @@ function failureDetails(messages) {
     if (httpStatus === undefined) details.kind = "job_completion_failure";
     details.job_completion = jobCompletion;
   }
+  if (toolResult !== undefined) details.mcp_tool_result = toolResult;
   const source = /(?:^|[\s(/])((?:scripts\/[a-z-]+\.mjs|test\/e2e\/mcp-runner\.e2e\.test\.ts)):(\d{1,7}):(\d{1,5})(?=$|[\s)])/gmu;
   for (const match of text.matchAll(source)) {
     if ((match[1] === "test/e2e/mcp-runner.e2e.test.ts" || browserSources.some(name => match[1] === "scripts/" + name))

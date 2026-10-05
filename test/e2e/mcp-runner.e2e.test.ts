@@ -12,7 +12,7 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -555,18 +555,18 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(existsSync(join(workspace, "ga-moved.txt"))).toBe(false);
   });
 
-  it("GA-003 real MCP CJK search returns bounded successful pages with an advancing cursor", async () => {
+  it("GA-003 real MCP CJK search returns bounded successful pages with an advancing cursor", async ({ onTestFinished }) => {
     const directory = join(workspace, "ga-search"); await mkdir(directory);
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
     for (let index = 0; index < 10; index++) await writeFile(join(directory, `${index}.txt`), (`needle${"中".repeat(4080)}\n`).repeat(10));
     const first = await mcpTool("inspect", { action: "search", workspace_id: "workspace-1", path: "ga-search", query: "needle" });
-    expect(first.isError).not.toBe(true);
+    expect(first.isError, mcpToolResultDiagnostic("inspect_search_initial", first)).not.toBe(true);
     expect((first.structuredContent?.results as unknown[]).length).toBeGreaterThan(0);
     expect(typeof first.structuredContent?.next_cursor).toBe("string");
     const second = await mcpTool("inspect", { action: "search", workspace_id: "workspace-1", path: "ga-search", query: "needle", cursor: first.structuredContent?.next_cursor });
-    expect(second.isError).not.toBe(true);
+    expect(second.isError, mcpToolResultDiagnostic("inspect_search_continuation", second)).not.toBe(true);
     expect(Number(second.structuredContent?.next_cursor)).toBeGreaterThan(Number(first.structuredContent?.next_cursor));
     expect(Buffer.byteLength(JSON.stringify(first.structuredContent))).toBeLessThan(65536);
-    await rm(directory, { recursive: true });
   });
 
   it("GA-011 escaped patch input inside the text limit is rejected before forwarding or mutation", async () => {
