@@ -1,12 +1,8 @@
-import { runnerSummary, clientSummary, clientDetail } from "../application/admin-projections.js";
-import type { AdminData, AdminNotice } from "../contracts/admin-views.js";
-import { arrayField } from "../values.js";
-import { json } from "../platform/control-plane.js";
-import type { ClientViewModel } from "../contracts/admin-views.js";
-import { record } from "../values.js";
+import { runnerSummary, clientSummary } from "../application/admin-projections.js";
+import type { AdminData, AdminNotice, ClientViewModel, RunnerSummaryViewModel } from "../contracts/admin-views.js";
+import { arrayField, record } from "../values.js";
+import { json, registryGet } from "../platform/control-plane.js";
 import type { RegistryFeatureHealth } from "../contracts/feature-health.js";
-import { registryGet } from "../platform/control-plane.js";
-import type { RunnerSummaryViewModel } from "../contracts/admin-views.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { recordArray, registryArray, registryRecord } from "./admin-read.js";
 
@@ -61,15 +57,15 @@ export async function loadAdminPageData(env: WorkerEnv, section: "dashboard" | "
     const runners = recordArray(snapshotBody?.runners) ?? (includeJobs ? await registryGet(env, "/runners").then(response => registryArray(response, "runners")) : undefined);
     if (runners === undefined) return undefined;
     const jobs = includeJobs ? recordArray(snapshotBody?.jobs) : undefined;
-    const projectedRunners = (runners as unknown as RunnerSummaryViewModel[]).map(runnerSummary);
-    return { clients: (clients as unknown as ClientViewModel[]).map(clientSummary), runners: projectedRunners, jobs: jobs ?? [], snapshot: { runners: projectedRunners, ...(jobs === undefined ? {} : { jobs }) }, notices: includeJobs && jobs === undefined ? [...notices, { title: "Job snapshot unavailable", message: "Job metadata is temporarily unavailable." }] : notices };
+    const projectedRunners = runners.map(runnerSummary);
+    return { clients: clients.map(clientSummary), runners: projectedRunners, jobs: jobs ?? [], snapshot: { runners: projectedRunners, ...(jobs === undefined ? {} : { jobs }) }, notices: includeJobs && jobs === undefined ? [...notices, { title: "Job snapshot unavailable", message: "Job metadata is temporarily unavailable." }] : notices };
   } catch { return undefined; }
 }
 
 type ClientDetailData =
   | { state: "missing" }
   | { state: "unavailable" }
-  | { state: "loaded"; client: Record<string, unknown>; runners: RunnerSummaryViewModel[]; overrides: Record<string, unknown>[]; notices: readonly AdminNotice[] };
+  | { state: "loaded"; client: ClientViewModel; runners: RunnerSummaryViewModel[]; overrides: Record<string, unknown>[]; notices: readonly AdminNotice[] };
 
 /** A failed permission read cannot be rendered as an empty, editable list. */
 export async function loadClientDetailData(env: WorkerEnv, clientId: string): Promise<ClientDetailData> {
@@ -81,10 +77,10 @@ export async function loadClientDetailData(env: WorkerEnv, clientId: string): Pr
       loadFeatureNotices(env),
     ]);
     if (clients === undefined) return { state: "unavailable" };
-    const client = clients.find(value => value.client_id === clientId);
+    const client = clients.map(clientSummary).find(value => value.client_id === clientId);
     if (client === undefined) return { state: "missing" };
     if (runners === undefined || overrides === undefined) return { state: "unavailable" };
-    return { state: "loaded", client: clientDetail(client), runners: (runners as unknown as RunnerSummaryViewModel[]).map(runnerSummary), overrides, notices };
+    return { state: "loaded", client, runners: runners.map(runnerSummary), overrides, notices };
   } catch { return { state: "unavailable" }; }
 }
 

@@ -34,9 +34,9 @@ async function fixture(native: boolean) {
   });
   let unavailableAction: "delete" | "revoke" | undefined;
   let unavailableRead: string | undefined;
-  let malformedRead = false;
+  let malformedRead: boolean | Record<string, unknown> = false;
   const registry = { idFromName: () => id, get: () => ({ fetch: (request: Request) => {
-    if (request.method === "GET" && new URL(request.url).pathname === unavailableRead) return Promise.resolve(malformedRead ? Response.json({}) : new Response("unavailable", { status: 503 }));
+    if (request.method === "GET" && new URL(request.url).pathname === unavailableRead) return Promise.resolve(malformedRead ? Response.json(malformedRead === true ? {} : malformedRead) : new Response("unavailable", { status: 503 }));
     if ((unavailableAction === "delete" && request.method === "DELETE")
       || (unavailableAction === "revoke" && new URL(request.url).pathname.endsWith("/revoke"))) return Promise.resolve(new Response("unavailable", { status: 503 }));
     return stub.fetch(request);
@@ -50,7 +50,7 @@ async function fixture(native: boolean) {
   });
   const mcp = () => request("/" + secret + "/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
-  return { stub, clientId, otherId, internal, open, submit, mcp, failAction: (action: "delete" | "revoke") => { unavailableAction = action; }, failRead: (path?: string, malformed = false) => { unavailableRead = path; malformedRead = malformed; } };
+  return { stub, clientId, otherId, internal, open, submit, mcp, failAction: (action: "delete" | "revoke") => { unavailableAction = action; }, failRead: (path?: string, malformed: boolean | Record<string, unknown> = false) => { unavailableRead = path; malformedRead = malformed; } };
 }
 
 it.each([false, true])("deletes active MCP clients and their overrides when computer access is %s", async native => {
@@ -138,6 +138,28 @@ it.each(["rename", "scopes", "active-runner"])("keeps invalid %s form submission
   const response = await f.submit(action);
   expect(response.status).toBe(400);
   expect(await response.text()).toContain('aria-current="page" href="/admin/clients"');
+  expect((await f.mcp()).status).toBe(200);
+});
+
+it.each([
+  ["missing scopes", { scopes: null }],
+  ["unknown scope", { scopes: ["coding:all"] }],
+  ["missing revocation timestamp", { revoked_at_ms: undefined }],
+  ["missing identifier", { client_id: undefined }],
+] as const)("does not render invalid client display data as editable permissions: %s", async (_label, invalid) => {
+  const f = await fixture(true);
+  f.failRead("/auth/clients", { clients: [{ client_id: f.clientId, label: "Target client", scopes: ["coding:read"],
+    revoked_at_ms: null, last_used_at_ms: null, active_runner_id: null, ...invalid }] });
+  for (const page of ["/admin/clients", "/admin/clients/" + encodeURIComponent(f.clientId)]) {
+    const response = await f.open(page);
+    expect(response.status).toBe(503);
+    const body = await response.text();
+    expect(body).not.toContain('class="scope-editor-form"');
+    expect(body).not.toContain('action="/admin/clients/client%3Atarget/delete"');
+    expect(response.headers.get("set-cookie")).toBeNull();
+  }
+  f.failRead();
+  expect((await f.open("/admin/clients/" + encodeURIComponent(f.clientId))).status).toBe(200);
   expect((await f.mcp()).status).toBe(200);
 });
 

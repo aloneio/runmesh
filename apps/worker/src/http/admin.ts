@@ -102,7 +102,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     if (data.state === "unavailable") return adminClientError(503, "Client details could not be loaded. Try again.");
     if (data.state === "missing") return adminClientError(404, "MCP client was not found.");
     const { client, runners, overrides, notices } = data;
-    return html(adminDocument(`${typeof client.label === "string" ? client.label : clientDetail[1]} · MCP Client`, clientDetailPage(client, runners, overrides, csrf), "clients", notices));
+    return html(adminDocument(`${client.label} · MCP Client`, clientDetailPage(client, runners, overrides, csrf), "clients", notices));
   }
 
   if (request.method === "GET" && runnerDetail !== null) {

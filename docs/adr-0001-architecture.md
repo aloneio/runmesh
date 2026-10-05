@@ -26,10 +26,10 @@ The dashboard renders installation commands and service manifests for an operato
 
 Protocol additions must remain explicit. The dashboard uses nonces for its application script; inline styles still require `style-src 'unsafe-inline'`. Deployed quota behavior, edge-log redaction and external MCP-client compatibility need environment-specific acceptance checks.
 
-## Current security contract (0.1.4; publication status in release readiness)
+## Security contract recorded for 0.1.4
 
-First administrator setup is CSRF-protected, same-origin and atomic first-success-wins. Complete it before exposing the instance to untrusted visitors. The default Runner
-is `dedicated_user`; the default new MCP client is `coding:read`. Existing
+First administrator setup is CSRF-protected, same-origin and atomic first-success-wins. Complete it before exposing the instance to untrusted visitors. In 0.1.4, the default Runner
+was `dedicated_user` and the default new MCP client was `coding:read`. Existing
 permissions are unchanged. Requested tool content is relayed to its authorized
 client but excluded from durable MCP audit. Audit reads have a seven-day visibility window and each store has a 1,000-entry cap per Runner; physical cleanup can lag. See the [security model](security.md) and [history retention](quota-resilience.md) for storage and deletion limits.
 
@@ -44,3 +44,9 @@ verification. Development selects only its separately verified dev prereleases. 
 ## Amendment — 2026-09-14: optional history isolation
 
 The quota work adds D1 for optional metadata audit while Registry retains credential and current-authorization authority. The v2 Registry gains additive retention counters/indexes and per-client recording preferences. The amendment preserves outbound transport, local Job authority and immutable Runner assets. See [recording and retention](quota-resilience.md) for recording semantics, quota limits and migration details.
+
+## Amendment — 2026-10-05: client display contracts
+
+With central sharing enabled, a new MCP client defaults to **MCP and Skills**, with an empty native scope list. Choosing **MCP, Skills and computer access** exposes the native permission choices. The default Runner execution mode remains `dedicated_user`.
+
+Administration queries decode Registry responses into display contracts before rendering. Client lists and details share one projection; pages consume the resulting type directly. This keeps storage fields separate from presentation and gives malformed responses the same unavailable-data handling as a failed read.
