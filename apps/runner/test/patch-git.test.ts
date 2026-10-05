@@ -117,6 +117,35 @@ describe("fs.apply_patch", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("keeps complete change totals when the preview response is truncated", async () => {
+    const test = await fixture();
+    try {
+      const paths = Array.from({ length: 6 }, (_, index) => `large-${index}.txt`);
+      const content = `${Array.from({ length: 24 }, (_, index) => `${index}:${"x".repeat(1_100)}`).join("\n")}\n`;
+      await Promise.all(paths.map((path) => writeFile(join(test.root, path), content)));
+      const result = await patch(test.workspace).preview({ workspace_id: test.workspace.workspaceId,
+        patch: envelope([...paths.map((path) => `*** Delete File: ${path}`), "*** Add File: last.txt\n+last"].join("\n")) });
+      expect(result).toMatchObject({ insertions: 1, deletions: 144, previews_truncated: true });
+      expect(result.changed_paths).toHaveLength(7);
+      expect((result.previews as unknown[]).length).toBeLessThan(7);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(48 * 1_024);
+      expect((await readdir(test.root)).sort()).toEqual(paths);
+      await expect(readFile(join(test.root, paths[0]!), "utf8")).resolves.toBe(content);
+    } finally { await test.cleanup(); }
+  });
+
+  it("marks a shortened single-line preview as truncated", async () => {
+    const test = await fixture();
+    try {
+      const result = await patch(test.workspace).preview({ workspace_id: test.workspace.workspaceId,
+        patch: envelope(`*** Add File: long.txt\n+${"x".repeat(2_048)}`) });
+      expect(result).toMatchObject({ insertions: 1, deletions: 0, previews_truncated: false,
+        previews: [{ path: "long.txt", truncated: true }] });
+      expect((result.previews as { diff: string }[])[0]!.diff).not.toContain("x".repeat(1_025));
+      expect(await readdir(test.root)).toEqual([]);
+    } finally { await test.cleanup(); }
+  });
+
   it("rejects missing, ambiguous, and overlapping hunk context before writing", async () => {
     const test = await fixture();
     try {
