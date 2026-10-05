@@ -60,10 +60,10 @@ export class PackedJobHistory {
     if (!Array.isArray(values) || values.length > MAX_JOBS) throw new JobHistoryUnavailableError();
     return values.map((v) => JobMetadataSchema.parse(v)).filter((job) => !terminal.has(job.status) || job.updated_at_ms > now - days * DAY);
   }
-  public merge(runnerId: string, lifecycle: string, incoming: readonly JobMetadata[], currentSettings: () => JobHistorySettings | undefined, now = Date.now()): Promise<{ recorded: boolean; updated_at_ms: number | null; deferred?: boolean }> {
-    return this.write(runnerId, lifecycle, () => this.mergeCurrent(runnerId, lifecycle, incoming, currentSettings, now));
+  public merge(runnerId: string, lifecycle: string, incoming: readonly JobMetadata[], currentSettings: () => JobHistorySettings | undefined, recordableNewJobIds: (jobs: readonly JobMetadata[]) => ReadonlySet<string>, now = Date.now()): Promise<{ recorded: boolean; updated_at_ms: number | null; deferred?: boolean }> {
+    return this.write(runnerId, lifecycle, () => this.mergeCurrent(runnerId, lifecycle, incoming, currentSettings, recordableNewJobIds, now));
   }
-  private async mergeCurrent(runnerId: string, lifecycle: string, incoming: readonly JobMetadata[], currentSettings: () => JobHistorySettings | undefined, now: number): Promise<{ recorded: boolean; updated_at_ms: number | null; deferred?: boolean }> {
+  private async mergeCurrent(runnerId: string, lifecycle: string, incoming: readonly JobMetadata[], currentSettings: () => JobHistorySettings | undefined, recordableNewJobIds: (jobs: readonly JobMetadata[]) => ReadonlySet<string>, now: number): Promise<{ recorded: boolean; updated_at_ms: number | null; deferred?: boolean }> {
     const initial = currentSettings();
     if (initial === undefined || initial.mode === "off") return { recorded: false, updated_at_ms: null };
     if (Date.now() < this.disabledUntil) throw new JobHistoryUnavailableError();
@@ -80,16 +80,23 @@ export class PackedJobHistory {
         if (settings.mode === "batched" && old !== null && old.updated_at_ms > now - settings.interval_seconds * 1000) return { recorded: false, updated_at_ms: old.updated_at_ms, deferred:true };
         if (old === null && incoming.length === 0) return { recorded:false,updated_at_ms:null };
         const map = new Map(this.decode(old, settings.retention_days, now).map((job) => [job.job_id, job]));
+        // Registry refreshes each client's capture decision once per batch,
+        // after this read and on every CAS retry; no per-Job D1 lookup is needed.
+        const recordable = recordableNewJobIds(incoming);
         for (const value of incoming) {
           const job = JobMetadataSchema.parse(value);
           if (job.runner_id !== undefined && job.runner_id !== runnerId) throw new JobHistoryUnavailableError();
           if (terminal.has(job.status) && job.updated_at_ms <= now - settings.retention_days * DAY) continue;
           const prior = map.get(job.job_id);
+          // Capture preferences govern first admission. Already archived Jobs
+          // must still reach their terminal state after a client opts out.
+          if (prior === undefined && !recordable.has(job.job_id)) continue;
           if (prior !== undefined && prior.workspace_id !== job.workspace_id) throw new JobHistoryUnavailableError();
           if (prior !== undefined && (prior.updated_at_ms > job.updated_at_ms || statusRank(prior.status) > statusRank(job.status) || (terminal.has(prior.status) && prior.status !== job.status))) continue;
           map.set(job.job_id, { ...job, runner_id: runnerId });
         }
         const jobs = [...map.values()].sort((a,b) => b.updated_at_ms-a.updated_at_ms || b.job_id.localeCompare(a.job_id)).slice(0,MAX_JOBS);
+        if (old === null && jobs.length === 0) return { recorded: false, updated_at_ms: null };
         const body = JSON.stringify(jobs);
         if (new TextEncoder().encode(body).byteLength > MAX_BYTES) throw new JobHistoryUnavailableError();
         if (old?.jobs_json === body && old.retention_days === settings.retention_days) return { recorded: false, updated_at_ms: old.updated_at_ms };

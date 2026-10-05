@@ -24,7 +24,7 @@ async function fixture(test:(instance:RegistryDO,state:DurableObjectState,send:S
     state.storage.sql.exec("UPDATE runners SET state='online',session_id='history-session',last_heartbeat_ms=? WHERE runner_id='r'",now);
     const identity={epoch:fence.runner.connection_epoch,credential_version:fence.runner.credential_version,lifecycle_id:fence.lifecycle_id,session_id:"history-session",now_ms:now};
     const send:Send=async(action,input,method="POST")=>{
-      const path=`/runners/r/${action}`,body=method==="GET"?"":JSON.stringify(input);
+      const path=action.startsWith("/")?action:`/runners/r/${action}`,body=method==="GET"?"":JSON.stringify(input);
       return instance.fetch(new Request(`https://registry.internal${path}`,{method,headers:await internalHeaders(env.INTERNAL_CONTROL_SECRET,method,path,body),...(method==="GET"?{}:{body})}));
     };
     await test(instance,state,send,identity,prepare);
@@ -99,14 +99,90 @@ it("archive failure reports degraded history without changing Runner availabilit
   });
 });
 
-it("empty and entirely opted-out snapshots never open the D1 archive", async () => {
+it("empty snapshots never open the D1 archive", async () => {
   await fixture(async (instance, state, send, identity,prepare) => {
     prepare.mockImplementation(() => { throw new Error("empty archive must not be opened"); });
     expect(await (await send("sync", sync(identity, []))).json()).toMatchObject({ history_status: "unchanged" });
-    instance.setJobRecording("c", false, Date.now());
-    expect(await (await send("sync", sync(identity))).json()).toMatchObject({ history_status: "unchanged" });
     expect(prepare).not.toHaveBeenCalled();
     expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n).toBe(0);
+  });
+});
+
+it.each([1, 100])("checks an opted-out batch of %s new Jobs with one snapshot read and no snapshot writes", async count => {
+  await fixture(async (instance, _state, send, identity, prepare) => {
+    instance.setJobRecording("c", false, Date.now());
+    prepare.mockClear();
+    expect(await (await send("sync", sync(identity, Array.from({ length: count }, (_, index) => `new-${index}`)))).json())
+      .toMatchObject({ history_status: "unchanged" });
+    expect(prepare.mock.calls.filter(([sql]) => sql.startsWith("SELECT jobs_json"))).toHaveLength(1);
+    expect(prepare.mock.calls.some(([sql]) => /^(INSERT INTO|UPDATE) runmesh_job_snapshots_v1/.test(sql))).toBe(false);
+    expect((await (await send("jobs", {}, "GET")).json() as { jobs: unknown[] }).jobs).toEqual([]);
+  });
+});
+
+it.each(["d1", "sqlite"] as const)("%s updates archived Jobs across opt-out and re-enabling without backfilling unrecorded Jobs", async backend => {
+  await fixture(async (_instance, _state, send, identity) => {
+    expect((await send("history-settings", { ...DEFAULT_JOB_HISTORY, mode: "immediate" })).status).toBe(200);
+    const createdAt = Date.now() - 1000;
+    const job = (jobId: string, status: "running" | "succeeded", created = createdAt) => ({
+      job_id: jobId, runner_id: "r", workspace_id: "w", status, created_at_ms: created, updated_at_ms: Date.now(), created_by_client_id: "c",
+    });
+    const upload = async (sequence: number, jobs: ReturnType<typeof job>[]) => {
+      const payload = sync(identity, []);
+      return send("sync", { ...payload, message: { ...(payload.message as object), sync_sequence: sequence, jobs,
+        extensions: { runmesh_history_ack: true } } });
+    };
+    const list = async () => (await (await send("jobs", {}, "GET")).json() as { jobs: Array<{ job_id: string; status: string }> }).jobs;
+    expect((await upload(1, [job("during-off", "running"), job("after-on", "running")])).status).toBe(200);
+    expect((await send("/auth/clients/c/recording", { record_jobs: false })).status).toBe(200);
+    expect((await upload(2, [job("during-off", "succeeded"), job("unrecorded", "running")])).status).toBe(200);
+    expect(await list()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ job_id: "during-off", status: "succeeded" }),
+      expect.objectContaining({ job_id: "after-on", status: "running" }),
+    ]));
+    expect((await list()).some(value => value.job_id === "unrecorded")).toBe(false);
+    expect((await send("/auth/clients/c/recording", { record_jobs: true })).status).toBe(200);
+    expect((await upload(3, [job("after-on", "succeeded"), job("unrecorded", "succeeded"), job("new-window", "succeeded", Date.now())])).status).toBe(200);
+    const result = await list();
+    expect(result).toHaveLength(3);
+    expect(result).toEqual(expect.arrayContaining([
+      expect.objectContaining({ job_id: "during-off", status: "succeeded" }),
+      expect.objectContaining({ job_id: "after-on", status: "succeeded" }),
+      expect.objectContaining({ job_id: "new-window", status: "succeeded" }),
+    ]));
+  }, backend);
+});
+
+it.each(["off", "new-window"])("uses current %s recording preferences after an archive read", async change => {
+  await fixture(async (_instance, _state, send, identity, prepare) => {
+    expect((await send("history-settings", { ...DEFAULT_JOB_HISTORY, mode: "immediate" })).status).toBe(200);
+    const createdAt = Date.now() - 1000;
+    const job = (jobId: string, status: string) => ({ job_id: jobId, runner_id: "r", workspace_id: "w", status,
+      created_at_ms: createdAt, updated_at_ms: Date.now(), created_by_client_id: "c" });
+    const upload = async (jobs: ReturnType<typeof job>[]) => {
+      const payload = sync(identity, []);
+      return send("sync", { ...payload, message: { ...(payload.message as object), jobs } });
+    };
+    expect((await upload([job("recorded", "running")])).status).toBe(200);
+    let changed = false;
+    const wrap = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => new Proxy(statement, { get(target, key) {
+      if (key === "bind") return (...args: any[]) => wrap(target.bind(...args), sql);
+      if (key === "first") return async () => {
+        const row = await target.first();
+        if (!changed && sql.startsWith("SELECT jobs_json")) {
+          changed = true;
+          expect((await send("/auth/clients/c/recording", { record_jobs: false })).status).toBe(200);
+          if (change === "new-window") expect((await send("/auth/clients/c/recording", { record_jobs: true })).status).toBe(200);
+        }
+        return row;
+      };
+      const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    prepare.mockImplementation(sql => wrap(db.prepare(sql), sql));
+    expect((await upload([job("recorded", "succeeded"), job("late-new", "running")])).status).toBe(200);
+    expect(changed).toBe(true);
+    const result = await (await send("jobs", {}, "GET")).json() as { jobs: unknown[] };
+    expect(result.jobs).toEqual([expect.objectContaining({ job_id: "recorded", status: "succeeded" })]);
   });
 });
 
@@ -149,7 +225,7 @@ it.each([7, 1])("overlapping settings requests keep the latest retention after a
 
 it.each([true, false])("reporting capability negotiation is explicit, new peer=%s", async capable => {
   await fixture(async (_instance, _state, send, identity) => {
-    const response = await send("connect", { session_id: "new-reporting-session", credential_version: identity.credential_version,
+    const response = await send("connect", { session_id: "new-reporting-session", credential_version: identity.credential_version, lifecycle_id: identity.lifecycle_id,
       now_ms: Date.now(), min_protocol_version: 2, max_protocol_version: 2,
       metadata: { runner_id: "r", runner_version: "0.1.3", platform: "test", architecture: "test",
         capabilities: { filesystem: true, process_execution: true, workspace_sync: true, pty: false, network_access: false,

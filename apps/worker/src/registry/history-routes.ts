@@ -326,21 +326,24 @@ export function createRunnerHistoryRoutes(ports: RunnerHistoryPorts): (request: 
       if (settings.mode === "off") return Response.json({
         history_status: "disabled"
       });
-      const clients = new Map<string, McpClientRecord | undefined>();
-      const eligible = jobs.filter(job => {
-        if (job.created_by_client_id === undefined) return true;
-        if (!clients.has(job.created_by_client_id)) clients.set(job.created_by_client_id, ports.getMcpClient(job.created_by_client_id));
-        const client = clients.get(job.created_by_client_id);
-        return client !== undefined && client.record_jobs !== false && job.created_at_ms >= (client.record_jobs_since_ms ?? 0);
-      });
-      // Empty/ineligible updates are not deletions. Retention has its own
-      // bounded cleanup path; do not open D1 just to merge nothing.
-      if (eligible.length === 0) return Response.json({
+      const recordableNewJobIds = (batch: readonly JobMetadata[]): ReadonlySet<string> => {
+        const clients = new Map<string, McpClientRecord | undefined>();
+        return new Set(batch.filter(job => {
+          if (job.created_by_client_id === undefined) return true;
+          if (!clients.has(job.created_by_client_id)) clients.set(job.created_by_client_id, ports.getMcpClient(job.created_by_client_id));
+          const client = clients.get(job.created_by_client_id);
+          return client !== undefined && client.record_jobs !== false && job.created_at_ms >= (client.record_jobs_since_ms ?? 0);
+        }).map(job => job.job_id));
+      };
+      // Empty updates are not deletions. A nonempty batch needs one bounded
+      // snapshot read: an opted-out client can still update an archived Job.
+      // Registry owns first-admission decisions; the sink knows which Jobs exist.
+      if (jobs.length === 0) return Response.json({
         history_status: "unchanged"
       });
       try {
         if (ports.packedJobs === undefined) throw new Error("history unavailable");
-        const saved = await ports.packedJobs.merge(runnerId, lifecycle, eligible, () => currentHistorySettings(runnerId, lifecycle));
+        const saved = await ports.packedJobs.merge(runnerId, lifecycle, jobs, () => currentHistorySettings(runnerId, lifecycle), recordableNewJobIds);
         return Response.json({
           history_status: saved.recorded ? "recorded" : saved.deferred ? "deferred" : "unchanged",
           updated_at_ms: saved.updated_at_ms

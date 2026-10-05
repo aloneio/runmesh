@@ -12,7 +12,7 @@ Jobs created with recording disabled stay excluded from upload candidates and th
 
 Retries with the same valid launch identity return the original Job and its capture decision. A queued launch receives fresh authorization, which can further restrict recording. An already unrecorded Job stays unrecorded when preferences are re-enabled.
 
-Preference changes apply at cloud archive admission and new launches. A previously allowed Job may still send metadata for cloud filtering, and an upload already admitted may complete. Existing archived history follows its retention settings; re-enabling starts a new capture window.
+Preference changes apply at cloud archive admission and new launches. A previously allowed Job may still send metadata for cloud filtering, and an upload already admitted may complete. Previously archived Jobs can continue state updates; re-enabling starts a new capture window for first-time recording. Existing history follows its retention settings.
 
 ## Upload behavior
 
@@ -35,14 +35,14 @@ Recovered recordable `unknown` processes retain a bounded reconciliation opportu
 
 Each capture contains at most **500 metadata records**, subject to wire and local-retention limits. A connection retains one captured payload. Treat this as a recent snapshot: local and cloud retention can remove records, so keep independent records for a complete long-term execution history. Command text, stdout/stderr bodies, host paths and queue credentials remain outside cloud Job history.
 
-The Registry validates transport identity and current preferences even for an empty update. If filtering leaves no Jobs, it returns `unchanged` before accessing D1. Existing cloud history is cleaned up through retention. Authorization, heartbeat, ordinary archive and cleanup operations retain their normal resource costs.
+The Registry validates transport identity and current preferences even for an empty update. Empty uploads return `unchanged` before accessing D1. A nonempty batch normally reads one bounded packed snapshot, including when all clients have opted out, to distinguish already archived Jobs from new Jobs. Only first-time recording is subject to each client's capture window. A batch containing only new, ineligible Jobs creates no snapshot row; concurrent write conflicts can require another bounded read. Authorization, heartbeat, archive updates and retention cleanup retain their normal resource costs.
 
 ## Compatibility
 
 | Pair or state | Behavior |
 | --- | --- |
 | Compatible Worker and Runner with D1/protocol 2 negotiated | Source filtering and change-driven history |
-| Compatible Worker with an older Runner | Existing Runner scheduling and cloud filtering; empty eligible updates avoid D1 |
+| Compatible Worker with an older Runner | Existing Runner scheduling and cloud filtering; empty uploads avoid D1 |
 | New Runner with an older Worker | Legacy scheduling until negotiation is available; explicit local no-record markers remain excluded |
 | SQLite backend | Existing compatible history behavior |
 | Local records without a capture marker | Eligible bounded metadata may upload and pass current cloud filtering |
