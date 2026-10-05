@@ -63,7 +63,7 @@ export class FilesystemService {
       const info = await handle.stat();
       await this.policy.verifySnapshot(resolved, snapshot);
       if (!info.isFile() || !sameIdentity(info, snapshot)) throw symlinkEscape();
-      const utf8 = await readSample(handle, Math.min(info.size, 4 * 1024));
+      const utf8 = await readSample(handle, info.size);
       const binary = !utf8;
       return { workspace_id: workspace.workspaceId, path: relativePath, type: "file", size: info.size, modified_at_ms: info.mtimeMs, encoding: binary ? "binary" : "utf-8", binary };
     } finally { await handle.close(); }
@@ -247,13 +247,13 @@ export class FilesystemService {
         if (isIgnored(childRelative, false, ignoreRules) || !matchesUserGlobs(childRelative, options)) return true;
         if (budget.files >= MAX_SEARCH_FILES) { truncateSearch(budget, "file_budget"); return false; }
         budget.files += 1;
-        if (snapshot.size > MAX_SEARCH_FILE_BYTES) return true;
         if (options.mode === "filename") {
           const match = literalMatch(entry.name, query, options.caseSensitive);
           if (match !== null) results.push(searchResult(childRelative, 1, entry.name, match, query.length, [], options));
           if (results.length >= MAX_SEARCH_RESULTS) { truncateSearch(budget, "result_budget"); return false; }
           return true;
         }
+        if (snapshot.size > MAX_SEARCH_FILE_BYTES) return true;
         const loaded = await readUtf8FileSecure(this.policy, resolved, snapshot, budget).catch(() => undefined);
         if (loaded === undefined) return !budget.truncated;
         addSearchContentPart(budget, childRelative, loaded.content);
@@ -296,13 +296,16 @@ export class FilesystemService {
   }
 }
 
-async function readSample(handle: Awaited<ReturnType<typeof open>>, size: number): Promise<boolean> {
+async function readSample(handle: Awaited<ReturnType<typeof open>>, fileSize: number): Promise<boolean> {
+  const size = Math.min(fileSize, 4 * 1024);
   if (size === 0) return true;
   const buffer = Buffer.alloc(size);
   const { bytesRead } = await handle.read(buffer, 0, size, 0);
   const sample = buffer.subarray(0, bytesRead);
   if (sample.includes(0)) return false;
-  try { new TextDecoder("utf-8", { fatal: true }).decode(sample); return true; } catch { return false; }
+  // A bounded sample can end inside one UTF-8 character. Streaming decode
+  // retains that partial suffix while still rejecting invalid interior bytes.
+  try { new TextDecoder("utf-8", { fatal: true }).decode(sample, { stream: size < fileSize }); return true; } catch { return false; }
 }
 
 async function readDirectoryThroughHandle(

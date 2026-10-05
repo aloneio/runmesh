@@ -146,6 +146,41 @@ describe("workspace path policy", () => {
     } finally { await test.cleanup(); }
   });
 
+  it.each([
+    ["three-byte first byte", Buffer.from("a".repeat(4095) + "中" + "tail"), false],
+    ["three-byte second byte", Buffer.from("a".repeat(4094) + "中" + "tail"), false],
+    ["four-byte first byte", Buffer.from("a".repeat(4095) + "😀" + "tail"), false],
+    ["four-byte second byte", Buffer.from("a".repeat(4094) + "😀" + "tail"), false],
+    ["four-byte third byte", Buffer.from("a".repeat(4093) + "😀" + "tail"), false],
+    ["complete short text", Buffer.from("中文😀"), false],
+    ["incomplete short file", Buffer.from([0xe4, 0xb8]), true],
+    ["incomplete complete sample", Buffer.concat([Buffer.from("a".repeat(4095)), Buffer.from([0xe4])]), true],
+    ["invalid interior byte", Buffer.concat([Buffer.from("a".repeat(1000)), Buffer.from([0xff]), Buffer.from("a".repeat(5000))]), true],
+  ] as const)("classifies UTF-8 stat samples at the %s boundary", async (_name, content, binary) => {
+    const test = await fixture();
+    try {
+      await writeFile(join(test.root, "sample.txt"), content);
+      await expect(new FilesystemService(policy(test.workspace)).stat({ workspace_id: test.workspace.workspaceId, path: "sample.txt" }))
+        .resolves.toMatchObject({ binary, encoding: binary ? "binary" : "utf-8", size: content.length });
+    } finally { await test.cleanup(); }
+  });
+
+  it("searches large filenames without reading their contents", async () => {
+    const test = await fixture();
+    try {
+      await writeFile(join(test.root, "large-needle.txt"), "needle" + "a".repeat(256 * 1024));
+      await writeFile(join(test.root, "small-needle.txt"), "needle");
+      const filesystem = new FilesystemService(policy(test.workspace));
+      const result = await filesystem.search({ workspace_id: test.workspace.workspaceId, mode: "filename", query: "needle" });
+      expect(result).toMatchObject({ truncated: false, scanned: { bytes: 0, files: 2 } });
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "large-needle.txt" }), expect.objectContaining({ path: "small-needle.txt" }),
+      ]));
+      await expect(filesystem.search({ workspace_id: test.workspace.workspaceId, query: "needle" }))
+        .resolves.toMatchObject({ results: [{ path: "small-needle.txt" }] });
+    } finally { await test.cleanup(); }
+  });
+
   it("streams a bounded directory page without materializing every entry", async () => {
     const test = await fixture();
     try {
@@ -319,6 +354,38 @@ describe("persistent local jobs", () => {
       await waitFor(() => runtime.jobs.get(started.job_id), (job) => job.status === "succeeded");
       await expect(runtime.syncJobs()).resolves.toEqual([expect.objectContaining({ job_id: started.job_id, workspace_id: test.workspace.workspaceId, status: "succeeded", runner_id: "runner-sync" })]);
       await expect(readFile(join(test.state, "jobs", started.job_id, "meta.json"), "utf8")).resolves.toContain('"status":"succeeded"');
+    } finally { await test.cleanup(); }
+  });
+
+  it("filters public job lists by current readable workspaces before the result limit", async () => {
+    const test = await fixture();
+    try {
+      const removedRoot = join(test.root, "removed"); await mkdir(removedRoot);
+      const denied = { ...test.workspace, workspaceId: "denied", rootPath: test.outside };
+      const removed = { ...test.workspace, workspaceId: "removed", rootPath: removedRoot };
+      const runtime = new RunnerRuntime({ stateDir: test.state, config: {
+        server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-list", workspaces: [test.workspace, denied, removed],
+      } });
+      await runtime.jobs.initialize();
+      const created: JobRecord[] = [];
+      for (const workspace of [test.workspace, denied, removed]) {
+        const job = await runtime.dispatch("exec.start", { workspace_id: workspace.workspaceId, command: [process.execPath, "-e", "process.exit(0)"] }) as JobRecord;
+        await waitFor(() => runtime.jobs.get(job.job_id), current => current.status === "succeeded");
+        created.push(job);
+      }
+      runtime.applyPolicy([test.workspace, { ...denied, readonly: true, permissions: { read: false, edit: false, shell: false, job_control: false } }]);
+      await expect(runtime.dispatch("job.list", { limit: 1 })).resolves.toMatchObject([{ job_id: created[0]!.job_id }]);
+      await expect(runtime.dispatch("job.list", {})).resolves.toHaveLength(1);
+      await expect(runtime.dispatch("job.list", { workspace_id: "denied" })).rejects.toMatchObject({ code: "permission_denied" });
+      await expect(runtime.dispatch("job.list", { workspace_id: "removed" })).rejects.toThrow();
+      // Internal history reconciliation still retains all durable Jobs.
+      await expect(runtime.syncJobs(500)).resolves.toHaveLength(3);
+      // Match job.get's existing workspace-ID semantics after a root update.
+      runtime.applyPolicy([{ ...test.workspace, rootPath: test.outside }]);
+      await expect(runtime.dispatch("job.get", { expected_workspace_id: test.workspace.workspaceId, job_id: created[0]!.job_id })).resolves.toMatchObject({ job_id: created[0]!.job_id });
+      await expect(runtime.dispatch("job.list", { limit: 1 })).resolves.toMatchObject([{ job_id: created[0]!.job_id }]);
+      runtime.applyPolicy([]);
+      await expect(runtime.dispatch("job.list", {})).resolves.toEqual([]);
     } finally { await test.cleanup(); }
   });
   it("persists failed process starts as terminal records and emits them", async () => {

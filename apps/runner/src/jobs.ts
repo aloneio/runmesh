@@ -264,20 +264,20 @@ export class JobManager {
   }
 
   /** Reconcile recovered PIDs before returning metadata to remote callers. */
-  public async listReconciled(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): Promise<JobRecord[]> {
+  public async listReconciled(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}, visibleWorkspaces?: ReadonlySet<string>): Promise<JobRecord[]> {
     await this.reconcileRecoveredJobs();
     this.resumeQueue();
-    return this.filteredList(input);
+    return this.filteredList(input, visibleWorkspaces);
   }
 
-  private filteredList(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown }): JobRecord[] {
+  private filteredList(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown }, visibleWorkspaces?: ReadonlySet<string>): JobRecord[] {
     const workspaceId = input.workspace_id;
     const status = input.status;
     if (workspaceId !== undefined && typeof workspaceId !== "string") throw new Error("workspace_id must be a string");
     if (status !== undefined && !isJobStatus(status)) throw new Error("status is invalid");
     const limit = bounded(input.limit, 1, 100, 100);
     return [...this.jobs.values()]
-      .filter((job) => (workspaceId === undefined || job.workspace_id === workspaceId) && (status === undefined || job.status === status))
+      .filter((job) => (visibleWorkspaces === undefined || visibleWorkspaces.has(job.workspace_id)) && (workspaceId === undefined || job.workspace_id === workspaceId) && (status === undefined || job.status === status))
       .sort((a, b) => b.updated_at_ms - a.updated_at_ms || a.job_id.localeCompare(b.job_id))
       .slice(0, limit);
   }
