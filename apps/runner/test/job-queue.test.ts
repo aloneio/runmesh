@@ -79,6 +79,45 @@ it("round robin cannot starve existing clients as new clients arrive",()=>{
  expect(queue.shift()?.id).toBe("b1");queue.push("c","c1",4);expect(queue.shift()?.id).toBe("a1");
 });
 
+it.each(["queued", "storage-failure", "cancelled"])("keeps a waiting admission out of running capacity while persistence is pending: %s", async outcome => {
+ let release!:()=>void, observed!:()=>void, injectFailure=outcome==="storage-failure";
+ const blocked=new Promise<void>(resolve=>{release=resolve;}), entered=new Promise<void>(resolve=>{observed=resolve;});
+ const files:JobFilePort={...nativeJobFiles,async atomicJson(path,value){
+  if(typeof value==="object" && value!==null && "request_id" in value && value.request_id==="admission-pending" && "status" in value && value.status==="queued") {
+   observed();await blocked;
+   if(injectFailure)throw Object.assign(new Error("synthetic queue storage outage"),{code:"ENOSPC"});
+  }
+  await nativeJobFiles.atomicJson(path,value);
+ }};
+ const f=await fixture(vi.fn(async()=>true),files);
+ let launching:Promise<{job:Awaited<ReturnType<typeof f.launch>>;error?:never}|{error:unknown;job?:never}>|undefined;
+ try {
+  const holding=await f.hold("a","hold");
+  launching=f.launch("b","admission-pending").then(job=>({job}),error=>({error}));
+  await entered;
+  expect(f.jobs.queueStatus()).toMatchObject({running:1,max_concurrent_jobs:1,available_slots:0,waiting:0});
+  const pending=f.jobs.list().find(job=>job.request_id==="admission-pending");
+  expect(pending).toMatchObject({status:"queued",pid:null});expect(f.started).toEqual(["hold"]);
+  const cancelling=outcome==="cancelled" ? f.jobs.cancel(pending!.job_id) : undefined;
+  release();const result=await launching;
+  if(outcome==="storage-failure") {
+   expect(result.error).toMatchObject({code:"ENOSPC"});
+   expect(f.jobs.list().some(job=>job.request_id==="admission-pending")).toBe(false);
+   expect(f.jobs.queueStatus()).toMatchObject({running:1,waiting:0});
+   injectFailure=false;const retry=await f.launch("b","admission-pending");
+   expect(retry.status).toBe("queued");await f.jobs.cancel(retry.job_id);
+  } else if(outcome==="cancelled") {
+   expect(result.job?.status).toBe("cancelled");expect((await cancelling)?.status).toBe("cancelled");
+  } else {
+   expect(result.job?.status).toBe("queued");expect(f.jobs.queueStatus()).toMatchObject({running:1,waiting:1});
+   await f.jobs.cancel(result.job!.job_id);
+  }
+  expect(f.jobs.queueStatus()).toMatchObject({running:1,waiting:0});expect(f.started).toEqual(["hold"]);
+  await f.release("hold");await wait(()=>f.jobs.get(holding.job_id).status==="succeeded");
+  expect(f.jobs.queueStatus()).toMatchObject({running:0,waiting:0,available_slots:1});
+ } finally { injectFailure=false;release();await launching;await f.close(); }
+});
+
 it("cancellation during initial queue persistence cannot resurrect a queued record",async()=>{
  let release!:()=>void, observed!:()=>void;
  const blocked=new Promise<void>(resolve=>{release=resolve;}), entered=new Promise<void>(resolve=>{observed=resolve;});
