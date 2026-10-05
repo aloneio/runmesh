@@ -92,10 +92,10 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
     if (failToken) return Response.json({ error: "invalid_grant" }, { status: 400 });
     return Response.json({ access_token: "synthetic-managed-access-" + state.refreshes, refresh_token: "synthetic-managed-refresh", token_type: "Bearer", expires_in: 60, ...tokenResponse });
   });
-  const service = () => createManagedOAuth({ repository, cipher, profile: () => live, admin: async () => allowed ? "allowed" : "denied", origin: () => configuredOrigin ?? undefined, hash: catalogSha256, random: randomBase64Url, now: () => now, protocol: protocol ?? createManagedOAuthProtocol(send) });
+  const service = (storage = cipher) => createManagedOAuth({ repository, cipher: storage, profile: () => live, admin: async () => allowed ? "allowed" : "denied", origin: () => configuredOrigin ?? undefined, hash: catalogSha256, random: randomBase64Url, now: () => now, protocol: protocol ?? createManagedOAuthProtocol(send) });
   const hash = "a".repeat(64), selection = { profile_id: base.profile_id, expected_revision: base.revision };
   const begin = async () => { const result = await service().run(hash, "begin", selection); expect(result.state).toBe("started"); if (result.state !== "started") throw new Error(JSON.stringify(result)); return new URL(result.authorization_url).searchParams.get("state")!; };
-  return { service, begin, hash, selection, state, posts, send, repository, record: () => record, now: (elapsed = 40_000) => { now += elapsed; },
+  return { service, begin, hash, selection, state, posts, send, repository, cipher, record: () => record, now: (elapsed = 40_000) => { now += elapsed; },
     callback: (value: string) => ({ state: value, code: "synthetic-one-use-code", iss: issuer }), fail: () => { failToken = true; }, revokeOnToken: () => { revokeOnToken = true; }, privateToken: () => { privateToken = true; }, pause: () => { live = { ...live, revision: 3, enabled: false }; },
     resume: () => { live = { ...live, revision: 4, enabled: true }; return live; },
     challenge: (url: string) => { challengeMetadata = url; }, tokens: (value: Record<string, unknown>) => { tokenResponse = value; } };
@@ -165,7 +165,8 @@ it("OAuth refresh can resume after its last admission check fails before token d
   const state = await f.begin();
   await f.service().run(f.hash, "complete", f.callback(state)); f.now();
   const ready = f.record(), requests = f.send.mock.calls.length;
-  const credential = () => f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  const owner = f.service();
+  const credential = () => owner.credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
   failAdmission = true;
   await expect(credential()).rejects.toThrow("temporary-admission-unavailable");
   expect(f.record()).toEqual(ready); expect(f.send.mock.calls).toHaveLength(requests);
@@ -403,12 +404,75 @@ it("OAuth claims a rotating refresh token before concurrent callers can reuse it
   expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
   expect(f.state.refreshes).toBe(1); expect(f.record()?.state).toBe("ready");
 });
+it.each(["refreshing-row", "earlier-ready-row", "completed-refresh"] as const)("OAuth reports temporary contention for a same-owner refresh from %s", async phase => {
+  let releaseRefresh!: () => void, enteredRefresh!: () => void, releaseRead!: () => void, enteredRead!: () => void;
+  const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+  const refreshEntered = new Promise<void>(resolve => { enteredRefresh = resolve; });
+  const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+  const readEntered = new Promise<void>(resolve => { enteredRead = resolve; });
+  const protocol = createManagedOAuthProtocol((url, init) => f.send(url, init));
+  const f = oauthFixture(false, origin, { ...protocol, refresh: async input => {
+    const value = await protocol.refresh(input); enteredRefresh(); await refreshGate; return value;
+  } });
+  const state = await f.begin(); await f.service().run(f.hash, "complete", f.callback(state)); f.now();
+  let reads = 0;
+  const owner = f.service({ ...f.cipher, open: async (context, value) => {
+    const result = await f.cipher.open(context, value);
+    if (phase !== "refreshing-row" && context.endsWith(":tokens") && ++reads === 1) { enteredRead(); await readGate; }
+    return result;
+  } });
+  const credential = () => owner.credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  let contender: ReturnType<typeof credential> | undefined, refresh: ReturnType<typeof credential> | undefined;
+  try {
+    if (phase !== "refreshing-row") { contender = credential(); await readEntered; }
+    refresh = credential(); await refreshEntered;
+    expect(f.record()?.state).toBe("refreshing");
+    if (phase === "completed-refresh") { releaseRefresh(); expect((await refresh).current()).toBe(true); }
+    if (contender === undefined) contender = credential();
+    const rejection = expect(contender).rejects.toMatchObject({ code: "unavailable" }); releaseRead(); await rejection;
+    // A contending call cannot release the first caller's ownership.
+    if (phase !== "completed-refresh") await expect(credential()).rejects.toMatchObject({ code: "unavailable" });
+    releaseRefresh(); expect((await refresh).current()).toBe(true);
+    expect((await credential()).current()).toBe(true); expect(f.state.refreshes).toBe(1);
+  } finally { releaseRead(); releaseRefresh(); await Promise.allSettled([contender, refresh]); }
+});
+it("OAuth refresh ownership is scoped to one profile", async () => {
+  const f = oauthFixture(), state = await f.begin(); await f.service().run(f.hash, "complete", f.callback(state));
+  const original = f.record()!, sibling = { ...original, profile_id: "sibling" };
+  for (const kind of ["client", "tokens"] as const) {
+    const value = await f.cipher.open(`connection:${original.profile_id}:${original.state_hash}:${kind}`, original[kind]!);
+    sibling[kind] = await f.cipher.seal(`connection:${sibling.profile_id}:${sibling.state_hash}:${kind}`, value);
+  }
+  const profiles = [{ ...base, authentication: "oauth" as const }, { ...base, authentication: "oauth" as const, profile_id: "sibling", endpoint: "https://second.provider.com/mcp" }];
+  const records = new Map([[original.profile_id, original], [sibling.profile_id, sibling]]);
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { entered = resolve; });
+  const protocol: ManagedOAuthProtocol = { begin: async () => { throw new Error("unused"); }, complete: async () => { throw new Error("unused"); },
+    refresh: vi.fn(async input => {
+      await input.authorize(); input.beforeTokenRequest();
+      if (input.endpoint === base.endpoint) { entered(); await gate; }
+      return { access_token: "synthetic-profile-refresh", token_type: "Bearer", expires_in: 60 };
+    }) };
+  const owner = createManagedOAuth({ cipher: f.cipher, protocol, origin: () => origin, admin: async () => "allowed", now: () => original.token_expires_at - 20_000,
+    hash: catalogSha256, random: randomBase64Url, profile: id => profiles.find(profile => profile.profile_id === id),
+    repository: { read: id => { const record = records.get(id); return record ? structuredClone(record) : undefined; }, find: () => undefined,
+      replace: (value, expected) => { if (records.get(value.profile_id)?.revision !== expected) return false; records.set(value.profile_id, structuredClone(value)); return true; } } });
+  const first = owner.credential(profiles[0]!, new AbortController().signal, async () => undefined);
+  try {
+    await started;
+    expect((await owner.credential(profiles[1]!, new AbortController().signal, async () => undefined)).current()).toBe(true);
+    expect(records.get(original.profile_id)?.state).toBe("refreshing");
+    release(); expect((await first).current()).toBe(true); expect(protocol.refresh).toHaveBeenCalledTimes(2);
+  } finally { release(); await first.catch(() => undefined); }
+});
 it("OAuth does not replay a failed refresh after service restart", async () => {
   const f = oauthFixture(), state = await f.begin();
   await f.service().run(f.hash, "complete", f.callback(state)); f.now(); f.fail();
-  const credential = () => f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  const owner = f.service();
+  const credential = () => owner.credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
   await expect(credential()).rejects.toThrow();
-  await expect(credential()).rejects.toThrow();
+  await expect(credential()).rejects.toMatchObject({ code: "reauthorization_required" });
+  await expect(f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined)).rejects.toMatchObject({ code: "reauthorization_required" });
   expect(f.state.refreshes).toBe(1); expect(f.record()?.state).toBe("refreshing");
 });
 it("managed OAuth SQLite claims survive repository recreation and reject stale writers", async () => {
