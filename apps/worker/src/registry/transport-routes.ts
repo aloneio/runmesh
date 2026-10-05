@@ -11,11 +11,12 @@ import { validLifecycleId, stringField } from "./values.js";
 export interface RunnerTransportPorts {
   authenticateRunner(runnerId: string, token: string): Promise<{
     credential_version: number;
+    lifecycle_id: string;
   } | undefined>;
   beginConnection(runnerId: string, metadata: RunnerMetadata, protocol: {
     min_protocol_version: number;
     max_protocol_version: number;
-  }, sessionId: string, credentialVersion: number, nowMs: number): number | undefined;
+  }, sessionId: string, credentialVersion: number, nowMs: number, lifecycleId: string): number | undefined;
   runnerRow(runnerId: string): RunnerRow | undefined;
   desiredPolicy(runnerId: string): RunnerPolicy | undefined;
   scheduleMaintenanceAlarm(nowMs: number): Promise<void>;
@@ -47,6 +48,7 @@ export function createRunnerTransportRoutes(ports: RunnerTransportPorts): (reque
       if (!parsed.ok) return registryInputError(parsed);
       const {
         sessionId,
+        lifecycleId,
         credentialVersion,
         nowMs,
         metadata,
@@ -56,7 +58,7 @@ export function createRunnerTransportRoutes(ports: RunnerTransportPorts): (reque
       const epoch = ports.beginConnection(runnerId, metadata.data, {
         min_protocol_version: protocolMin,
         max_protocol_version: protocolMax
-      }, sessionId, credentialVersion, nowMs);
+      }, sessionId, credentialVersion, nowMs, lifecycleId);
       const row = epoch === undefined ? undefined : ports.runnerRow(runnerId);
       const policy = epoch === undefined ? undefined : ports.desiredPolicy(runnerId);
       if (epoch === undefined || row === undefined || row.connection_epoch !== epoch || row.session_id !== sessionId || !validLifecycleId(row.lifecycle_id)) {

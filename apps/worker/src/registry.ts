@@ -500,9 +500,9 @@ export class RegistryDO {
 
   public redeemRunnerEnrollment(verifier: string, tokenVerifier: string, publicInfo: RunnerPublicInfo, nowMs: number, mutationId: string): Promise<{ runner_id: string } | undefined> { return this.lifecycle.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, nowMs, mutationId); }
 
-  public authenticateRunner(runnerId: string, token: string): Promise<{ credential_version: number } | undefined> { return this.lifecycle.authenticateRunner(runnerId, token); }
+  public authenticateRunner(runnerId: string, token: string): Promise<{ credential_version: number; lifecycle_id: string } | undefined> { return this.lifecycle.authenticateRunner(runnerId, token); }
 
-  public beginConnection(runnerId: string, metadata: RunnerMetadata, protocol: { min_protocol_version: number; max_protocol_version: number }, sessionId: string, credentialVersion: number, nowMs: number): number | undefined { return this.lifecycle.beginConnection(runnerId, metadata, protocol, sessionId, credentialVersion, nowMs); }
+  public beginConnection(runnerId: string, metadata: RunnerMetadata, protocol: { min_protocol_version: number; max_protocol_version: number }, sessionId: string, credentialVersion: number, nowMs: number, lifecycleId: string): number | undefined { return this.lifecycle.beginConnection(runnerId, metadata, protocol, sessionId, credentialVersion, nowMs, lifecycleId); }
 
   public sessionIsCurrent(runnerId: string, epoch: number, credentialVersion: number, requireOnline: boolean, lifecycleId: string, sessionId: string): boolean { return this.lifecycle.sessionIsCurrent(runnerId, epoch, credentialVersion, requireOnline, lifecycleId, sessionId); }
 

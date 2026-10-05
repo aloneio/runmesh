@@ -22,17 +22,18 @@ function invalidInput(error: string, status: number) {
   };
 }
 export function parseRunnerConnection(input: InternalInput) {
-  const sessionId = stringField(input, "session_id", 128);
+  const identity = parseTransportIdentity(input);
   const credentialVersion = integerField(input, "credential_version");
   const nowMs = integerField(input, "now_ms");
   const metadata = RunnerMetadataSchema.safeParse(input.metadata);
   const protocolMin = integerField(input, "min_protocol_version");
   const protocolMax = integerField(input, "max_protocol_version");
-  if (!metadata.success || sessionId === undefined || credentialVersion === undefined || nowMs === undefined || protocolMin === undefined || protocolMax === undefined || protocolMin < 1 || protocolMin > protocolMax || protocolMax > 1_000) return invalidInput("invalid connection metadata", 400);
+  if (!metadata.success || !identity.valid || credentialVersion === undefined || nowMs === undefined || protocolMin === undefined || protocolMax === undefined || protocolMin < 1 || protocolMin > protocolMax || protocolMax > 1_000) return invalidInput("invalid connection metadata", 400);
   return {
     ok: true as const,
     value: {
-      sessionId,
+      sessionId: identity.sessionId,
+      lifecycleId: identity.lifecycleId,
       credentialVersion,
       nowMs,
       metadata,

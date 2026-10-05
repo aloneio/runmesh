@@ -176,7 +176,7 @@ it("negotiates batched job reporting independently of the history backend", asyn
   };
   const route = createRunnerTransportRoutes(ports);
   const response = await route(request("connect", "POST", {
-    session_id: "audit88-session-id", credential_version: 1, now_ms: 123,
+    session_id: "audit88-session-id", lifecycle_id: "audit88-lifecycle", credential_version: 1, now_ms: 123,
     min_protocol_version: PROTOCOL_CURRENT_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
     metadata: { runner_id: "r", runner_version: "test", platform: "linux", architecture: "x64",
       capabilities: { filesystem: true, process_execution: true, workspace_sync: true, pty: false,

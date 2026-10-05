@@ -178,6 +178,7 @@
         "apps/worker/test/rpc-contract.test.ts",
         "apps/worker/test/runner-action-responses.test.ts",
         "apps/worker/test/runner-admission-initialization.test.ts",
+        "apps/worker/test/runner-auth-lifecycle.test.ts",
         "apps/worker/test/runner-capability-admission.test.ts",
         "apps/worker/test/runner-creation-recovery.test.ts",
         "apps/worker/test/runner-hello-maintenance.test.ts",

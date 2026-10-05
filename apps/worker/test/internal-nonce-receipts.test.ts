@@ -63,7 +63,7 @@ it("consumes the original nonce through Registry and rejects a replay before a s
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`nonce-replay-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_existing, state) => {
     const replies = new BridgeReplies();
-    let attachment: unknown = { runnerId: "nonce-runner", sessionId: "nonce-session", epoch: 0, credentialVersion: 1, lifecycleId: null,
+    let attachment: unknown = { runnerId: "nonce-runner", sessionId: "nonce-session", epoch: 0, credentialVersion: 1, lifecycleId: "a".repeat(64),
       protocolVersion: 0, authenticated: true, helloDeadlineMs: Date.now() + 10_000 };
     const send = vi.fn((raw: string) => {
       const frame = decodeWireFrame(raw);

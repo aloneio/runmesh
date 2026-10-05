@@ -244,7 +244,7 @@
   },
   "session_begin": {
     "calls": 4,
-    "trace": "8abec46af83477b2180c3104dd2f7644514a33340b396a54b067b7222d722361",
+    "trace": "5e05680de22f16878cb8991969d3e4cfa3282771d69586256b111cd735f6e597",
     "reads": 2,
     "writes": 1,
     "result": 1
