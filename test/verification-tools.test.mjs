@@ -10,7 +10,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -381,6 +381,94 @@ test("a failed E2E subprocess preserves only forwarded Worker events in its CI s
   const summary = { error: browserErrorDiagnostic({ code: child.status }), worker_events: mcpWorkerFailureEvidence(child.stderr) };
   assert.deepEqual(summary, { error: { kind: "process_exit" }, worker_events: [{ event: "mcp_handler_error", kind: "type_error", stage: "server_factory", reason: "unknown" }] });
   assert.ok(!JSON.stringify(summary).includes("private"));
+});
+
+test("fixed runtime messages survive fragmented Worker logs without copying text or prefixes", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  forward("\u001b[31m\u2718 [ERROR]\u001b[0m Error: Network connec");
+  forward("tion lost.\r\n  at private-stack\n");
+  forward("[ERROR] Cannot perform I/O on behalf of a different request.\n");
+  forward("Error: This ReadableStream is locked to a reader.\n");
+  for (const line of ["private Network connection lost.\n", "Error: Network connection lost. private-token\n", "[PRIVATE] Network connection lost.\n", "x".repeat(1025) + "\n"])
+    forward(line);
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), [
+    { event: "runtime_log", signature: "network_connection_lost" },
+    { event: "runtime_log", signature: "cross_request_io" },
+    { event: "runtime_log", signature: "locked_reader" },
+  ]);
+  assert.doesNotMatch(emitted.join(""), /private|Network connection|ReadableStream/u);
+});
+
+test("launcher snapshots report only lifecycle classification and bounded exit state", () => {
+  const expected = { event: "launcher_snapshot", reason: "test_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false };
+  const line = mcpLauncherDiagnostic({ ...expected, pid: 123, log: "private-token", filename: "private-file" });
+  assert.deepEqual(mcpWorkerFailureEvidence(line), [expected]);
+  assert.deepEqual(mcpWorkerFailureEvidence(mcpLauncherDiagnostic({ ...expected, exit_code: 137, signal: "SIGKILL", exited_before_teardown: true })),
+    [{ ...expected, exit_code: 137, signal: "SIGKILL", exited_before_teardown: true }]);
+  for (const patch of [{ reason: "private" }, { exit_code: "137" }, { exit_code: 0.5 }, { exit_code: 2147483648 },
+    { signal: "private" }, { teardown_started: "false" }, { exited_before_teardown: 1 }]) {
+    assert.equal(mcpLauncherDiagnostic({ ...expected, ...patch }), undefined);
+    assert.deepEqual(mcpWorkerFailureEvidence("RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify({ ...expected, ...patch }) + "\n"), []);
+  }
+  assert.doesNotMatch(line, /private|123/u);
+});
+
+test("fixture diagnostics distinguish the primary error from cancellation and observation failures", async () => {
+  const response = new Response("Error: Network connection lost.\n at private-cookie", { status: 500, headers: { "content-type": "text/plain" } });
+  const httpError = await mcpHttpFailure(response, "private-id", "job", { action: "cancel", job_id: "private-job" });
+  const primary = mcpFixtureFailureDiagnostic("queue", "primary", { name: "AssertionError", message: "private-assertion" });
+  const cancel = mcpFixtureFailureDiagnostic("queue", "cancel", httpError);
+  const observe = mcpFixtureFailureDiagnostic("queue", "observe", new Error("wait timed out: private details"));
+  const events = mcpWorkerFailureEvidence(primary + cancel + observe);
+  assert.deepEqual(events, [
+    { event: "fixture_failure", fixture: "queue", phase: "primary", kind: "assertion_failed" },
+    { event: "fixture_failure", fixture: "queue", phase: "cancel", kind: "mcp_http_failure", http_status: 500,
+      mcp_response: { content_type: "text", phase: "job_cancel", body_kind: "non_json", rpc_code: "absent", rpc_id: "absent", runtime_signature: "network_connection_lost" } },
+    { event: "fixture_failure", fixture: "queue", phase: "observe", kind: "timeout" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(events), /private|Network connection lost/u);
+  assert.equal(mcpFixtureFailureDiagnostic("private", "primary", httpError), undefined);
+  assert.equal(mcpFixtureFailureDiagnostic("queue", "private", httpError), undefined);
+  const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  for (const patch of [{ http_status: 600 }, { http_status: "500" }, { mcp_response: { content_type: "private" } }, { kind: "private" }])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...events[1], ...patch })), []);
+  assert.deepEqual(mcpWorkerFailureEvidence("private " + cancel), []);
+  assert.deepEqual(mcpWorkerFailureEvidence(cancel.trimEnd() + "private\n"), []);
+});
+
+test("runtime floods preserve the first fixture primary and independent launcher evidence", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  for (let i = 0; i < 40; i++) forward("Error: Network connection lost.\nRUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown\n");
+  assert.equal(emitted.length, 24);
+  const primary = mcpFixtureFailureDiagnostic("queue", "primary", { name: "AssertionError", message: "private" });
+  const later = mcpFixtureFailureDiagnostic("queue", "primary", new Error("timed out"));
+  const cleanup = mcpFixtureFailureDiagnostic("queue", "cancel", new Error("private"));
+  const launcher = mcpLauncherDiagnostic({ reason: "test_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false });
+  const events = mcpWorkerFailureEvidence(emitted.join("").repeat(3) + primary + later.repeat(30) + cleanup.repeat(30) + launcher);
+  assert.equal(events.filter(event => event.event === "runtime_log").length, 8);
+  assert.equal(events.filter(event => event.event === "mcp_handler_error").length, 16);
+  assert.deepEqual(events.filter(event => event.event === "fixture_failure" && event.phase === "primary"),
+    [{ event: "fixture_failure", fixture: "queue", phase: "primary", kind: "assertion_failed" }]);
+  assert.equal(events.filter(event => event.event === "fixture_failure" && event.phase === "cancel").length, 8);
+  assert.equal(events.filter(event => event.event === "launcher_snapshot").length, 1);
+  assert.ok(events.length <= 46);
+});
+
+test("a failed child preserves runtime, primary, cleanup and launcher classes through the existing CI outlet", () => {
+  const helper = new URL("../scripts/mcp-diagnostics.mjs", import.meta.url).href;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import { createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpLauncherDiagnostic } from ${JSON.stringify(helper)};
+    const forward = createMcpWorkerDiagnosticForwarder(line => process.stderr.write(line));
+    forward("[ERROR] Error: Network connection lost.\\nprivate worker stack\\n");
+    process.stderr.write(mcpFixtureFailureDiagnostic("busy", "primary", {name:"AssertionError", message:"private-token"}));
+    process.stderr.write(mcpFixtureFailureDiagnostic("busy", "cancel", new Error("private cleanup")));
+    process.stderr.write(mcpLauncherDiagnostic({reason:"test_failed",exit_code:null,signal:null,teardown_started:false,exited_before_teardown:false}));
+    process.stderr.write("private child stderr\\n"); process.exitCode = 1;
+  `], { encoding: "utf8", timeout: 10000 });
+  assert.equal(child.status, 1);
+  const summary = { error: browserErrorDiagnostic({ code: child.status }), worker_events: mcpWorkerFailureEvidence(child.stderr) };
+  assert.deepEqual(summary.worker_events.map(event => event.event), ["runtime_log", "fixture_failure", "fixture_failure", "launcher_snapshot"]);
+  assert.doesNotMatch(JSON.stringify(summary), /private/u);
 });
 
 test("direct browser failures use optional error stacks and retain only allowlisted source coordinates", () => {

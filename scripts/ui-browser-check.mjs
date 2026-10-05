@@ -5,6 +5,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import WebSocket from "ws";
 import { UI_BROWSER_STAGES } from "./ui-browser-contract.mjs";
+import { createUiNavigationDiagnostic, withUiNavigationDiagnostic } from "./ui-browser-diagnostics.mjs";
 export { UI_BROWSER_STAGES };
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const navigationContextErrors = new Set([
@@ -173,11 +174,12 @@ export async function checkUiWithChromium(origin,cookie,output){
  const profile=await mkdtemp(join(tmpdir(),"runmesh-ui-browser-"));
  const child=spawn(process.env.RUNMESH_CHROMIUM_EXECUTABLE ?? "/usr/bin/chromium",["--headless","--no-sandbox","--disable-dev-shm-usage","--no-first-run","--disable-background-networking","--remote-debugging-address=127.0.0.1","--remote-debugging-port=0",`--user-data-dir=${profile}`,"about:blank"],{stdio:["ignore","ignore","pipe"]});
  let socket,protocol,stage="browser_setup";
+ const navigationDiagnostic=createUiNavigationDiagnostic();
  try{
   const endpoint=await waitForUiBrowserEndpoint(child);
   socket=new WebSocket(endpoint);await waitForUiBrowserSocket(socket,child);
   const exceptions=[],requests=[];
-  protocol=createUiBrowserProtocol(socket,child,{stage:()=>stage,onEvent:message=>{if(message.method==="Runtime.exceptionThrown")exceptions.push(message.params.exceptionDetails.text);else if(message.method==="Network.requestWillBeSent")requests.push(message.params.request.url);}});
+  protocol=createUiBrowserProtocol(socket,child,{stage:()=>stage,onEvent:message=>{navigationDiagnostic.observe(message);if(message.method==="Runtime.exceptionThrown")exceptions.push(message.params.exceptionDetails.text);else if(message.method==="Network.requestWillBeSent")requests.push(message.params.request.url);}});
   const {call}=protocol;
   const {targetId}=await call("Target.createTarget",{url:"about:blank"});const {sessionId}=await call("Target.attachToTarget",{targetId,flatten:true});
   protocol.setTarget(targetId,sessionId);
@@ -189,7 +191,9 @@ export async function checkUiWithChromium(origin,cookie,output){
   const reports=[];
   for(const locale of ["en","zh-CN"]){
    stage="dashboard_navigation";
-   const url=`${origin}/admin?lang=${locale}`, navigation=await tab("Page.navigate",{url});
+   const url=`${origin}/admin?lang=${locale}`;
+   navigationDiagnostic.begin(url,locale,sessionId);
+   const navigation=await tab("Page.navigate",{url});
    assert.equal(navigation.errorText,undefined);assert.ok(navigation.loaderId);
    await waitForUiNavigation(tab,{url,locale,frameId:navigation.frameId,loaderId:navigation.loaderId},{stage});
    stage="dashboard_initial";
@@ -202,6 +206,7 @@ export async function checkUiWithChromium(origin,cookie,output){
    reports.push({locale,idle_dom_mutations:second.mutations,idle_admin_requests:0,stable_panel_geometry:true});
    // Exercise mounted SPA navigation and an explicit refresh in the selected locale.
    stage="clients_navigation";
+   navigationDiagnostic.begin(`${origin}/admin/clients`,locale,sessionId);
    await evaluate("document.querySelector('.control-nav a[href=\"/admin/clients\"]').click()");
    await waitForUiNavigation(tab,{url:`${origin}/admin/clients`,locale},{stage});
    stage="clients_details";
@@ -209,6 +214,7 @@ export async function checkUiWithChromium(origin,cookie,output){
    assert.equal(await evaluate("location.pathname"),"/admin/clients");
    assert.equal(await evaluate("document.documentElement.lang"),locale);
    stage="dashboard_return";
+   navigationDiagnostic.begin(`${origin}/admin`,locale,sessionId);
    await evaluate("document.querySelector('.control-nav a[href=\"/admin\"]').click()");
    await waitForUiNavigation(tab,{url:`${origin}/admin`,locale},{stage});
    stage="dashboard_headings";
@@ -217,6 +223,7 @@ export async function checkUiWithChromium(origin,cookie,output){
   // A preference changed in another tab must reload the shell, not mix
   // its old language with the newly fetched main-content language.
   stage="locale_navigation";
+  navigationDiagnostic.begin(`${origin}/admin/clients`,"en",sessionId);
   await tab("Network.setCookie",{name:"runmesh_lang",value:"en",url:origin,path:"/"});
   await evaluate("document.querySelector('.control-nav a[href=\"/admin/clients\"]').click()");
   await waitForUiNavigation(tab,{url:`${origin}/admin/clients`,locale:"en"},{stage});
@@ -230,6 +237,12 @@ export async function checkUiWithChromium(origin,cookie,output){
   await call("Browser.close").catch(()=>{});
   console.log(JSON.stringify({browser_ui_check:reports,mobile_horizontal_overflow:false,script_exceptions:exceptions.length}));
   return reports;
+ }catch(error){
+  const diagnostic=navigationDiagnostic.diagnostic();
+  if(diagnostic&&["dashboard_navigation","clients_navigation","dashboard_return","locale_navigation"].includes(stage)){
+   throw withUiNavigationDiagnostic(error,diagnostic);
+  }
+  throw error;
  }finally{
   protocol?.dispose();closeUiBrowserSocket(socket);
   if(child.pid!==undefined&&child.exitCode===null){child.kill("SIGTERM");await Promise.race([new Promise(r=>child.once("exit",r)),sleep(3000)]);if(child.exitCode===null)child.kill("SIGKILL");}

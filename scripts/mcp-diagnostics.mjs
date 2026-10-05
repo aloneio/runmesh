@@ -127,13 +127,84 @@ export function jobCompletionDiagnostic(text) {
 }
 
 function workerEvent(line) {
-  const match = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|\u25b2 \[WARNING\] )?RUNMESH_MCP_HANDLER_ERROR kind=([a-z_]+) stage=([a-z_]+) reason=([a-z_]+)$/u.exec(clean(line).trim());
-  return match && errorKinds.includes(match[1]) && stages.includes(match[2]) && reasons.includes(match[3])
-    ? { event: "mcp_handler_error", kind: match[1], stage: match[2], reason: match[3] } : undefined;
+  const text = clean(line).trim();
+  const match = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|\u25b2 \[WARNING\] )?RUNMESH_MCP_HANDLER_ERROR kind=([a-z_]+) stage=([a-z_]+) reason=([a-z_]+)$/u.exec(text);
+  if (match && errorKinds.includes(match[1]) && stages.includes(match[2]) && reasons.includes(match[3]))
+    return { event: "mcp_handler_error", kind: match[1], stage: match[2], reason: match[3] };
+  // Runtime failures can bypass the MCP handler entirely. Match complete fixed
+  // messages, including the pinned Wrangler error prefix, never arbitrary logs.
+  const runtime = text.replace(/^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] )/u, "").replace(/^Error: /u, "");
+  for (const [signature, message] of runtimeSignatures) {
+    if (runtime === message) return { event: "runtime_log", signature };
+  }
+  return undefined;
+}
+
+const launcherReasons = ["setup_failed", "test_failed", "unexpected_exit", "teardown_failed"];
+const launcherSignals = ["SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGBUS", "SIGILL", "SIGFPE", "SIGINT", "other"];
+const fixtureNames = ["queue", "busy"];
+const fixturePhases = ["primary", "release", "cancel", "observe"];
+const fixtureFailureKinds = ["mcp_http_failure", "assertion_failed", "timeout", "other"];
+const exitCode = value => value === null || (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647);
+
+function safeWorkerEvent(value) {
+  if (!record(value)) return undefined;
+  if (value.event === "mcp_handler_error" && errorKinds.includes(value.kind) && stages.includes(value.stage) && reasons.includes(value.reason))
+    return { event: "mcp_handler_error", kind: value.kind, stage: value.stage, reason: value.reason };
+  if (value.event === "runtime_log" && runtimeSignatures.has(value.signature)) return { event: "runtime_log", signature: value.signature };
+  if (value.event === "launcher_snapshot" && launcherReasons.includes(value.reason) && exitCode(value.exit_code)
+    && (value.signal === null || launcherSignals.includes(value.signal)) && typeof value.teardown_started === "boolean" && typeof value.exited_before_teardown === "boolean")
+    return { event: "launcher_snapshot", reason: value.reason, exit_code: value.exit_code, signal: value.signal,
+      teardown_started: value.teardown_started, exited_before_teardown: value.exited_before_teardown };
+  if (value.event === "fixture_failure" && fixtureNames.includes(value.fixture) && fixturePhases.includes(value.phase) && fixtureFailureKinds.includes(value.kind)) {
+    const base = { event: "fixture_failure", fixture: value.fixture, phase: value.phase, kind: value.kind };
+    if (value.kind !== "mcp_http_failure") return base;
+    const detail = mcpHttpDiagnostic(HTTP_MARKER + JSON.stringify(value.mcp_response));
+    return detail !== undefined && Number.isInteger(value.http_status) && value.http_status >= 100 && value.http_status <= 599
+      ? { ...base, http_status: value.http_status, mcp_response: detail } : undefined;
+  }
+  return undefined;
+}
+
+function eventMarker(value) {
+  const event = safeWorkerEvent(value);
+  return event === undefined ? undefined : `${WORKER_MARKER}${JSON.stringify(event)}\n`;
+}
+
+/** This observes the Wrangler launcher, not the inner workerd process. */
+export function mcpLauncherDiagnostic(value) {
+  return eventMarker({ ...value, event: "launcher_snapshot" });
+}
+
+/** Keep the primary failure and each cleanup phase distinct without error text. */
+export function mcpFixtureFailureDiagnostic(fixture, phase, error) {
+  const text = typeof error?.message === "string" ? error.message.slice(0, 16384) : "";
+  const status = /^(?:Error: )?RUNMESH_E2E_MCP_HTTP_STATUS=([1-5]\d{2})\r?$/mu.exec(text)?.[1];
+  const detail = mcpHttpDiagnostic(text);
+  const kind = status !== undefined && detail !== undefined ? "mcp_http_failure"
+    : error?.code === "ERR_ASSERTION" || error?.name === "AssertionError" ? "assertion_failed"
+      : /timed? ?out|ETIMEDOUT/iu.test(text) ? "timeout" : "other";
+  return eventMarker({ event: "fixture_failure", fixture, phase, kind,
+    ...(kind === "mcp_http_failure" ? { http_status: Number(status), mcp_response: detail } : {}) });
+}
+
+function eventBudget() {
+  const counts = new Map();
+  return event => {
+    // Separate bounds preserve launcher and fixture evidence during log floods.
+    // Totals: 16 handler + 8 runtime + 4 launcher + 2 primary + 16 cleanup = 46.
+    const key = event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
+    const limit = event.event === "mcp_handler_error" ? 16 : event.event === "launcher_snapshot" ? 4
+      : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;
+    const count = counts.get(key) ?? 0;
+    if (count >= limit) return false;
+    counts.set(key, count + 1); return true;
+  };
 }
 
 export function createMcpWorkerDiagnosticForwarder(emit) {
-  let pending = "", discard = false, emitted = 0;
+  let pending = "", discard = false;
+  const admit = eventBudget();
   return chunk => {
     // A chunk or a line may start inside private output. Require one complete,
     // bounded marker line and emit a newly constructed object, never its text.
@@ -142,8 +213,8 @@ export function createMcpWorkerDiagnosticForwarder(emit) {
       if (!discard && pending.length + part.length <= 1024) pending += part;
       else { pending = ""; discard = true; }
       if (!complete) continue;
-      const event = !discard && emitted < 16 ? workerEvent(pending) : undefined;
-      if (event) { emitted++; emit(`${WORKER_MARKER}${JSON.stringify(event)}\n`); }
+      const event = !discard ? workerEvent(pending) : undefined;
+      if (event && admit(event)) emit(`${WORKER_MARKER}${JSON.stringify(event)}\n`);
       pending = ""; discard = false;
     }
   };
@@ -151,17 +222,15 @@ export function createMcpWorkerDiagnosticForwarder(emit) {
 
 export function mcpWorkerFailureEvidence(stderr) {
   if (typeof stderr !== "string") return [];
-  const events = [];
+  const events = [], admit = eventBudget();
   // Match execFile's capture bound so a later assertion cannot evict an earlier
-  // fixed event. Retain at most sixteen freshly constructed records.
+  // fixed event. Each category retains its own bounded, reconstructed records.
   const text = clean(stderr.slice(0, 8 * 1024 * 1024));
-  for (const match of text.matchAll(/^RUNMESH_E2E_MCP_WORKER_EVENT=(\{[^\r\n]{1,256}\})\r?$/gmu)) {
+  for (const match of text.matchAll(/^RUNMESH_E2E_MCP_WORKER_EVENT=(\{[^\r\n]{1,768}\})\r?$/gmu)) {
     try {
-      const value = JSON.parse(match[1]);
-      if (record(value) && value.event === "mcp_handler_error" && errorKinds.includes(value.kind) && stages.includes(value.stage) && reasons.includes(value.reason))
-        events.push({ event: "mcp_handler_error", kind: value.kind, stage: value.stage, reason: value.reason });
+      const event = safeWorkerEvent(JSON.parse(match[1]));
+      if (event !== undefined && admit(event)) events.push(event);
     } catch { /* Unrecognized private output contributes no diagnostics. */ }
-    if (events.length === 16) break;
   }
   return events;
 }

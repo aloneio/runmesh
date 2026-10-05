@@ -12,7 +12,7 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpHttpFailure } from "../../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -100,6 +100,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   function reportWorkerDiagnostics(reason: string): void {
     if (workerDiagnosticsReported) return;
     workerDiagnosticsReported = true;
+    const reasonCode = ({ "setup failed": "setup_failed", "test failed": "test_failed", "unexpected process exit": "unexpected_exit", "teardown failed": "teardown_failed" } as Record<string, string>)[reason];
+    const signal = worker?.signalCode ?? null;
+    const snapshot = mcpLauncherDiagnostic({ reason: reasonCode, exit_code: worker?.exitCode ?? null,
+      signal: signal === null || ["SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGBUS", "SIGILL", "SIGFPE", "SIGINT"].includes(signal) ? signal : "other",
+      teardown_started: teardownStarted, exited_before_teardown: workerEvents.some(event => event.event === "exit" && !event.duringTeardown) });
+    if (snapshot !== undefined) process.stderr.write(snapshot);
     let output = workerLog?.() ?? "";
     // The ring buffer may start partway through a credential-bearing line.
     if (output.length === 8_192) {
@@ -601,16 +607,19 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const replay=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-third",background:true},other);
       replayId = replay.structuredContent?.job_id as string | undefined;
       expect(replay.structuredContent?.job_id).toBe(queuedId);
+    } catch (error) {
+      reportFixtureFailure("queue", "primary", error);
+      throw error;
     } finally {
       // Release markers also settle a launch whose HTTP reply did not expose its Job ID.
-      await attemptCleanup(cleanupErrors, () => writeFile(join(workspace,".queue-e2e-release-1"),"release"));
-      await attemptCleanup(cleanupErrors, () => writeFile(join(workspace,".queue-e2e-release-2"),"release"));
+      await attemptCleanup(cleanupErrors, () => writeFile(join(workspace,".queue-e2e-release-1"),"release"), { fixture: "queue", phase: "release" });
+      await attemptCleanup(cleanupErrors, () => writeFile(join(workspace,".queue-e2e-release-2"),"release"), { fixture: "queue", phase: "release" });
       await cleanupJobs([
         { id: queuedId, client: other, workspaceId: "workspace-1" },
         { id: firstId, client: clientA, workspaceId: "workspace-1" },
         { id: secondSlotId, client: clientA, workspaceId: "workspace-1" },
         { id: replayId, client: other, workspaceId: "workspace-1" },
-      ], cleanupErrors, { timeoutMs: 8000, sharedBudget: true });
+      ], cleanupErrors, { timeoutMs: 8000, sharedBudget: true, fixture: "queue" });
     }
   });
 
@@ -636,10 +645,13 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const third = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true, queue: false });
       thirdId = third.structuredContent?.job_id as string | undefined;
       expect(third).toMatchObject({ isError: true, structuredContent: { error: { code: "busy" } } });
+    } catch (error) {
+      reportFixtureFailure("busy", "primary", error);
+      throw error;
     } finally {
       await cleanupJobs([
         { id: firstId, client: clientA }, { id: secondId, client: clientA }, { id: thirdId, client: clientA },
-      ], cleanupErrors, { timeoutMs: 12000 });
+      ], cleanupErrors, { timeoutMs: 12000, fixture: "busy" });
     }
   });
 
@@ -1018,12 +1030,19 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     return { endpoint };
   }
 
-  async function attemptCleanup(errors: unknown[], operation: () => Promise<void>): Promise<boolean> {
-    try { await operation(); return true; }
-    catch (error) { errors.push(error); return false; }
+  function reportFixtureFailure(fixture: "queue" | "busy", phase: "primary" | "release" | "cancel" | "observe", error: unknown): void {
+    try {
+      const diagnostic = mcpFixtureFailureDiagnostic(fixture, phase, error);
+      if (diagnostic !== undefined) process.stderr.write(diagnostic);
+    } catch { /* Diagnostics do not change the original failure or cleanup. */ }
   }
 
-  async function cleanupJobs(jobs: readonly CleanupJob[], errors: unknown[], options: { readonly timeoutMs: number; readonly sharedBudget?: boolean }): Promise<void> {
+  async function attemptCleanup(errors: unknown[], operation: () => Promise<void>, context: { readonly fixture: "queue" | "busy"; readonly phase: "release" | "cancel" | "observe" }): Promise<boolean> {
+    try { await operation(); return true; }
+    catch (error) { errors.push(error); reportFixtureFailure(context.fixture, context.phase, error); return false; }
+  }
+
+  async function cleanupJobs(jobs: readonly CleanupJob[], errors: unknown[], options: { readonly timeoutMs: number; readonly sharedBudget?: boolean; readonly fixture: "queue" | "busy" }): Promise<void> {
     const seen = new Set<string>();
     const owned = jobs.filter(job => {
       if (typeof job.id !== "string" || seen.has(job.id)) return false;
@@ -1033,7 +1052,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       await attemptCleanup(errors, async () => {
         const result = await mcpTool("job", { action: "cancel", job_id: job.id, ...(job.workspaceId === undefined ? {} : { workspace_id: job.workspaceId }) }, job.client);
         expect(result.isError).not.toBe(true);
-      });
+      }, { fixture: options.fixture, phase: "cancel" });
     }
     // Queue cleanup shares its original eight-second wait across all Jobs.
     // Busy cleanup retains its existing per-Job wait budget.
@@ -1046,12 +1065,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
             expect(result.isError).not.toBe(true);
             expect(typeof result.structuredContent?.status).toBe("string");
             if (["cancelled", "succeeded", "failed", "interrupted"].includes(String(result.structuredContent?.status))) pending.delete(job);
-          });
+          }, { fixture: options.fixture, phase: "observe" });
           // Keep the failed observation as a separate cleanup error; do not replay it.
           if (!observed) pending.delete(job);
         }
         return pending.size === 0;
-      }, options.timeoutMs));
+      }, options.timeoutMs), { fixture: options.fixture, phase: "observe" });
     }
   }
 
