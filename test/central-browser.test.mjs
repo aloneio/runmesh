@@ -154,6 +154,36 @@ for (const [status, code, operationState] of [
   assert.equal(api.requests.length, 1);
 });
 
+for (const locale of ['en', 'zh-CN']) test('confirmed Skill capacity rejection keeps the ' + locale + ' form usable', async t => {
+  const translate = createCentralTranslator(locale);
+  let full = true;
+  const api = client(t, () => full
+    ? Response.json({ error: { code: 'skill_capacity', operation_state: 'not_started' } }, { status: 429 })
+    : Response.json({ state: 'installed' }), translate);
+  await assert.rejects(api.request('skill-installations', { files: [], expected_revision: 32 }), {
+    message: translate('skillLibraryLimitReached'),
+  });
+  assert.equal(api.refreshRequired(), false);
+  assert.equal(api.requests.length, 1, 'The rejected installation is never replayed');
+  full = false;
+  assert.equal((await api.request('skill-installations', { files: [], expected_revision: 0 })).state, 'installed');
+  assert.equal(api.requests.length, 2);
+});
+
+for (const [path, code, operationState] of [
+  ['skill-installations', 'skill_capacity', 'unknown'],
+  ['skill-installations', 'skill_capacity', undefined],
+  ['skill-installations', 'central_revision_conflict', 'not_started'],
+  ['skill-installations', 'central_result_unconfirmed', 'not_started'],
+  ['skills/research', 'skill_capacity', 'not_started'],
+]) test('capacity recovery remains scoped to a confirmed installation: ' + path + ' ' + code + ' ' + operationState, async t => {
+  const api = client(t, () => Response.json({ error: { code, operation_state: operationState } }, { status: 429 }));
+  await assert.rejects(api.request(path, { files: [], expected_revision: 32 }), /operationCouldNotBeConfirmedRefreshTheCurrentState/u);
+  assert.equal(api.refreshRequired(), true);
+  await assert.rejects(api.request('skill-installations', { files: [], expected_revision: 0 }), /refreshTheLibraryBeforeMakingAnotherChange/u);
+  assert.equal(api.requests.length, 1);
+});
+
 for (const detached of [false, true]) test("request timeout preserves " + (detached ? "detached-view cancellation" : "service-local recovery"), async t => {
   const schedule = globalThis.setTimeout;
   t.mock.method(globalThis, "setTimeout", (callback, delay) => schedule(callback, delay === 25000 ? 0 : delay));

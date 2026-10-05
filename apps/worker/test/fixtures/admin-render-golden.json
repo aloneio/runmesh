@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "925472bd7cd0bb71de6f63a1a259c2123121bce11f679f70404cd3a727f2656e",
-      "bytes": 132055,
+      "sha256": "59521eca1d4e78e8447afb9a0f43381f57855358aab10906234d8c0e183b28ef",
+      "bytes": 132539,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "c14bdf57634312d6ff4f50f2fe1f05c2c967958bdab4f4e7a1e94b272649104b",
-      "bytes": 132643,
+      "sha256": "cfdb61edb15d0750ddc44c97bba014d50e6666bb7c52366ead4bfd5e2643ce6d",
+      "bytes": 133127,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "7a67b3101660106d25ca23ee0a0bb2a99028cad7d870464f417d8594e2631d7f",
-      "bytes": 133791,
+      "sha256": "afe57415a56ab4d8915f76f1a2285a94e12ba4c97267c306aa0f351108cc36b7",
+      "bytes": 134275,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "c05d8509e6caa867e4567fac6fe52ca688fd05e80dec98dfed360b1085b3b3bf",
-      "bytes": 134140,
+      "sha256": "a44445e1f681f85eddeb13379a80ffcc7ecfaf9718fd5611cfe80ef6385b7851",
+      "bytes": 134624,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -673,5 +673,16 @@
     ],
     "reviewed_change": "Report failed clipboard writes with short English and Chinese retry labels, keep manual-copy guidance in the button title, announce copy status with a polite live region, remove temporary clipboard content on every outcome, and allow explicit retry. Replacing only the new browser bundle with the independently rebuilt source-base bundle reproduces every prior rendered hash and byte count.",
     "non_script_markup_unchanged": true
+  },
+  "skill_capacity_review": {
+    "source_base": "ac4e2b8de2e0eeeb1f151b5e00b5fd6be78f0ca3",
+    "reviewed_change": "Confirmed Skill installation capacity rejections show a localized limit message and leave the form ready for an explicit next operation. Unknown outcomes and unrelated HTTP 429 errors retain refresh admission. Replacing only the updated browser bundle reproduces each previous rendered hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ]
   }
 }
