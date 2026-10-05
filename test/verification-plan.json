@@ -82,6 +82,7 @@
         "apps/runner/test/job-cwd-race.test.ts",
         "apps/runner/test/job-input.test.ts",
         "apps/runner/test/job-queue.test.ts",
+        "apps/runner/test/job-queued-cancellation.test.ts",
         "apps/runner/test/job-recovery.test.ts",
         "apps/runner/test/job-reporting.test.ts",
         "apps/runner/test/patch-git.test.ts",
