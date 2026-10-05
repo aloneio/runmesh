@@ -14,6 +14,7 @@ const context = (record: ManagedOAuthRecord, kind: string) => `connection:${reco
  * ports. Construction performs no I/O; the protocol adapter owns SDK details. */
 export function createManagedOAuth(ports: ManagedOAuthPorts) {
   const active = new Set<string>();
+  const refreshing = new Set<string>();
   const origin = (requestOrigin?: string) => {
     const configured = ports.origin(), value = configured ?? requestOrigin;
     if (configured !== undefined && requestOrigin !== undefined && configured !== requestOrigin) return fault("denied");
@@ -34,6 +35,14 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
   const current = (record: ManagedOAuthRecord) => {
     const live = ports.profile(record.profile_id), stored = ports.repository.read(record.profile_id);
     return live?.enabled === true && live.authentication === "oauth" && live.revision === record.profile_revision && stored?.revision === record.revision;
+  };
+  const credentialChanged = (record: ManagedOAuthRecord): never => {
+    const stored = ports.repository.read(record.profile_id);
+    const sameAccount = stored !== undefined && stored.state_hash === record.state_hash
+      && stored.profile_revision === record.profile_revision && current(stored);
+    const temporary = sameAccount && ((refreshing.has(record.profile_id) && (stored.state === "ready" || stored.state === "refreshing"))
+      || (stored.state === "ready" && stored.revision > record.revision));
+    return fault(temporary ? "unavailable" : "reauthorization_required");
   };
   const replace = (record: ManagedOAuthRecord, patch: Partial<ManagedOAuthRecord>) => {
     if (!current(record)) return fault("conflict");
@@ -120,7 +129,8 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     async credential(selected: ConnectionProfile, signal: AbortSignal, admit: () => Promise<void>): Promise<CredentialLease> {
       await admit(); signal.throwIfAborted();
       let record = ports.repository.read(selected.profile_id);
-      if (!record || record.state !== "ready" || !record.tokens || !record.discovery || !record.client) return fault("reauthorization_required");
+      if (!record) return fault("reauthorization_required");
+      if (record.state !== "ready" || !record.tokens || !record.discovery || !record.client) return credentialChanged(record);
       if (record.profile_revision !== selected.revision) {
         // Profile destinations and authentication are immutable; later revisions
         // only pause/resume sharing. Rebind a ready account for a new lease,
@@ -133,22 +143,32 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
         if (!ports.repository.replace(resumed, record.revision)) return fault("reauthorization_required");
         record = resumed;
       }
-      if (!record.tokens || !record.client || !current(record)) return fault("reauthorization_required");
+      if (!record.tokens || !record.client || !current(record)) return credentialChanged(record);
       const base = origin(record.origin);
-      const authorize = async () => { await admit(); signal.throwIfAborted(); if (!current(record!)) return fault("reauthorization_required"); };
+      const authorize = async () => {
+        await admit(); signal.throwIfAborted();
+        if (!current(record!)) return credentialChanged(record!);
+      };
       let tokens = await ports.cipher.open(context(record, "tokens"), record.tokens) as ManagedOAuthTokens;
       if (record.token_expires_at <= ports.now() + 30_000) {
         if (!tokens.refresh_token) return fault("reauthorization_required");
-        const client = await ports.cipher.open(context(record, "client"), record.client);
-        const fresh = await ports.protocol.refresh({ endpoint: selected.endpoint, origin: base, discovery: record.discovery!,
-          client, refresh_token: tokens.refresh_token, signal, authorize,
-          beforeTokenRequest: () => {
-            if (record!.state !== "ready") return fault("reauthorization_required");
-            record = replace(record!, { state: "refreshing" });
-          } });
-        const value = tokenValues({ ...fresh, ...(tokens.issuer === undefined ? {} : { issuer: tokens.issuer }) }, tokens); tokens = value.tokens;
-        const envelope = await ports.cipher.seal(context(record, "tokens"), tokens);
-        record = await commit(record, { state: "ready", tokens: envelope, token_expires_at: value.expires }, authorize);
+        // Only this owner's live refresh is temporary contention. Persisted
+        // refreshing state after eviction or failure still needs a new account
+        // authorization because a rotating token may already have been used.
+        if (!current(record) || refreshing.has(selected.profile_id)) return credentialChanged(record);
+        refreshing.add(selected.profile_id);
+        try {
+          const client = await ports.cipher.open(context(record, "client"), record.client);
+          const fresh = await ports.protocol.refresh({ endpoint: selected.endpoint, origin: base, discovery: record.discovery!,
+            client, refresh_token: tokens.refresh_token, signal, authorize,
+            beforeTokenRequest: () => {
+              if (record!.state !== "ready") return fault("reauthorization_required");
+              record = replace(record!, { state: "refreshing" });
+            } });
+          const value = tokenValues({ ...fresh, ...(tokens.issuer === undefined ? {} : { issuer: tokens.issuer }) }, tokens); tokens = value.tokens;
+          const envelope = await ports.cipher.seal(context(record, "tokens"), tokens);
+          record = await commit(record, { state: "ready", tokens: envelope, token_expires_at: value.expires }, authorize);
+        } finally { refreshing.delete(selected.profile_id); }
       }
       await authorize();
       const credential = parseCredential({ kind: "bearer", token: tokens.access_token }); if (!credential) return fault("unavailable");
