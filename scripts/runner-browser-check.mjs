@@ -20,9 +20,9 @@ export async function checkRunnerActions(executable) {
         requests.push(url.pathname);
         assert.equal(body.get('csrf_token'), 'fixture-csrf');
         assert.equal(body.get('confirmation'), runnerId);
-        if (mode === 'delayed') await new Promise(resolve => { release = resolve; });
-        if (mode === 'success' || mode === 'expired') {
-          removed = mode === 'success'; res.statusCode = 303;
+        if (mode === 'delayed' || mode === 'delayed-success') await new Promise(resolve => { release = resolve; });
+        if (mode === 'success' || mode === 'delayed-success' || mode === 'expired') {
+          removed = mode !== 'expired'; res.statusCode = 303;
           res.setHeader('location', mode === 'expired' ? '/login' : '/admin/runners'); res.end(); return;
         }
         if (mode === 'unknown') { res.statusCode = 502; res.end('PRIVATE_UPSTREAM_DIAGNOSTIC'); return; }
@@ -38,6 +38,7 @@ export async function checkRunnerActions(executable) {
         res.statusCode = response.status; res.end(await response.text()); return;
       }
       if (url.pathname === '/login') { res.end('<h1>Sign in</h1>'); return; }
+      if (url.pathname === '/admin/clients') { res.end(adminDocument('Clients', '<section class="page-heading"><h1>Clients</h1></section>', 'clients')); return; }
       res.setHeader('set-cookie', 'fixture_console_session=active; Path=/; HttpOnly; SameSite=Lax');
       const data = { runners: removed ? [] : [{ runner_id: runnerId, display_name: 'Disposable Runner', state: 'offline', last_heartbeat_ms: null, public_info: null }] };
       res.end(adminDocument('Runners', runnersPage({ configuredModes: new Map([[runnerId, 'dedicated_user']]), maxValidityDays: 365 }, data, 'fixture-csrf'), 'runners'));
@@ -81,6 +82,27 @@ export async function checkRunnerActions(executable) {
     assert.equal(requests.length, previous + 1); release();
     await page.waitForFunction(() => !document.querySelector('[data-runner-danger-action]').hasAttribute('aria-busy'));
     assert.equal(await page.getByRole('button', { name: 'Delete', exact: true }).isEnabled(), true);
+
+    // A delayed success belongs to the departed page, even before its DOM is replaced.
+    mode = 'delayed-success'; release = undefined; const beforeHandoff = requests.length;
+    let releaseDestination, destinationStarted;
+    const destinationReady = new Promise(resolve => { releaseDestination = resolve; });
+    const destinationRequested = new Promise(resolve => { destinationStarted = resolve; });
+    await page.route(origin + '/admin/clients', async route => { destinationStarted(); await destinationReady; await route.continue(); });
+    try {
+      const mutation = page.waitForRequest(request => request.method() === 'POST');
+      await page.getByRole('button', { name: 'Delete', exact: true }).click(); await mutation;
+      await page.locator('.control-nav a[href="/admin/clients"]').click(); await destinationRequested;
+      assert.equal(await page.locator('[data-runner-danger-action]').count(), 1);
+      const response = page.waitForResponse(result => result.url() === origin + '/admin/runners' && result.request().method() === 'GET');
+      assert.ok(release); release(); await response;
+      await page.waitForFunction(() => !document.querySelector('[data-runner-danger-action]')?.hasAttribute('aria-busy'));
+      assert.equal(await page.locator('[data-runner-danger-action]').count(), 1, 'The old page must remain visible until the selected destination arrives');
+      releaseDestination(); await page.waitForURL(origin + '/admin/clients');
+      assert.equal(await page.getByRole('heading', { name: 'Clients', exact: true }).count(), 1);
+      assert.equal(requests.length, beforeHandoff + 1, 'Leaving the page must not replay the Runner mutation');
+    } finally { release?.(); releaseDestination(); await page.unroute(origin + '/admin/clients').catch(() => undefined); }
+    removed = false; await openForm();
 
     mode = 'unknown';
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -127,6 +149,6 @@ export async function checkRunnerActions(executable) {
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
     assert.equal(page.url(), origin + '/login');
     assert.deepEqual(errors, []);
-    return { state: 'passed', inline_errors: true, session_preserved: true, submitter_respected: true, duplicate_post_blocked: true, unknown_not_replayed: true, stalled_headers_recover: true, stalled_body_recovers: true, successful_delete_refresh: true, expired_session_redirect: true, screenshots: 0 };
+    return { state: 'passed', inline_errors: true, session_preserved: true, submitter_respected: true, duplicate_post_blocked: true, stale_success_keeps_destination: true, unknown_not_replayed: true, stalled_headers_recover: true, stalled_body_recovers: true, successful_delete_refresh: true, expired_session_redirect: true, screenshots: 0 };
   } finally { release?.(); await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 }

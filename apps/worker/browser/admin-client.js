@@ -9,9 +9,10 @@ const locale = createLocale({ document });
 const controls = createPageControls({ document, window, navigator, location, locale });
 let navigation;
 function bindPage(root) {
+  const isCurrent = navigation.capturePage();
   controls.bindPageControls(root);
-  bindCentralProduct(root);
-  bindRunnerActions(root);
+  bindCentralProduct(root, { isCurrent });
+  bindRunnerActions(root, { isCurrent });
   navigation.bind(root);
 }
 const view = createAdminPages({ document, location, history, bindPage, locale });
