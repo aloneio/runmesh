@@ -42,6 +42,8 @@ export interface RunnerHistoryPorts {
 
 /** Admitted requests only; authority remains with synchronous Registry operations. */
 export function createRunnerHistoryRoutes(ports: RunnerHistoryPorts): (request: RunnerRouteRequest) => Promise<Response | undefined> {
+  const currentHistorySettings = (runnerId: string, lifecycle: string): JobHistorySettings | undefined =>
+    ports.runnerRow(runnerId)?.lifecycle_id === lifecycle ? ports.jobHistorySettings(runnerId, lifecycle) : undefined;
   return async ({
     method,
     runnerId,
@@ -62,16 +64,15 @@ export function createRunnerHistoryRoutes(ports: RunnerHistoryPorts): (request: 
         const settings = ports.jobHistorySettings(runnerId);
         const life = ports.runnerRow(runnerId)?.lifecycle_id;
         if (ports.packedJobs !== undefined && life !== undefined) {
+          let pending = false;
           try {
-            await ports.packedJobs.setRetention(runnerId, life, settings.retention_days);
+            await ports.packedJobs.setRetention(runnerId, life, () => currentHistorySettings(runnerId, life));
           } catch {
-            return Response.json({
-              ...settings,
-              cleanup_update: "pending_next_upload"
-            }, {
-              status: 202
-            });
+            pending = true;
           }
+          const current = currentHistorySettings(runnerId, life);
+          if (current === undefined) return new Response("history identity changed", { status: 409 });
+          return Response.json(pending ? { ...current, cleanup_update: "pending_next_upload" } : current, { status: pending ? 202 : 200 });
         }
         return Response.json(settings);
       }
@@ -339,7 +340,7 @@ export function createRunnerHistoryRoutes(ports: RunnerHistoryPorts): (request: 
       });
       try {
         if (ports.packedJobs === undefined) throw new Error("history unavailable");
-        const saved = await ports.packedJobs.merge(runnerId, lifecycle, eligible, settings);
+        const saved = await ports.packedJobs.merge(runnerId, lifecycle, eligible, () => currentHistorySettings(runnerId, lifecycle));
         return Response.json({
           history_status: saved.recorded ? "recorded" : saved.deferred ? "deferred" : "unchanged",
           updated_at_ms: saved.updated_at_ms

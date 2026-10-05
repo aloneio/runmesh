@@ -3,7 +3,7 @@ import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
 
 /** Optional history sinks; these operations never own Registry authority. */
 export interface PackedHistoryPort {
-  merge(runnerId: string, lifecycleId: string, jobs: readonly JobMetadata[], settings: JobHistorySettings): Promise<{
+  merge(runnerId: string, lifecycleId: string, jobs: readonly JobMetadata[], currentSettings: () => JobHistorySettings | undefined): Promise<{
     recorded: boolean;
     updated_at_ms: number | null;
     deferred?: boolean;
@@ -18,7 +18,7 @@ export interface PackedHistoryPort {
     retained_limit: number;
   }>;
   get(runnerId: string, lifecycleId: string, jobId: string, settings: JobHistorySettings): Promise<JobMetadata | undefined>;
-  setRetention(runnerId: string, lifecycleId: string, days: number): Promise<void>;
+  setRetention(runnerId: string, lifecycleId: string, currentSettings: () => JobHistorySettings | undefined): Promise<void>;
 }
 export interface AuditHistoryPort {
   list(runnerId: string, lifecycleId: string, limit?: number): Promise<Record<string, unknown>[]>;

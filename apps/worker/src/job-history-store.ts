@@ -15,7 +15,19 @@ const SELECT = "SELECT jobs_json,updated_at_ms,revision,retention_days FROM runm
 export class PackedJobHistory {
   private ready: Promise<void> | undefined;
   private disabledUntil = 0;
+  private readonly writes = new Map<string, Promise<unknown>>();
   public constructor(private readonly db: D1Database, private readonly namespace: string) {}
+  /** Registry is the sole policy writer. Order each lifecycle's pending D1
+   * writes so a no-op settings acknowledgement cannot precede an older write.
+   * The independent cleanup worker still uses snapshot revision CAS. */
+  private write<T>(runnerId: string, lifecycle: string, operation: () => Promise<T>): Promise<T> {
+    const key = JSON.stringify([runnerId, lifecycle]), previous = this.writes.get(key);
+    const result = previous === undefined ? Promise.resolve().then(operation) : previous.then(operation, operation);
+    this.writes.set(key, result);
+    const complete = () => { if (this.writes.get(key) === result) this.writes.delete(key); };
+    void result.then(complete, complete);
+    return result;
+  }
   private async initialize(): Promise<void> {
     if (Date.now() < this.disabledUntil) throw new JobHistoryUnavailableError();
     this.ready ??= (async () => {
@@ -48,13 +60,21 @@ export class PackedJobHistory {
     if (!Array.isArray(values) || values.length > MAX_JOBS) throw new JobHistoryUnavailableError();
     return values.map((v) => JobMetadataSchema.parse(v)).filter((job) => !terminal.has(job.status) || job.updated_at_ms > now - days * DAY);
   }
-  public async merge(runnerId: string, lifecycle: string, incoming: readonly JobMetadata[], settings: JobHistorySettings, now = Date.now()): Promise<{ recorded: boolean; updated_at_ms: number | null; deferred?: boolean }> {
-    if (settings.mode === "off") return { recorded: false, updated_at_ms: null };
+  public merge(runnerId: string, lifecycle: string, incoming: readonly JobMetadata[], currentSettings: () => JobHistorySettings | undefined, now = Date.now()): Promise<{ recorded: boolean; updated_at_ms: number | null; deferred?: boolean }> {
+    return this.write(runnerId, lifecycle, () => this.mergeCurrent(runnerId, lifecycle, incoming, currentSettings, now));
+  }
+  private async mergeCurrent(runnerId: string, lifecycle: string, incoming: readonly JobMetadata[], currentSettings: () => JobHistorySettings | undefined, now: number): Promise<{ recorded: boolean; updated_at_ms: number | null; deferred?: boolean }> {
+    const initial = currentSettings();
+    if (initial === undefined || initial.mode === "off") return { recorded: false, updated_at_ms: null };
     if (Date.now() < this.disabledUntil) throw new JobHistoryUnavailableError();
     try {
       await this.initialize();
       for (let attempt = 0; attempt < 3; attempt++) {
         const old = await this.db.prepare(SELECT).bind(this.namespace,runnerId,lifecycle).first<SnapshotRow>();
+        // Registry owns these settings. Re-read after I/O and on every CAS
+        // retry so an older upload cannot restore an earlier retention choice.
+        const settings = currentSettings();
+        if (settings === undefined || settings.mode === "off") return { recorded: false, updated_at_ms: old?.updated_at_ms ?? null };
         // This durable guard also bounds legacy peers that upload a complete
         // snapshot after every event; it survives isolate reconstruction.
         if (settings.mode === "batched" && old !== null && old.updated_at_ms > now - settings.interval_seconds * 1000) return { recorded: false, updated_at_ms: old.updated_at_ms, deferred:true };
@@ -99,12 +119,29 @@ export class PackedJobHistory {
       return this.decode(row,settings.retention_days,Date.now()).find((job) => job.job_id === jobId);
     } catch (error) { return this.failed(error); }
   }
-  public async setRetention(runnerId: string, lifecycle: string, days: number): Promise<void> {
-    if (!HISTORY_DAYS.some((allowed) => allowed === days)) throw new JobHistoryUnavailableError();
+  public setRetention(runnerId: string, lifecycle: string, currentSettings: () => JobHistorySettings | undefined): Promise<void> {
+    return this.write(runnerId, lifecycle, () => this.setCurrentRetention(runnerId, lifecycle, currentSettings));
+  }
+  private async setCurrentRetention(runnerId: string, lifecycle: string, currentSettings: () => JobHistorySettings | undefined): Promise<void> {
+    if (currentSettings() === undefined) return;
     if (Date.now() < this.disabledUntil) throw new JobHistoryUnavailableError();
     try {
       await this.initialize();
-      await this.db.prepare("UPDATE runmesh_job_snapshots_v1 SET retention_days=?,revision=revision+1 WHERE namespace=? AND runner_id=? AND lifecycle_id=? AND retention_days<>?").bind(days,this.namespace,runnerId,lifecycle,days).run();
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const old = await this.db.prepare(SELECT).bind(this.namespace,runnerId,lifecycle).first<SnapshotRow>();
+        const settings = currentSettings();
+        if (settings === undefined) return;
+        const days = settings.retention_days;
+        if (!HISTORY_DAYS.some((allowed) => allowed === days)) throw new JobHistoryUnavailableError();
+        if (old?.retention_days === days) return;
+        // The first settings write also fences an in-flight first upload.
+        // Zero keeps this empty row from delaying the first batched snapshot.
+        const result = old === null
+          ? await this.db.prepare("INSERT INTO runmesh_job_snapshots_v1 (namespace,runner_id,lifecycle_id,jobs_json,updated_at_ms,revision,retention_days) VALUES (?,?,?,'[]',0,1,?) ON CONFLICT(namespace,runner_id,lifecycle_id) DO NOTHING").bind(this.namespace,runnerId,lifecycle,days).run()
+          : await this.db.prepare("UPDATE runmesh_job_snapshots_v1 SET retention_days=?,revision=revision+1 WHERE namespace=? AND runner_id=? AND lifecycle_id=? AND revision=?").bind(days,this.namespace,runnerId,lifecycle,old.revision).run();
+        if (result.meta.changes > 0) return;
+      }
+      throw new JobHistoryUnavailableError();
     } catch (error) { return this.failed(error); }
   }
   /** Cursor-based sweep: at most 20 packed rows per cron, never a full table
