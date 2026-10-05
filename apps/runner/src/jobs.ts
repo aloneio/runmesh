@@ -381,6 +381,9 @@ export class JobManager {
       ...(params.record_history === undefined ? {} : { record_history: params.record_history as boolean }),
     };
     if (reservedJob === undefined) {
+    // Classify waiting admissions before their first persistence await so a
+    // waiting record does not count as another execution slot.
+    if (mustQueue) this.queuedIds.add(job.job_id);
     this.jobs.set(job.job_id, job);
     try {
       await this.files.ensureDirectoryPath(this.jobDir(job.job_id), "Runner job directory", true);
@@ -393,6 +396,7 @@ export class JobManager {
       // (for example a concurrent queued cancellation) by checking identity.
       if (this.jobs.get(job.job_id) === job && !this.detachedCompletions.has(job.job_id)) {
         this.jobs.delete(job.job_id);
+        this.queuedIds.delete(job.job_id);
         this.jobLogBytes.delete(job.job_id);
         await this.files.rm(this.jobDir(job.job_id), { recursive: true, force: true }).catch(() => undefined);
       }
@@ -407,7 +411,7 @@ export class JobManager {
       }
       const current=this.jobs.get(job.job_id);
       if(current?.status !== "queued")return current ?? job;
-      this.queue.push(client, job.job_id, {input:params,generation}); this.queuedIds.add(job.job_id);
+      this.queue.push(client, job.job_id, {input:params,generation});
       this.onEvent({type:"status",job});
       return job;
     }
