@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "507fb360cf33c365e799012a8dcd4653b4d970659e5c4bbdfa3f663cf297bdc2",
-      "bytes": 134089,
+      "sha256": "86cede1d571588ad3b23f84d488d88b7217571622efa18843f4b7e0e75c9bc50",
+      "bytes": 134914,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "403047d92faa143a6108ad5aa2c9ed432c0f5440799f97484919a556783ab73a",
-      "bytes": 134677,
+      "sha256": "f0a53060017f3ad5af58bfea500ab5aea4256ba52010eb66ee2ddccf4ab263a1",
+      "bytes": 135502,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "362fea22fefd4bde58c49df85f75cce7d8a0f41e4c3b052070a83927c97c25ef",
-      "bytes": 135825,
+      "sha256": "cf330b46626f0381eb023dfd50058f38d3c18847a3329256c4876ab3bfe0f0a3",
+      "bytes": 136650,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "ce373c3e75507aa1cf75b58ffef0093b5f3f01f2a3f0b96bb0b8729ce2ece258",
-      "bytes": 136174,
+      "sha256": "b1dfbc1b26483b1ddeeda8e23c738e7da23526d0adfbf278bdbc40433244302b",
+      "bytes": 136999,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -716,6 +716,17 @@
       "admin-document"
     ],
     "reviewed_change": "Preserve forms and controller lifetimes for settled same-page fragment history. Pending or cross-page restoration continues through the existing navigation owner. Independently rebuilding and substituting the prior browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes.",
+    "non_script_markup_unchanged": true
+  },
+  "oauth_navigation_review": {
+    "source_base": "3aaa3cf10348cae03f0e61e4ef336694f8f4754f",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Route OAuth callback URL cleanup through the existing navigation and page-view owners so rendered page keys match native history. Same-page history preserves live forms; pending and cross-page navigation retains its lifecycle. Independently rebuilding and substituting the prior browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes.",
     "non_script_markup_unchanged": true
   }
 }

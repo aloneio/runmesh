@@ -5,10 +5,11 @@ import { createAdminNavigation } from "../apps/worker/browser/admin-navigation.j
 import { createAdminPages } from "../apps/worker/browser/admin-pages.js";
 import { createPageControls } from "../apps/worker/browser/page-controls.js";
 import { createLocale } from "../apps/worker/browser/locale.js";
+import { bindCentralProduct } from "../apps/worker/browser/central/controller.js";
 
-function harness() {
+function harness(href = "https://worker.test/admin") {
   const fetched = [], mounted = [], busy = [];
-  const location = { href: "https://worker.test/admin" };
+  const location = { href };
   const context = { location, document: { querySelectorAll: () => [] }, locale: { requestedLocale: () => "en" },
     fetch: async (url, options) => { fetched.push({ url, options }); return { ok: true, text: async () => "version-" + fetched.length }; },
     parse: markup => ({ title: markup, querySelector: () => ({ markup }) }), onError() {},
@@ -41,6 +42,99 @@ test("native fragment history preserves the initial page and its live controller
   assert.equal(original(), true);
   assert.equal(h.fetched.length, 0);
   assert.equal(h.mounted.length, 0);
+});
+
+test("current URL replacement refuses a different page or origin", async () => {
+  const h = harness("https://worker.test/admin/central?connected=fixture"), current = h.nav.capturePage(), replacements = [];
+  h.context.view.replaceCurrentUrl = (...args) => replacements.push(args);
+  for (const destination of ["/admin/clients", "https://other.test/admin/central"]) {
+    assert.equal(h.nav.replaceCurrentUrl(destination), false);
+  }
+  await h.nav.restore(new URL("https://worker.test/admin/central?connected=fixture#main-content"));
+  assert.deepEqual(replacements, []);
+  assert.equal(h.fetched.length, 0);
+  assert.equal(current(), true);
+});
+
+test("current URL replacement cannot revive loading or departed pages", async () => {
+  const h = harness("https://worker.test/admin/central?connected=fixture"), replacements = [];
+  h.context.view.replaceCurrentUrl = (...args) => replacements.push(args);
+  let release;
+  h.context.fetch = () => new Promise(resolve => { release = resolve; });
+  const pending = h.open("/admin/clients");
+  assert.equal(h.nav.replaceCurrentUrl("/admin/central"), false);
+  h.nav.retire();
+  release({ ok: true, text: async () => "departed" });
+  await pending;
+  assert.equal(h.nav.isLoading(), false);
+  assert.equal(h.nav.replaceCurrentUrl("/admin/central"), false);
+  assert.deepEqual(replacements, []);
+  assert.equal(h.nav.capturePage()(), false);
+});
+
+test("a failed history replacement keeps the last rendered page key", async () => {
+  const h = harness("https://worker.test/admin/central?connected=fixture"), current = h.nav.capturePage();
+  h.context.view.replaceCurrentUrl = () => { throw new Error("history rejected"); };
+  assert.throws(() => h.nav.replaceCurrentUrl("/admin/central"), /history rejected/u);
+  await h.nav.restore(new URL("https://worker.test/admin/central?connected=fixture#main-content"));
+  assert.equal(h.fetched.length, 0);
+  assert.equal(current(), true);
+  await h.nav.restore(new URL("https://worker.test/admin/central"));
+  assert.equal(h.fetched.length, 1);
+  assert.equal(current(), false);
+});
+
+for (const entry of ["initial", "mounted"]) test("OAuth return cleanup preserves fragment history and drafts on the " + entry + " page", async t => {
+  const callback = "/admin/central?connected=service-fixture", clean = "https://worker.test/admin/central";
+  const h = harness(entry === "initial" ? "https://worker.test" + callback : undefined);
+  const originalGlobals = new Map(["document", "location", "history", "fetch"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  t.after(() => { for (const [key, descriptor] of originalGlobals) descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete globalThis[key]; });
+  const status = element(), create = element(), refresh = element(), draft = { value: "" };
+  const list = { replaceChildren() {}, append() {} }, replacements = [], replacementLoading = [];
+  const app = { isConnected: true, setAttribute() {},
+    getAttribute: name => name === "data-skills" ? "false" : "fixture-csrf",
+    querySelector: selector => ({ "[data-product-status]": status, "[data-service-list]": list,
+      "[data-product-refresh]": refresh, "[data-service-create]": create })[selector] ?? null,
+    querySelectorAll: () => [],
+  };
+  const history = { state: { runmeshAdmin: true }, replaceState(state, _title, url) {
+    this.state = state; replacements.push(url); h.context.location.href = new URL(url, h.context.location.href).href;
+  } };
+  Object.assign(globalThis, { document: { documentElement: { lang: "en" }, createElement: () => element() },
+    location: h.context.location, history, fetch: async () => Response.json({ state: "listed", profiles: [], next_after: null }) });
+  h.context.view.replaceCurrentUrl = url => history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+  let pageIsCurrent, mountedWhileLoading;
+  function bind() {
+    pageIsCurrent = h.nav.capturePage();
+    bindCentralProduct({ querySelector: () => app }, { isCurrent: pageIsCurrent, navigate: url => h.nav.navigate(url),
+      replaceCurrentUrl: url => { replacementLoading.push(h.nav.isLoading()); return h.nav.replaceCurrentUrl(url); } });
+  }
+  const mount = h.context.view.mount;
+  h.context.view.mount = (...args) => {
+    mount(...args); h.context.location.href = args[4].href; draft.value = "";
+    if (args[2].startsWith("/admin/central")) { mountedWhileLoading = h.nav.isLoading(); bind(); }
+  };
+  if (entry === "initial") bind(); else await h.open(callback);
+  await new Promise(setImmediate);
+  assert.equal(h.context.location.href, clean);
+  const reads = h.fetched.length, mounts = h.mounted.length, current = pageIsCurrent;
+  draft.value = "Unsubmitted service address";
+  for (const path of [clean + "#main-content", clean, clean + "#main-content"]) {
+    h.context.location.href = path;
+    await h.nav.restore(new URL(path));
+    assert.equal(h.fetched.length, reads, "Same-page skip/Back/Forward must not reload the cleaned OAuth URL");
+    assert.equal(h.mounted.length, mounts);
+    assert.equal(draft.value, "Unsubmitted service address");
+    assert.equal(current(), true);
+  }
+  assert.deepEqual(replacements, ["/admin/central"]);
+  assert.deepEqual(replacementLoading, [false]);
+  assert.deepEqual(history.state, { runmeshAdmin: true });
+  if (entry === "mounted") assert.equal(mountedWhileLoading, true);
+  await h.open("/admin/clients");
+  assert.equal(h.fetched.length, reads + 1, "Cross-page navigation still revalidates");
+  assert.equal(h.mounted.at(-1).key, "/admin/clients");
+  assert.equal(current(), false);
 });
 
 test("fragment history uses the last mounted page while query changes revalidate", async () => {
@@ -280,6 +374,21 @@ function element() {
     classList: { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name), toggle(name, active) { if (active) classes.add(name); else classes.delete(name); } },
   };
 }
+test("current URL replacement updates the active container without remounting or losing history state", () => {
+  const active = element(), stale = element(), replacements = [], state = { runmeshAdmin: true, marker: "kept" };
+  active.setAttribute("data-page-key", "/admin/central?connected=fixture");
+  stale.setAttribute("data-page-key", "/admin/clients");
+  const document = { querySelector: selector => selector === "[data-page-container].is-active" ? active : null,
+    createElement() { assert.fail("URL cleanup must not remount a page"); } };
+  const history = { state, replaceState: (...args) => replacements.push(args) };
+  const view = createAdminPages({ document, location: {}, history, bindPage() { assert.fail("URL cleanup must not rebind controllers"); }, locale: {} });
+  view.replaceCurrentUrl(new URL("https://worker.test/admin/central#main-content"), "/admin/central");
+  assert.deepEqual(replacements, [[state, "", "/admin/central#main-content"]]);
+  assert.equal(replacements[0][0], state);
+  assert.equal(active.getAttribute("data-page-key"), "/admin/central");
+  assert.equal(stale.getAttribute("data-page-key"), "/admin/clients");
+});
+
 test("mounting a page removes obsolete forms and sensitive DOM through the view module", () => {
   const viewport = { children: [], style: {}, appendChild(node) { this.children.push(node); }, querySelectorAll() { return this.children; }, querySelector() { return this.children[0]; } };
   const make = () => { const node = element(); node.appendChild = root => { node.querySelector = () => root; }; node.remove = () => viewport.children.splice(viewport.children.indexOf(node), 1); return node; };

@@ -5,7 +5,7 @@ import { createServiceWorkflow } from "./services.js";
 import { createSkillWorkflow } from "./skills.js";
 
 /** One owner for refresh admission, snapshots and busy state across both workflows. */
-export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate }) {
+export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, replaceCurrentUrl }) {
   var app = root.querySelector('[data-central-product]');
   if (!app || app.__productBound) return;
   app.__productBound = true;
@@ -98,7 +98,7 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate })
     await refresh();
     if (!isCurrent()) return;
     var connected = new URL(location.href).searchParams.get('connected');
-    if (connected) history.replaceState(null, '', '/admin/central');
+    if (connected) replaceCurrentUrl('/admin/central');
     await services.resumePending(profiles, connected);
   });
 }

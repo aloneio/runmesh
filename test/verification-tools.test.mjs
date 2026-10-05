@@ -540,6 +540,21 @@ test("AR08 reporter preserves skipped and todo counts without leaking raw fixtur
   assert.deepEqual(summary, { state: "passed", total: 3, passed: 1, failed: 0, skipped: 1, todo: 1, files: 1 });
   assert.ok(!JSON.stringify(summary).includes("private"));
 });
+test("AR08 reporter counts every completed status and still rejects actual failures", () => {
+  const value = reporter(); value.numTotalTests++; value.numPendingTests++;
+  value.testResults[0].assertionResults.push({ status: "skipped" });
+  assert.deepEqual(summarizeVitest(value, 0), { state: "passed", total: 4, passed: 1, failed: 0, skipped: 2, todo: 1, files: 1 });
+  value.numTotalTests++; value.numFailedTests++;
+  value.testResults[0].assertionResults.push({ status: "failed" });
+  assert.throws(() => summarizeVitest(value, 0), /an actual failure/u);
+});
+for (const status of ["constructor", "__proto__", "toString", "hasOwnProperty", ["passed"], null, 0, {}])
+test("AR08 reporter rejects malformed status " + JSON.stringify(status), () => {
+  const value = reporter(); value.numTotalTests++;
+  if (Array.isArray(status)) value.numPassedTests++;
+  value.testResults[0].assertionResults.push({ status });
+  assert.throws(() => summarizeVitest(value, 0), /unknown\/incomplete test result/u);
+});
 test("AR08 exit zero, stale counts and success-looking reporters cannot fabricate verification", () => {
   assert.throws(() => summarizeVitest(reporter(), 1));
   for (const mutate of [r => r.success = false, r => r.numFailedTestSuites = 1, r => r.numTotalTests++,

@@ -1,7 +1,9 @@
 import type { Baseline } from "./contracts.js";
+import type { FileVersion } from "./contracts.js";
 import { basename } from "node:path";
 import { conflict } from "./values.js";
 import { constants } from "node:fs";
+import type { Stats } from "node:fs";
 import { dirname } from "node:path";
 import { hash } from "./values.js";
 import type { InstallState } from "./contracts.js";
@@ -44,7 +46,7 @@ export async function captureBaseline(path: ResolvedPath, policy?: PathPolicy): 
       ? undefined
       : { resolved: targetResolved, snapshot: finalTargetSnapshot };
     return {
-      path, exists: true, hash: hash(opened.bytes), mode: opened.mode, size: opened.size, bytes: opened.bytes,
+      path, exists: true, hash: hash(opened.bytes), mode: opened.mode, size: opened.size, bytes: opened.bytes, fileVersion: opened.version,
       ...(parentBoundary === undefined ? {} : { parentBoundary }),
       ...(finalTargetBoundary === undefined ? {} : { targetBoundary: finalTargetBoundary }),
     };
@@ -69,7 +71,7 @@ async function readRegularFileCapped(
   parentBoundary?: ParentBoundary,
   targetBoundary?: TargetBoundary,
   targetResolved?: ResolvedPolicyPath,
-): Promise<{ readonly bytes: Buffer; readonly mode: number; readonly size: number; readonly targetSnapshot?: PathSnapshot }> {
+): Promise<{ readonly bytes: Buffer; readonly mode: number; readonly size: number; readonly version: FileVersion; readonly targetSnapshot?: PathSnapshot }> {
   const handle = await openNoFollow(path);
   try {
     const info = await handle.stat();
@@ -100,7 +102,7 @@ async function readRegularFileCapped(
       offset += bytesRead;
     }
     if (offset > MAX_TEXT_FILE_BYTES) throw new RpcRuntimeError("file_too_large", `file exceeds ${MAX_TEXT_FILE_BYTES} bytes: ${relativePath}`);
-    return { bytes: Buffer.from(buffer.subarray(0, offset)), mode: info.mode & 0o7777, size: offset, ...(targetSnapshot === undefined ? {} : { targetSnapshot }) };
+    return { bytes: Buffer.from(buffer.subarray(0, offset)), mode: info.mode & 0o7777, size: offset, version: fileVersion(info), ...(targetSnapshot === undefined ? {} : { targetSnapshot }) };
   } finally {
     await handle.close();
   }
@@ -177,7 +179,7 @@ function sameCanonicalPath(left: string, right: string): boolean {
     : left === right;
 }
 
-export async function writeTemporary(target: string, bytes: Buffer, mode: number, policy?: PathPolicy, parentBoundary?: ParentBoundary): Promise<string> {
+export async function writeTemporary(target: string, bytes: Buffer, mode: number, policy?: PathPolicy, parentBoundary?: ParentBoundary): Promise<{ path: string; version: FileVersion }> {
   // Anchor temporary creation to the canonical parent captured with the
   // baseline. If the lexical ancestor is replaced by a junction between the
   // check and open(), this path either remains the original directory or fails
@@ -186,15 +188,19 @@ export async function writeTemporary(target: string, bytes: Buffer, mode: number
   const temporary = `${anchoredTarget}.runmesh-${randomUUID()}.tmp`;
   const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), mode);
   try {
+    let version: FileVersion;
     try {
       if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
       await handle.writeFile(bytes);
       await handle.chmod(mode);
       await handle.sync();
+      // Installation hard-links this same inode. Observe it while the staging
+      // descriptor owns it, before the public destination can be replaced.
+      version = fileVersion(await handle.stat());
     } finally {
       await handle.close();
     }
-    return temporary;
+    return { path: temporary, version };
   } catch (error) {
     // The caller learns this pathname only after preparation succeeds. Clean
     // up a failed write/mode/sync/close here after releasing its descriptor,
@@ -274,7 +280,7 @@ export async function rollback(states: readonly InstallState[], policy?: PathPol
       if (state.backupMoved) {
         // Do not erase a post-baseline writer during recovery. Retain the
         // backup and return its exact recovery path to the caller instead.
-        if (current.exists && (!state.installed || current.hash !== state.installedHash)) {
+        if (current.exists && !sameInstalledFile(state, current)) {
           throw new Error("target changed after patch installation");
         }
         if (current.exists) await rm(anchoredPath(change.path.path, change.baseline.parentBoundary), { force: false });
@@ -285,7 +291,7 @@ export async function rollback(states: readonly InstallState[], policy?: PathPol
         await verifyParentBoundary(policy, change.baseline.parentBoundary);
         await rm(state.backupPath as string, { force: false });
       } else if (state.installed && change.action === "write") {
-        if (!current.exists || current.hash !== state.installedHash) throw new Error("target changed after patch installation");
+        if (!sameInstalledFile(state, current)) throw new Error("target changed after patch installation");
         await verifyParentBoundary(policy, change.baseline.parentBoundary);
         await rm(anchoredPath(change.path.path, change.baseline.parentBoundary), { force: false });
       }
@@ -301,6 +307,19 @@ export async function rollback(states: readonly InstallState[], policy?: PathPol
     }
   }
   return failures;
+}
+
+function fileVersion(info: Stats): FileVersion {
+  return { device: info.dev, inode: info.ino, size: info.size, mode: info.mode & 0o7777, modifiedAtMs: info.mtimeMs };
+}
+
+function sameInstalledFile(state: InstallState, current: Baseline): boolean {
+  const expected = state.change.replacementVersion;
+  const observed = current.fileVersion;
+  return state.installed && current.exists && current.hash === state.installedHash
+    && expected !== undefined && observed !== undefined
+    && observed.device === expected.device && observed.inode === expected.inode
+    && observed.size === expected.size && observed.mode === expected.mode && observed.modifiedAtMs === expected.modifiedAtMs;
 }
 
 export async function fsyncDirectory(directory: string, policy?: PathPolicy, parentBoundary?: ParentBoundary): Promise<void> {

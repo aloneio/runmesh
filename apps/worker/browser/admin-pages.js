@@ -117,6 +117,12 @@ function createAdminPages({
   return {
     pageRoot,
     mount: mountAdminPage,
+    replaceCurrentUrl(url, key) {
+      const active = document.querySelector("[data-page-container].is-active");
+      if (!active) throw new Error("active page missing");
+      history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+      active.setAttribute("data-page-key", key);
+    },
     initialize() {
       ensurePageViewport();
       const active = document.querySelector("[data-page-container].is-active");

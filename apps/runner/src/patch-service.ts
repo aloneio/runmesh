@@ -281,10 +281,9 @@ export class PatchService {
         : applyHunks(sourceText, operation.hunks, sourcePath.relativePath);
       const sourceMode = source?.mode;
       if (sourceMode === null || sourceMode === undefined) throw conflict("missing_file", `source file does not exist: ${operation.path}`);
-      // A pure rename preserves the existing inode and therefore its mode is
-      // intentional.  Any operation that writes a replacement inode must
-      // clear setuid/setgid/sticky bits; otherwise a privileged source file
-      // could make a remote content edit install a privileged executable.
+      // A pure move preserves the source content and mode in the staged
+      // replacement. Content edits clear setuid/setgid/sticky bits so editing
+      // a privileged source file cannot install a privileged executable.
       const replacementMode = operation.kind === "move" && operation.hunks.length === 0
         ? sourceMode
         : sourceMode & REGULAR_FILE_MODE_MASK;
@@ -315,8 +314,8 @@ export class PatchService {
         // a path-policy race into an unreviewed write surface.
         await assertExistingParent(change.path.path, change.baseline.parentBoundary);
         await verifyParentBoundary(this.policy, change.baseline.parentBoundary);
-        const temporaryPath = await writeTemporary(change.path.path, change.bytes as Buffer, change.mode ?? 0o644, this.policy, change.baseline.parentBoundary);
-        prepared.push({ ...change, temporaryPath });
+        const temporary = await writeTemporary(change.path.path, change.bytes as Buffer, change.mode ?? 0o644, this.policy, change.baseline.parentBoundary);
+        prepared.push({ ...change, temporaryPath: temporary.path, replacementVersion: temporary.version });
       }
       return prepared;
     } catch (error) {

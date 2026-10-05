@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const hash = value => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+const testStates = { passed: "passed", failed: "failed", pending: "skipped", skipped: "skipped", todo: "todo" };
 
 /** Counters only: never export test names, errors, stack traces or paths.
  * An exit code alone is not evidence that any required test actually ran.
@@ -17,8 +18,8 @@ export function summarizeVitest(result, exitCode) {
     assert.ok(file.status === "passed" || file.status === "skipped", "test file failed or did not complete");
     for (const item of file.assertionResults) {
       assert.ok(++total <= 10000, "test observation budget exceeded");
-      const state = { passed: "passed", failed: "failed", pending: "skipped", skipped: "skipped", todo: "todo" }[item.status];
-      assert.ok(state, "unknown/incomplete test result"); counts[state]++;
+      assert.ok(typeof item.status === "string" && Object.hasOwn(testStates, item.status), "unknown/incomplete test result");
+      counts[testStates[item.status]]++;
     }
   }
   assert.ok(counts.passed > 0 && counts.failed === 0, "no passing tests or an actual failure");
