@@ -32,14 +32,19 @@ interface ProtocolOperation {
   readonly endpoint: string; readonly origin: string; readonly signal: AbortSignal;
   readonly authorize: () => Promise<void>;
 }
+interface TokenOperation extends ProtocolOperation {
+  /** Claim the one-use credential synchronously after admission and immediately
+   * before dispatch. Preparation failures leave its persisted state unchanged. */
+  readonly beforeTokenRequest: () => void;
+}
 export interface ManagedOAuthProtocol {
   begin(input: ProtocolOperation & { readonly state: string }): Promise<{
     readonly authorization_url: string; readonly discovery: ManagedOAuthDocument;
     readonly client: unknown; readonly verifier: string;
   }>;
-  complete(input: ProtocolOperation & { readonly discovery: ManagedOAuthDocument; readonly client: unknown;
+  complete(input: TokenOperation & { readonly discovery: ManagedOAuthDocument; readonly client: unknown;
     readonly verifier: unknown; readonly code: string; readonly issuer?: string }): Promise<ManagedOAuthTokens>;
-  refresh(input: ProtocolOperation & { readonly discovery: ManagedOAuthDocument; readonly client: unknown;
+  refresh(input: TokenOperation & { readonly discovery: ManagedOAuthDocument; readonly client: unknown;
     readonly refresh_token: string }): Promise<ManagedOAuthTokens>;
 }
 export interface ManagedOAuthPorts {

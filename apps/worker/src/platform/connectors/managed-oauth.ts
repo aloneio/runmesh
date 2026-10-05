@@ -67,7 +67,7 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
       const result = await auth(p.value, { serverUrl: input.endpoint, authorizationCode: input.code,
         ...(input.issuer === undefined ? {} : { iss: input.issuer }),
         fetchFn: managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
-          discovery: p.discovery, phase: 'complete', ...(send ? { send } : {}) }) });
+          discovery: p.discovery, phase: 'complete', beforeTokenRequest: input.beforeTokenRequest, ...(send ? { send } : {}) }) });
       if (result !== 'AUTHORIZED' || !p.tokens()) return fault('unavailable');
       return p.tokens()!;
     },
@@ -77,7 +77,7 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
         clientInformation: client, refreshToken: input.refresh_token,
         resource: new URL(discovery.resourceMetadata?.resource ?? input.endpoint),
         fetchFn: managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
-          discovery: () => discovery, phase: 'refresh', ...(send ? { send } : {}) }) });
+          discovery: () => discovery, phase: 'refresh', beforeTokenRequest: input.beforeTokenRequest, ...(send ? { send } : {}) }) });
     },
   };
 }

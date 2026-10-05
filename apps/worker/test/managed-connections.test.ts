@@ -145,6 +145,33 @@ it("an unavailable control secret does not replace an existing account during re
   secret = fixtureControlSecret;
   expect((await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined)).current()).toBe(true);
 });
+it("OAuth callback can resume after a temporary cipher failure before token exchange", async () => {
+  let secret: unknown = fixtureControlSecret;
+  const f = oauthFixture(false, origin, undefined, () => secret), state = await f.begin();
+  const pending = f.record(), requests = f.send.mock.calls.length;
+  secret = undefined;
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "failed" });
+  expect(f.record()).toEqual(pending); expect(f.send.mock.calls).toHaveLength(requests);
+  secret = fixtureControlSecret;
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  expect(f.state.exchanges).toBe(1);
+});
+it("OAuth refresh can resume after its last admission check fails before token dispatch", async () => {
+  let failAdmission = false;
+  const protocol = createManagedOAuthProtocol((url, init) => f.send(url, init));
+  const f = oauthFixture(false, origin, { ...protocol, refresh: input => protocol.refresh({ ...input, authorize: async () => {
+    await input.authorize(); if (failAdmission) throw new Error("temporary-admission-unavailable");
+  } }) });
+  const state = await f.begin();
+  await f.service().run(f.hash, "complete", f.callback(state)); f.now();
+  const ready = f.record(), requests = f.send.mock.calls.length;
+  const credential = () => f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  failAdmission = true;
+  await expect(credential()).rejects.toThrow("temporary-admission-unavailable");
+  expect(f.record()).toEqual(ready); expect(f.send.mock.calls).toHaveLength(requests);
+  failAdmission = false;
+  expect((await credential()).current()).toBe(true); expect(f.state.refreshes).toBe(1);
+});
 it("resuming a paused OAuth service keeps the account and replaces old leases without another consent", async () => {
   const f = oauthFixture(), state = await f.begin(), signal = new AbortController().signal;
   expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
@@ -238,7 +265,7 @@ it.each([false, true])("OAuth discovers provider and registers automatically (CI
   f.now(); const refreshed = await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined); expect(f.state.refreshes).toBe(1); expect(lease.current()).toBe(false);
   expect(await f.service().run(f.hash, "revoke", f.selection)).toMatchObject({ state: "revoked" }); expect(refreshed.current()).toBe(false); expect(f.record()?.tokens).toBeUndefined();
 });
-it.each([false, true])("OAuth HTTP handoff and callback persist through the real owner (CIMD=%s)", async cimd => {
+it.each([false, true].flatMap(cimd => [false, true].map(configuredOrigin => ({ cimd, configuredOrigin }))))("OAuth HTTP handoff and callback persist through the real owner (CIMD=$cimd, configured origin=$configuredOrigin)", async ({ cimd, configuredOrigin }) => {
   const raw = randomBase64Url(), csrf = randomBase64Url(), hash = await sha256Hex(raw), csrfHash = await sha256Hex(csrf);
   const verifier = await passwordVerifier("oauth-integration-administrator-password");
   const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
@@ -248,7 +275,7 @@ it.each([false, true])("OAuth HTTP handoff and callback persist through the real
   });
   const namespace = (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
   const stub = namespace.get(namespace.idFromName("oauth-integration-" + crypto.randomUUID()));
-  const bindings = { ...env, RUNMESH_PUBLIC_ORIGIN: origin } as WorkerEnv;
+  const bindings = { ...env, RUNMESH_PUBLIC_ORIGIN: configuredOrigin ? origin : undefined } as WorkerEnv;
   let owner: CapabilitiesDOv1;
   await runInDurableObject(stub, (_existing, storage) => { owner = new CapabilitiesDOv1(storage, bindings); });
   const call = <T>(operation: (instance: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => operation(owner));
@@ -267,6 +294,11 @@ it.each([false, true])("OAuth HTTP handoff and callback persist through the real
     } }), configured, url);
   };
   try {
+    const metadataUrl = new URL(origin + "/admin/central/connections/client-metadata");
+    const metadata = await handleConnections(new Request(metadataUrl, { headers: { host: metadataUrl.host } }), configured, metadataUrl);
+    expect({ status: metadata.status, body: await metadata.json() }).toMatchObject({ status: 200, body: {
+      client_id: metadataUrl.href, redirect_uris: [origin + "/admin/central/connections/callback"],
+    } });
     // The real Durable Object uses only the existing control secret binding.
     const begin = await request("begin", f.selection), started = await begin.json() as { authorization_url: string };
     expect({ status: begin.status, body: started }).toMatchObject({ status: 200, body: { state: "started" } });
@@ -287,6 +319,13 @@ it("OAuth rejects issuer mixup and never retries an invalid one-use code", async
   const again = await f.begin(); f.fail(); expect(await f.service().run(f.hash, "complete", f.callback(again))).toMatchObject({ state: "failed" }); expect(f.state.exchanges).toBe(1);
   expect(await f.service().run(f.hash, "complete", f.callback(again))).toMatchObject({ state: "failed", code: "invalid_callback" }); expect(f.state.exchanges).toBe(1);
 });
+it("concurrent OAuth callbacks claim the authorization code once at token dispatch", async () => {
+  const f = oauthFixture(), state = await f.begin();
+  const results = await Promise.all([0, 1].map(() => f.service().run(f.hash, "complete", f.callback(state))));
+  expect(results.filter(result => result.state === "linked")).toHaveLength(1);
+  expect(results.filter(result => result.state === "failed")).toHaveLength(1);
+  expect(f.state.exchanges).toBe(1); expect(f.record()?.state).toBe("ready");
+});
 it("OAuth does not persist tokens after browser authorization is revoked during exchange", async () => {
   const f = oauthFixture(), state = await f.begin(); f.revokeOnToken();
   expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "failed" }); expect(f.record()?.tokens).toBeUndefined();
@@ -301,12 +340,14 @@ it("managed account lifecycle uses protocol ports without network or SDK-owned s
       return { authorization_url: issuer + '/authorize?state=' + input.state, discovery: { provider_version: 1 }, client: { registration: 'opaque' }, verifier: 'opaque-verifier' };
     }),
     complete: vi.fn(async input => {
-      expect(f.record()?.state).toBe("exchanging"); await input.authorize();
+      expect(f.record()?.state).toBe("pending"); await input.authorize(); input.beforeTokenRequest();
+      expect(f.record()?.state).toBe("exchanging");
       expect(input.client).toEqual({ registration: 'opaque' }); expect(input.verifier).toBe('opaque-verifier');
       return { access_token: 'synthetic-port-access', token_type: 'Bearer', refresh_token: 'synthetic-port-refresh', expires_in: 60 };
     }),
     refresh: vi.fn(async input => {
-      expect(f.record()?.state).toBe("refreshing"); await input.authorize();
+      expect(f.record()?.state).toBe("ready"); await input.authorize(); input.beforeTokenRequest();
+      expect(f.record()?.state).toBe("refreshing");
       expect(input.refresh_token).toBe('synthetic-port-refresh');
       return { access_token: 'synthetic-port-refreshed', token_type: 'Bearer', expires_in: 60 };
     }),
@@ -320,8 +361,8 @@ it("managed account lifecycle uses protocol ports without network or SDK-owned s
 it.each(['before-dispatch', 'during-response'] as const)("managed OAuth expires a short-lived refreshed lease %s", async phase => {
   const protocol: ManagedOAuthProtocol = {
     begin: async input => ({ authorization_url: issuer + '/authorize?state=' + input.state, discovery: {}, client: {}, verifier: 'fixture-verifier' }),
-    complete: async () => ({ access_token: 'synthetic-initial-token', refresh_token: 'synthetic-refresh-token', token_type: 'Bearer', expires_in: 1 }),
-    refresh: vi.fn(async () => ({ access_token: 'synthetic-short-lived-token', token_type: 'Bearer', expires_in: 2 })),
+    complete: async input => { await input.authorize(); input.beforeTokenRequest(); return { access_token: 'synthetic-initial-token', refresh_token: 'synthetic-refresh-token', token_type: 'Bearer', expires_in: 1 }; },
+    refresh: vi.fn(async input => { await input.authorize(); input.beforeTokenRequest(); return { access_token: 'synthetic-short-lived-token', token_type: 'Bearer', expires_in: 2 }; }),
   };
   const f = oauthFixture(false, origin, protocol), state = await f.begin();
   expect(await f.service().run(f.hash, 'complete', f.callback(state))).toMatchObject({ state: 'linked' });
