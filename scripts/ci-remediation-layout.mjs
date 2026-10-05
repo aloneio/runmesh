@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "./ci-policy.mjs";
-import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_ADDED_COMMANDS, UPLOAD_ACTION, checkCommand, GITLAB_EVENTS } from "./ci-contract.mjs";
+import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_ADDED_COMMANDS, WINDOWS_TRANSPORT_STEP, BROWSER_COMMANDS, UPLOAD_ACTION, checkCommand, GITLAB_EVENTS } from "./ci-contract.mjs";
 
 const yaml = value => stringify(value, { aliasDuplicateObjects: false, lineWidth: 0 });
 const checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const node = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
 const rules = () => [...GITLAB_EVENTS.map(expression => ({ if: expression })), { when: "never" }];
-const setup = () => [{ uses: checkout, with: { "persist-credentials": false } }, { uses: node, with: { "node-version-file": ".node-version", cache: "npm" } }, { run: "npm install --global npm@10.9.3" }];
+const setup = (commands = ["npm install --global npm@10.9.3"]) => [{ uses: checkout, with: { "persist-credentials": false } }, { uses: node, with: { "node-version-file": ".node-version", cache: "npm" } }, ...commands.map(run => ({ run }))];
 const upload = name => ({ name: "Preserve sanitized gate evidence", if: "always()", uses: UPLOAD_ACTION, with: {
   name, path: "ci-results/*.json\nci-results/*.xml\n", "if-no-files-found": "error", "retention-days": 14, "include-hidden-files": false, overwrite: false, archive: true,
 } });
@@ -55,8 +55,7 @@ export function proposedCiFiles(input) {
   // The old parity entrypoint now consumes the shared parsed CI contract.
   // It remains an ordinary explicit step; it is not self-granted permission.
   gh.jobs.verify.steps.push(upload("ci-verify-${{ github.run_id }}-${{ github.run_attempt }}"));
-  gh.jobs.browser = { "runs-on": "ubuntu-latest", "timeout-minutes": 15, steps: [...setup(),
-    { run: "npm ci" }, { run: "npm run typecheck" }, { run: "npm run build" }, { run: "npm run browser:install" }, { run: "npm run test:browser" },
+  gh.jobs.browser = { "runs-on": "ubuntu-latest", "timeout-minutes": 15, steps: [...setup(BROWSER_COMMANDS),
     upload("ci-browser-${{ github.run_id }}-${{ github.run_attempt }}"),
   ] };
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
@@ -66,11 +65,13 @@ export function proposedCiFiles(input) {
   Object.assign(gl.verify, { variables: { ...gl.verify.variables, GIT_DEPTH: "0" }, timeout: "30m", interruptible: true, allow_failure: false, rules: rules(),
     script: ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], artifacts: artifacts() });
   gl.browser = { stage: "verify", timeout: "15m", interruptible: true, allow_failure: false, rules: rules(),
-    script: ["npm install --global npm@10.9.3", "npm ci", "npm run typecheck", "npm run build", "npm run browser:install", "npm run test:browser"], artifacts: artifacts() };
+    script: [...BROWSER_COMMANDS], artifacts: artifacts() };
   // Preserve historical checks and add only the declared later native gates.
   for (const command of NATIVE_ADDED_COMMANDS) {
     if (!gh.jobs["native-runner"].steps.some(step => step.run === command)) gh.jobs["native-runner"].steps.push({ run: command });
   }
+  if (!gh.jobs["native-runner"].steps.some(step => step.run === WINDOWS_TRANSPORT_STEP.run))
+    gh.jobs["native-runner"].steps.push({ ...WINDOWS_TRANSPORT_STEP });
   const github = yaml(gh), gitlab = yaml(gl) + "\n" + policy;
   validateCiWiring(pkg, github, gitlab);
   const cli = `import { readFile } from "node:fs/promises";\nimport { validateCiWiring } from "./ci-policy.mjs";\nconst root = new URL("../", import.meta.url);\nconst read = path => readFile(new URL(path, root), "utf8");\ntry { console.log(JSON.stringify(validateCiWiring(JSON.parse(await read("package.json")), await read(".github/workflows/ci.yml"), await read(".gitlab-ci.yml")))); }\ncatch (error) { console.error("CI execution contract failed:", error.message); process.exitCode = 1; }\n`;

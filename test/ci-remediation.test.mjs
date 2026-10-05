@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
-import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, LTS_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, checkCommand } from "../scripts/ci-contract.mjs";
+import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, LTS_COMMANDS, BROWSER_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, checkCommand } from "../scripts/ci-contract.mjs";
 import { gateEvidence, gateJUnit, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
 import { browserEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
@@ -18,19 +18,19 @@ function fixture() {
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
   const gh = { on: { push: { branches: ["main", "dev"] }, pull_request: null, workflow_dispatch: null, workflow_call: null }, permissions: { contents: "read" }, jobs: {
     verify: { "runs-on": "ubuntu-latest", "timeout-minutes": 30, steps: [...CHECK_IDS.map(id => ({ run: checkCommand(id) })), { uses: UPLOAD_ACTION, if: "always()", with: { path: "ci-results/*.json\nci-results/*.xml\n", "if-no-files-found": "error" } }] },
-    "native-runner": { "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: NATIVE_COMMANDS.map(run => ({ run })) },
+    "native-runner": { "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: [...NATIVE_COMMANDS.map(run => ({ run })), { ...WINDOWS_TRANSPORT_STEP }] },
     "runner-lts": { strategy: { matrix: { node: ["22.23.2", "24.21.0"] } }, steps: [
       ...LTS_COMMANDS.slice(0, 3).map(run => ({ run })),
       { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version": "${{ matrix.node }}" } },
       ...LTS_COMMANDS.slice(3).map(run => ({ run })),
     ] },
-    browser: { steps: [{ run: "npm run browser:install" }, { run: "npm run test:browser" }] },
+    browser: { steps: BROWSER_COMMANDS.map(run => ({ run })) },
     "verify-all": { if: "always()", needs: [...AGGREGATE_JOBS], steps: [{ env, run: Object.keys(env).map(key => `test "$${key}" = success`).join(" && ") }] },
   } };
   const rules = [...GITLAB_EVENTS.map(expression => ({ if: expression })), { when: "never" }];
   const gl = { workflow: { rules }, verify: { timeout: "30m", script: ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], rules,
     artifacts: { paths: ["ci-results/*.json", "ci-results/*.xml"], when: "always", reports: { junit: "ci-results/*.xml" } } },
-    browser: { rules, script: ["npm run browser:install", "npm run test:browser"] } };
+    browser: { rules, script: [...BROWSER_COMMANDS] } };
   return { pkg, gh, gl };
 }
 const verify = f => validateCiWiring(f.pkg, stringify(f.gh, { aliasDuplicateObjects: false }), stringify(f.gl, { aliasDuplicateObjects: false }));
@@ -75,13 +75,32 @@ for (const [name, mutate] of Object.entries({
   "LTS runtime setup skipped": f => f.gh.jobs["runner-lts"].steps[3].if = false,
   "LTS runtime setup allows failure": f => f.gh.jobs["runner-lts"].steps[3]["continue-on-error"] = true,
   "LTS runtime selected after tests": f => f.gh.jobs["runner-lts"].steps.push(f.gh.jobs["runner-lts"].steps.splice(3, 1)[0]),
-  "browser optional": f => f.gh.jobs.browser.steps[1].if = "false",
+  "browser optional": f => f.gh.jobs.browser.steps.at(-1).if = "false",
+  "browser test is commented": f => f.gh.jobs.browser.steps.at(-1).run = "# npm run test:browser",
+  "browser test masks failure": f => f.gh.jobs.browser.steps.at(-1).run += " || true",
+  "browser test allows failure": f => f.gh.jobs.browser.steps.at(-1)["continue-on-error"] = true,
+  "browser test overrides shell": f => f.gh.jobs.browser.steps.at(-1).shell = "bash {0} || true",
+  "browser preparation reordered": f => f.gh.jobs.browser.steps.reverse(),
+  "browser missing build": f => f.gh.jobs.browser.steps = f.gh.jobs.browser.steps.filter(step => step.run !== "npm run build"),
+  "GitLab browser commands only appear in scalar comments": f => f.gl.browser.script = "# npm run browser:install\n# npm run test:browser\ntrue",
+  "GitLab browser scalar masks failures": f => f.gl.browser.script = "npm run browser:install || true\nnpm run test:browser || true",
+  "GitLab browser test masks failure": f => f.gl.browser.script[f.gl.browser.script.length - 1] += " || true",
+  "GitLab browser missing build": f => f.gl.browser.script = f.gl.browser.script.filter(command => command !== "npm run build"),
+  "GitLab browser preparation reordered": f => f.gl.browser.script.reverse(),
+  "GitLab browser duplicated test": f => f.gl.browser.script.push("npm run test:browser"),
+  "Windows transport missing": f => f.gh.jobs["native-runner"].steps.pop(),
+  "Windows transport runs on another platform": f => f.gh.jobs["native-runner"].steps.at(-1).if = "matrix.os == 'ubuntu-latest'",
+  "Windows transport disabled": f => f.gh.jobs["native-runner"].steps.at(-1).if = false,
+  "Windows transport masks failure": f => f.gh.jobs["native-runner"].steps.at(-1).run += " || true",
+  "Windows transport allows failure": f => f.gh.jobs["native-runner"].steps.at(-1)["continue-on-error"] = true,
+  "Windows transport overrides shell": f => f.gh.jobs["native-runner"].steps.at(-1).shell = "pwsh -Command {0}; exit 0",
+  "Windows transport duplicated": f => f.gh.jobs["native-runner"].steps.push({ ...WINDOWS_TRANSPORT_STEP }),
   "native test optional": f => f.gh.jobs["native-runner"].steps[3].if = "false",
   "native soft failure": f => f.gh.jobs["native-runner"].steps[3]["continue-on-error"] = true,
   "missing LTS tests": f => f.gh.jobs["runner-lts"].steps.pop(),
   "browser script is no-op": f => f.pkg.scripts["test:browser"] = "node -e true",
   "package gate is version-only": f => f.pkg.scripts["test:package:e2e"] = "node apps/runner/dist/runmesh.cjs --version",
-  "browser missing install": f => f.gh.jobs.browser.steps.shift(),
+  "browser missing install": f => f.gh.jobs.browser.steps = f.gh.jobs.browser.steps.filter(step => step.run !== "npm run browser:install"),
   "overbroad artifact": f => f.gh.jobs.verify.steps.at(-1).with.path = ".",
   "hidden artifacts": f => f.gh.jobs.verify.steps.at(-1).with["include-hidden-files"] = true,
   "GitLab entire checkout artifact": f => f.gl.verify.artifacts.paths = ["."],

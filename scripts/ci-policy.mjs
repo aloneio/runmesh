@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { parseDocument } from "yaml";
-import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, LTS_COMMANDS, checkCommand, UPLOAD_ACTION, GITLAB_EVENTS } from "./ci-contract.mjs";
+import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, UPLOAD_ACTION, GITLAB_EVENTS } from "./ci-contract.mjs";
 
 export function parseCi(source) {
   assert.ok(typeof source === "string" && Buffer.byteLength(source) <= 1048576, "CI YAML byte budget");
@@ -22,12 +22,13 @@ function rules(value, label) {
   for (const [index, expression] of GITLAB_EVENTS.entries()) eq(value[index], { if: expression }, `${label} event rule changed`);
   eq(value.at(-1), { when: "never" }, `${label} must deny other events`);
 }
-function requiredStep(steps, command) {
+function requiredStep(steps, command, condition) {
   const matches = steps.filter(step => step.run === command);
   assert.equal(matches.length, 1, `missing/duplicate executable step: ${command}`);
   const step = matches[0];
   assert.equal(step.shell, undefined, "critical steps must use the reviewed default shell");
-  assert.ok(step.if === undefined && step["continue-on-error"] === undefined && step["working-directory"] === undefined, `conditional/nonblocking critical step: ${command}`);
+  assert.equal(step.if, condition, `critical step condition changed: ${command}`);
+  assert.ok(step["continue-on-error"] === undefined && step["working-directory"] === undefined, `nonblocking/relocated critical step: ${command}`);
 }
 
 /** Restricted, reviewed YAML grammar, not an interpreter for arbitrary shell
@@ -56,6 +57,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   assert.equal(gh.jobs["native-runner"]["runs-on"], "${{ matrix.os }}", "native jobs must run on their matrix platform");
   eq(gh.jobs["runner-lts"].strategy?.matrix, { node: ["22.23.2", "24.21.0"] }, "LTS matrix must execute every declared runtime");
   for (const command of NATIVE_COMMANDS) requiredStep(gh.jobs["native-runner"].steps, command);
+  requiredStep(gh.jobs["native-runner"].steps, WINDOWS_TRANSPORT_STEP.run, WINDOWS_TRANSPORT_STEP.if);
   for (const command of LTS_COMMANDS) requiredStep(gh.jobs["runner-lts"].steps, command);
   const ltsSteps = gh.jobs["runner-lts"].steps;
   const runtimeSetup = ltsSteps.filter(step => step.uses?.startsWith("actions/setup-node@")).at(-1);
@@ -64,8 +66,8 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   for (const command of ["npm run test --workspace=@aloneio/runmesh-runner", "node apps/runner/dist/runmesh.cjs --version"]) {
     assert.ok(ltsSteps.indexOf(runtimeSetup) < ltsSteps.findIndex(step => step.run === command), "LTS runtime must be selected before its tests");
   }
-  requiredStep(gh.jobs.browser.steps, "npm run test:browser");
-  requiredStep(gh.jobs.browser.steps, "npm run browser:install");
+  for (const command of BROWSER_COMMANDS) requiredStep(gh.jobs.browser.steps, command);
+  eq(gh.jobs.browser.steps.filter(step => step.run !== undefined).map(step => step.run), BROWSER_COMMANDS, "GitHub browser preparation and tests must execute in the reviewed order");
   const aggregate = gh.jobs["verify-all"];
   assert.equal(aggregate?.defaults, undefined, "aggregate must not override the result-check shell or working directory");
   eq(aggregate?.needs, [...AGGREGATE_JOBS], "aggregate must include every required job");
@@ -91,7 +93,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   eq(gl.verify.artifacts?.paths, ["ci-results/*.json", "ci-results/*.xml"], "GitLab artifact whitelist changed");
   assert.equal(gl.verify.artifacts?.when, "always");
   assert.equal(gl.verify.artifacts?.reports?.junit, "ci-results/*.xml");
-  assert.ok(gl.browser.script.includes("npm run test:browser") && gl.browser.script.includes("npm run browser:install"));
+  eq(gl.browser.script, BROWSER_COMMANDS, "GitLab browser preparation and tests must execute in order without shell masking");
   // Do not accept a shell comment, `|| true`, background process, or test-name
   // filter as equivalent to the complete aggregate command.
   const unit = split(pkg.scripts?.["test:unit"]);

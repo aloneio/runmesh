@@ -43,7 +43,11 @@ export const NATIVE_COMMANDS = Object.freeze([
   "node --test test/verification-tools.test.mjs test/package-verification.test.mjs", "node --test test/architecture.test.mjs",
   ...NATIVE_ADDED_COMMANDS,
 ]);
+export const WINDOWS_TRANSPORT_STEP = Object.freeze({ run: "npm run test:e2e", if: "matrix.os == 'windows-latest'" });
 export const LTS_COMMANDS = Object.freeze(["npm ci", "npm run build", "npm run pack:smoke", "npm run test --workspace=@aloneio/runmesh-runner", "node apps/runner/dist/runmesh.cjs --version"]);
+export const BROWSER_COMMANDS = Object.freeze([
+  "npm install --global npm@10.9.3", "npm ci", "npm run typecheck", "npm run build", "npm run browser:install", "npm run test:browser",
+]);
 export const checkCommand = id => `node scripts/ci-check.mjs ${id}`;
 export const GITLAB_EVENTS = Object.freeze([
   '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"',
