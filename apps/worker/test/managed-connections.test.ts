@@ -195,6 +195,28 @@ it("resuming sharing cannot revive an explicitly disconnected OAuth account", as
   await expect(f.service().credential(selected, new AbortController().signal, async () => undefined)).rejects.toMatchObject({ code: "reauthorization_required" });
   expect(f.record()?.state).toBe("revoked"); expect(f.record()?.tokens).toBeUndefined();
 });
+it("concurrent OAuth resume callers share the current account without another consent or binding write", async () => {
+  const f = oauthFixture(), state = await f.begin(), signal = new AbortController().signal;
+  await f.service().run(f.hash, "complete", f.callback(state));
+  f.pause(); const selected = f.resume(), owner = f.service();
+  let admissions = 0, entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const earlier = owner.credential(selected, signal, async () => {
+    if (++admissions === 2) { entered(); await gate; }
+  });
+  try {
+    await waiting;
+    const later = await owner.credential(selected, signal, async () => undefined);
+    const settled = f.record();
+    expect(later.current()).toBe(true); expect(settled?.profile_revision).toBe(selected.revision);
+    release();
+    const original = await earlier;
+    expect(original.current()).toBe(true); expect(later.current()).toBe(true);
+    expect(original.credential).toEqual(later.credential); expect(f.record()).toEqual(settled);
+    expect(f.state).toEqual({ registration: 1, exchanges: 1, refreshes: 0 });
+  } finally { release(); await earlier.catch(() => undefined); }
+});
 it("OAuth account revocation during resume admission prevents rebinding", async () => {
   const f = oauthFixture(), state = await f.begin();
   await f.service().run(f.hash, "complete", f.callback(state));
@@ -203,6 +225,24 @@ it("OAuth account revocation during resume admission prevents rebinding", async 
     if (++admissions === 2) await f.service().run(f.hash, "revoke", { ...f.selection, expected_revision: selected.revision });
   })).rejects.toMatchObject({ code: "reauthorization_required" });
   expect(f.record()?.state).toBe("revoked"); expect(f.record()?.tokens).toBeUndefined();
+});
+it.each([false, true])("OAuth resume cannot borrow an account replaced during admission (completed=%s)", async completed => {
+  const f = oauthFixture(), state = await f.begin();
+  await f.service().run(f.hash, "complete", f.callback(state));
+  f.pause(); const selected = f.resume(); let admissions = 0;
+  let replacement: ManagedOAuthRecord | undefined;
+  await expect(f.service().credential(selected, new AbortController().signal, async () => {
+    if (++admissions !== 2) return;
+    const owner = f.service(), begun = await owner.run(f.hash, "begin", { ...f.selection, expected_revision: selected.revision });
+    expect(begun.state).toBe("started");
+    if (begun.state !== "started") throw new Error("replacement authorization did not start");
+    if (completed) {
+      const callback = f.callback(new URL(begun.authorization_url).searchParams.get("state")!);
+      expect(await owner.run(f.hash, "complete", callback)).toMatchObject({ state: "linked" });
+    }
+    replacement = f.record();
+  })).rejects.toMatchObject({ code: "reauthorization_required" });
+  expect(f.record()).toEqual(replacement); expect(f.record()?.state).toBe(completed ? "ready" : "pending");
 });
 it("pause-resume does not revive an unfinished OAuth handoff", async () => {
   const f = oauthFixture(), state = await f.begin();

@@ -137,11 +137,19 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
         // never an unfinished exchange/refresh or a revoked account.
         await admit(); signal.throwIfAborted();
         const live = profile(selected.profile_id, selected.revision);
+        const stored = ports.repository.read(selected.profile_id);
         if (live.endpoint !== selected.endpoint || live.connector_id !== selected.connector_id
-          || selected.authentication !== "oauth" || record.profile_revision >= live.revision) return fault("reauthorization_required");
-        const resumed = { ...record, profile_revision: live.revision, revision: record.revision + 1 };
-        if (!ports.repository.replace(resumed, record.revision)) return fault("reauthorization_required");
-        record = resumed;
+          || selected.authentication !== "oauth" || !stored || stored.state_hash !== record.state_hash
+          || stored.profile_revision > live.revision) return fault("reauthorization_required");
+        record = stored;
+        if (record.state !== "ready" || !record.tokens || !record.discovery || !record.client) return credentialChanged(record);
+        // Another admitted caller may already have rebound this account.
+        // Reuse its revision so both leases remain valid without another write.
+        if (record.profile_revision !== live.revision) {
+          const resumed = { ...record, profile_revision: live.revision, revision: record.revision + 1 };
+          if (!ports.repository.replace(resumed, record.revision)) return fault("reauthorization_required");
+          record = resumed;
+        }
       }
       if (!record.tokens || !record.client || !current(record)) return credentialChanged(record);
       const base = origin(record.origin);
