@@ -211,6 +211,28 @@ async function connectionReceipt(action: "begin" | "complete" | "revoke", receip
   return response;
 }
 
+it.each([
+  { address: "https://control.provider.com", host: "other.provider.com" },
+  { address: "http://control.provider.com", host: "control.provider.com" },
+  { address: "https://127.0.0.1", host: "127.0.0.1" },
+])("OAuth metadata rejects an automatic origin with invalid authority: $address / $host", async ({ address, host }) => {
+  const get = vi.fn(() => { throw new Error("must not resolve"); });
+  const config = { ...configured(), RUNMESH_PUBLIC_ORIGIN: undefined,
+    CAPABILITIES: { idFromName: () => "central", get } } as unknown as WorkerEnv;
+  const request = new Request(address + "/admin/central/connections/client-metadata", { headers: { host } });
+  const response = await handleCentralAdmin(request, config, new URL(request.url));
+  expect(response.status).toBe(503); expect(get).not.toHaveBeenCalled();
+});
+
+it("OAuth metadata keeps the configured public origin behind an HTTP reverse proxy", async () => {
+  const request = new Request("http://internal-proxy/admin/central/connections/client-metadata", { headers: { host: "control.provider.com" } });
+  const config = { ...configured(), RUNMESH_PUBLIC_ORIGIN: "https://control.provider.com" };
+  const response = await handleCentralAdmin(request, config, new URL(request.url));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ client_id: "https://control.provider.com/admin/central/connections/client-metadata",
+    redirect_uris: ["https://control.provider.com/admin/central/connections/callback"] });
+});
+
 it.each(["begin", "complete", "revoke"] as const)("OAuth %s returns only its public receipt fields", async action => {
   const safe = action === "begin" ? { state: "started", profile_id: "expected-profile", authorization_url: "https://login.provider.com/authorize?state=synthetic" }
     : { state: action === "complete" ? "linked" : "revoked", profile_id: "expected-profile" };

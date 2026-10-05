@@ -35,10 +35,13 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     const live = ports.profile(record.profile_id), stored = ports.repository.read(record.profile_id);
     return live?.enabled === true && live.authentication === "oauth" && live.revision === record.profile_revision && stored?.revision === record.revision;
   };
-  const commit = async (record: ManagedOAuthRecord, patch: Partial<ManagedOAuthRecord>, authorize: () => Promise<void>) => {
-    await authorize(); if (!current(record)) return fault("conflict");
+  const replace = (record: ManagedOAuthRecord, patch: Partial<ManagedOAuthRecord>) => {
+    if (!current(record)) return fault("conflict");
     const next = { ...record, ...patch, revision: record.revision + 1 };
     if (!ports.repository.replace(next, record.revision)) return fault("conflict"); return next;
+  };
+  const commit = async (record: ManagedOAuthRecord, patch: Partial<ManagedOAuthRecord>, authorize: () => Promise<void>) => {
+    await authorize(); return replace(record, patch);
   };
   const tokenValues = (raw: ManagedOAuthTokens, previous?: ManagedOAuthTokens) => {
     if (raw.token_type?.toLowerCase() !== "bearer" || parseCredential({ kind: "bearer", token: raw.access_token }) === undefined
@@ -82,13 +85,16 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     const selected = profile(record.profile_id, record.profile_revision), base = origin(requestOrigin ?? record.origin);
     if (base !== record.origin) return fault("invalid_callback");
     const authorize = async () => { await admin(hash, signal); if (!current(record!)) return fault("conflict"); };
-    record = await commit(record, { state: "exchanging" }, authorize);
     if (input.error !== undefined) { await commit(record, { state: "revoked", verifier: undefined, client: undefined, discovery: undefined }, authorize); return fault("reauthorization_required"); }
     if (!record.discovery || !record.client || !record.verifier) return fault('invalid_callback');
     const client = await ports.cipher.open(context(record, 'client'), record.client);
     const verifier = await ports.cipher.open(context(record, 'verifier'), record.verifier);
     const result = await ports.protocol.complete({ endpoint: selected.endpoint, origin: base, discovery: record.discovery,
-      client, verifier, code: input.code as string, ...(input.iss === undefined ? {} : { issuer: input.iss as string }), signal, authorize });
+      client, verifier, code: input.code as string, ...(input.iss === undefined ? {} : { issuer: input.iss as string }), signal, authorize,
+      beforeTokenRequest: () => {
+        if (record!.state !== "pending" || record!.expires_at <= ports.now()) return fault("invalid_callback");
+        record = replace(record!, { state: "exchanging" });
+      } });
     const value = tokenValues(result), tokens = await ports.cipher.seal(context(record, 'tokens'), value.tokens);
     await commit(record, { state: "ready", tokens, token_expires_at: value.expires, verifier: undefined }, authorize);
     return { state: "linked", profile_id: record.profile_id };
@@ -134,9 +140,12 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
       if (record.token_expires_at <= ports.now() + 30_000) {
         if (!tokens.refresh_token) return fault("reauthorization_required");
         const client = await ports.cipher.open(context(record, "client"), record.client);
-        record = await commit(record, { state: "refreshing" }, authorize);
         const fresh = await ports.protocol.refresh({ endpoint: selected.endpoint, origin: base, discovery: record.discovery!,
-          client, refresh_token: tokens.refresh_token, signal, authorize });
+          client, refresh_token: tokens.refresh_token, signal, authorize,
+          beforeTokenRequest: () => {
+            if (record!.state !== "ready") return fault("reauthorization_required");
+            record = replace(record!, { state: "refreshing" });
+          } });
         const value = tokenValues({ ...fresh, ...(tokens.issuer === undefined ? {} : { issuer: tokens.issuer }) }, tokens); tokens = value.tokens;
         const envelope = await ports.cipher.seal(context(record, "tokens"), tokens);
         record = await commit(record, { state: "ready", tokens: envelope, token_expires_at: value.expires }, authorize);

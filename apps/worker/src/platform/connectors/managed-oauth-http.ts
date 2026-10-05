@@ -29,7 +29,7 @@ export async function managedOAuthChallenge(endpoint: string, ports: { signal: A
 /** Public HTTPS only, no redirects/cookies, bounded bodies and no token replay.
  * Token and registration writes are pinned to the discovered metadata. */
 export function managedOAuthFetch(ports: { signal: AbortSignal; authorize: () => Promise<void>; discovery: () => OAuthDiscoveryState | undefined;
-  origin: string; send?: FetchLike; phase: "begin" | "complete" | "refresh" }): FetchLike {
+  origin: string; send?: FetchLike } & ({ phase: "begin" } | { phase: "complete" | "refresh"; beforeTokenRequest: () => void })): FetchLike {
   let requests = 0, posts = 0, total = 0;
   return async (input, init) => {
     const url = publicOAuthUrl(String(input), ports.origin), method = init?.method ?? "GET";
@@ -45,6 +45,7 @@ export function managedOAuthFetch(ports: { signal: AbortSignal; authorize: () =>
     const body = init?.body;
     if (body !== undefined && body !== null && (!(typeof body === "string" || body instanceof URLSearchParams) || new TextEncoder().encode(String(body)).length > 16_384)) throw new TypeError("oauth_request_invalid");
     await ports.authorize(); ports.signal.throwIfAborted();
+    if (method === "POST" && ports.phase !== "begin") ports.beforeTokenRequest();
     const response = await (ports.send ?? fetch)(url, { method, headers, ...(body === undefined ? {} : { body }), signal: ports.signal, credentials: "omit", redirect: "manual", cache: "no-store" });
     if (response.status >= 300 && response.status < 400) { void response.body?.cancel().catch(() => undefined); throw new TypeError("oauth_redirect_denied"); }
     const reader = response.body?.getReader(), chunks: Uint8Array[] = []; let size = 0, count = 0;
