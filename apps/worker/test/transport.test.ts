@@ -829,7 +829,7 @@ describe("Worker runner transport", () => {
       const epoch = instance.beginConnection("policy-supersede", {
         runner_id: "policy-supersede", runner_version: "test", platform: "test", architecture: "test",
         capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} },
-      }, { min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION }, "policy-session", credentialVersion, now + 1);
+      }, { min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION }, "policy-session", credentialVersion, now + 1, instance.getRunnerExecutionState("policy-supersede")!.lifecycle_id);
       const identity = runnerTransportIdentity(instance, "policy-supersede");
       expect(epoch).toEqual(expect.any(Number));
       const initial = instance.getDesiredPolicySnapshot("policy-supersede");
@@ -963,7 +963,7 @@ describe("Worker runner transport", () => {
       const epoch = instance.beginConnection(runnerId, {
         runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test",
         capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} },
-      }, { min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION }, "terminal-retention-session", credentialVersion, Date.now());
+      }, { min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION }, "terminal-retention-session", credentialVersion, Date.now(), instance.getRunnerExecutionState(runnerId)!.lifecycle_id);
       expect(epoch).toEqual(expect.any(Number));
       return { epoch: epoch as number, credentialVersion, ...runnerTransportIdentity(instance, runnerId) };
     });

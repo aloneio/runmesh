@@ -5,7 +5,7 @@ import { RunnerDO } from "../src/runner-do.js";
 
 function pendingSocket(deadline = Date.now() + 10_000) {
   let attachment: unknown = { runnerId: "hello-runner", sessionId: crypto.randomUUID(), epoch: 0, credentialVersion: 1,
-    lifecycleId: null, protocolVersion: 0, authenticated: true, helloDeadlineMs: deadline };
+    lifecycleId: "a".repeat(64), protocolVersion: 0, authenticated: true, helloDeadlineMs: deadline };
   let readyState = WebSocket.OPEN;
   return {
     get readyState() { return readyState; },

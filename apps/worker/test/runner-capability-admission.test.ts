@@ -17,7 +17,7 @@ async function fixture(methods: string[], run: (request: (method: string) => Pro
     const replies = new BridgeReplies(), sent: string[] = [];
     let allowed = true;
     let attachment: Record<string, unknown> = { runnerId: policy.runner_id, sessionId: "compat-session", epoch: 0,
-      credentialVersion: 1, lifecycleId: null, protocolVersion: 0, authenticated: true, helloDeadlineMs: Date.now() + 10_000 };
+      credentialVersion: 1, lifecycleId: "a".repeat(64), protocolVersion: 0, authenticated: true, helloDeadlineMs: Date.now() + 10_000 };
     const socket = { readyState: WebSocket.OPEN, close: vi.fn(),
       deserializeAttachment: () => attachment, serializeAttachment: (value: Record<string, unknown>) => { attachment = value; },
       send(raw: string) {

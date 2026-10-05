@@ -313,14 +313,15 @@ export class RegistryLifecycle {
     });
   }
 
-  public async authenticateRunner(runnerId: string, token: string): Promise<{ credential_version: number } | undefined> {
+  public async authenticateRunner(runnerId: string, token: string): Promise<{ credential_version: number; lifecycle_id: string } | undefined> {
     if (!isConfiguredSecret(this.runnerTokenPepper)) return undefined;
     const tokenVerifier = await runnerTokenVerifier(token, this.runnerTokenPepper);
-    const row = this.storage.sql.exec<Pick<RunnerRow, "token_verifier" | "credential_version">>("SELECT token_verifier, credential_version FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
-    return row !== undefined && row.token_verifier.length > 0 && constantTimeEqual(row.token_verifier, tokenVerifier) ? { credential_version: row.credential_version } : undefined;
+    const row = this.storage.sql.exec<Pick<RunnerRow, "token_verifier" | "credential_version" | "lifecycle_id">>("SELECT token_verifier, credential_version, lifecycle_id FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    return row !== undefined && validLifecycleId(row.lifecycle_id) && row.token_verifier.length > 0 && constantTimeEqual(row.token_verifier, tokenVerifier)
+      ? { credential_version: row.credential_version, lifecycle_id: row.lifecycle_id } : undefined;
   }
 
-  public beginConnection(runnerId: string, metadata: RunnerMetadata, protocol: { min_protocol_version: number; max_protocol_version: number }, sessionId: string, credentialVersion: number, nowMs: number): number | undefined {
+  public beginConnection(runnerId: string, metadata: RunnerMetadata, protocol: { min_protocol_version: number; max_protocol_version: number }, sessionId: string, credentialVersion: number, nowMs: number, lifecycleId: string): number | undefined {
     const compatibility = protocolCompatibility(protocol.min_protocol_version, protocol.max_protocol_version);
     // Allocate the epoch and publish the session in one transaction. Reading
     // the row, then querying it again after UPDATE, lets two simultaneous
@@ -328,17 +329,17 @@ export class RegistryLifecycle {
     // authorized as the same session.
     return this.storage.transactionSync(() => {
       const prior = this.runnerRow(runnerId);
-      if (prior === undefined || prior.credential_version !== credentialVersion || !validLifecycleId(prior.lifecycle_id) || !validSessionId(sessionId) || !Number.isSafeInteger(prior.connection_epoch) || prior.connection_epoch < 0) return undefined;
+      if (prior === undefined || prior.credential_version !== credentialVersion || !validLifecycleId(prior.lifecycle_id) || prior.lifecycle_id !== lifecycleId || !validSessionId(sessionId) || !Number.isSafeInteger(prior.connection_epoch) || prior.connection_epoch < 0) return undefined;
       const nextEpoch = prior.connection_epoch + 1;
       const changed = this.storage.sql.exec(
         `UPDATE runners SET state = 'online', connection_epoch = ?, session_id = ?, metadata_json = ?,
          current_runner_version = ?, protocol_min_version = ?, protocol_max_version = ?, protocol_compatibility = ?,
          update_status = ?, last_heartbeat_ms = ?, last_sync_sequence = NULL,
          policy_status = CASE WHEN desired_policy_revision = 0 THEN 'applied' ELSE 'pending' END, updated_at_ms = ?
-         WHERE runner_id = ? AND credential_version = ? AND connection_epoch = ?`,
+         WHERE runner_id = ? AND credential_version = ? AND connection_epoch = ? AND lifecycle_id = ?`,
         nextEpoch, sessionId, JSON.stringify(metadata), metadata.runner_version, protocol.min_protocol_version, protocol.max_protocol_version, compatibility,
         updateStatus(prior.update_channel ?? "stable", prior.desired_runner_version ?? undefined, prior.latest_runner_version ?? undefined, { ...prior, current_runner_version: metadata.runner_version, protocol_compatibility: compatibility }),
-        nowMs, nowMs, runnerId, credentialVersion, prior.connection_epoch,
+        nowMs, nowMs, runnerId, credentialVersion, prior.connection_epoch, lifecycleId,
       );
       return changed.rowsWritten === 1 ? nextEpoch : undefined;
     });

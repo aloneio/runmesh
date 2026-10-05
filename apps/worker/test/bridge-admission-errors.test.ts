@@ -9,7 +9,7 @@ async function harness(access: () => Response, run: (instance: RunnerDO, replies
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`admission-errors-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_existing, state) => {
     const replies = new BridgeReplies();
-    let attachment: unknown = { runnerId: "runner-test", sessionId: "session-test", epoch: 0, credentialVersion: 1, lifecycleId: null,
+    let attachment: unknown = { runnerId: "runner-test", sessionId: "session-test", epoch: 0, credentialVersion: 1, lifecycleId: "a".repeat(64),
       protocolVersion: 0, authenticated: true, helloDeadlineMs: Date.now() + 10_000 };
     const send = vi.fn((raw: string) => {
       const frame = decodeWireFrame(raw);

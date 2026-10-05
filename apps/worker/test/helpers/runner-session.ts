@@ -16,7 +16,7 @@ export async function runnerSession(state: DurableObjectState, env: WorkerEnv, o
     runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] };
   const policy = options.policy ?? { ...input, checksum: runnerPolicyChecksum(input) };
   let connected = true;
-  let attachment: unknown = { runnerId, sessionId, credentialVersion, epoch: 0, lifecycleId: null,
+  let attachment: unknown = { runnerId, sessionId, credentialVersion, epoch: 0, lifecycleId,
     protocolVersion: 0, authenticated: true, helloDeadlineMs: Date.now() + 10_000 };
   const frames: WireMessage[] = [];
   const socket = {

@@ -53,7 +53,7 @@ it("AR06 preserves cross-domain SQL, transaction order, costs and receipts", asy
       capture("workspace_create", () => r.createManagedWorkspace("r", { workspace_id: "w", display_name: "Workspace", root_path: "/synthetic/workspace", enabled: true, permissions: all }, now, "workspace-create"));
       const desired = capture("policy_desired", () => r.getDesiredPolicySnapshot("r"))!;
       const before = r.getRunnerExecutionState("r")!;
-      const epoch = capture("session_begin", () => r.beginConnection("r", { runner_version: "0.1.3", platform: "linux", architecture: "x64", hostname: "synthetic" } as any, { min_protocol_version: 2, max_protocol_version: 2 }, "session", before.runner.credential_version, now))!;
+      const epoch = capture("session_begin", () => r.beginConnection("r", { runner_version: "0.1.3", platform: "linux", architecture: "x64", hostname: "synthetic" } as any, { min_protocol_version: 2, max_protocol_version: 2 }, "session", before.runner.credential_version, now, before.lifecycle_id))!;
       capture("policy_ack", () => r.acknowledgePolicy("r", epoch, before.runner.credential_version, {
         desired_revision: desired.revision, desired_checksum: desired.checksum, applied_revision: desired.revision, applied_checksum: desired.checksum,
         runner_reported_policy_revision: desired.revision, runner_reported_policy_checksum: desired.checksum,

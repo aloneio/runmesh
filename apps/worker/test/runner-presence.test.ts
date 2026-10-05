@@ -55,7 +55,7 @@ it.each(["offline", "stale"] as const)("keeps runner_current and runner_list val
     const desired = registry.getDesiredPolicySnapshot("presence-runner")!;
     const before = registry.getRunnerExecutionState("presence-runner")!;
     const epoch = registry.beginConnection("presence-runner", { runner_version: "0.1.3", platform: "linux", architecture: "x64", hostname: "synthetic" } as any,
-      { min_protocol_version: 2, max_protocol_version: 2 }, "presence-session", before.runner.credential_version, now)!;
+      { min_protocol_version: 2, max_protocol_version: 2 }, "presence-session", before.runner.credential_version, now, before.lifecycle_id)!;
     registry.acknowledgePolicy("presence-runner", epoch, before.runner.credential_version, {
       desired_revision: desired.revision, desired_checksum: desired.checksum, applied_revision: desired.revision, applied_checksum: desired.checksum,
       runner_reported_policy_revision: desired.revision, runner_reported_policy_checksum: desired.checksum,

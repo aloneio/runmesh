@@ -33,9 +33,8 @@ interface ConnectionAttachment {
   sessionId: string;
   epoch: number;
   credentialVersion: number;
-  /** Opaque Registry identity for the runner_id lifecycle. `null` is only
-   * allowed before the hello response binds the socket. */
-  lifecycleId: string | null;
+  /** Registry lifecycle authenticated with the credential before hello. */
+  readonly lifecycleId: string;
   protocolVersion: number;
   authenticated: boolean;
   readonly helloDeadlineMs: number;
@@ -259,7 +258,7 @@ export class RunnerDO {
       return authResponse.status === 401 || authResponse.status === 403
         ? new Response("unauthorized", { status: 401 }) : controlPlaneUnavailableResponse(authResponse);
     }
-    let authBody: { credential_version?: unknown };
+    let authBody: { credential_version?: unknown; lifecycle_id?: unknown };
     try {
       const parsed = await authResponse.json();
       if (!isRecord(parsed)) return controlPlaneUnavailableResponse();
@@ -270,7 +269,7 @@ export class RunnerDO {
     // Registry identity counters are persisted integers. Do not let a
     // malformed (fractional, non-finite, or unsafe) value enter the socket
     // attachment and subsequently participate in equality/fencing checks.
-    if (!isSafeNonnegativeInteger(authBody.credential_version)) return controlPlaneUnavailableResponse();
+    if (!isSafeNonnegativeInteger(authBody.credential_version) || !validLifecycleId(authBody.lifecycle_id)) return controlPlaneUnavailableResponse();
 
     const pair = new WebSocketPair();
     const server = pair[1];
@@ -279,7 +278,7 @@ export class RunnerDO {
       sessionId: crypto.randomUUID(),
       epoch: 0,
       credentialVersion: authBody.credential_version,
-      lifecycleId: null,
+      lifecycleId: authBody.lifecycle_id,
       protocolVersion: 0,
       authenticated: true,
       helloDeadlineMs: Date.now() + HELLO_DEADLINE_MS,
@@ -313,6 +312,10 @@ export class RunnerDO {
       ws.close(1008, "hello timeout");
       return;
     }
+    if (!validLifecycleId(attachment.lifecycleId)) {
+      ws.close(4001, "authentication required");
+      return;
+    }
     let message: WireMessage;
     try {
       message = decodeWireFrame(typeof raw === "string" ? raw : new Uint8Array(raw));
@@ -338,10 +341,9 @@ export class RunnerDO {
       }
       const epochResponse = await this.registryRequest(attachment.runnerId, "/connect", {
         method: "POST",
-        // The lifecycle nonce is allocated by Registry during /connect, so the
-        // handshake carries an explicit null placeholder and all subsequent
-        // transport requests carry the returned concrete value.
-        body: JSON.stringify({ metadata: message.runner, min_protocol_version: message.min_protocol_version, max_protocol_version: message.max_protocol_version, session_id: attachment.sessionId, lifecycle_id: null, credential_version: attachment.credentialVersion, now_ms: Date.now() }),
+        // Bind the hello to the lifecycle that authenticated this socket,
+        // including when deletion and recreation overlap the auth response.
+        body: JSON.stringify({ metadata: message.runner, min_protocol_version: message.min_protocol_version, max_protocol_version: message.max_protocol_version, session_id: attachment.sessionId, lifecycle_id: attachment.lifecycleId, credential_version: attachment.credentialVersion, now_ms: Date.now() }),
       });
       if (!epochResponse.ok) {
         this.closeForRegistryFailure(ws, epochResponse);
@@ -354,12 +356,11 @@ export class RunnerDO {
         ws.close(1011, "invalid registry response");
         return;
       }
-      if (receipt === undefined) {
+      if (receipt === undefined || receipt.lifecycleId !== attachment.lifecycleId) {
         ws.close(1011, "invalid registry response");
         return;
       }
       attachment.epoch = receipt.epoch;
-      attachment.lifecycleId = receipt.lifecycleId;
       attachment.protocolVersion = negotiation.protocolVersion;
       attachment.contextMethods = receipt.contextMethods;
       if (receipt.queueProtocol !== undefined) attachment.queueProtocol = receipt.queueProtocol;
