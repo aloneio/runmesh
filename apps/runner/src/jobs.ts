@@ -101,9 +101,9 @@ export class JobManager {
     readonly job: JobRecord; readonly child: ChildProcess | undefined;
     readonly code: number | null; readonly signal: NodeJS.Signals | null; readonly spawnFailed: boolean;
   }>();
-  /** Keep an unstarted job's terminal intent until its record is durable. The
-   * existing finishing/persistence barriers coordinate these queued jobs. */
-  private readonly queuedCompletions = new Map<string, { record: JobRecord; notifiedFailure: boolean }>();
+  /** Terminal decisions for jobs without a verified local child (unstarted,
+   * recovered or identity lost). Publication shares the durability barrier. */
+  private readonly detachedCompletions = new Map<string, { record: JobRecord; notifiedFailure: boolean }>();
   /** A termination decision is published before signalling a child so a
    * close event cannot classify a cancellation as an ordinary failure. */
   private readonly terminationAttempts = new Map<string, Promise<boolean>>();
@@ -144,7 +144,7 @@ export class JobManager {
         try { await this.startReserved(next.value.input, next.value.generation, job); }
         catch {
           const current=this.jobs.get(next.id);
-          if (current?.status === "queued" && !this.queuedCompletions.has(next.id)) {
+          if (current?.status === "queued" && !this.detachedCompletions.has(next.id)) {
             await this.completeQueuedJob(current, "failed", "Queued launch could not be authorized or started; no command was run.");
           }
         }
@@ -286,12 +286,12 @@ export class JobManager {
 
   public hasPendingHistoryRecovery(): boolean {
     return [...this.jobs.values()].some(job => job.record_history !== false
-      && (this.queuedCompletions.has(job.job_id) || this.failedCompletions.has(job.job_id) || job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)));
+      && (this.detachedCompletions.has(job.job_id) || this.failedCompletions.has(job.job_id) || job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)));
   }
 
   public async reconcileRecoveredJobs(): Promise<void> {
     for (const job of [...this.jobs.values()]) {
-      await this.reconcileQueuedCompletion(job.job_id);
+      await this.reconcileDetachedCompletion(job.job_id);
       await this.reconcileFailedCompletion(job.job_id);
       await this.reconcileRecoveredJob(job.job_id);
     }
@@ -306,7 +306,7 @@ export class JobManager {
 
   public async getReconciled(jobId: unknown): Promise<JobRecord> {
     let job = this.get(jobId);
-    await this.reconcileQueuedCompletion(job.job_id);
+    await this.reconcileDetachedCompletion(job.job_id);
     await this.reconcileFailedCompletion(job.job_id);
     job = this.get(jobId);
     if (job.status === "unknown" || job.status === "cancelling") {
@@ -391,7 +391,7 @@ export class JobManager {
       // in-memory reservation and its partial directory so a failed start
       // cannot consume a concurrency slot forever. Preserve any newer record
       // (for example a concurrent queued cancellation) by checking identity.
-      if (this.jobs.get(job.job_id) === job && !this.queuedCompletions.has(job.job_id)) {
+      if (this.jobs.get(job.job_id) === job && !this.detachedCompletions.has(job.job_id)) {
         this.jobs.delete(job.job_id);
         this.jobLogBytes.delete(job.job_id);
         await this.files.rm(this.jobDir(job.job_id), { recursive: true, force: true }).catch(() => undefined);
@@ -401,8 +401,8 @@ export class JobManager {
 
     }
     if (mustQueue) {
-      if (this.queuedCompletions.has(job.job_id)) {
-        await this.reconcileQueuedCompletion(job.job_id);
+      if (this.detachedCompletions.has(job.job_id)) {
+        await this.reconcileDetachedCompletion(job.job_id);
         return this.get(job.job_id);
       }
       const current=this.jobs.get(job.job_id);
@@ -425,9 +425,9 @@ export class JobManager {
       // remaining window before spawn.
       if (reservedJob !== undefined && (this.queueAuthorizer === undefined || !await this.queueAuthorizer(params, job))) throw new RpcRuntimeError("permission_denied", "Queued launch authorization was denied or unavailable");
       await this.policy.verifySnapshot(cwd, cwdSnapshot);
-      if (this.queuedCompletions.has(job.job_id)) {
+      if (this.detachedCompletions.has(job.job_id)) {
         await this.closeLogHandlesSafely(stdout, stderr);
-        await this.reconcileQueuedCompletion(job.job_id);
+        await this.reconcileDetachedCompletion(job.job_id);
         return this.get(job.job_id);
       }
       const beforeSpawn = this.jobs.get(job.job_id);
@@ -469,7 +469,7 @@ export class JobManager {
       // of resurrecting it as a stale spawn failure.
       const current = this.jobs.get(job.job_id);
       if (current !== undefined && current.status !== "queued") return current;
-      if (this.queuedCompletions.has(job.job_id)) {
+      if (this.detachedCompletions.has(job.job_id)) {
         // A concurrent cancellation may still be committing when log setup
         // fails. Join its existing result; a failed, settled write remains
         // pending for the next reconciliation instead of retrying here.
@@ -531,6 +531,10 @@ export class JobManager {
     // leaving this method with a stale running snapshot that could target a
     // reused PID.
     let job = this.get(jobId);
+    if (job.status !== "queued" && this.detachedCompletions.has(job.job_id)) {
+      await this.reconcileDetachedCompletion(job.job_id);
+      return this.get(job.job_id);
+    }
     if (this.failedCompletions.has(job.job_id)) {
       await this.reconcileFailedCompletion(job.job_id);
       job = this.get(jobId);
@@ -547,6 +551,7 @@ export class JobManager {
 
     const expectedChild = this.processes.get(job.job_id);
     const before = await this.checkLocalTerminationTarget(job, expectedChild);
+    if (this.detachedCompletions.has(job.job_id)) return this.getReconciled(job.job_id);
     if (!before.safe) {
       if (before.kind === "terminal") return this.waitForTerminalResult(job.job_id, before.message);
       throw new Error(before.message);
@@ -560,6 +565,7 @@ export class JobManager {
       // Emit a status event only for the record that is still current; a stale
       // cancelling event after `completed` could regress Registry metadata.
       const afterCancellingPersist = this.jobs.get(job.job_id);
+      if (this.detachedCompletions.has(job.job_id)) return this.getReconciled(job.job_id);
       if (afterCancellingPersist === undefined) return job;
       if (!isActive(afterCancellingPersist)) return this.waitForTerminalResult(job.job_id, "job is no longer active; cancellation was not sent");
       if (afterCancellingPersist.status !== "cancelling") return afterCancellingPersist;
@@ -573,6 +579,7 @@ export class JobManager {
       if (current === undefined) return job;
       if (!isActive(current)) return this.waitForTerminalResult(cancelling.job_id, "job is no longer active; cancellation was not sent");
       const after = await this.checkLocalTerminationTarget(current, expectedChild);
+      if (this.detachedCompletions.has(job.job_id)) return this.getReconciled(job.job_id);
       if (!after.safe) {
         if (after.kind === "terminal") return this.waitForTerminalResult(cancelling.job_id, after.message);
         if (after.kind === "unverified") throw new Error(after.message);
@@ -584,6 +591,9 @@ export class JobManager {
       // choosing failed versus cancelled.
       termination = this.terminationAttempts.get(cancelling.job_id) ?? this.beginTermination(cancelling.job_id, current.pid, expectedChild, current.process_start_fingerprint);
       const delivered = await termination;
+      // Another cancellation may establish identity loss while this attempt
+      // settles. Join that durable decision before publishing a local marker.
+      if (this.detachedCompletions.has(job.job_id)) return this.getReconciled(job.job_id);
       if (!delivered) {
         // A false result means no cancellation-delivery evidence exists. Do
         // one final observation so a process that exited concurrently can
@@ -594,6 +604,7 @@ export class JobManager {
         if (undelivered === undefined) return job;
         if (!isActive(undelivered)) return this.waitForTerminalResult(cancelling.job_id, "job is no longer active; cancellation was not sent");
         const verification = await this.checkLocalTerminationTarget(undelivered, expectedChild);
+        if (this.detachedCompletions.has(job.job_id)) return this.getReconciled(job.job_id);
         if (!verification.safe) {
           if (verification.kind === "terminal") return this.waitForTerminalResult(cancelling.job_id, verification.message);
           if (verification.kind === "unverified") throw new Error(verification.message);
@@ -607,20 +618,24 @@ export class JobManager {
         }
         throw new Error("process termination was not delivered; job remains running");
       }
-      this.terminationDelivered.add(cancelling.job_id);
       const deliveredCurrent = this.jobs.get(cancelling.job_id);
       // A close handler may have already committed a terminal record while
       // the termination command was settling. Never resurrect that record
       // with the stale `cancelling` snapshot.
       if (deliveredCurrent !== undefined && deliveredCurrent.status === "cancelling") {
+        this.terminationDelivered.add(cancelling.job_id);
         const deliveredRecord = { ...deliveredCurrent, cancellation_delivered_at_ms: Date.now(), updated_at_ms: Date.now() };
         this.jobs.set(deliveredRecord.job_id, deliveredRecord);
         await this.persist(deliveredRecord);
       }
     } catch (error) {
+      // Return the reconciliation promise directly so a failed terminal write
+      // stays pending for the next caller instead of retrying in this catch.
+      if (this.detachedCompletions.has(job.job_id)) return this.getReconciled(job.job_id);
       // Do not falsely report cancellation merely because process-tree control
       // failed. The original local child remains observable and may exit normally.
       const current = this.jobs.get(job.job_id);
+      if (current?.status === "interrupted" && current.recovery_liveness?.fingerprint_matches === false) return current;
       if (current?.status === "cancelling" && current.cancellation_delivered_at_ms === null && this.processes.get(job.job_id) === expectedChild && expectedChild?.exitCode === null && expectedChild.signalCode === null) {
         const running = { ...current, status: "running" as const, updated_at_ms: Date.now() };
         this.jobs.set(job.job_id, running);
@@ -682,13 +697,16 @@ export class JobManager {
   private async markUnsafeLocalCancellation(job: JobRecord, message: string): Promise<JobRecord> {
     const current = this.jobs.get(job.job_id);
     if (current === undefined) throw new Error("job not found");
-    if (!isActive(current)) return current;
-    const terminal = { ...terminalRecoveredJob(current, "interrupted", { checked_at_ms: Date.now(), alive: true, fingerprint_matches: false }), recovery_note: message.slice(0, 512) };
-    this.jobs.set(terminal.job_id, terminal);
-    this.processes.delete(terminal.job_id);
-    await this.persist(terminal);
-    this.onEvent({ type: "completed", job: terminal });
-    return terminal;
+    if (!isActive(current) || !sameJobProcessIdentity(current, job)) return current;
+    if (!this.detachedCompletions.has(job.job_id)) {
+      const record = { ...terminalRecoveredJob(current, "interrupted", { checked_at_ms: Date.now(), alive: true, fingerprint_matches: false }), recovery_note: message.slice(0, 512) };
+      this.detachedCompletions.set(job.job_id, { record, notifiedFailure: false });
+      // The handle no longer proves this process identity. Retire it before
+      // yielding, while retaining the current slot until the decision is durable.
+      this.processes.delete(job.job_id);
+    }
+    await this.reconcileDetachedCompletion(job.job_id);
+    return this.get(job.job_id);
   }
 
   /** Wait until the local child and its terminal metadata persistence finish. */
@@ -758,7 +776,7 @@ export class JobManager {
     // callback can mutate terminal metadata (or race retention and recreate a
     // pruned job directory).
     const current = this.jobs.get(jobId);
-    if (current === undefined || !isActive(current)) return;
+    if (current === undefined || !isActive(current) || this.detachedCompletions.has(jobId)) return;
     const reserved = this.reserveLogBytes(jobId, chunk);
     // This path is intentionally fire-and-forget (it runs from a stream data
     // callback).  Persisting the metadata can fail, and leaving that promise
@@ -772,7 +790,7 @@ export class JobManager {
       // been pruned since the reservation above. Release the reservation and
       // avoid reopening a removed directory in that case.
       const latest = this.jobs.get(jobId);
-      if (latest === undefined || !isActive(latest)) {
+      if (latest === undefined || !isActive(latest) || this.detachedCompletions.has(jobId)) {
         this.releaseLogBytes(jobId, reserved.data.byteLength);
         return;
       }
@@ -789,7 +807,7 @@ export class JobManager {
 
   private async markOutputTruncated(jobId: string): Promise<void> {
     const current = this.jobs.get(jobId);
-    if (current === undefined || !isActive(current) || current.output_truncated) return;
+    if (current === undefined || !isActive(current) || current.output_truncated || this.detachedCompletions.has(jobId)) return;
     const updated = { ...current, output_truncated: true };
     this.jobs.set(jobId, updated);
     await this.persist(updated);
@@ -884,20 +902,50 @@ export class JobManager {
     const job = this.jobs.get(jobId);
     if (job === undefined || job.status !== "unknown" && !(job.status === "cancelling" && job.recovery_liveness !== null)) return;
     const inspection = await this.processAdapter.inspectProcess(job.pid, job.process_start_fingerprint);
-    if (inspection.alive && inspection.fingerprintMatches !== false) return;
+    if (this.detachedCompletions.has(jobId)) return this.reconcileDetachedCompletion(jobId);
     // The inspection yielded to the event loop. Re-read the record before
     // publishing interruption/cancellation so a concurrent cancel or another
     // reconciliation cannot be overwritten by this stale snapshot.
     const current = this.jobs.get(jobId);
     if (current === undefined || current.status !== job.status || current.pid !== job.pid || current.process_start_fingerprint !== job.process_start_fingerprint) return;
-    const deliveredCancellation = current.status === "cancelling" && current.cancellation_delivered_at_ms !== null;
-    const terminal = terminalRecoveredJob(current, deliveredCancellation ? "cancelled" : "interrupted", {
+    if (inspection.alive && inspection.fingerprintMatches !== false) return this.persistRecoveredDelivery(current);
+    await this.completeRecoveredJob(current, {
       checked_at_ms: Date.now(), alive: inspection.alive, fingerprint_matches: inspection.fingerprintMatches,
     });
-    this.jobs.set(job.job_id, terminal);
-    this.terminationDelivered.delete(job.job_id);
-    await this.persist(terminal);
-    this.onEvent({ type: "completed", job: terminal });
+  }
+
+  private async completeRecoveredJob(job: JobRecord, liveness: RecoveryLiveness): Promise<void> {
+    // A recovered process can exit while its shared termination decision is
+    // still settling. Preserve that decision before choosing the terminal state.
+    const termination = this.terminationAttempts.get(job.job_id);
+    if (termination !== undefined && await termination.catch(() => false)) this.recordRecoveredDelivery(job.job_id);
+    if (this.detachedCompletions.has(job.job_id)) return this.reconcileDetachedCompletion(job.job_id);
+    const current = this.jobs.get(job.job_id);
+    if (current === undefined || !sameJobProcessIdentity(current, job)
+      || !(current.status === "unknown" || current.status === "cancelling" && current.recovery_liveness !== null)) return;
+    const record = terminalRecoveredJob(current, current.cancellation_delivered_at_ms !== null ? "cancelled" : "interrupted", liveness);
+    this.detachedCompletions.set(job.job_id, { record, notifiedFailure: false });
+    await this.reconcileDetachedCompletion(job.job_id);
+  }
+
+  private recordRecoveredDelivery(jobId: string): void {
+    const current = this.jobs.get(jobId);
+    if (current === undefined || !(current.status === "unknown" || current.status === "cancelling")
+      || current.recovery_liveness === null || current.cancellation_delivered_at_ms !== null) return;
+    // A concurrent identity probe may temporarily return this recovered job
+    // to unknown. The shared, confirmed termination decision still applies.
+    const now = Date.now();
+    this.jobs.set(jobId, { ...current, status: "cancelling", cancellation_delivered_at_ms: now, updated_at_ms: now });
+    this.terminationDelivered.add(jobId);
+  }
+
+  private async persistRecoveredDelivery(job: JobRecord): Promise<void> {
+    if (this.detachedCompletions.has(job.job_id)) return this.reconcileDetachedCompletion(job.job_id);
+    if (job.cancellation_delivered_at_ms === null || !this.terminationDelivered.has(job.job_id)) return;
+    await this.persist(job);
+    // Recovered jobs retain the stored marker as their delivery evidence;
+    // this transient flag is needed only until storage catches up.
+    if (this.jobs.get(job.job_id) === job) this.terminationDelivered.delete(job.job_id);
   }
 
   /**
@@ -920,9 +968,17 @@ export class JobManager {
     // snapshot was in flight; never promote that stale snapshot to cancelling.
     const initial = this.jobs.get(job.job_id);
     if (initial === undefined) return job;
+    if (this.detachedCompletions.has(job.job_id)) {
+      await this.reconcileDetachedCompletion(job.job_id); return this.get(job.job_id);
+    }
     if (initial.pid !== job.pid || initial.process_start_fingerprint !== job.process_start_fingerprint || !(initial.status === "unknown" || (initial.status === "cancelling" && initial.recovery_liveness !== null))) return initial;
-    if (initial.status === "cancelling" && initial.cancellation_delivered_at_ms !== null) return initial;
+    if (initial.status === "cancelling" && initial.cancellation_delivered_at_ms !== null) {
+      await this.persistRecoveredDelivery(initial); return this.get(job.job_id);
+    }
     const inspection = await this.processAdapter.inspectProcess(initial.pid, initial.process_start_fingerprint);
+    if (this.detachedCompletions.has(job.job_id)) {
+      await this.reconcileDetachedCompletion(job.job_id); return this.get(job.job_id);
+    }
     if (!inspection.alive || inspection.fingerprintMatches !== true) {
       // The probe yielded. A concurrent reconciliation/cancellation may have
       // already committed a newer terminal (or cancelling) state; return that
@@ -937,10 +993,15 @@ export class JobManager {
     // Another caller can finish delivery while the identity probe is pending.
     // Its durable marker is an idempotency barrier, not permission to send a
     // second signal after the shared in-flight termination promise is gone.
-    if (beforePublish.status === "cancelling" && beforePublish.cancellation_delivered_at_ms !== null) return beforePublish;
+    if (beforePublish.status === "cancelling" && beforePublish.cancellation_delivered_at_ms !== null) {
+      await this.persistRecoveredDelivery(beforePublish); return this.get(job.job_id);
+    }
     const recovered = { ...beforePublish, status: "cancelling" as const, recovery_liveness: beforePublish.recovery_liveness ?? { checked_at_ms: Date.now(), alive: true, fingerprint_matches: inspection.fingerprintMatches }, recovery_note: "cancellation requested after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: Date.now() };
     this.jobs.set(recovered.job_id, recovered);
     await this.persist(recovered);
+    if (this.detachedCompletions.has(job.job_id)) {
+      await this.reconcileDetachedCompletion(job.job_id); return this.get(job.job_id);
+    }
     const afterPublish = this.jobs.get(recovered.job_id);
     if (afterPublish === undefined) return recovered;
     if (!isActive(afterPublish)) return afterPublish;
@@ -951,6 +1012,9 @@ export class JobManager {
     const current = this.jobs.get(recovered.job_id);
     if (current === undefined || !isActive(current)) return current ?? recovered;
     const latestInspection = await this.processAdapter.inspectProcess(current.pid, current.process_start_fingerprint);
+    if (this.detachedCompletions.has(job.job_id)) {
+      await this.reconcileDetachedCompletion(job.job_id); return this.get(job.job_id);
+    }
     if (!latestInspection.alive || latestInspection.fingerprintMatches !== true) {
       const beforeTerminal = this.jobs.get(recovered.job_id);
       if (beforeTerminal === undefined || beforeTerminal.status !== current.status || beforeTerminal.pid !== current.pid || beforeTerminal.process_start_fingerprint !== current.process_start_fingerprint) return beforeTerminal ?? current;
@@ -968,13 +1032,10 @@ export class JobManager {
         if (this.jobs.get(unverified.job_id) === unverified) this.onEvent({ type: "status", job: unverified });
         throw new Error("recovered job cannot be cancelled safely because its process identity is no longer verified");
       }
-      const terminal = terminalRecoveredJob(beforeTerminal, beforeTerminal.cancellation_delivered_at_ms !== null ? "cancelled" : "interrupted", {
+      await this.completeRecoveredJob(beforeTerminal, {
         checked_at_ms: Date.now(), alive: latestInspection.alive, fingerprint_matches: latestInspection.fingerprintMatches,
       });
-      this.jobs.set(terminal.job_id, terminal);
-      await this.persist(terminal);
-      this.onEvent({ type: "completed", job: terminal });
-      return terminal;
+      return this.get(job.job_id);
     }
     // The fingerprint probe above yields to the event loop. Re-check the
     // durable/in-memory record in the same turn immediately before signalling;
@@ -987,7 +1048,9 @@ export class JobManager {
     }
     // The final probe also yields. A completed concurrent delivery no longer
     // has an in-flight promise to share, so recheck its persisted marker here.
-    if (beforeSignal.cancellation_delivered_at_ms !== null) return beforeSignal;
+    if (beforeSignal.cancellation_delivered_at_ms !== null) {
+      await this.persistRecoveredDelivery(beforeSignal); return this.get(job.job_id);
+    }
     // Recovered callers can race with one another after the async identity
     // probe. Share one platform termination decision per job so concurrent
     // requests cannot send duplicate SIGTERM/taskkill commands.
@@ -996,22 +1059,19 @@ export class JobManager {
       termination = this.terminationAttempts.get(recovered.job_id)
         ?? this.beginTermination(recovered.job_id, beforeSignal.pid, undefined, beforeSignal.process_start_fingerprint);
       if (await termination) {
+        this.recordRecoveredDelivery(recovered.job_id);
+        if (this.detachedCompletions.has(job.job_id)) {
+          await this.reconcileDetachedCompletion(job.job_id); return this.get(job.job_id);
+        }
         const latest = this.jobs.get(recovered.job_id);
         if (latest === undefined) return recovered;
         if (!isActive(latest)) return this.waitForTerminalResult(recovered.job_id, "job is no longer active; cancellation was not sent");
         if (latest.status !== "cancelling" || latest.pid !== beforeSignal.pid || latest.process_start_fingerprint !== beforeSignal.process_start_fingerprint) return latest;
-        // Another concurrent caller may have published the marker while this
-        // decision was settling. Preserve that record instead of rewriting it
-        // (and avoid reporting a second delivery timestamp).
-        if (latest.cancellation_delivered_at_ms !== null) return latest;
-        const delivered = { ...latest, cancellation_delivered_at_ms: Date.now(), updated_at_ms: Date.now() };
-        this.jobs.set(delivered.job_id, delivered);
-        this.terminationDelivered.add(delivered.job_id);
-        await this.persist(delivered);
+        await this.persistRecoveredDelivery(latest);
         // This runner did not spawn the recovered child and cannot observe close.
         // A later get/list/sync probes it and converges only to cancelled when the
         // persisted delivery marker proves a cancellation request was sent.
-        return delivered;
+        return this.get(job.job_id);
       }
       return recovered;
     } finally {
@@ -1020,6 +1080,7 @@ export class JobManager {
   }
 
   private async finish(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {
+    if (this.detachedCompletions.has(jobId)) return this.reconcileDetachedCompletion(jobId);
     const existing = this.finishing.get(jobId);
     if (existing !== undefined) return existing;
     const job = this.jobs.get(jobId);
@@ -1056,27 +1117,29 @@ export class JobManager {
   }
 
   private completeQueuedJob(job: JobRecord, status: "cancelled" | "failed", recoveryNote = job.recovery_note): Promise<void> {
-    const pending = this.queuedCompletions.get(job.job_id);
+    const pending = this.detachedCompletions.get(job.job_id);
     // A requested cancellation takes precedence over an in-flight failure
     // decision while the unstarted job remains behind the durability barrier.
     if (pending === undefined || (status === "cancelled" && pending.record.status !== "cancelled")) {
       const now = Date.now();
       const record = { ...job, status, updated_at_ms: now, completed_at_ms: now, recovery_note: recoveryNote };
-      if (pending === undefined) this.queuedCompletions.set(job.job_id, { record, notifiedFailure: false });
+      if (pending === undefined) this.detachedCompletions.set(job.job_id, { record, notifiedFailure: false });
       else pending.record = record;
       this.queue.remove(job.job_id);
       // This job has no child: retain queued accounting until publication so
       // it cannot consume a process slot or re-enter dispatch after failure.
       this.queuedIds.add(job.job_id);
     }
-    return this.reconcileQueuedCompletion(job.job_id);
+    return this.reconcileDetachedCompletion(job.job_id);
   }
 
-  private reconcileQueuedCompletion(jobId: string): Promise<void> {
-    const pending = this.queuedCompletions.get(jobId);
+  private reconcileDetachedCompletion(jobId: string): Promise<void> {
+    const pending = this.detachedCompletions.get(jobId);
     if (pending === undefined) return Promise.resolve();
     const existing = this.finishing.get(jobId);
-    if (existing !== undefined) return existing;
+    // A local close may already be flushing when identity loss is observed.
+    // Its completion yields ownership, then this decision still needs its write.
+    if (existing !== undefined) return existing.then(() => this.reconcileDetachedCompletion(jobId));
     const prior = this.jobs.get(jobId);
     this.terminalPersisting.add(jobId);
     const task = (async () => {
@@ -1089,7 +1152,8 @@ export class JobManager {
         if (this.jobs.get(jobId) === prior) {
           this.jobs.set(jobId, record);
           this.queuedIds.delete(jobId);
-          this.queuedCompletions.delete(jobId);
+          this.detachedCompletions.delete(jobId);
+          this.terminationDelivered.delete(jobId);
           this.onEvent({ type: "completed", job: record });
         }
         return;
@@ -1113,7 +1177,7 @@ export class JobManager {
 
   private finishOnce(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {
     return finishJobCompletion({
-      current: () => this.jobs.get(jobId),
+      current: () => this.detachedCompletions.has(jobId) ? undefined : this.jobs.get(jobId),
       pendingTermination: () => this.terminationAttempts.get(jobId),
       terminationDelivered: () => this.terminationDelivered.has(jobId),
       flushLogs: () => this.flushLogs(jobId),
@@ -1211,12 +1275,15 @@ export class JobManager {
       // durability paths intentionally enqueue before publication, while the
       // record is still active, so permit only that narrowly-scoped case.
       const current = this.jobs.get(job.job_id);
+      const detached = this.detachedCompletions.get(job.job_id);
+      if (detached !== undefined && detached.record !== job) return;
       // A terminal write may be waiting on an older active snapshot while
       // start() queues its own running snapshot.  The terminal reservation is
       // the ordering signal: active writes that arrive after it are stale and
       // must not be allowed to execute after the terminal metadata.
-      if (this.terminalPersisting.has(job.job_id) && isActive(job)) return;
-      const prePublishTerminal = !isActive(job) && current !== undefined && isActive(current);
+      if (this.terminalPersisting.has(job.job_id) && occupiesProcessSlot(job)) return;
+      const prePublishTerminal = !occupiesProcessSlot(job) && current !== undefined
+        && (isActive(current) || this.detachedCompletions.get(job.job_id)?.record === job);
       if (current !== job && !prePublishTerminal) return;
       await this.files.atomicJson(path, job);
     });

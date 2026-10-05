@@ -249,7 +249,7 @@ export class FilesystemService {
         budget.files += 1;
         if (options.mode === "filename") {
           const match = literalMatch(entry.name, query, options.caseSensitive);
-          if (match !== null) results.push(searchResult(childRelative, 1, entry.name, match, query.length, [], options));
+          if (match !== null) results.push(searchResult(childRelative, 1, entry.name, match.offset, match.length, [], options));
           if (results.length >= MAX_SEARCH_RESULTS) { truncateSearch(budget, "result_budget"); return false; }
           return true;
         }
@@ -260,7 +260,7 @@ export class FilesystemService {
         const lines = loaded.content.split(/\r?\n/);
         for (const [index, line] of lines.entries()) {
           const match = literalMatch(line, query, options.caseSensitive);
-          if (match !== null) results.push(searchResult(childRelative, index + 1, line, match, query.length, lines, options));
+          if (match !== null) results.push(searchResult(childRelative, index + 1, line, match.offset, match.length, lines, options));
           if (results.length >= MAX_SEARCH_RESULTS) { truncateSearch(budget, "result_budget"); return false; }
         }
         return true;
@@ -441,12 +441,37 @@ function matchesUserGlobs(path: string, options: SearchOptions): boolean {
   return !options.excludeGlobs.some(matches);
 }
 
-function literalMatch(value: string, query: string, caseSensitive: boolean): number | null {
-  const index = caseSensitive ? value.indexOf(query) : value.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
-  return index < 0 ? null : index;
+function literalMatch(value: string, query: string, caseSensitive: boolean): { readonly offset: number; readonly length: number } | null {
+  // Use Unicode default lowercase so the same query behaves consistently on
+  // every host. Whole-string folding preserves contextual forms such as sigma.
+  const folded = caseSensitive ? value : value.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const index = folded.indexOf(needle);
+  if (index < 0) return null;
+  if (caseSensitive || folded.length === value.length) return { offset: index, length: needle.length };
+
+  // Default lowercase can expand a source character (İ -> i + combining dot).
+  // Map both folded boundaries back to source text in one pass. A match within
+  // an expanded character covers that character; unchanged characters keep
+  // their original UTF-16 boundary offsets.
+  let sourceOffset = 0, foldedOffset = 0, start = -1;
+  const end = index + needle.length;
+  for (const character of value) {
+    const foldedWidth = character.toLowerCase().length;
+    const nextFolded = foldedOffset + foldedWidth;
+    const sameWidth = foldedWidth === character.length;
+    if (start < 0 && nextFolded > index) start = sourceOffset + (sameWidth ? index - foldedOffset : 0);
+    if (nextFolded >= end) {
+      const sourceEnd = sourceOffset + (sameWidth ? end - foldedOffset : character.length);
+      return { offset: start, length: sourceEnd - start };
+    }
+    sourceOffset += character.length;
+    foldedOffset = nextFolded;
+  }
+  return null;
 }
 
-function searchResult(path: string, lineNumber: number, line: string, matchOffset: number, queryLength: number, lines: readonly string[], options: SearchOptions): SearchResult {
+function searchResult(path: string, lineNumber: number, line: string, matchOffset: number, matchLength: number, lines: readonly string[], options: SearchOptions): SearchResult {
   const beforeStart = Math.max(0, lineNumber - 1 - options.contextBefore);
   const afterEnd = Math.min(lines.length, lineNumber + options.contextAfter);
   const contextBefore = lines.slice(beforeStart, lineNumber - 1).map((text, index) => ({ line: beforeStart + index + 1, text: text.slice(0, 4_096) }));
@@ -455,7 +480,7 @@ function searchResult(path: string, lineNumber: number, line: string, matchOffse
     path,
     line: lineNumber,
     column: Array.from(line.slice(0, matchOffset)).length + 1,
-    match: line.slice(matchOffset, matchOffset + queryLength).slice(0, 1_024),
+    match: line.slice(matchOffset, matchOffset + matchLength).slice(0, 1_024),
     text: line.slice(0, 4_096),
     context_before: contextBefore,
     context_after: contextAfter,
