@@ -101,6 +101,9 @@ export class JobManager {
     readonly job: JobRecord; readonly child: ChildProcess | undefined;
     readonly code: number | null; readonly signal: NodeJS.Signals | null; readonly spawnFailed: boolean;
   }>();
+  /** Keep an unstarted job's terminal intent until its record is durable. The
+   * existing finishing/persistence barriers coordinate these queued jobs. */
+  private readonly queuedCompletions = new Map<string, { record: JobRecord; notifiedFailure: boolean }>();
   /** A termination decision is published before signalling a child so a
    * close event cannot classify a cancellation as an ordinary failure. */
   private readonly terminationAttempts = new Map<string, Promise<boolean>>();
@@ -141,9 +144,8 @@ export class JobManager {
         try { await this.startReserved(next.value.input, next.value.generation, job); }
         catch {
           const current=this.jobs.get(next.id);
-          if (current?.status === "queued") {
-            const failed={...current,status:"failed" as const,updated_at_ms:Date.now(),completed_at_ms:Date.now(),recovery_note:"Queued launch could not be authorized or started; no command was run."};
-            this.jobs.set(next.id,failed); await this.persist(failed); this.onEvent({type:"completed",job:failed});
+          if (current?.status === "queued" && !this.queuedCompletions.has(next.id)) {
+            await this.completeQueuedJob(current, "failed", "Queued launch could not be authorized or started; no command was run.");
           }
         }
       }
@@ -284,11 +286,12 @@ export class JobManager {
 
   public hasPendingHistoryRecovery(): boolean {
     return [...this.jobs.values()].some(job => job.record_history !== false
-      && (this.failedCompletions.has(job.job_id) || job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)));
+      && (this.queuedCompletions.has(job.job_id) || this.failedCompletions.has(job.job_id) || job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)));
   }
 
   public async reconcileRecoveredJobs(): Promise<void> {
     for (const job of [...this.jobs.values()]) {
+      await this.reconcileQueuedCompletion(job.job_id);
       await this.reconcileFailedCompletion(job.job_id);
       await this.reconcileRecoveredJob(job.job_id);
     }
@@ -303,6 +306,7 @@ export class JobManager {
 
   public async getReconciled(jobId: unknown): Promise<JobRecord> {
     let job = this.get(jobId);
+    await this.reconcileQueuedCompletion(job.job_id);
     await this.reconcileFailedCompletion(job.job_id);
     job = this.get(jobId);
     if (job.status === "unknown" || job.status === "cancelling") {
@@ -387,7 +391,7 @@ export class JobManager {
       // in-memory reservation and its partial directory so a failed start
       // cannot consume a concurrency slot forever. Preserve any newer record
       // (for example a concurrent queued cancellation) by checking identity.
-      if (this.jobs.get(job.job_id) === job) {
+      if (this.jobs.get(job.job_id) === job && !this.queuedCompletions.has(job.job_id)) {
         this.jobs.delete(job.job_id);
         this.jobLogBytes.delete(job.job_id);
         await this.files.rm(this.jobDir(job.job_id), { recursive: true, force: true }).catch(() => undefined);
@@ -397,6 +401,10 @@ export class JobManager {
 
     }
     if (mustQueue) {
+      if (this.queuedCompletions.has(job.job_id)) {
+        await this.reconcileQueuedCompletion(job.job_id);
+        return this.get(job.job_id);
+      }
       const current=this.jobs.get(job.job_id);
       if(current?.status !== "queued")return current ?? job;
       this.queue.push(client, job.job_id, {input:params,generation}); this.queuedIds.add(job.job_id);
@@ -417,6 +425,11 @@ export class JobManager {
       // remaining window before spawn.
       if (reservedJob !== undefined && (this.queueAuthorizer === undefined || !await this.queueAuthorizer(params, job))) throw new RpcRuntimeError("permission_denied", "Queued launch authorization was denied or unavailable");
       await this.policy.verifySnapshot(cwd, cwdSnapshot);
+      if (this.queuedCompletions.has(job.job_id)) {
+        await this.closeLogHandlesSafely(stdout, stderr);
+        await this.reconcileQueuedCompletion(job.job_id);
+        return this.get(job.job_id);
+      }
       const beforeSpawn = this.jobs.get(job.job_id);
       if (beforeSpawn === undefined || beforeSpawn.status !== "queued") {
         await this.closeLogHandlesSafely(stdout, stderr);
@@ -456,18 +469,18 @@ export class JobManager {
       // of resurrecting it as a stale spawn failure.
       const current = this.jobs.get(job.job_id);
       if (current !== undefined && current.status !== "queued") return current;
-      const failed = { ...job, status: "failed" as const, updated_at_ms: Date.now(), completed_at_ms: Date.now() };
-      await this.persist(failed);
-      // A queued cancellation can publish its terminal record while the
-      // failed metadata write is awaiting the per-job persistence chain. Do
-      // not overwrite that newer identity decision when the write resumes.
-      const afterFailedPersist = this.jobs.get(job.job_id);
-      if (afterFailedPersist !== job) return afterFailedPersist ?? failed;
-      this.jobs.set(job.job_id, failed);
-      // A spawn/open failure still creates a durable terminal Job record. Emit
-      // it so an online Runner can synchronize the failure to Registry even
-      // though no running event was possible.
-      this.onEvent({ type: "completed", job: failed });
+      if (this.queuedCompletions.has(job.job_id)) {
+        // A concurrent cancellation may still be committing when log setup
+        // fails. Join its existing result; a failed, settled write remains
+        // pending for the next reconciliation instead of retrying here.
+        const finishing = this.finishing.get(job.job_id);
+        if (finishing === undefined) throw error;
+        await finishing;
+        return this.get(job.job_id);
+      }
+      await this.completeQueuedJob(current ?? job, "failed");
+      const completed = this.jobs.get(job.job_id);
+      if (completed?.status === "cancelled") return completed;
       throw error;
     }
 
@@ -526,13 +539,8 @@ export class JobManager {
       job = await this.getReconciled(jobId);
     }
     if (job.status === "queued") {
-      this.queue.remove(job.job_id); this.queuedIds.delete(job.job_id);
-      const cancelled = { ...job, status: "cancelled" as const, updated_at_ms: Date.now(), completed_at_ms: Date.now() };
-      this.jobs.set(job.job_id, cancelled);
-      await this.persist(cancelled);
-      this.onEvent({ type: "completed", job: cancelled });
-      this.resumeQueue();
-      return cancelled;
+      await this.completeQueuedJob(job, "cancelled");
+      return this.get(job.job_id);
     }
     if (job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)) return this.cancelRecoveredUnknown(job);
     if (job.status !== "running" && job.status !== "cancelling") return job;
@@ -1045,6 +1053,62 @@ export class JobManager {
     // Reuse the witnessed close/error arguments, including nonzero exit
     // codes. A liveness probe cannot reconstruct an OS process's result.
     await this.finish(jobId, observed.code, observed.signal, observed.spawnFailed);
+  }
+
+  private completeQueuedJob(job: JobRecord, status: "cancelled" | "failed", recoveryNote = job.recovery_note): Promise<void> {
+    const pending = this.queuedCompletions.get(job.job_id);
+    // A requested cancellation takes precedence over an in-flight failure
+    // decision while the unstarted job remains behind the durability barrier.
+    if (pending === undefined || (status === "cancelled" && pending.record.status !== "cancelled")) {
+      const now = Date.now();
+      const record = { ...job, status, updated_at_ms: now, completed_at_ms: now, recovery_note: recoveryNote };
+      if (pending === undefined) this.queuedCompletions.set(job.job_id, { record, notifiedFailure: false });
+      else pending.record = record;
+      this.queue.remove(job.job_id);
+      // This job has no child: retain queued accounting until publication so
+      // it cannot consume a process slot or re-enter dispatch after failure.
+      this.queuedIds.add(job.job_id);
+    }
+    return this.reconcileQueuedCompletion(job.job_id);
+  }
+
+  private reconcileQueuedCompletion(jobId: string): Promise<void> {
+    const pending = this.queuedCompletions.get(jobId);
+    if (pending === undefined) return Promise.resolve();
+    const existing = this.finishing.get(jobId);
+    if (existing !== undefined) return existing;
+    const prior = this.jobs.get(jobId);
+    this.terminalPersisting.add(jobId);
+    const task = (async () => {
+      for (;;) {
+        const record = pending.record;
+        await this.persist(record);
+        // A cancellation may supersede failure during the write. Persist its
+        // final decision before publishing one completion event.
+        if (record !== pending.record) continue;
+        if (this.jobs.get(jobId) === prior) {
+          this.jobs.set(jobId, record);
+          this.queuedIds.delete(jobId);
+          this.queuedCompletions.delete(jobId);
+          this.onEvent({ type: "completed", job: record });
+        }
+        return;
+      }
+    })().catch(error => {
+      if (!pending.notifiedFailure && prior !== undefined) {
+        pending.notifiedFailure = true;
+        // Wake the established history reconciliation retry without
+        // publishing completion before the local record is committed.
+        try { this.onEvent({ type: "status", job: prior }); } catch { /* observations remain local */ }
+      }
+      throw error;
+    }).finally(() => {
+      this.terminalPersisting.delete(jobId);
+      this.finishing.delete(jobId);
+      this.resumeQueue();
+    });
+    this.finishing.set(jobId, task);
+    return task;
   }
 
   private finishOnce(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {

@@ -668,9 +668,11 @@ describe("persistent local jobs", () => {
       startPromise = manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
       await waitFor(() => targetJobId, (value) => value !== undefined);
       cancelPromise = manager.cancel(targetJobId!);
-      await waitFor(() => manager!.get(targetJobId!), (value) => value.status === "cancelled");
-      // Release the queued metadata write only after cancellation has published
-      // its terminal in memory; the pre-spawn check must observe that state.
+      expect(manager.get(targetJobId!).status).toBe("queued");
+      expect(manager.hasPendingHistoryRecovery()).toBe(true);
+      expect(probe.children).toHaveLength(0);
+      // Cancellation owns the pending terminal decision while the original
+      // write is blocked. Publication waits for its own durable write.
       releaseQueuedWrite();
       await expect(cancelPromise).resolves.toMatchObject({ status: "cancelled" });
       await expect(startPromise).resolves.toMatchObject({ status: "cancelled" });
@@ -698,13 +700,31 @@ describe("persistent local jobs", () => {
     const test = await fixture();
     let releaseQueuedWrite!: () => void;
     const queuedWriteGate = new Promise<void>((resolve) => { releaseQueuedWrite = resolve; });
+    let releaseCancelledWrite!: () => void;
+    const cancelledWriteGate = new Promise<void>((resolve) => { releaseCancelledWrite = resolve; });
+    let observeLogFailure!: () => void, observeLogClose!: () => void;
+    const logFailed = new Promise<void>((resolve) => { observeLogFailure = resolve; });
+    const logClosed = new Promise<void>((resolve) => { observeLogClose = resolve; });
+    let startSettled = false;
     let targetJobId: string | undefined;
     let startPromise: Promise<JobRecord> | undefined;
     let cancelPromise: Promise<JobRecord> | undefined;
     let manager: JobManager | undefined;
     try {
       const snapshotFaults = createJobFileFaults();
-      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { processes: probe.processes,  files: snapshotFaults.files });
+      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { processes: probe.processes, files: {
+        ...snapshotFaults.files,
+        async openJobLog(path, mode) {
+          try {
+            const handle = await nativeJobFiles.openJobLog(path, mode);
+            if (mode === "append" && path.endsWith("stdout.log")) {
+              const close = handle.close.bind(handle);
+              handle.close = async () => { await close(); observeLogClose(); };
+            }
+            return handle;
+          } catch (error) { observeLogFailure(); throw error; }
+        },
+      } });
 
       snapshotFaults.write = async (record, commit) => {
         if (record.status === "queued" && targetJobId === undefined) {
@@ -713,18 +733,27 @@ describe("persistent local jobs", () => {
           await queuedWriteGate;
           return write;
         }
+        if (record.status === "cancelled") await cancelledWriteGate;
         return commit();
       };
       await manager.initialize();
       startPromise = manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
+      void startPromise.then(() => { startSettled = true; }, () => { startSettled = true; });
       await waitFor(() => targetJobId, (value) => value !== undefined);
       cancelPromise = manager.cancel(targetJobId!);
-      await waitFor(() => manager!.get(targetJobId!), (value) => value.status === "cancelled");
-      // Force the second log open to reject after cancellation has published
-      // its in-memory terminal state. The catch path must preserve cancelled,
-      // not rebuild a stale failed record from the original queued snapshot.
+      expect(manager.get(targetJobId!).status).toBe("queued");
+      expect(manager.hasPendingHistoryRecovery()).toBe(true);
+      // The second log open fails while cancellation is still writing. The
+      // start catch must join that decision and preserve its eventual result.
       await mkdir(join(test.state, "jobs", targetJobId!, "stderr.log"));
       releaseQueuedWrite();
+      await logFailed;
+      await logClosed;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(startSettled).toBe(false);
+      expect(manager.get(targetJobId!).status).toBe("queued");
+      expect(probe.children).toHaveLength(0);
+      releaseCancelledWrite();
       await expect(cancelPromise).resolves.toMatchObject({ status: "cancelled" });
       await expect(startPromise).resolves.toMatchObject({ status: "cancelled" });
       expect((probe.children.length > 0)).toBe(false);
@@ -732,6 +761,7 @@ describe("persistent local jobs", () => {
       expect(persisted).toMatchObject({ status: "cancelled" });
     } finally {
       releaseQueuedWrite();
+      releaseCancelledWrite();
       if (cancelPromise !== undefined) await cancelPromise.catch(() => undefined);
       if (startPromise !== undefined) await startPromise.catch(() => undefined);
       if (manager !== undefined && targetJobId !== undefined) {
@@ -768,9 +798,8 @@ describe("persistent local jobs", () => {
           return write;
         }
         if (record.status === "failed" && record.job_id === targetJobId) {
-          // The start() catch has already observed the queued record, but has
-          // not yet called the real persistence method. This is the exact
-          // window in which cancel() can publish a newer terminal identity.
+          // Hold the failed terminal decision before it reaches storage.
+          // Cancellation can supersede it while publication is still pending.
           resolveFailedPersist();
           await failedWriteGate;
         }
@@ -783,10 +812,13 @@ describe("persistent local jobs", () => {
       releaseQueuedWrite();
       await failedPersistEntered;
       cancelPromise = manager.cancel(targetJobId!);
-      await waitFor(() => manager!.get(targetJobId!), (value) => value.status === "cancelled");
+      expect(manager.get(targetJobId!).status).toBe("queued");
+      expect(manager.hasPendingHistoryRecovery()).toBe(true);
+      expect(probe.children).toHaveLength(0);
       releaseFailedWrite();
       await expect(cancelPromise).resolves.toMatchObject({ status: "cancelled" });
       await expect(startPromise).resolves.toMatchObject({ status: "cancelled" });
+      expect(probe.children).toHaveLength(0);
       const persisted = JSON.parse(await readFile(join(test.state, "jobs", targetJobId!, "meta.json"), "utf8")) as Record<string, unknown>;
       expect(persisted).toMatchObject({ status: "cancelled" });
     } finally {
