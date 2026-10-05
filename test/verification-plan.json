@@ -92,6 +92,7 @@
         "apps/runner/test/job-reporting.test.ts",
         "apps/runner/test/patch-git.test.ts",
         "apps/runner/test/patch-large-lines.test.ts",
+        "apps/runner/test/patch-persistence-failures.test.ts",
         "apps/runner/test/permission-chain.test.ts",
         "apps/runner/test/product.test.ts",
         "apps/runner/test/purge-native.test.ts",
