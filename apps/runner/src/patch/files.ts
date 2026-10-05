@@ -17,13 +17,13 @@ import type { ParentBoundary } from "./contracts.js";
 import { PathPolicy } from "../path-policy.js";
 import type { PathSnapshot } from "../path-policy.js";
 import { randomUUID } from "node:crypto";
-import { rename } from "node:fs/promises";
 import type { ResolvedPath } from "./contracts.js";
 import type { ResolvedPolicyPath } from "./contracts.js";
 import { rm } from "node:fs/promises";
 import { RpcRuntimeError } from "../errors.js";
 import type { TargetBoundary } from "./contracts.js";
 import { win32 } from "node:path";
+import { withRecovery } from "./recovery.js";
 
 export async function captureBaseline(path: ResolvedPath, policy?: PathPolicy): Promise<Baseline> {
   const parentBoundary = policy === undefined ? undefined : await captureParentBoundary(policy, path);
@@ -186,14 +186,27 @@ export async function writeTemporary(target: string, bytes: Buffer, mode: number
   const temporary = `${anchoredTarget}.runmesh-${randomUUID()}.tmp`;
   const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), mode);
   try {
-    if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
-    await handle.writeFile(bytes);
-    await handle.chmod(mode);
-    await handle.sync().catch(() => undefined);
-  } finally {
-    await handle.close();
+    try {
+      if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
+      await handle.writeFile(bytes);
+      await handle.chmod(mode);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    return temporary;
+  } catch (error) {
+    // The caller learns this pathname only after preparation succeeds. Clean
+    // up a failed write/mode/sync/close here after releasing its descriptor,
+    // retaining the original I/O error and checking the captured parent.
+    try {
+      await verifyParentBoundary(policy, parentBoundary);
+      await rm(temporary, { force: true });
+    } catch (cleanupError) {
+      throw withRecovery(error, [{ path: target, temporary_path: temporary, error: message(cleanupError) }]);
+    }
+    throw error;
   }
-  return temporary;
 }
 
 export async function moveToBackup(target: string, policy?: PathPolicy, parentBoundary?: ParentBoundary, targetBoundary?: TargetBoundary): Promise<string> {
@@ -213,7 +226,8 @@ export async function moveToBackup(target: string, policy?: PathPolicy, parentBo
       if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
       await verifyTargetBoundary(policy, targetBoundary);
       await rm(anchoredTarget, { force: false });
-      if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
+      // Unlinking commits the move. The coordinator must record the backup
+      // before any further validation can fail, so its rollback owns it.
       return backupPath;
     } catch (error) {
       if (linked) {
@@ -221,9 +235,7 @@ export async function moveToBackup(target: string, policy?: PathPolicy, parentBo
           if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
           await rm(backupPath, { force: false });
         } catch (cleanupError) {
-          throw new RpcRuntimeError("patch_rollback_failed", "could not remove a backup after installation failed", {
-            recovery: [{ path: anchoredTarget, backup_path: backupPath, error: message(cleanupError) }],
-          });
+          throw withRecovery(error, [{ path: anchoredTarget, backup_path: backupPath, error: message(cleanupError) }]);
         }
       }
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -246,9 +258,9 @@ export async function assertExistingParent(target: string, parentBoundary?: Pare
 
 export async function installNoReplace(temporaryPath: string, target: string, policy?: PathPolicy, parentBoundary?: ParentBoundary): Promise<void> {
   if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
+  // Linking commits the destination. Return immediately so the transaction
+  // records that ownership before validation or staging cleanup can fail.
   await link(temporaryPath, anchoredPath(target, parentBoundary));
-  if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
-  await rm(temporaryPath, { force: false });
 }
 
 export async function rollback(states: readonly InstallState[], policy?: PathPolicy): Promise<Record<string, unknown>[]> {
@@ -267,7 +279,11 @@ export async function rollback(states: readonly InstallState[], policy?: PathPol
         }
         if (current.exists) await rm(anchoredPath(change.path.path, change.baseline.parentBoundary), { force: false });
         await verifyParentBoundary(policy, change.baseline.parentBoundary);
-        await rename(state.backupPath as string, anchoredPath(change.path.path, change.baseline.parentBoundary));
+        // Recovery uses the same exclusive destination rule as installation:
+        // a file created after the check remains owned by its writer.
+        await link(state.backupPath as string, anchoredPath(change.path.path, change.baseline.parentBoundary));
+        await verifyParentBoundary(policy, change.baseline.parentBoundary);
+        await rm(state.backupPath as string, { force: false });
       } else if (state.installed && change.action === "write") {
         if (!current.exists || current.hash !== state.installedHash) throw new Error("target changed after patch installation");
         await verifyParentBoundary(policy, change.baseline.parentBoundary);

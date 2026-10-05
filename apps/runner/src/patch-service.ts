@@ -48,6 +48,7 @@ import { toResolved } from "./patch/values.js";
 import { verifyParentBoundary } from "./patch/files.js";
 import { verifyTargetBoundary } from "./patch/files.js";
 import { withPatchCommitLock } from "./rpc-budget.js";
+import { withRecovery } from "./patch/recovery.js";
 import { writeTemporary } from "./patch/files.js";
 
 /**
@@ -152,7 +153,7 @@ export class PatchService {
         }
         return result;
       });
-    } catch (error) { await this.removeTemporary(prepared); throw error; }
+    } catch (error) { throw withRecovery(error, await this.removeTemporary(prepared)); }
   }
 
   private async resolveOperations(workspaceId: unknown, operations: readonly PatchOperation[]): Promise<readonly ResolvedOperation[]> {
@@ -319,8 +320,7 @@ export class PatchService {
       }
       return prepared;
     } catch (error) {
-      await this.removeTemporary(prepared);
-      throw error;
+      throw withRecovery(error, await this.removeTemporary(prepared));
     }
   }
 
@@ -383,17 +383,12 @@ export class PatchService {
           state.installed = true;
         }
         await verifyParentBoundary(this.policy, change.baseline.parentBoundary);
+        if (change.action === "write") await rm(change.temporaryPath as string, { force: false });
         await fsyncDirectory(dirname(anchoredPath(change.path.path, change.baseline.parentBoundary)), this.policy, change.baseline.parentBoundary);
       }
     } catch (error) {
-      const recovery = await rollback(states, this.policy);
-      await this.removeTemporary(changes);
-      if (recovery.length > 0) {
-        throw new RpcRuntimeError("patch_rollback_failed", "patch installation failed and rollback was incomplete", {
-          install_error: message(error),
-          recovery,
-        });
-      }
+      const failure = withRecovery(error, await rollback(states, this.policy));
+      if (failure instanceof RpcRuntimeError && failure.code === "patch_rollback_failed") throw failure;
       throw new RpcRuntimeError("patch_install_failed", "patch installation failed; all changes were rolled back", {
         install_error: message(error),
       });
@@ -415,16 +410,21 @@ export class PatchService {
     return warnings;
   }
 
-  private async removeTemporary(changes: readonly PreparedChange[]): Promise<void> {
-    await Promise.all(changes.map(async (change) => {
+  private async removeTemporary(changes: readonly PreparedChange[]): Promise<readonly RecoveryWarning[]> {
+    const recovery: RecoveryWarning[] = [];
+    for (const change of changes) {
       if (change.temporaryPath !== undefined) {
         // If the parent identity no longer matches, leave the temporary file
         // for operator cleanup rather than deleting an attacker-selected path.
-        await verifyParentBoundary(this.policy, change.baseline.parentBoundary)
-          .then(() => rm(change.temporaryPath as string, { force: true }))
-          .catch(() => undefined);
+        try {
+          await verifyParentBoundary(this.policy, change.baseline.parentBoundary);
+          await rm(change.temporaryPath, { force: true });
+        } catch (error) {
+          recovery.push({ path: change.path.relativePath, temporary_path: change.temporaryPath, error: message(error) });
+        }
       }
-    }));
+    }
+    return recovery;
   }
 }
 
