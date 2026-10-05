@@ -10,7 +10,8 @@ import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
 import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, LTS_COMMANDS, BROWSER_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, checkCommand } from "../scripts/ci-contract.mjs";
 import { gateEvidence, gateJUnit, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
-import { browserEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
+import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
+import { createUiNavigationDiagnostic, uiNavigationDiagnosticMarker, uiNavigationFailureDiagnostic, withUiNavigationDiagnostic } from "../scripts/ui-browser-diagnostics.mjs";
 import { closeUiBrowserSocket, createUiBrowserProtocol, waitForUiBrowserEndpoint, waitForUiBrowserSocket, waitForUiNavigation } from "../scripts/ui-browser-check.mjs";
 
 function fixture() {
@@ -302,6 +303,99 @@ test("CI04 cleanup absorbs a connecting socket's asynchronous close error until 
   await closed;
   assert.equal(h.socket.listenerCount("error"), 0);
   assert.equal(h.socket.listenerCount("close"), 0);
+});
+
+test("CI04 navigation failure diagnostics distinguish headers, body and completed response", () => {
+  let now = 100;
+  const observed = createUiNavigationDiagnostic({ now: () => now });
+  const url = "http://127.0.0.1:1234/admin/clients?private=secret";
+  const event = (method, params, sessionId = "tab") => observed.observe({ method, params, sessionId });
+  assert.equal(observed.diagnostic(), undefined);
+  observed.begin(url, "en", "tab");
+  event("Network.requestWillBeSent", { requestId: "other", request: { url } }, "other-tab");
+  event("Network.requestWillBeSent", { requestId: "asset", request: { url: url + "-asset" } });
+  assert.equal(observed.diagnostic().phase, "not_started");
+  event("Network.requestWillBeSent", { requestId: "document", request: { url } });
+  now = 300;
+  assert.deepEqual(observed.diagnostic(), { locale: "en", phase: "headers_pending", status: null, elapsed_ms: 200, exception_count: 0 });
+  event("Network.responseReceived", { requestId: "asset", response: { status: 404 } });
+  assert.equal(observed.diagnostic().status, null);
+  event("Network.responseReceived", { requestId: "document", response: { status: 200, headers: { Cookie: "private" } } });
+  assert.equal(observed.diagnostic().phase, "body_pending");
+  event("Network.loadingFinished", { requestId: "document" });
+  event("Runtime.exceptionThrown", { exceptionDetails: { text: "private exception" } });
+  const complete = observed.diagnostic();
+  assert.deepEqual(complete, { locale: "en", phase: "complete", status: 200, elapsed_ms: 200, exception_count: 1 });
+  assert.doesNotMatch(JSON.stringify(complete), /secret|private|Cookie|requestId|127\.0\.0\.1/);
+});
+
+test("CI04 navigation diagnostics reset between locales and follow the latest matching request", () => {
+  let now = 0;
+  const observed = createUiNavigationDiagnostic({ now: () => now });
+  const url = "http://127.0.0.1:1234/admin/clients";
+  const event = (method, params) => observed.observe({ method, params, sessionId: "tab" });
+  observed.begin(url, "en", "tab");
+  event("Network.requestWillBeSent", { requestId: "old", request: { url } });
+  event("Runtime.exceptionThrown", {});
+  now = 50;
+  observed.begin(url, "zh-CN", "tab");
+  event("Network.loadingFinished", { requestId: "old" });
+  assert.deepEqual(observed.diagnostic(), { locale: "zh-CN", phase: "not_started", status: null, elapsed_ms: 0, exception_count: 0 });
+  event("Network.requestWillBeSent", { requestId: "fetch", request: { url } });
+  event("Network.responseReceived", { requestId: "fetch", response: { status: 200 } });
+  event("Network.requestWillBeSent", { requestId: "reload", request: { url } });
+  event("Network.loadingFinished", { requestId: "fetch" });
+  assert.equal(observed.diagnostic().phase, "headers_pending");
+  event("Network.loadingFailed", { requestId: "reload", errorText: "private failure" });
+  now = 900000;
+  for (let i = 0; i < 1005; i++) event("Runtime.exceptionThrown", {});
+  assert.deepEqual(observed.diagnostic(), { locale: "zh-CN", phase: "failed", status: null, elapsed_ms: 600000, exception_count: 1000 });
+});
+
+test("CI04 navigation diagnostic parser projects fixed fields and rejects malformed observations", () => {
+  const valid = { locale: "en", phase: "body_pending", status: 200, elapsed_ms: 5000, exception_count: 0 };
+  assert.deepEqual(uiNavigationFailureDiagnostic(uiNavigationDiagnosticMarker({ ...valid, url: "private" })), valid);
+  for (const changed of [{ locale: "private" }, { phase: "private" }, { status: 600 }, { status: "200" },
+    { elapsed_ms: -1 }, { elapsed_ms: 600001 }, { elapsed_ms: 0.5 }, { exception_count: 1001 }]) {
+    assert.equal(uiNavigationFailureDiagnostic(uiNavigationDiagnosticMarker({ ...valid, ...changed })), undefined);
+  }
+  assert.equal(uiNavigationFailureDiagnostic("RUNMESH_E2E_UI_NAVIGATION_DIAGNOSTIC={broken}"), undefined);
+});
+
+test("CI04 timed-out navigation retains its network phase through browser failure evidence", async () => {
+  const h = navigationFixture();
+  const expected = { url: "http://127.0.0.1:1234/admin/clients", locale: "en" };
+  const observed = createUiNavigationDiagnostic({ now: h.clock.now });
+  observed.begin(expected.url, expected.locale, "tab");
+  observed.observe({ method: "Network.requestWillBeSent", sessionId: "tab", params: { requestId: "private-id", request: { url: expected.url } } });
+  h.state.loading = true;
+  let failed;
+  try { await waitForUiNavigation(h.tab, expected, { ...h.clock, stage: "clients_navigation" }); }
+  catch (error) { failed = error; }
+  assert.ok(failed);
+  const wrapped = withUiNavigationDiagnostic(failed, observed.diagnostic());
+  assert.equal(wrapped.cause, failed);
+  const message = wrapped.message;
+  const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [message] }] }] });
+  assert.equal(summary.required_browser_status, "failed");
+  assert.equal(summary.failures[0].navigation_state, "navigation_busy");
+  assert.deepEqual(summary.failures[0].navigation, { locale: "en", phase: "headers_pending", status: null, elapsed_ms: 5000, exception_count: 0 });
+  assert.doesNotMatch(JSON.stringify(summary), /private-id|127\.0\.0\.1/);
+});
+
+test("CI04 navigation diagnostic annotation preserves the original error classification", () => {
+  let original;
+  try { assert.equal("private actual", "private expected"); } catch (error) { original = error; }
+  const diagnostic = { locale: "en", phase: "not_started", status: null, elapsed_ms: 10, exception_count: 0 };
+  const wrapped = withUiNavigationDiagnostic(original, diagnostic);
+  assert.equal(wrapped.name, original.name);
+  assert.equal(wrapped.code, original.code);
+  assert.equal(wrapped.cause, original);
+  assert.equal(browserErrorDiagnostic(wrapped).kind, "assertion_failed");
+  const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [wrapped.stack] }] }] });
+  assert.equal(summary.failures[0].kind, "assertion_failed");
+  assert.deepEqual(summary.failures[0].navigation, diagnostic);
+  assert.doesNotMatch(JSON.stringify(summary), /private actual|private expected/);
 });
 
 test("CI04 full navigation waits beyond a ready old document for the requested loader and locale", async () => {
