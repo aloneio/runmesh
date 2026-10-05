@@ -131,9 +131,11 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           if (method === "tools/list") {
             const reply = boundedWireJson(text), result = catalogObject(reply.result);
             if (result !== undefined) {
+              // The SDK ends aggregation on a repeated response cursor. Reject
+              // that incomplete walk before it can look like a complete catalog.
               if (!Array.isArray(result.tools) || (totalTools += result.tools.length) > CATALOG_LIMITS.tools
                 || result.tools.some(tool => parseRemoteTool(tool) === undefined)
-                || (result.nextCursor !== undefined && (typeof result.nextCursor !== "string" || !result.nextCursor || result.nextCursor.length > 2048)))
+                || (result.nextCursor !== undefined && (typeof result.nextCursor !== "string" || !result.nextCursor || result.nextCursor.length > 2048 || cursors.has(result.nextCursor))))
                 throw new RemoteFault("upstream_protocol_error");
             }
           }
