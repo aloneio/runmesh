@@ -14,7 +14,7 @@ The development Worker selects complete, public, immutable GitHub prereleases wi
 
 After installation, compare the package and CLI `--version` with the selected tag, then verify Runner connectivity, policy acknowledgement and the required MCP operations.
 
-The Worker normally refreshes its selection after 60 seconds and can continue offering a verified package for up to one hour while refreshing in the background. A refresh can take up to 20 seconds. Check the version displayed in the panel after a new publication. If installation is temporarily unavailable, check the release workflow and try the panel again after the next refresh.
+The Worker normally refreshes its selection after 60 seconds and can continue offering a verified package for up to one hour while refreshing in the background. Check the version displayed in the panel after a new publication. If installation is temporarily unavailable, check the release workflow and try the panel again after the next refresh.
 
 Versions are ordered by dev sequence. A delayed older batch therefore leaves a newer selected version in place. During Worker updates, a verified compatible dev package can remain available until a new batch is published and verified. Check the displayed package version and its changes before installation. Production uses its separately reviewed stable release.
 

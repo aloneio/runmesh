@@ -89,6 +89,33 @@ async function checkSkillFileErrors(browser, origin, requests, library) {
  }
 }
 
+async function checkOAuthReturnHistory(page, origin, requests, entry) {
+ await page.waitForLoadState('networkidle');
+ assert.equal(new URL(page.url()).search,'');
+ assert.equal(await page.locator('[data-page-container].is-active').getAttribute('data-page-key'),'/admin/central');
+ const name=page.locator('[data-service-create] [name=name]'),previous=await name.inputValue();
+ const node=await name.elementHandle(),draft='Unsaved OAuth '+entry+' service',start=requests.length;
+ const reloads=[];
+ const observe=request=>{if(new URL(request.url()).pathname==='/admin/central')reloads.push(request.url());};
+ page.on('request',observe);
+ try {
+  await name.fill(draft);
+  await page.locator('.skip-link').focus();await page.keyboard.press('Enter');
+  for(const action of ['skip','back','forward','reset']) {
+   if(action==='back'||action==='reset')await page.goBack();
+   if(action==='forward')await page.goForward();
+   await page.waitForURL(origin+'/admin/central'+(action==='skip'||action==='forward'?'#main-content':''));
+   await page.waitForLoadState('networkidle');
+   assert.equal(await node.evaluate(input=>input.isConnected),true,entry+' OAuth '+action+' retains the original form');
+   assert.equal(await name.inputValue(),draft,entry+' OAuth '+action+' retains the unsubmitted draft');
+   assert.equal(await page.locator('[data-page-container].is-active').getAttribute('data-page-key'),'/admin/central');
+   assert.deepEqual(reloads,[],entry+' OAuth fragment history does not refetch the page');
+   assert.equal(requests.length,start,entry+' OAuth fragment history does not repeat refresh or recovery');
+  }
+  await name.fill(previous);
+ } finally {page.off('request',observe);await node.dispose();}
+}
+
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
 export async function checkGuidedProduct(executable) {
  await checkAdminLayout(executable);
@@ -179,8 +206,21 @@ export async function checkGuidedProduct(executable) {
   ]);
   await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,2);assert.equal(new URL(page.url()).search,'');
+  const oauthId=profiles.at(-1).profile_id;
+  await checkOAuthReturnHistory(page,origin,requests,'initial');
+  // The same cleanup must synchronize navigation after an in-page callback mount.
+  await page.evaluate(()=>{window.oauthHistoryNavigationMarker=true;});
+  await page.locator('.control-nav a[href="/admin/clients"]').click();
+  await page.waitForURL(origin+'/admin/clients');
+  await page.waitForFunction(()=>document.documentElement.getAttribute('data-runmesh-navigation-busy')==='false');
+  const callbackLink=page.locator('.control-nav a[href^="/admin/central"]');
+  await callbackLink.evaluate((link,id)=>link.setAttribute('href','/admin/central?connected='+encodeURIComponent(id)),oauthId);
+  await callbackLink.click();await status.filter({hasText:'Connected.'}).waitFor();
+  await callbackLink.evaluate(link=>link.setAttribute('href','/admin/central'));
+  assert.equal(await page.evaluate(()=>window.oauthHistoryNavigationMarker),true,'OAuth callback mounts through the existing navigation owner');
+  await checkOAuthReturnHistory(page,origin,requests,'mounted');
   // A completed OAuth sign-in whose return was interrupted also finishes on reopening.
-  const oauthId=profiles.at(-1).profile_id;catalogs.delete(oauthId);
+  catalogs.delete(oauthId);
   await page.reload();await status.filter({hasText:'Connected.'}).waitFor();
   assert.deepEqual(catalogs.get(oauthId).head.approved_names,['search']);
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);

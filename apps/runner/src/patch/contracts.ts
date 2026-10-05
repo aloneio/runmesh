@@ -33,6 +33,15 @@ export type ParentBoundary = {
 
 export type TargetBoundary = ParentBoundary;
 
+/** Link/unlink preserve these fields; ctime and link count intentionally vary. */
+export type FileVersion = {
+  readonly device: number;
+  readonly inode: number;
+  readonly size: number;
+  readonly mode: number;
+  readonly modifiedAtMs: number;
+};
+
 export type Baseline = {
   readonly path: ResolvedPath;
   readonly exists: boolean;
@@ -40,6 +49,7 @@ export type Baseline = {
   readonly mode: number | null;
   readonly size: number | null;
   readonly bytes?: Buffer;
+  readonly fileVersion?: FileVersion;
   /** Identity of the target's parent directory captured with the baseline. */
   readonly parentBoundary?: ParentBoundary;
   /** Identity of an existing target, preventing a Windows leaf swap from
@@ -62,7 +72,11 @@ export type PlannedChange = {
   readonly mode?: number;
 };
 
-export type PreparedChange = PlannedChange & { readonly temporaryPath?: string };
+export type PreparedChange = PlannedChange & {
+  readonly temporaryPath?: string;
+  /** Identity observed through the staging descriptor before installation. */
+  readonly replacementVersion?: FileVersion;
+};
 
 export type InstallState = {
   readonly change: PreparedChange;

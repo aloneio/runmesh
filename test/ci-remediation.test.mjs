@@ -179,6 +179,13 @@ test("CI04 requires the actual named Chromium test, not just exit zero", () => {
   const wrong = rawBrowser(); wrong.testResults[0].assertionResults[0].title = "different successful test";
   assert.throws(() => browserEvidence(wrong, 0));
 });
+for (const status of ["constructor", "__proto__", "toString", ["passed"]])
+test("CI04 browser evidence rejects malformed auxiliary status " + JSON.stringify(status), () => {
+  const raw = rawBrowser(); raw.numTotalTests++;
+  if (Array.isArray(status)) raw.numPassedTests++;
+  raw.testResults[0].assertionResults.push({ status, title: "auxiliary test" });
+  assert.throws(() => browserEvidence(raw, 0), /unknown\/incomplete test result/u);
+});
 test("CI04 missing, skipped, duplicate or TODO browser evidence cannot pass", () => {
   for (const state of ["skipped", "pending", "failed", "todo"]) {
     const raw = rawBrowser(); raw.testResults[0].assertionResults[0].status = state;

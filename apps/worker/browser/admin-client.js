@@ -12,7 +12,7 @@ const controls = createPageControls({ document, window, navigator, location, loc
 function bindPage(root) {
   const isCurrent = navigation.capturePage();
   controls.bindPageControls(root);
-  bindCentralProduct(root, { isCurrent, navigate });
+  bindCentralProduct(root, { isCurrent, navigate, replaceCurrentUrl: url => navigation.replaceCurrentUrl(url) });
   bindRunnerActions(root, { isCurrent, navigate });
   navigation.bind(root);
 }

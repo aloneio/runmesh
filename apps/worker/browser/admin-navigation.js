@@ -108,6 +108,16 @@ export function createAdminNavigation({
   }
   return {
     open,
+    replaceCurrentUrl(url) {
+      if (loading || leaving) return false;
+      const current = new URL(location.href), destination = new URL(url, current);
+      // Canonicalizing the current page must not impersonate a page transition.
+      if (destination.origin !== current.origin || destination.pathname !== current.pathname) return false;
+      const key = pageKey(destination);
+      view.replaceCurrentUrl(destination, key);
+      renderedPageKey = key;
+      return true;
+    },
     restore(url) {
       // Native fragment navigation owns its focus, scroll and history. Keep
       // the current forms unless a pending transition already retired them.
