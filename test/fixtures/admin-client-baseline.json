@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "8c24ad7d8ce2e4a3b2fe6c2165e9bbd42e21433c803f699da9a94efdf71face3",
+      "sha256": "952ad2a8c07d79ca7c7bf935efbf840816ee5d6b41a2c92bb09c2ebf34cc5241",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "443983a2bbd715770a987a6bc7868e9213778075e288df652489253331ae2303",
+      "sha256": "fcfb310d8f71942a7a3b937a4919a830761dc6a5dcc26b9ad128a2491afc57a4",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -127,5 +127,16 @@
     ],
     "reviewed_change": "Permission selectors expose dependencies derived from the shared protocol and use one browser controller for Runner, workspace and client override forms. Workspace presets share the submitted-form definition and update displayed values; manual field edits choose Custom. Version guidance describes selecting a target, installing on the Runner host and restarting the service. Restoring only the previous bundle, dependency/preset attributes and version sentence reproduces every prior rendered hash and byte count.",
     "other_markup_unchanged": true
+  },
+  "clipboard_failure_review": {
+    "source_base": "ad6b82112a9ce8e917b1e4a4cbf3714f6f725d31",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Report failed clipboard writes with short English and Chinese retry labels, keep manual-copy guidance in the button title, announce copy status with a polite live region, remove temporary clipboard content on every outcome, and allow explicit retry. Replacing only the new browser bundle with the independently rebuilt source-base bundle reproduces every prior rendered hash and byte count.",
+    "non_script_markup_unchanged": true
   }
 }
