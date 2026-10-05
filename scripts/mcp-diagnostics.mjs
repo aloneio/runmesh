@@ -17,8 +17,24 @@ const stages = ["request_validation", "identity_verification", "request_body", "
   "handler_dispatch", "server_factory", "sdk_transport", "response_priming", "response_headers"];
 const reasons = ["invalid_auth_context", "conflicting_auth_context", "already_connected", "network_connection_lost", "unknown"];
 const HTTP_MARKER = "RUNMESH_E2E_MCP_HTTP_DIAGNOSTIC=";
+const TOOL_RESULT_MARKER = "RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=";
 const WORKER_MARKER = "RUNMESH_E2E_MCP_WORKER_EVENT=";
 const jobStatuses = ["queued", "running", "cancelling", "succeeded", "failed", "cancelled", "interrupted", "unknown", "absent", "other"];
+const toolResultFields = {
+  phase: ["inspect_search_initial", "inspect_search_continuation", "other"],
+  result: ["error", "success", "absent", "other"],
+  // Fixed public RPC codes relevant to native tool admission and bounded reads.
+  // Other codes remain classified as "other", never reflected from the result.
+  error_code: ["invalid_params", "invalid_request", "invalid_path", "path_traversal", "invalid_workspace", "runner_not_selected",
+    "permission_denied", "insufficient_scope", "readonly_workspace", "stale_policy", "policy_pending", "runner_not_active", "runner_expired", "runner_not_authorized",
+    "runner_offline", "service_unavailable", "registry_unavailable", "control_plane_unavailable", "timeout", "runner_access_unavailable",
+    "runner_upgrade_required", "runner_unavailable", "no_runners_available", "file_changed", "path_changed", "cursor_mismatch", "cursor_expired",
+    "search_snapshot_changed", "not_found", "read_budget_exhausted", "snapshot_too_large", "file_too_large", "queue_full", "busy",
+    "authorization_response_invalid", "internal_error", "runner_rpc_failed", "tool_result_invalid", "absent", "other"],
+  failure_class: ["validation", "authorization", "availability", "conflict", "resource", "execution", "internal", "unknown", "absent", "other"],
+  operation_state: ["not_started", "running", "committed", "unknown", "absent", "other"],
+  next_action: ["correct_request", "refresh_permissions", "wait_and_retry", "re_read_and_retry", "inspect_job", "contact_operator", "absent", "other"],
+};
 const clean = value => value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "");
 const record = value => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -111,6 +127,36 @@ export function mcpHttpDiagnostic(text) {
       || (value.runtime_signature !== undefined && !runtimeSignatures.has(value.runtime_signature))) return undefined;
     return { content_type: value.content_type, phase: value.phase, body_kind: value.body_kind, rpc_code: value.rpc_code, rpc_id: value.rpc_id,
       ...(value.runtime_signature === undefined ? {} : { runtime_signature: value.runtime_signature }) };
+  } catch { return undefined; }
+}
+
+/** A safe assertion message: never inspect free-form content, messages or details. */
+export function mcpToolResultDiagnostic(phase, result) {
+  const structured = record(result) && record(result.structuredContent) ? result.structuredContent : undefined;
+  const error = structured?.error;
+  const field = (name, value) => value === undefined ? "absent" : toolResultFields[name].includes(value) ? value : "other";
+  const errorField = name => error === undefined ? undefined : record(error) ? error[name] : null;
+  const flag = record(result) ? result.isError : undefined;
+  const detail = {
+    phase: toolResultFields.phase.includes(phase) ? phase : "other",
+    result: flag === true ? "error" : flag === false ? "success" : flag === undefined ? "absent" : "other",
+    error_code: field("error_code", errorField("code")),
+    failure_class: field("failure_class", errorField("failure_class")),
+    operation_state: field("operation_state", errorField("operation_state")),
+    next_action: field("next_action", errorField("next_action")),
+  };
+  // Assertion libraries prefix and suffix custom messages. Keep the marker on
+  // its own complete line so the decoder never accepts surrounding free text.
+  return `\n${TOOL_RESULT_MARKER}${JSON.stringify(detail)}\n`;
+}
+
+export function mcpToolResultFailureDiagnostic(text) {
+  if (typeof text !== "string") return undefined;
+  const raw = /^RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=(\{[^\r\n]{1,512}\})\r?$/mu.exec(text)?.[1];
+  try {
+    const value = JSON.parse(raw);
+    if (!record(value) || Object.entries(toolResultFields).some(([key, allowed]) => !allowed.includes(value[key]))) return undefined;
+    return Object.fromEntries(Object.keys(toolResultFields).map(key => [key, value[key]]));
   } catch { return undefined; }
 }
 

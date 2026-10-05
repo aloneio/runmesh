@@ -10,7 +10,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -174,6 +174,69 @@ test("admin setup diagnostics bound response inspection without retrying the mut
   const oversized = await adminSetupHttpDiagnostic(new Response("private".repeat(1000), { status: 500 }), "workspace_create");
   assert.ok(oversized.includes('"body_kind":"oversized"'));
   assert.ok(!oversized.includes("private"));
+});
+
+test("MCP tool-result diagnostics carry known classifications without inspecting free-form tool content", () => {
+  for (const code of ["search_snapshot_changed", "timeout", "runner_rpc_failed", "tool_result_invalid", "invalid_params", "runner_offline"]) {
+    const result = { isError: true, structuredContent: { error: { code, failure_class: "conflict", operation_state: "not_started", next_action: "re_read_and_retry",
+      message: "private-error", recovery_hint: "private-hint", details: { path: "private-path", snapshot_id: "private-id" } }, runner_id: "private-runner" } };
+    Object.defineProperty(result, "content", { get() { assert.fail("Free-form tool content must not be inspected"); } });
+    const marker = mcpToolResultDiagnostic("inspect_search_continuation", result);
+    const detail = { phase: "inspect_search_continuation", result: "error", error_code: code,
+      failure_class: "conflict", operation_state: "not_started", next_action: "re_read_and_retry" };
+    assert.deepEqual(mcpToolResultFailureDiagnostic(marker), detail);
+    const failure = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
+      "AssertionError: " + marker + ": expected true to not be true",
+    ] }] }] });
+    assert.deepEqual(failure.failures, [{ test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: detail }]);
+    assert.deepEqual(browserErrorDiagnostic(new Error("Operation timed out" + marker)), { kind: "timeout", mcp_tool_result: detail });
+    assert.ok(!marker.includes("private"));
+    assert.ok(!JSON.stringify(failure).includes("private"));
+  }
+});
+
+test("MCP tool-result diagnostics normalize unknown, missing and malformed result fields", () => {
+  const missing = { phase: "inspect_search_initial", result: "absent", error_code: "absent", failure_class: "absent", operation_state: "absent", next_action: "absent" };
+  assert.deepEqual(mcpToolResultFailureDiagnostic(mcpToolResultDiagnostic("inspect_search_initial", {})), missing);
+  assert.deepEqual(mcpToolResultFailureDiagnostic(mcpToolResultDiagnostic("inspect_search_initial", null)), missing);
+  for (const value of ["private-value", "__proto__", "constructor", ["timeout"], null, 0, true, {}]) {
+    const marker = mcpToolResultDiagnostic(value, { isError: value, structuredContent: { error: {
+      code: value, failure_class: value, operation_state: value, next_action: value,
+    } } });
+    assert.deepEqual(mcpToolResultFailureDiagnostic(marker), { phase: "other", result: value === true ? "error" : "other",
+      error_code: "other", failure_class: "other", operation_state: "other", next_action: "other" });
+    assert.ok(!marker.includes("private"));
+  }
+  const malformed = mcpToolResultDiagnostic("inspect_search_initial", { isError: false, structuredContent: { error: "private-error" } });
+  assert.deepEqual(mcpToolResultFailureDiagnostic(malformed), { phase: "inspect_search_initial", result: "success", error_code: "other",
+    failure_class: "other", operation_state: "other", next_action: "other" });
+});
+
+test("MCP tool-result decoder projects a bounded enum record and rejects forged fields and marker lines", () => {
+  const detail = { phase: "inspect_search_initial", result: "error", error_code: "timeout", failure_class: "availability", operation_state: "unknown", next_action: "inspect_job" };
+  const marker = value => "RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=" + JSON.stringify(value);
+  assert.deepEqual(mcpToolResultFailureDiagnostic(marker({ ...detail, path: "private-path", args: "private-args", id: "private-id" })), detail);
+  for (const key of Object.keys(detail)) {
+    for (const value of ["private", [detail[key]], null, {}, 1, true])
+      assert.equal(mcpToolResultFailureDiagnostic(marker({ ...detail, [key]: value })), undefined);
+    const missing = { ...detail }; delete missing[key];
+    assert.equal(mcpToolResultFailureDiagnostic(marker(missing)), undefined);
+  }
+  for (const text of [undefined, {}, marker([]), marker(null), "private " + marker(detail), marker(detail) + "private", marker({ ...detail, private: "x".repeat(513) })])
+    assert.equal(mcpToolResultFailureDiagnostic(text), undefined);
+  assert.equal(mcpToolResultFailureDiagnostic("RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC={invalid}"), undefined);
+});
+
+test("MCP tool-result failure evidence preserves safe fields and the original assertion coordinates", () => {
+  const diagnostic = { phase: "inspect_search_continuation", result: "error", error_code: "search_snapshot_changed",
+    failure_class: "conflict", operation_state: "not_started", next_action: "re_read_and_retry" };
+  const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
+    "AssertionError: \nRUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=" + JSON.stringify(diagnostic)
+      + "\n: expected true to not be true\n    at /private/test/e2e/mcp-runner.e2e.test.ts:566:32",
+  ] }] }] });
+  assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: diagnostic,
+    location: { file: "test/e2e/mcp-runner.e2e.test.ts", line: 566, column: 32 } }]);
+  assert.ok(!JSON.stringify(summary).includes("private"));
 });
 
 test("MCP HTTP failures retain only a bounded status from the exact fixed marker", () => {
