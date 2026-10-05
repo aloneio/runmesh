@@ -78,6 +78,7 @@
         "apps/runner/test/history-upload.test.ts",
         "apps/runner/test/job-cancellation.test.ts",
         "apps/runner/test/job-completion.test.ts",
+        "apps/runner/test/job-initialization.test.ts",
         "apps/runner/test/job-cwd-race.test.ts",
         "apps/runner/test/job-input.test.ts",
         "apps/runner/test/job-queue.test.ts",

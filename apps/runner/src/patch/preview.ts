@@ -33,21 +33,25 @@ export function changePreview(change: PlannedChange): Record<string, unknown> & 
   const shownRemoved = removed.slice(0, maxLines);
   const remaining = Math.max(0, maxLines - shownRemoved.length);
   const shownAdded = added.slice(0, remaining);
+  const maxLineLength = 1_024;
+  const maxDiffLength = 16 * 1_024;
+  const contentTruncated = shownRemoved.length < removed.length || shownAdded.length < added.length
+    || shownRemoved.some((line) => line.length > maxLineLength) || shownAdded.some((line) => line.length > maxLineLength);
   const diff = [
     `--- a/${change.path.relativePath}`,
     `+++ b/${change.path.relativePath}`,
     `@@ line ${prefix + 1} @@`,
-    ...shownRemoved.map((line) => `-${line.slice(0, 1_024)}`),
-    ...shownAdded.map((line) => `+${line.slice(0, 1_024)}`),
-    ...(shownRemoved.length < removed.length || shownAdded.length < added.length ? ["... preview truncated ..."] : []),
-  ].join("\n").slice(0, 16 * 1_024);
+    ...shownRemoved.map((line) => `-${line.slice(0, maxLineLength)}`),
+    ...shownAdded.map((line) => `+${line.slice(0, maxLineLength)}`),
+    ...(contentTruncated ? ["... preview truncated ..."] : []),
+  ].join("\n");
   return {
     path: change.path.relativePath,
     status: change.action === "write" ? (change.baseline.exists ? "updated" : "created") : "deleted",
     insertions: added.length,
     deletions: removed.length,
-    diff,
-    truncated: shownRemoved.length < removed.length || shownAdded.length < added.length || diff.length >= 16 * 1_024,
+    diff: diff.slice(0, maxDiffLength),
+    truncated: contentTruncated || diff.length > maxDiffLength,
   };
 }
 

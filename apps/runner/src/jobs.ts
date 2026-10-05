@@ -111,6 +111,7 @@ export class JobManager {
   private startChain: Promise<void> = Promise.resolve();
   private readonly queue: FairJobQueue<{input:Record<string,unknown>;generation:number}>;
   private readonly queuedIds = new Set<string>();
+  private initialization: Promise<void> | undefined;
   private queueAuthorizer: JobManagerOptions["authorizeQueuedJob"];
   private draining = false;
   private waitingAdmissions = 0;
@@ -183,7 +184,18 @@ export class JobManager {
       logPath: (jobId, stream) => this.logPath(jobId, stream) });
   }
 
-  public async initialize(): Promise<void> {
+  public initialize(): Promise<void> {
+    // Recovery belongs to this supervisor's lifetime, not each transport
+    // start. Re-reading local children as recovered PIDs would discard their
+    // live status and stop accepting stdin or retaining their output.
+    if (this.initialization !== undefined) return this.initialization;
+    const attempt = this.initializeOnce();
+    this.initialization = attempt;
+    void attempt.catch(() => { if (this.initialization === attempt) this.initialization = undefined; });
+    return attempt;
+  }
+
+  private async initializeOnce(): Promise<void> {
     // State is a credential/job-output boundary. Walk and inspect each path
     // component before creating children so a pre-existing symlink/junction
     // cannot redirect the supervisor into an attacker-controlled tree.

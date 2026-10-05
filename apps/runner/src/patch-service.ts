@@ -94,9 +94,12 @@ export class PatchService {
       const preview = changePreview(change);
       insertions += preview.insertions;
       deletions += preview.deletions;
+      // The complete plan is still applied when display excerpts fill their
+      // response budget. Keep its totals independent of excerpt packing.
+      if (previewsTruncated) continue;
       previews.push(preview);
       const candidate = { workspace_id: workspace.workspaceId, preview_id: previewId, changed_paths: changes, insertions, deletions, previews, previews_truncated: false };
-      if (jsonBytes(candidate) > MAX_RPC_RESULT_BYTES - 1_024) { previews.pop(); previewsTruncated = true; break; }
+      if (jsonBytes(candidate) > MAX_RPC_RESULT_BYTES - 1_024) { previews.pop(); previewsTruncated = true; }
     }
     const result = { workspace_id: workspace.workspaceId, preview_id: previewId, changed_paths: changes, insertions, deletions, previews, previews_truncated: previewsTruncated };
     assertRpcResultFits(result);
