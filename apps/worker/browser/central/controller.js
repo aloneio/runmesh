@@ -5,7 +5,7 @@ import { createServiceWorkflow } from "./services.js";
 import { createSkillWorkflow } from "./skills.js";
 
 /** One owner for refresh admission, snapshots and busy state across both workflows. */
-export function bindCentralProduct(root, { isCurrent: pageIsCurrent }) {
+export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate }) {
   var app = root.querySelector('[data-central-product]');
   if (!app || app.__productBound) return;
   app.__productBound = true;
@@ -34,7 +34,7 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent }) {
     refresh,
     run,
     navigate: url => {
-      if (isCurrent()) location.assign(url);
+      if (isCurrent()) navigate(url);
     }
   });
   var skillWorkflow = createSkillWorkflow({

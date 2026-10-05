@@ -40,6 +40,8 @@ https://your-host.example/<generated-secret>/mcp
 
 `inspect` 支持列目录、搜索和 Git 检查。先用 `git_log` 查提交，再用 `git_show` 和必填的 `revision` 查看内容，或用 `git_blame` 和可选行范围查看归属。`revision` 只用于 `git_show`。Worker 更新后，客户端动作或参数与服务器有差异时，刷新工具目录。
 
+搜索时，`include_globs: ["*.txt"]` 按文件名匹配各层目录中的文本文件，`include_globs: ["docs/**/*.md"]` 则选择 `docs` 目录中的 Markdown 文件。含 `/` 的模式匹配相对工作区路径；`*` 匹配单个路径段中的字符，`**` 可跨目录，`**/` 匹配零层或多层目录，`?` 匹配一个 Unicode 字符。`exclude_globs` 使用相同规则排除文件。
+
 使用 `edit` 前先读文件，并保留读取时的基线。遇到基线冲突，重新读取再生成补丁；遇到超时或结果未知，先检查补丁是否已经应用，再决定是否重试。权限拒绝交由管理员核对。
 
 ## 执行命令并保留回执

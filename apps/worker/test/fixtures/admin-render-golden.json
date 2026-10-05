@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "1f0e82c824ddc9630c95f709009e569d94fa074d512085f346d750f71728c9b6",
-      "bytes": 133105,
+      "sha256": "b161da490e2c30d715d819775b9461b106dbb82f73e4ea6c08ef9ea5af8f56d7",
+      "bytes": 133852,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "f4b264116f76c191a0f7fe477735599ae14eaf4c683b11a8bd95fd2ec80b52ac",
-      "bytes": 133693,
+      "sha256": "b90b88a94aa738c05fc2a7bf269fc2a43a74126e2bf1371fef27796d6a18e4ac",
+      "bytes": 134440,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "7b75ca448acef11a7317159f0cfff43d994496330d20b9e1df899b8c1f857f42",
-      "bytes": 134841,
+      "sha256": "3421c50a90635e6955579111121a237e22132d7cd3c4ae4fb38e9185ff902e5e",
+      "bytes": 135588,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "3c057e95249fc8b126772c70b9c8f980ca1007e7efa44e935f4eaada9935a2e3",
-      "bytes": 135190,
+      "sha256": "ff9ec3cdc670212db04522a7e4a9e7bebdd77b1e76cf321e5c338c1d5c0e81a8",
+      "bytes": 135937,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -694,6 +694,17 @@
       "admin-document"
     ],
     "reviewed_change": "Retire page actions when navigation begins and inject the current-page guard into MCP and Runner controllers. Late OAuth and Runner responses preserve the chosen destination; discarded Runner responses release their unread body. Substituting the independently rebuilt prior browser bundle reproduces all 13 prior rendered hashes and byte counts and both script wrapper hashes.",
+    "non_script_markup_unchanged": true
+  },
+  "full_navigation_handoff_review": {
+    "source_base": "f7203b871eadfb0afd93dbc3e7e302ebc9d157cb",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Route language, OAuth and Runner full-page destinations through the navigation owner. Native page departure retires controllers, aborts pending soft navigation and clears queued destinations. Independently rebuilding and substituting the prior browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes.",
     "non_script_markup_unchanged": true
   }
 }

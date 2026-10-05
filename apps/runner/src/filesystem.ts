@@ -10,6 +10,7 @@ import { PathPolicyError, type PathPolicy, type PathSnapshot } from "./path-poli
 import { RpcRuntimeError } from "./errors.js";
 import type { WorkspaceConfig } from "./config.js";
 import { utf8ForwardBoundary, utf8SafePrefixLength } from "./utf8-pagination.js";
+import { compilePathGlob, type PathGlob } from "./filesystem/glob.js";
 
 const MAX_READ_BYTES = 256 * 1024;
 const MAX_SEARCH_RESULTS = 1_000;
@@ -33,8 +34,8 @@ type SearchResult = { readonly path: string; readonly line: number; readonly col
 type SearchTruncatedReason = "time_budget" | "byte_budget" | "directory_budget" | "entry_budget" | "file_budget" | "result_budget" | "response_bytes";
 type SearchBudget = { bytes: number; directories: number; entries: number; files: number; deadline: number; truncated: boolean; truncatedReason: SearchTruncatedReason | null; readonly snapshotXor: Buffer };
 type SearchMode = "literal" | "filename";
-type SearchOptions = { readonly mode: SearchMode; readonly caseSensitive: boolean; readonly includeGlobs: readonly RegExp[]; readonly excludeGlobs: readonly RegExp[]; readonly contextBefore: number; readonly contextAfter: number };
-type IgnoreRule = { readonly negative: boolean; readonly directoryOnly: boolean; readonly matcher: RegExp; readonly exactMatcher: RegExp };
+type SearchOptions = { readonly mode: SearchMode; readonly caseSensitive: boolean; readonly includeGlobs: readonly PathGlob[]; readonly excludeGlobs: readonly PathGlob[]; readonly contextBefore: number; readonly contextAfter: number };
+type IgnoreRule = { readonly negative: boolean; readonly directoryOnly: boolean; readonly matcher: PathGlob; readonly exactMatcher: PathGlob };
 type DirectoryEntryVisitor = (entry: Dirent<string>, index: number) => boolean | Promise<boolean>;
 
 export class FilesystemService {
@@ -412,31 +413,15 @@ function searchGlobList(value: unknown, field: string): string[] {
   return value as string[];
 }
 
-function compileUserGlob(value: string): RegExp {
+function compileUserGlob(value: string): PathGlob {
   const normalized = value.replace(/\\/g, "/");
-  return new RegExp(`^${globBody(normalized)}$`, process.platform === "win32" ? "i" : "");
-}
-
-function globBody(value: string): string {
-  let result = "";
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index] as string;
-    if (char === "*") {
-      if (value[index + 1] === "*") {
-        while (value[index + 1] === "*") index += 1;
-        if (value[index + 1] === "/") { index += 1; result += "(?:.*/)?"; }
-        else result += ".*";
-      } else result += "[^/]*";
-    } else if (char === "?") result += "[^/]";
-    else result += char.replace(/[|\\{}()[\]^$+?.-]/g, "\\$&");
-  }
-  return result;
+  return compilePathGlob(normalized, { caseSensitive: process.platform !== "win32" });
 }
 
 function matchesUserGlobs(path: string, options: SearchOptions): boolean {
   const candidate = path.replace(/\\/g, "/");
   const name = basename(candidate);
-  const matches = (pattern: RegExp): boolean => pattern.test(pattern.source.includes("/") ? candidate : name) || pattern.test(candidate);
+  const matches = (pattern: PathGlob): boolean => pattern.test(pattern.pattern.includes("/") ? candidate : name) || pattern.test(candidate);
   if (options.includeGlobs.length > 0 && !options.includeGlobs.some(matches)) return false;
   return !options.excludeGlobs.some(matches);
 }
@@ -507,7 +492,7 @@ function xorDigest(target: Buffer, digest: Buffer): void {
 function searchSnapshotId(workspaceId: string, query: string, options: SearchOptions, snapshotXor: Buffer): string {
   return createHash("sha256").update(workspaceId).update("\0").update(query).update("\0").update(options.mode).update(options.caseSensitive ? "1" : "0")
     .update(String(options.contextBefore)).update(":").update(String(options.contextAfter)).update("\0")
-    .update(options.includeGlobs.map((item) => item.source).join("\0")).update("\0").update(options.excludeGlobs.map((item) => item.source).join("\0"))
+    .update(options.includeGlobs.map((item) => item.identity).join("\0")).update("\0").update(options.excludeGlobs.map((item) => item.identity).join("\0"))
     .update(snapshotXor).digest("hex").slice(0, 16);
 }
 
@@ -525,13 +510,9 @@ function parseIgnoreRules(content: string, base: string, remaining: number): Ign
     const anchored = line.startsWith("/");
     if (anchored) line = line.slice(1);
     if (line === "") continue;
-    const prefix = base === "" ? "" : `${escapeRegex(base)}/`;
-    const body = globBody(line);
     const hasSlash = line.includes("/");
-    const exactSource = anchored || hasSlash ? `^${prefix}${body}$` : `^${prefix}(?:.*/)?${body}$`;
-    const source = anchored || hasSlash ? `^${prefix}${body}(?:/.*)?$` : `^${prefix}(?:.*/)?${body}(?:/.*)?$`;
-    const flags = process.platform === "win32" ? "i" : "";
-    rules.push({ negative, directoryOnly, matcher: new RegExp(source, flags), exactMatcher: new RegExp(exactSource, flags) });
+    const options = { caseSensitive: process.platform !== "win32", directoryPrefix: base, matchBasename: !anchored && !hasSlash };
+    rules.push({ negative, directoryOnly, matcher: compilePathGlob(line, { ...options, matchDescendants: true }), exactMatcher: compilePathGlob(line, options) });
   }
   return rules;
 }
@@ -545,8 +526,6 @@ function isIgnored(path: string, isDirectory: boolean, rules: readonly IgnoreRul
   }
   return ignored;
 }
-
-function escapeRegex(value: string): string { return value.replace(/[|\\{}()[\]^$+*?.-]/g, "\\$&"); }
 
 async function openNoFollow(path: string, nonBlocking = false): Promise<Awaited<ReturnType<typeof open>>> {
   try {

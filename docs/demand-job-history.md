@@ -4,7 +4,7 @@ Change-driven reporting uploads recent Job metadata when recorded Jobs change, t
 
 ## Enable and configure reporting
 
-Choose the recording preference in **Admin > MCP Clients > client detail > Cloud Job history**. Set the Runner's upload mode and interval in **Job history and retention**. The control plane supplies the recording decision when authorizing a launch.
+Choose the recording preference in **Admin > AI connections > client detail > Cloud Job history**. Set the Runner's upload mode and interval in **Job history and retention**. The control plane supplies the recording decision when authorizing a launch.
 
 Reporting protocol 2 is active when the Runner advertises `capabilities.labels.job_reporting_protocol="2"` and receives `runmesh_job_reporting:2` in its authenticated welcome. It uses the existing `job_history_protocol="1"` settings. See [history settings](batched-job-history.md).
 

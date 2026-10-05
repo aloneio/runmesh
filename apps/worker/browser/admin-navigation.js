@@ -11,15 +11,29 @@ export function createAdminNavigation({
   let loading = false;
   let queued;
   let generation = 0;
+  let leaving = false;
+  let activeController;
   const boundLinks = new WeakSet();
   const pageKey = url => url.pathname + url.search;
-  function navigateFully(url) {
+  function retire() {
     generation++;
-    const destination = queued?.url ?? url;
+    leaving = true;
     queued = undefined;
+    activeController?.abort();
+  }
+  function navigate(url) {
+    const destination = new URL(url, location.href);
+    retire();
     location.href = destination.href;
   }
+  function navigateFully(url) {
+    navigate(queued?.url ?? url);
+  }
   async function open(url, shouldPush) {
+    if (leaving) {
+      navigate(url);
+      return;
+    }
     // A new destination retires the old page immediately, including while
     // its DOM remains visible during loading or a full-navigation fallback.
     generation++;
@@ -33,6 +47,7 @@ export function createAdminNavigation({
     loading = true;
     view.setLoading(true);
     const controller = new AbortController();
+    activeController = controller;
     const timer = setTimeout(() => controller.abort(), 25000);
     try {
       const response = await fetch(url.href, {
@@ -40,6 +55,7 @@ export function createAdminNavigation({
         cache: "no-store",
         signal: controller.signal
       });
+      if (leaving) return;
       if (!response.ok) throw new Error("HTTP " + response.status);
       const markup = await response.text();
       controller.signal.throwIfAborted();
@@ -57,11 +73,14 @@ export function createAdminNavigation({
       if (!root) throw new Error("page root missing");
       view.mount(root, parsed.title || "", pageKey(url), shouldPush, url);
     } catch (error) {
-      onError(error);
-      navigateFully(url);
+      if (!leaving) {
+        onError(error);
+        navigateFully(url);
+      }
     } finally {
       clearTimeout(timer);
       controller.abort();
+      if (activeController === controller) activeController = undefined;
       loading = false;
       view.setLoading(false);
       if (queued) {
@@ -87,11 +106,13 @@ export function createAdminNavigation({
   }
   return {
     open,
+    navigate,
+    retire,
     bind,
     isLoading: () => loading,
     capturePage() {
       const pageGeneration = generation;
-      return () => pageGeneration === generation;
+      return () => !leaving && pageGeneration === generation;
     },
     initialize() {
       view.initialize();

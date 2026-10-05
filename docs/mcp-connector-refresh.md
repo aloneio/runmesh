@@ -17,7 +17,7 @@ For ChatGPT's supported setup options, see the [custom MCP connection guide](htt
 
 ## Check the connection and Runner
 
-In **MCP Clients**, **Valid** under **Credential status** means the stored credential is active. Confirm that your MCP app uses the latest connection URL, then check the selected Runner's connection state. An authenticated `runner_current` or `runner_list` call can report an offline or stale Runner.
+In **AI connections**, **Valid** under **Credential status** means the stored credential is active. Confirm that your MCP app uses the latest connection URL, then check the selected Runner's connection state. An authenticated `runner_current` or `runner_list` call can report an offline or stale Runner.
 
 Rotation preserves the client's identity, permissions and selected Runner. After rotating a credential, update each client using that connection to the new URL. Record the HTTP status, error code, time and deployment identity when diagnosing a rejection, and omit the secret-bearing path.
 

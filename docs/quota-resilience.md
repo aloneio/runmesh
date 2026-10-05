@@ -12,7 +12,7 @@ Both D1 and Durable Objects have metered limits. Exhausting Registry's allowance
 
 ## Disable new cloud Job recording
 
-In **Admin > MCP Clients > client detail > Cloud Job history**, select **Do not record new jobs** and save. Existing clients retain their chosen preference across deployment.
+In **Admin > AI connections > client detail > Cloud Job history**, select **Do not record new jobs** and save. Existing clients retain their chosen preference across deployment.
 
 The preference suppresses new cloud Job snapshots and that client's `exec.*`/`job.*` audit entries. Existing cloud records, local metadata/logs, workspace files, client transcripts and provider logs retain their own lifetimes. Security and replay state remains available for authorization. Re-enabling begins a new capture window; already unrecorded Jobs stay excluded, while previously recorded Jobs can continue state updates.
 
