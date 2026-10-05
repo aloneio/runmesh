@@ -151,7 +151,8 @@ export class RunnerDO {
       if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       const mutationId = mutationIdFromBody(body);
       if (mutationId === undefined) return Response.json({ error: { code: "invalid_mutation_id", message: "mutation_id is required" } }, { status: 400 });
-      return this.cancelPolicyMutation(mutationId);
+      const evidence = JSON.parse(body) as Record<string, unknown>;
+      return this.cancelPolicyMutation(mutationId, evidence.confirmed_write_rejection === true);
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/mark-policy-committed") {
       const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
@@ -1036,7 +1037,7 @@ export class RunnerDO {
     }
   }
 
-  private async cancelPolicyMutation(mutationId: string): Promise<Response> {
+  private async cancelPolicyMutation(mutationId: string, confirmedWriteRejection = false): Promise<Response> {
     const before = await this.admission();
     if (!before.fenced || before.mutationId === null) return Response.json({ error: { code: "no_active_mutation", message: "no active mutation fence" } }, { status: 409 });
     if (before.mutationId !== mutationId) return Response.json({ error: { code: "mutation_mismatch", message: "mutation ID does not own the current fence" } }, { status: 409 });
@@ -1050,6 +1051,14 @@ export class RunnerDO {
     const state = await stateResponse.json() as unknown;
     if (!isRecord(state) || typeof state.runner_exists !== "boolean" || typeof state.mutation_committed !== "boolean") {
       return Response.json({ error: { code: "mutation_uncertain", message: "mutation evidence is incomplete" } }, { status: 503 });
+    }
+    if (state.runner_exists === false && state.mutation_committed === false && confirmedWriteRejection) {
+      // A definite rejection ends this owner's creation attempt. Absence by
+      // itself cannot release a creation whose Registry write is still in flight.
+      const next: AdmissionState = { ...FENCED_ADMISSION, runnerId: before.runnerId, mutationPhase: "idle" };
+      return await this.persistAdmissionIfCurrent(before, next)
+        ? new Response(null, { status: 204 })
+        : Response.json({ error: { code: "mutation_state_changed", message: "mutation changed while cancelling" } }, { status: 409 });
     }
     if (state.runner_exists !== true || state.mutation_committed === true) return Response.json({ error: { code: "mutation_committed", message: "mutation has committed or Runner is gone" } }, { status: 409 });
     if (!validLifecycleId(state.lifecycle_id) || !isSafeNonnegativeInteger(state.credential_version)

@@ -129,6 +129,22 @@ it("creation does not cancel an uncertain enrollment write", async () => {
   });
   expect(calls).not.toContain("cancel");
 });
+it.each(["invalid", "denied", "missing", "conflict", "unknown", "throw"] as const)("creation carries confirmed rejection evidence only after a definite %s result", async outcome => {
+  const { ports } = fixture();
+  ports.create = async () => { if (outcome === "throw") throw new Error("lost response"); return outcome; };
+  ports.observe = async () => ({ runner_exists: false, mutation_committed: false });
+  let received: unknown = "not called";
+  ports.cancel = async (_id, _mutation, evidence) => { received = evidence; return false; };
+  expect(await createRunner(ports, "r")).toMatchObject({ state: "failed", reason: "commit" });
+  expect(received).toEqual(outcome === "unknown" || outcome === "throw" ? undefined : { confirmedWriteRejection: true });
+});
+it.each(["create", "rotate"] as const)("%s finalizes its committed write when enrollment is rejected by the admin session", async action => {
+  const { ports, calls } = fixture();
+  ports.enroll = async () => ({ ok: false, status: 403, deterministic: true });
+  const result = action === "create" ? await createRunner(ports, "r") : await rotateRunner(ports, "r", snapshot);
+  expect(result).toEqual({ state: "failed", reason: "enrollment_rejected", cause: "denied" });
+  expect(calls.at(-1)).toBe("finalize:true"); expect(calls).not.toContain("cancel");
+});
 it("rotation observes the fenced lifecycle before changing credentials", async () => {
   const {
     calls,
@@ -164,7 +180,7 @@ it.each(["lifecycle", "mode", "missing"])("rotation cancels an uncommitted fence
   });
   expect(calls).toEqual(["fence", "cancel"]);
 });
-it.each(["invalid", "missing", "conflict"] as const)("revocation cancels only a deterministic %s rejection", async cause => {
+it.each(["invalid", "denied", "missing", "conflict"] as const)("revocation cancels only a deterministic %s rejection", async cause => {
   const {
     calls,
     ports
@@ -350,7 +366,7 @@ it.each([true, false])("registration settles a lost response against committed e
   });
   expect(calls.at(-1)).toBe(committed ? "finalize:true" : "cancel");
 });
-it.each(["invalid", "missing", "conflict"] as const)("registration cancels a deterministic %s rejection without commit", async cause => {
+it.each(["invalid", "denied", "missing", "conflict"] as const)("registration cancels a deterministic %s rejection without commit", async cause => {
   const {
     calls,
     ports
@@ -359,6 +375,9 @@ it.each(["invalid", "missing", "conflict"] as const)("registration cancels a det
   ports.observe = async () => ({
     mutation_committed: false
   });
+  ports.cancel = async (_id, _mutation, evidence) => {
+    expect(evidence).toEqual({ confirmedWriteRejection: true }); calls.push("cancel"); return true;
+  };
   expect(await registerRunner(ports, "r", true)).toEqual({
     state: "failed",
     reason: "write",

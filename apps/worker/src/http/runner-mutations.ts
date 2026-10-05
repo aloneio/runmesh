@@ -5,8 +5,8 @@ import type { WorkerEnv } from "../platform/env.js";
 export function runnerLifecyclePorts(env: WorkerEnv): RunnerLifecyclePorts {
   return {
     observe: (id, mutation) => runnerMutationState(env, id, mutation),
-    cancel: async (id, mutation) => {
-      const response = await cancelRunnerPolicyMutation(env, id, mutation);
+    cancel: async (id, mutation, evidence) => {
+      const response = await cancelRunnerPolicyMutation(env, id, mutation, evidence);
       void response.body?.cancel().catch(() => undefined);
       return response.ok;
     },
@@ -17,7 +17,7 @@ export function registryWriteResult(response: Response): RunnerWriteResult<Respo
   return response.ok ? {
     state: "accepted",
     value: response
-  } : [400, 404, 409].includes(response.status) ? {
+  } : [400, 403, 404, 409].includes(response.status) ? {
     state: "rejected",
     value: response
   } : {

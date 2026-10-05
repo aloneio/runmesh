@@ -33,7 +33,8 @@ export async function createRunner(ports: RunnerCreationPorts, runnerId: string)
     changed = "unknown";
   }
   if (changed !== "accepted") {
-    if ((await settleRunnerMutation(ports, runnerId, mutationId, true)) === "uncertain") return {
+    const rejection = changed === "unknown" ? undefined : { confirmedWriteRejection: true as const };
+    if ((await settleRunnerMutation(ports, runnerId, mutationId, true, rejection)) === "uncertain") return {
       state: "failed",
       reason: "commit"
     };
@@ -69,7 +70,7 @@ export async function createRunner(ports: RunnerCreationPorts, runnerId: string)
     return {
       state: "failed",
       reason: "enrollment_rejected",
-      cause: enrollment.status === 404 ? "missing" : "conflict"
+      cause: enrollment.status === 403 ? "denied" : enrollment.status === 404 ? "missing" : "conflict"
     };
   }
   try {

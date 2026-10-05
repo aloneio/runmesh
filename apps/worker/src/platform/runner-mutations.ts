@@ -1,6 +1,7 @@
 import { controlPlaneUnavailable } from "./control-plane.js";
 import { signedInternalHeaders } from "./control-plane.js";
 import type { WorkerEnv } from "./env.js";
+import type { RunnerWriteRejectionEvidence } from "../contracts/runner-mutations.js";
 export async function pushRunnerPolicy(env: WorkerEnv, runnerId: string, mutationId?: string): Promise<Response> {
   const body = JSON.stringify(mutationId === undefined ? {} : {
     mutation_id: mutationId
@@ -59,9 +60,10 @@ export async function markRunnerPolicyCommitted(env: WorkerEnv, runnerId: string
     });
   }
 }
-export async function cancelRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
+export async function cancelRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutationId: string, evidence?: RunnerWriteRejectionEvidence): Promise<Response> {
   const body = JSON.stringify({
-    mutation_id: mutationId
+    mutation_id: mutationId,
+    ...(evidence?.confirmedWriteRejection === true ? { confirmed_write_rejection: true } : {})
   });
   const headers = await signedInternalHeaders(env, "POST", "/cancel-policy-mutation", body);
   if (headers === undefined) return controlPlaneUnavailable();

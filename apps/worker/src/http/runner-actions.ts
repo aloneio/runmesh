@@ -91,6 +91,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     if (result.state === "deleted") return redirect("/admin");
     if (result.state === "rejected") return result.reason === "confirmation"
       ? adminRunnerError(400, "Type the Runner ID to confirm deletion.")
+      : result.status === 403 ? adminRunnerError(403, "Authentication changed. Sign in again.")
       : adminRunnerError(result.status === 404 ? 404 : 400, "Runner delete failed.");
     if (result.state === "unavailable") return adminRunnerError(503, "Could not start deleting the Runner. Try again.");
     if (result.reason === "cancel") return adminRunnerError(503, "Runner deletion failed; Runner remains locked.");
@@ -119,6 +120,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     const result = await regenerateEnrollmentFromControlPlane(env, runnerId, initialState.snapshot, { selection, ttlMs: enrollmentTtlMs, window: enrollmentWindow });
     if (result.state === "failed") {
       if (result.reason === "cleanup") return enrollmentCleanupUnavailable(result.diagnostic);
+      if (result.cause === "denied") return adminRunnerError(403, "Authentication changed. Sign in again.");
       if (result.reason === "changed" || result.reason === "enrollment_rejected") return adminRunnerError(result.cause === "missing" ? 404 : 409, result.cause === "missing" ? "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
       const message = result.reason === "fence" ? "Could not start Runner registration. Try again." : result.reason === "recovery" ? "Runner enrollment state is uncertain; Runner remains locked." : result.reason === "enrollment_recovery" ? "Enrollment code state is uncertain; Runner remains locked." : "Enrollment code creation is uncertain; Runner remains locked.";
       return adminRunnerError(503, message);

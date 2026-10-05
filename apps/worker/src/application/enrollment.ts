@@ -16,7 +16,7 @@ export async function createEnrollmentCode(ports: EnrollmentPorts, runnerId: str
     ...(expected === undefined ? {} : { expected_execution_mode: expected.configuredMode, expected_lifecycle_id: expected.lifecycleId }),
   };
   const response = await ports.create(runnerId, payload);
-  if (response?.status !== 200) return { ok: false, status: response?.status ?? 503, deterministic: response !== undefined && [400, 404, 409].includes(response.status) };
+  if (response?.status !== 200) return { ok: false, status: response?.status ?? 503, deterministic: response !== undefined && [400, 403, 404, 409].includes(response.status) };
   try {
     const value = record(response.value);
     if (value?.runner_id !== runnerId || value.enrollment_id !== enrollmentId

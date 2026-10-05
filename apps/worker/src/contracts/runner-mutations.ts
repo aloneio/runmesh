@@ -9,8 +9,12 @@ export interface RunnerMutationObservation {
 }
 export interface RunnerLifecyclePorts {
   observe(runnerId: string, mutationId: string): Promise<RunnerMutationObservation | undefined>;
-  cancel(runnerId: string, mutationId: string): Promise<boolean>;
+  cancel(runnerId: string, mutationId: string, evidence?: RunnerWriteRejectionEvidence): Promise<boolean>;
   finalize(runnerId: string, mutationId: string, allowLifecycleChange: boolean): Promise<void>;
+}
+/** Supplied only after Registry confirms that this write was rejected. */
+export interface RunnerWriteRejectionEvidence {
+  readonly confirmedWriteRejection: true;
 }
 export type RunnerWriteResult<T> = {
   readonly state: "accepted";
