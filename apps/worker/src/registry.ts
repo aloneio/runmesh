@@ -275,7 +275,7 @@ export class RegistryDO {
     const nowMs = Date.now();
     try { await this.runMaintenanceAlarm(nowMs); }
     catch (error) {
-      this.disableFeatureHealth("maintenance_alarm", error, nowMs);
+      this.featureHealth.disable("maintenance_alarm", error, nowMs);
       // Avoid a tight retry burst when an account/storage backend is overloaded.
       // If even rescheduling fails, retain the platform's bounded alarm retry.
       try { await this.ctx.storage.setAlarm(nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS); }
@@ -309,17 +309,20 @@ export class RegistryDO {
       if (this.ctx.storage.sql.exec("SELECT 1 FROM runner_enrollments WHERE expires_at_ms <= ? LIMIT 1", enrollmentRetentionCutoff).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", enrollmentRetentionCutoff);
       await this.ctx.storage.put(HISTORY_CLEANUP_DEADLINE_KEY, nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
     }
-    await this.scheduleMaintenanceAlarm(nowMs);
+    await this.scheduleMaintenanceAlarm(nowMs, true);
   }
 
-  private scheduleMaintenanceAlarm(nowMs: number): Promise<void> {
-    const work = this.maintenanceQueue.then(() => this.scheduleMaintenanceAlarmNow(nowMs));
+  private scheduleMaintenanceAlarm(nowMs: number, required = false): Promise<void> {
+    const work = this.maintenanceQueue.then(() => this.scheduleMaintenanceAlarmNow(nowMs, required));
     this.maintenanceQueue = work.catch(() => undefined);
     return work;
   }
 
-  private async scheduleMaintenanceAlarmNow(nowMs: number): Promise<void> {
-    if (this.featureHealthDisabled("maintenance_alarm", nowMs)) return;
+  private async scheduleMaintenanceAlarmNow(nowMs: number, required: boolean): Promise<void> {
+    // An alarm consumes its prior wakeup. Its replacement must either persist
+    // or reject the alarm turn so the platform retries. Such a retry can arrive
+    // before the optional-feature cooldown and still needs a future deadline.
+    if (!required && this.featureHealthDisabled("maintenance_alarm", nowMs)) return;
     try {
       const nextStale = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
         "SELECT MIN(COALESCE(last_heartbeat_ms, 0) + 45000) AS next_ms FROM runners WHERE state = 'online'",
@@ -344,7 +347,10 @@ export class RegistryDO {
       if (deadline === null) { if (current !== null) await this.ctx.storage.deleteAlarm(); return; }
       if (current === null || current <= nowMs || current > deadline) await this.ctx.storage.setAlarm(deadline);
       this.clearFeatureHealth("maintenance_alarm");
-    } catch (error) { this.disableFeatureHealth("maintenance_alarm", error, nowMs); }
+    } catch (error) {
+      if (required) throw error;
+      this.disableFeatureHealth("maintenance_alarm", error, nowMs);
+    }
   }
 
   private loadFeatureHealth(): void { this.featureHealth.load(); }

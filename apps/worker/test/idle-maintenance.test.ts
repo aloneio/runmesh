@@ -1,4 +1,4 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { REGISTRY_HISTORY_CLEANUP_INTERVAL_MS } from "../src/registry.js";
 import { internalHeaders, INTERNAL_SIGNATURE_SKEW_MS } from "../src/security.js";
@@ -44,6 +44,70 @@ it("schedules a cooldown instead of rapidly retrying an overloaded maintenance t
       expect(await state.storage.getAlarm()).toBe(now + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
       expect(instance.featureHealthSnapshot(now).some((feature) => feature.feature === "maintenance_alarm")).toBe(true);
     } finally { sql.mockRestore(); clock.mockRestore(); }
+  });
+});
+
+it.each(["cooldown-succeeds", "cooldown-fails"] as const)("preserves maintenance after a real alarm cannot reschedule: %s", async scenario => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName("idle-alarm-retry-" + crypto.randomUUID()));
+  const now = Date.now(), expires = now + 60_000;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  let restoreFault = () => {}, writes = 0;
+  try {
+    const path = "/auth/internal-nonces", body = JSON.stringify({ nonce: "a".repeat(64), expires_at_ms: expires });
+    const headers = await internalHeaders("test-internal-control-secret-not-for-production", "POST", path, body);
+    expect((await stub.fetch(new Request("https://registry.internal" + path, { method: "POST", body, headers }))).status).toBe(204);
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).toBe(expires);
+      const original = state.storage.setAlarm.bind(state.storage);
+      const fault = vi.spyOn(state.storage, "setAlarm").mockImplementation((...args) => {
+        writes += 1;
+        if (writes === 1 || scenario === "cooldown-fails") return Promise.reject(new Error("synthetic alarm storage outage"));
+        return original(...args);
+      });
+      restoreFault = () => fault.mockRestore();
+    });
+    // Unlike calling instance.alarm(), this consumes the persisted alarm first.
+    if (scenario === "cooldown-fails") await expect(runDurableObjectAlarm(stub)).rejects.toThrow("synthetic alarm storage outage");
+    else expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(writes).toBe(2);
+    restoreFault();
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM internal_request_nonces").one().n).toBe(1);
+      expect(await state.storage.getAlarm()).toBe(scenario === "cooldown-fails" ? null : now + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
+      // Simulate the platform's retry after the rejected turn. It can arrive
+      // before the in-memory feature cooldown expires.
+      if (scenario === "cooldown-fails") await state.storage.setAlarm(now + 1_000);
+    });
+    clock.mockReturnValue(scenario === "cooldown-fails" ? now + 1_000 : now + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).toBe(scenario === "cooldown-fails" ? now + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS : null);
+    });
+    if (scenario === "cooldown-fails") {
+      clock.mockReturnValue(now + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+    }
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM internal_request_nonces").one().n).toBe(0);
+      expect(await state.storage.getAlarm()).toBeNull();
+    });
+  } finally { restoreFault(); clock.mockRestore(); }
+});
+
+it("keeps signed mutations available while optional alarm scheduling is unavailable", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName("idle-optional-scheduling-" + crypto.randomUUID()));
+  await runInDurableObject(stub, async (instance, state) => {
+    const alarm = vi.spyOn(state.storage, "setAlarm").mockRejectedValue(new Error("synthetic alarm storage outage"));
+    try {
+      for (const nonce of ["a".repeat(64), "b".repeat(64)]) {
+        const path = "/auth/internal-nonces", body = JSON.stringify({ nonce, expires_at_ms: Date.now() + 60_000 });
+        const headers = await internalHeaders("test-internal-control-secret-not-for-production", "POST", path, body);
+        expect((await instance.fetch(new Request("https://registry.internal" + path, { method: "POST", body, headers }))).status).toBe(204);
+      }
+      // One ordinary attempt plus one cooldown attempt; later requests honor
+      // the breaker instead of adding recurring failed writes.
+      expect(alarm).toHaveBeenCalledTimes(2);
+    } finally { alarm.mockRestore(); }
   });
 });
 
