@@ -36,6 +36,8 @@ const bad = [
   ["native-service contracts to HTTP adapter", { "apps/runner/src/services/contracts.ts": 'export * from "../updates/cloud.js";', "apps/runner/src/updates/cloud.ts": 'export {};' }],
   ["native-service contracts through intermediary", { "apps/runner/src/services/contracts.cts": 'export * from "./helper.js";', "apps/runner/src/services/helper.ts": 'export * from "../updates/cloud.js";', "apps/runner/src/updates/cloud.ts": 'export {};' }],
   ["native-service contracts to platform types", { "apps/runner/src/services/contracts.mts": 'import type { PathLike } from "node:fs";' }],
+  ["published native-service contracts to protocol package types", { "apps/runner/src/services/contracts.ts": 'import type { PermissionSet } from "@aloneio/runmesh-protocol";', "packages/protocol/src/index.ts": 'export type PermissionSet = {};' }],
+  ["published native-service contracts to relative protocol types", { "apps/runner/src/services/contracts.ts": 'export type { PermissionSet } from "../../../../packages/protocol/src/index.js";', "packages/protocol/src/index.ts": 'export type PermissionSet = {};' }],
   ["native-service contracts own process state", { "apps/runner/src/services/contracts.ts": 'export const platform = process.platform;' }],
   ["native-service contracts own scheduling", { "apps/runner/src/services/contracts.ts": 'export const delay = () => setTimeout(() => {}, 100);' }],
   ["update coordinator to HTTP adapter", { "apps/runner/src/updates/coordinator.ts": 'import "./cloud.js";', "apps/runner/src/updates/cloud.ts": "export {};" }],
@@ -240,8 +242,8 @@ test("update coordination uses shared ports while retaining local scheduling", a
   const f = await fixture(t, {
     "apps/runner/src/updates/coordinator.ts": 'import { Failure } from "./contracts.js"; export const delay = () => new Promise(resolve => setTimeout(resolve, performance.now()));',
     "apps/runner/src/updates/contracts.ts": 'import type { Snapshot } from "../services/contracts.js"; import "@aloneio/runmesh-protocol"; export class Failure extends Error {}',
-    "apps/runner/src/services/contracts.ts": 'import type { SharedState } from "@aloneio/runmesh-protocol"; export type Snapshot = SharedState;',
-    "packages/protocol/src/index.ts": 'export type SharedState = {};',
+    "apps/runner/src/services/contracts.ts": 'export type Snapshot = { readonly active: boolean };',
+    "packages/protocol/src/index.ts": 'export {};',
   });
   assert.deepEqual((await checkArchitecture(f.root)).failures, []);
 });

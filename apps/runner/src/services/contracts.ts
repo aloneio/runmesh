@@ -4,6 +4,26 @@ export type ServicePlatform = "linux" | "darwin" | "win32";
 
 export type ServiceMode = "user" | "system";
 
+/** JSON-only native state, retained before stopping a Runner for maintenance. */
+export interface NativeServiceSnapshot {
+  readonly schema_version: 1;
+  readonly platform: ServicePlatform;
+  readonly mode: ServiceMode;
+  readonly registered: boolean;
+  readonly active: boolean;
+  readonly enabled: boolean;
+  readonly enablement: string;
+  readonly pid?: number;
+}
+
+/** Native lifecycle operations shared with the independent version manager. */
+export interface NativeServiceMaintenancePort {
+  snapshot(): Promise<NativeServiceSnapshot>;
+  stop(): Promise<void>;
+  start(): Promise<void>;
+  restoreEnabled(snapshot: NativeServiceSnapshot): Promise<void>;
+}
+
 /** The OS identity used by a machine service. */
 export type ExecutionMode = "dedicated_user" | "privileged_host";
 

@@ -4,7 +4,7 @@ import { nativeProbeReliable, systemdEnablementState } from "../services/probes.
 import { stopWindowsTask, windowsTaskMissingCatch } from "../services/task-scheduler.js";
 import { LINUX_SERVICE_NAME, MACOS_LABEL } from "../services/values.js";
 import { posix, win32 } from "node:path";
-import type { NativeServiceMaintenancePort, NativeServiceSnapshot } from "./contracts.js";
+import type { NativeServiceMaintenancePort, NativeServiceSnapshot } from "../services/contracts.js";
 
 export interface NativeServiceMaintenanceOptions {
   readonly platform?: ServicePlatform;

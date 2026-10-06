@@ -41,7 +41,9 @@ for (const locale of ["en", "zh-CN"]) it("renders client dates and UTC times sep
   const html = await response.text();
   expect(html).toContain(`<time class="timestamp" datetime="${iso}" title="${iso}" data-no-i18n><span>2026-09-20 </span><span>02:30:26 UTC</span></time>`);
   expect(html.match(/<time\b/g)).toHaveLength(1);
-  expect(html.match(new RegExp('<td class="time-cell">' + (locale === "en" ? "Never" : "从未") + '</td>', 'g'))).toHaveLength(2);
+  // Check the timestamp value independently of decorative mobile headings.
+  const values = await new HTMLRewriter().on('[aria-hidden="true"]', { element(element) { element.remove(); } }).transform(new Response(html)).text();
+  expect(values.match(new RegExp('<td class="time-cell">' + (locale === "en" ? "Never" : "从未") + '</td>', 'g'))).toHaveLength(2);
   expect(clients[0]!.last_used_at_ms).toBe(Date.parse(iso));
 });
 
