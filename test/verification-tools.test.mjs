@@ -5,7 +5,10 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { ChildProcess, spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { waitForWorker } from "../scripts/worker-fixture.mjs";
 import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWiring } from "../scripts/verification-plan.mjs";
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
@@ -16,6 +19,80 @@ import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferenc
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plan = JSON.parse(await readFile(join(root, "test/verification-plan.json"), "utf8"));
 const files = plan.groups.flatMap(g => g.files);
+
+test("Worker fixture discovers its owned port over IPC after a released candidate is occupied", async t => {
+  const candidate = createServer();
+  await new Promise(resolve => candidate.listen(0, "127.0.0.1", resolve));
+  const port = candidate.address().port;
+  await new Promise(resolve => candidate.close(resolve));
+  const occupied = createServer();
+  await new Promise(resolve => occupied.listen(port, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => occupied.close(resolve)));
+  // The old probe-close-spawn approach cannot claim this released address.
+  const oldLaunch = createServer();
+  await assert.rejects(new Promise((resolve, reject) => {
+    oldLaunch.once("error", reject); oldLaunch.listen(port, "127.0.0.1", resolve);
+  }), { code: "EADDRINUSE" });
+
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { createServer } from 'node:http';
+    const server = createServer((_request, response) => response.end('healthy'));
+    server.listen(0, '127.0.0.1', () => process.send(JSON.stringify({
+      event: 'DEV_SERVER_READY', ip: '127.0.0.1', port: server.address().port
+    })));
+  `], { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const closed = once(child, "close"); child.kill(); await closed;
+    }
+  });
+  const origin = await waitForWorker(child, 5_000);
+  assert.match(origin, /^http:\/\/127\.0\.0\.1:[1-9][0-9]*$/);
+  assert.notEqual(Number(new URL(origin).port), port);
+  assert.equal(child.listenerCount("message"), 0);
+});
+
+test("Worker fixture fails promptly if the launcher exits before its readiness message", async () => {
+  for (const alreadyExited of [false, true]) {
+    const child = new ChildProcess();
+    if (alreadyExited) child.exitCode = 1;
+    const ready = waitForWorker(child, 60_000, () => "launcher failed");
+    if (!alreadyExited) { child.exitCode = 1; child.emit("exit", 1, null); }
+    await assert.rejects(ready, /Worker exited before readiness \(code=1, signal=null\)\nlauncher failed/);
+    for (const event of ["message", "error", "exit"]) assert.equal(child.listenerCount(event), 0);
+  }
+});
+
+test("Worker fixture rejects spawn errors and malformed readiness addresses", async () => {
+  const child = new ChildProcess();
+  const failed = waitForWorker(child, 60_000);
+  child.emit("error", new Error("synthetic spawn failure"));
+  await assert.rejects(failed, /Worker failed to start: synthetic spawn failure/);
+  for (const address of [{ ip: "127.0.0.1", port: 0 }, { ip: "example.com", port: 80 }, { ip: "127.0.0.1", port: 70_000 }]) {
+    const ready = waitForWorker(child, 60_000);
+    child.emit("message", JSON.stringify({ event: "DEV_SERVER_READY", ...address }));
+    await assert.rejects(ready, /invalid loopback readiness address/);
+  }
+});
+
+for (const failure of ["deadline", "exit"]) {
+  test(`Worker fixture cancels an accepted stalled health request on ${failure}`, async t => {
+    const child = new ChildProcess();
+    let disconnected;
+    const closed = new Promise(resolve => { disconnected = resolve; });
+    const server = createServer((_request, response) => {
+      response.once("close", disconnected);
+      if (failure === "exit") { child.exitCode = 1; child.emit("exit", 1, null); }
+    });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+    const ready = waitForWorker(child, failure === "deadline" ? 1_000 : 60_000, () => "health probe stalled");
+    child.emit("message", JSON.stringify({ event: "DEV_SERVER_READY", ip: "127.0.0.1", port: server.address().port }));
+    await assert.rejects(ready, failure === "deadline" ? /timed out after 1000ms\nhealth probe stalled/ : /Worker exited before readiness/);
+    await closed;
+    assert.equal(child.listenerCount("message"), 0);
+  });
+}
 
 test("format gate discovers every supported script extension in the Git index", async t => {
   const dir = await mkdtemp(join(tmpdir(), "runmesh-format-"));

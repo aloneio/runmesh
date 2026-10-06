@@ -1,11 +1,11 @@
-import type { DevelopmentReleaseCache, DevelopmentReleaseRefreshScheduler, DevelopmentReleaseVerifier, DevelopmentReleaseDependencies, RunnerReleaseEnvironment } from "../src/contracts/runner-release.js";
+import type { CachedDevelopmentReleaseRecord, DevelopmentReleaseCache, DevelopmentReleaseRefreshScheduler, DevelopmentReleaseVerifier, DevelopmentReleaseDependencies, RunnerReleaseEnvironment } from "../src/contracts/runner-release.js";
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import worker from "../src/index.js";
 import { developmentReleaseDependencies, registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerReleaseDescriptor as resolveRelease, createDevelopmentReleaseRuntime, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
-import { isDevelopmentReleaseVersion } from "../src/domain/release-selection.js";
+import { developmentDescriptor, isDevelopmentReleaseVersion } from "../src/domain/release-selection.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
 import { boundedJson, readDevelopmentReleaseCache, releaseFetch, DevelopmentReleaseError, developmentReleaseFailure, safeDevelopmentReleaseFailure } from "../src/distribution/release-io.js";
 
@@ -1256,5 +1256,264 @@ it("projects only fixed release diagnostic fields at the HTTP observability boun
     }
     for (const http_status of ["503", 99, 600, 503.5, NaN]) expect(safeDevelopmentReleaseFailure({ phase: "discovery", reason: "http_error", http_status }))
       .toEqual({ phase: "discovery", reason: "http_error" });
+    dependencies.onRefreshFailure?.({ phase: "discovery", reason: "http_error", http_status: 403, recovery: "failed",
+      recovery_phase: "signature", recovery_reason: "http_error", recovery_http_status: 404, recovery_message: "PRIVATE_SENTINEL" } as never);
+    expect(warn.mock.calls.at(-1)).toEqual([{ event: "dev_runner_release_refresh_failed", phase: "discovery", reason: "http_error", http_status: 403,
+      recovery: "failed", recovery_phase: "signature", recovery_reason: "http_error", recovery_http_status: 404 }]);
+    expect(safeDevelopmentReleaseFailure({ phase: "discovery", reason: "network_error", recovery: "failed", recovery_phase: "PRIVATE_SENTINEL", recovery_reason: "http_error" }))
+      .toEqual({ phase: "discovery", reason: "network_error", recovery: "failed", recovery_phase: "discovery", recovery_reason: "unexpected" });
+    expect(safeDevelopmentReleaseFailure({ phase: "discovery", reason: "network_error", recovery: "reverified", recovery_message: "PRIVATE_SENTINEL" }))
+      .toEqual({ phase: "discovery", reason: "network_error", recovery: "reverified" });
   } finally { warn.mockRestore(); }
+});
+
+describe("reverification after a discovery outage", () => {
+  function fixture(ageMs = 3_600_000) {
+    const descriptor = developmentDescriptor(release(devVersion(42), "2026-10-05T23:35:06Z"))!;
+    const state: { record: CachedDevelopmentReleaseRecord | undefined } = { record: { schema_version: 1, verified_at_ms: Date.now() - ageMs, descriptor } };
+    const cache = { match: vi.fn(async () => state.record === undefined ? undefined : Response.json(state.record)),
+      put: vi.fn(async (_request: Request, response: Response) => { state.record = await response.json(); }) };
+    return { descriptor, state, cache };
+  }
+
+  it.each([403, 429, 500, 503, "network"] as const)("reverifies an expired immutable candidate after discovery %s before renewing its timestamp", async failure => {
+    vi.useFakeTimers();
+    const f = fixture(), oldTimestamp = f.state.record!.verified_at_ms;
+    let finish!: () => void, settled = false;
+    const verify = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const fetchImpl = vi.fn(async () => { if (failure === "network") throw new TypeError("synthetic network failure"); return new Response(null, { status: failure }); });
+    const onRefreshFailure = vi.fn();
+    const dependencies = { fetch: fetchImpl, verify, cache: f.cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime(), onRefreshFailure };
+    const pending = resolveRelease(devEnv, dependencies).then(value => { settled = true; return value; });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(verify).toHaveBeenCalledExactlyOnceWith(f.descriptor, expect.any(Function));
+    expect(settled).toBe(false);
+    expect(f.cache.put).not.toHaveBeenCalled();
+    expect(f.state.record!.verified_at_ms).toBe(oldTimestamp);
+    finish();
+    expect(await pending).toEqual(f.descriptor);
+    expect(f.state.record!.verified_at_ms).toBe(Date.now());
+    expect(f.state.record!.descriptor.published_at).toBe(f.descriptor.published_at);
+    expect(f.cache.put).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(onRefreshFailure.mock.calls).toEqual([[{ ...(failure === "network" ? { phase: "discovery", reason: "network_error" }
+      : { phase: "discovery", reason: "http_error", http_status: failure }), recovery: "reverified" }]]);
+  });
+
+  it.each(["future", "invalid", "missing", "soft stale"] as const)("never treats a %s cache as an expired candidate", async kind => {
+    vi.useFakeTimers();
+    const f = fixture(kind === "future" ? -60_000 : kind === "soft stale" ? 120_000 : 3_600_000);
+    if (kind === "missing") f.state.record = undefined;
+    if (kind === "invalid") f.state.record = { ...f.state.record!, descriptor: { ...f.descriptor, signature_url: "https://untrusted.invalid/manifest.sig" } };
+    const timestamp = f.state.record?.verified_at_ms, verify = vi.fn(async () => undefined);
+    const pending = resolveRelease(devEnv, { fetch: responseFetch({}, 403), verify, cache: f.cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
+    await vi.advanceTimersByTimeAsync(20_500);
+    expect(await pending).toMatchObject({ distributable: kind === "soft stale" });
+    expect(verify).not.toHaveBeenCalled();
+    expect(f.cache.put).not.toHaveBeenCalled();
+    expect(f.state.record?.verified_at_ms).toBe(timestamp);
+  });
+
+  it.each(["not found", "malformed", "no candidate", "candidate verification"] as const)("does not reverify an expired record after %s discovery", async failure => {
+    vi.useFakeTimers();
+    const f = fixture(), verify = vi.fn<DevelopmentReleaseVerifier>(async () => { throw new DevelopmentReleaseError("synthetic invalid signature", { phase: "verification", reason: "invalid_signature" }); });
+    const fetchImpl = responseFetch(failure === "malformed" ? {} : failure === "candidate verification" ? [release(devVersion(43), "2026-10-06T00:00:00Z")] : [], failure === "not found" ? 404 : 200);
+    const pending = resolveRelease(devEnv, { fetch: fetchImpl, verify, cache: f.cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
+    await vi.advanceTimersByTimeAsync(20_500);
+    expect(await pending).toMatchObject({ distributable: false });
+    expect(verify.mock.calls.every(([descriptor]) => descriptor.package_version === devVersion(43))).toBe(true);
+    expect(verify).toHaveBeenCalledTimes(failure === "candidate verification" ? 1 : 0);
+    expect(f.cache.put).not.toHaveBeenCalled();
+  });
+
+  it.each(["valid", "tampered", "incompatible"] as const)("runs the complete signature and manifest verifier on a %s expired candidate", async mode => {
+    const f = fixture(), target = installerReleaseTarget(f.descriptor.package_version, "dev");
+    const manifest = { schema_version: 1, project: "runmesh", version: target.version, tag: target.tag, channel: "dev", prerelease: true,
+      commit_sha: "a".repeat(40), protocol_min: mode === "incompatible" ? 3 : 2, protocol_max: mode === "incompatible" ? 3 : 2,
+      published_at: "2026-10-05T21:12:59Z", artifacts: [{ name: target.artifact_name, platform: "node", architecture: "portable", node_major_min: 22, url: target.artifact_url, size: 123, sha256: "b".repeat(64) }] };
+    const bytes = new TextEncoder().encode(JSON.stringify(manifest));
+    const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]) as CryptoKeyPair;
+    const toBase64 = (value: Uint8Array) => btoa(String.fromCharCode(...value));
+    const publicKey = new Uint8Array(await crypto.subtle.exportKey("spki", keyPair.publicKey));
+    const signature = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, keyPair.privateKey, bytes));
+    const trust = { key_id: "test-dev-key", public_key_pem: `-----BEGIN PUBLIC KEY-----\n${toBase64(publicKey)}\n-----END PUBLIC KEY-----\n` };
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://api.github.com/")) return new Response(null, { status: 403 });
+      if (url === target.manifest_url) return new Response(mode === "tampered" ? JSON.stringify({ ...manifest, commit_sha: "c".repeat(40) }) : bytes);
+      if (url === target.signature_url) return new Response(toBase64(signature));
+      if (url === target.signature_descriptor_url) return Response.json({ schema_version: 1, algorithm: "ed25519", key_id: trust.key_id, encoding: "base64", signed_file: "manifest.json" });
+      throw new Error("unexpected release request");
+    });
+    let verificationSettled = false;
+    const verify = vi.fn<DevelopmentReleaseVerifier>(async (descriptor, fetcher) => {
+      try { await verifyDevelopmentRunnerRelease(descriptor, fetcher, trust); }
+      finally { verificationSettled = true; }
+    });
+    const onRefreshFailure = vi.fn();
+    vi.useFakeTimers();
+    const pending = resolveRelease(devEnv, { fetch: fetchImpl, verify, cache: f.cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime(), onRefreshFailure });
+    await vi.waitFor(() => expect(verificationSettled).toBe(true));
+    await vi.advanceTimersByTimeAsync(20_500);
+    expect(await pending).toMatchObject({ distributable: mode === "valid" });
+    expect(verify).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls.filter(([input]) => !String(input).startsWith("https://api.github.com/")).map(([input]) => input))
+      .toEqual([target.manifest_url, target.signature_url, target.signature_descriptor_url]);
+    expect(f.cache.put).toHaveBeenCalledTimes(mode === "valid" ? 1 : 0);
+    expect(onRefreshFailure.mock.calls).toEqual([[{ phase: "discovery", reason: "http_error", http_status: 403,
+      ...(mode === "valid" ? { recovery: "reverified" } : { recovery: "failed", recovery_phase: "verification", recovery_reason: mode === "tampered" ? "invalid_signature" : "invalid_manifest" }) }]]);
+  });
+
+  it("prefers a freshly discovered release to an expired candidate", async () => {
+    const f = fixture(), verify = vi.fn(async () => undefined);
+    const result = await resolveRelease(devEnv, { fetch: responseFetch([release(devVersion(43), "2026-10-06T00:00:00Z")]), verify,
+      cache: f.cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
+    expect(result.package_version).toBe(devVersion(43));
+    expect(verify).toHaveBeenCalledExactlyOnceWith(result, expect.any(Function));
+  });
+
+  it("returns the newer Registry winner when an older candidate finishes revalidation last", async () => {
+    vi.useFakeTimers();
+    const f = fixture(), newer = developmentDescriptor(release(devVersion(43), "2026-10-06T00:00:00Z"))!;
+    let finish!: () => void;
+    const verify = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    // The real Registry's monotonic-version guard owns the cross-isolate CAS.
+    f.cache.put.mockImplementation(async () => undefined);
+    const runtime = createDevelopmentReleaseRuntime();
+    const pending = resolveRelease(devEnv, { fetch: responseFetch({}, 403), verify, cache: f.cache, now: () => Date.now(), runtime });
+    await vi.advanceTimersByTimeAsync(300);
+    f.state.record = { schema_version: 1, verified_at_ms: Date.now(), descriptor: newer };
+    await vi.advanceTimersByTimeAsync(1);
+    finish();
+    expect(await pending).toEqual(newer);
+    expect(runtime.cached?.descriptor).toEqual(newer);
+    expect(runtime.cached?.verified_at_ms).toBe(f.state.record.verified_at_ms);
+  });
+
+  it("cannot let a late revalidation overwrite a newer refresh in the same runtime", async () => {
+    vi.useFakeTimers();
+    const f = fixture(), runtime = createDevelopmentReleaseRuntime();
+    let now = Date.now(), finish!: () => void, calls = 0;
+    const fetchImpl = vi.fn(async () => ++calls <= 3 ? new Response(null, { status: 403 }) : Response.json([release(devVersion(43), "2026-10-06T00:00:00Z")]));
+    const verify = vi.fn<DevelopmentReleaseVerifier>(async descriptor => {
+      if (descriptor.package_version === f.descriptor.package_version) await new Promise<void>(resolve => { finish = resolve; });
+    });
+    const dependencies = { fetch: fetchImpl, verify, cache: f.cache, now: () => now, runtime };
+    const older = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(300);
+    now += 20_001;
+    const newer = await resolveRelease(devEnv, dependencies);
+    finish();
+    expect(newer.package_version).toBe(devVersion(43));
+    expect(await older).toEqual(newer);
+    expect(runtime.cached?.descriptor).toEqual(newer);
+    expect(f.cache.put).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a newer runtime commit when fallback readback finishes late", async () => {
+    vi.useFakeTimers();
+    const f = fixture(), runtime = createDevelopmentReleaseRuntime();
+    let now = Date.now(), finishRead!: (response: Response) => void;
+    const olderRecord = f.state.record!;
+    f.cache.match.mockImplementationOnce(async () => Response.json(olderRecord))
+      .mockImplementationOnce(() => new Promise<Response>(resolve => { finishRead = resolve; }));
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => ++calls <= 3 ? new Response(null, { status: 403 }) : Response.json([release(devVersion(44), "2026-10-06T00:00:00Z")]));
+    const dependencies = { fetch: fetchImpl, verify: async () => undefined, cache: f.cache, now: () => now, runtime };
+    const older = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(f.cache.match).toHaveBeenCalledTimes(2);
+    now += 60_001;
+    const newer = await resolveRelease(devEnv, dependencies);
+    const middle = developmentDescriptor(release(devVersion(43), "2026-10-06T00:00:00Z"))!;
+    finishRead(Response.json({ schema_version: 1, verified_at_ms: now, descriptor: middle }));
+    expect(newer.package_version).toBe(devVersion(44));
+    expect(await older).toEqual(newer);
+    expect(runtime.cached?.descriptor).toEqual(newer);
+    expect(f.state.record?.descriptor).toEqual(newer);
+  });
+
+  it.each(["normal", "fallback"] as const)("returns a newer runtime commit after a late %s cache write exhausts the readback budget", async mode => {
+    vi.useFakeTimers();
+    const f = fixture(), runtime = createDevelopmentReleaseRuntime();
+    let now = Date.now(), elapsed = 0, finishWrite!: () => void, calls = 0;
+    const performanceClock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const put = f.cache.put.getMockImplementation()!;
+    f.cache.put.mockImplementationOnce(() => new Promise<void>(resolve => { finishWrite = resolve; })).mockImplementation(put);
+    const fetchImpl = vi.fn(async () => {
+      calls++;
+      if (mode === "fallback" && calls <= 3) return new Response(null, { status: 403 });
+      return Response.json([release(devVersion(mode === "normal" && calls === 1 ? 42 : 43), "2026-10-06T00:00:00Z")]);
+    });
+    const dependencies = { fetch: fetchImpl, verify: async () => undefined, cache: f.cache, now: () => now, runtime };
+    const older = resolveRelease(devEnv, dependencies);
+    try {
+      await vi.advanceTimersByTimeAsync(300);
+      expect(f.cache.put).toHaveBeenCalledOnce();
+      now += 60_001;
+      elapsed = 20_001;
+      const newer = await resolveRelease(devEnv, dependencies);
+      finishWrite();
+      expect(newer.package_version).toBe(devVersion(43));
+      expect(await older).toEqual(newer);
+      expect(runtime.cached?.descriptor).toEqual(newer);
+      expect(f.cache.match).toHaveBeenCalledTimes(mode === "fallback" ? 3 : 2);
+    } finally { finishWrite?.(); await older; performanceClock.mockRestore(); }
+  });
+
+  it("reads the Registry winner after verification and persistence spend the network budget", async () => {
+    vi.useFakeTimers();
+    const f = fixture(), runtime = createDevelopmentReleaseRuntime();
+    const newer = developmentDescriptor(release(devVersion(43), "2026-10-06T00:00:00Z"))!;
+    let elapsed = 0;
+    const performanceClock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    f.cache.put.mockImplementation(async () => {
+      elapsed = 21_000;
+      // Another isolate's completed release wins the Registry's version guard.
+      f.state.record = { schema_version: 1, verified_at_ms: Date.now(), descriptor: newer };
+    });
+    try {
+      const pending = resolveRelease(devEnv, { fetch: responseFetch({}, 403), verify: async () => { elapsed = 19_000; },
+        cache: f.cache, now: () => Date.now(), runtime });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await pending).toEqual(newer);
+      expect(runtime.cached?.descriptor).toEqual(newer);
+      expect(f.cache.match).toHaveBeenCalledTimes(2);
+      expect(f.cache.put).toHaveBeenCalledOnce();
+    } finally { performanceClock.mockRestore(); }
+  });
+
+  it("shares the original discovery deadline with asset revalidation", async () => {
+    vi.useFakeTimers();
+    const f = fixture(), timeouts: number[] = [], assetSignals: AbortSignal[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      timeouts.push(ms);
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("synthetic deadline", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    let calls = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (String(input).startsWith("https://api.github.com/")) {
+        if (++calls === 1) await new Promise(resolve => setTimeout(resolve, 19_000));
+        return new Response(null, { status: 403 });
+      }
+      const signal = init!.signal!;
+      assetSignals.push(signal);
+      return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    const verify: DevelopmentReleaseVerifier = (descriptor, fetcher) => verifyDevelopmentRunnerRelease(descriptor, fetcher);
+    try {
+      const pending = resolveRelease(devEnv, { fetch: fetchImpl, verify, cache: f.cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
+      await vi.advanceTimersByTimeAsync(19_500);
+      expect(assetSignals).toHaveLength(1);
+      expect(assetSignals[0]!.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(assetSignals[0]!.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(await pending).toMatchObject({ distributable: false });
+      expect(timeouts.filter(ms => ms === 20_000)).toHaveLength(1);
+      expect(f.cache.put).not.toHaveBeenCalled();
+    } finally { timeout.mockRestore(); vi.clearAllTimers(); }
+  });
 });

@@ -67,6 +67,10 @@ export interface DevelopmentReleaseFailure {
   readonly phase: "discovery" | "manifest" | "signature" | "signature_descriptor" | "verification";
   readonly reason: "http_error" | "network_error" | "timeout" | "invalid_response" | "invalid_signature" | "invalid_manifest" | "no_candidate" | "unexpected";
   readonly http_status?: number;
+  readonly recovery?: "reverified" | "failed";
+  readonly recovery_phase?: DevelopmentReleaseFailure["phase"];
+  readonly recovery_reason?: DevelopmentReleaseFailure["reason"];
+  readonly recovery_http_status?: number;
 }
 /** Only values and launch counters may cross requests, never an I/O promise. */
 export interface DevelopmentReleaseRuntime {
@@ -82,6 +86,6 @@ export interface DevelopmentReleaseDependencies {
   readonly cache: DevelopmentReleaseCache | undefined;
   readonly now: () => number;
   readonly runtime: DevelopmentReleaseRuntime;
-  /** Synchronous observation, once per failed refresh after cache recovery. */
+  /** One synchronous failure observation after recovery, including discovery outages restored by re-verification. */
   readonly onRefreshFailure?: (failure: DevelopmentReleaseFailure) => void;
 }

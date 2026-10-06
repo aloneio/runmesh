@@ -5,7 +5,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import WebSocket from "ws";
 import { UI_BROWSER_STAGES } from "./ui-browser-contract.mjs";
-import { createUiNavigationDiagnostic, withUiNavigationDiagnostic } from "./ui-browser-diagnostics.mjs";
+import { createUiNavigationDiagnostic, probeUiNavigationServer, withUiNavigationDiagnostic } from "./ui-browser-diagnostics.mjs";
 export { UI_BROWSER_STAGES };
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const navigationContextErrors = new Set([
@@ -240,6 +240,7 @@ export async function checkUiWithChromium(origin,cookie,output){
  }catch(error){
   const diagnostic=navigationDiagnostic.diagnostic();
   if(diagnostic&&["dashboard_navigation","clients_navigation","dashboard_return","locale_navigation"].includes(stage)){
+   try { diagnostic.server_probes=await probeUiNavigationServer(origin,cookie); } catch { /* Keep the original browser failure if the fixture cannot be probed. */ }
    throw withUiNavigationDiagnostic(error,diagnostic);
   }
   throw error;

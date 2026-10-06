@@ -21,8 +21,17 @@ export function safeDevelopmentReleaseFailure(value: unknown): DevelopmentReleas
     || typeof value.reason !== "string" || !["http_error", "network_error", "timeout", "invalid_response", "invalid_signature", "invalid_manifest", "no_candidate", "unexpected"].includes(value.reason)) {
     return { phase: "discovery", reason: "unexpected" };
   }
-  return { phase: value.phase as DevelopmentReleaseFailure["phase"], reason: value.reason as DevelopmentReleaseFailure["reason"],
+  const failure: DevelopmentReleaseFailure = { phase: value.phase as DevelopmentReleaseFailure["phase"], reason: value.reason as DevelopmentReleaseFailure["reason"],
     ...(Number.isInteger(value.http_status) && Number(value.http_status) >= 100 && Number(value.http_status) <= 599 ? { http_status: Number(value.http_status) } : {}) };
+  if (value.recovery === "reverified") return { ...failure, recovery: "reverified" };
+  if (value.recovery === "failed") {
+    // Project the recovery through the same fixed vocabulary; never forward
+    // exception messages, URLs, or arbitrary fields from either failure.
+    const recovery = safeDevelopmentReleaseFailure({ phase: value.recovery_phase, reason: value.recovery_reason, http_status: value.recovery_http_status });
+    return { ...failure, recovery: "failed", recovery_phase: recovery.phase, recovery_reason: recovery.reason,
+      ...(recovery.http_status === undefined ? {} : { recovery_http_status: recovery.http_status }) };
+  }
+  return failure;
 }
 export function developmentReleaseFailure(error: unknown, phase: DevelopmentReleaseFailure["phase"] = "discovery"): DevelopmentReleaseFailure {
   return error instanceof DevelopmentReleaseError ? safeDevelopmentReleaseFailure(error.failure) : { phase, reason: "unexpected" };

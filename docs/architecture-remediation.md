@@ -177,6 +177,7 @@ Implementation baseline: `8ee90367db4db491faa6ebec79a866e81a52da61` (dev, 2026-0
 | Fetching, bounded reads and crypto | `distribution/release-io.ts` | Fixed origins, retry and byte limits; installer artifact size/hash/checksum verification |
 | Request-owned discovery/refresh | `distribution/release.ts` | Explicit fetch, verifier, clock, cache and value-state ports |
 | Isolate composition | `http/release-cache.ts` | Shared value cache and launch counters; pending I/O belongs to its request |
+| Shared release-cache admission | `registry/release-cache.ts` | Pure freshness and version ordering; reuses the release-selection validator |
 
 The same field validator is compiled into the POSIX and PowerShell verifier
 bodies. Signed-fixture differential tests execute Worker verification and both
@@ -187,6 +188,12 @@ work. A newer committed refresh takes precedence over a delayed older result.
 Only successful verification updates its timestamp, and soft reuse stays within
 the original one-hour expiry. Stable selection is source-pinned; development
 selects its verified dev channel.
+
+When release discovery is temporarily unavailable, an expired development
+descriptor supplies a previously verified immutable tag. The existing verifier
+checks its signature and manifest again before refreshing its timestamp.
+Shared storage orders releases by development sequence and then verification
+time, so a delayed verification preserves a newer release.
 
 New Job, Context, Patch and Connection files default to the pure role. Register
 I/O adapters explicitly; reviewed hash/path calculations and platform type ports

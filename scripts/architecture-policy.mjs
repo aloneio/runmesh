@@ -38,11 +38,16 @@ const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSo
 /** Conservative source guard: stateful workflows receive API and view ports. */
 export function boundaryNodeProblem(from, node) {
   const source = canonicalSource(from);
+  if (source === "apps/worker/src/registry/release-cache.ts" && (node.type === "AwaitExpression" || node.async === true))
+    return "Registry release cache admission must stay synchronous";
   if (source === "apps/worker/src/domain/runner-handshake.ts" && (node.type === "AwaitExpression" || node.async === true))
     return "Runner handshake parsing and projection must stay synchronous";
   if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
     return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if (source === "apps/worker/src/registry/release-cache.ts"
+    && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Registry release cache admission uses supplied values, not platform state or scheduling";
   if (source === "apps/worker/src/job-history-settings.ts" && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval"].includes(node.name)))
     return "History display defaults use shared protocol values, not storage or ambient I/O";
   if (["apps/worker/src/domain/runner-handshake.ts", "apps/runner/src/environment-contracts.ts"].includes(source)
@@ -152,6 +157,11 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  // This pure admission policy shares release validation and cadence rules;
+  // the Registry facade and other domains retain their existing boundaries.
+  if (from === "apps/worker/src/registry/release-cache.ts") return [
+    "apps/worker/src/domain/release-selection.ts", "apps/worker/src/contracts/runner-release.ts",
+  ].includes(to) ? undefined : "Registry release cache admission depends only on shared release rules and records";
   if (from === "apps/worker/src/domain/runner-handshake.ts" && to !== "apps/worker/src/values.ts" && !to.startsWith("packages/protocol/src/"))
     return "Runner handshake parsing and projection must not depend on state owners or adapters";
   if (from === "apps/runner/src/environment-contracts.ts" && !to.startsWith("packages/protocol/src/"))

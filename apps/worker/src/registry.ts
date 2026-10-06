@@ -15,6 +15,7 @@ import type { PolicyReadiness } from "./contracts/runner-selection.js";
 import type { McpClientActiveRunner } from "./contracts/runner-selection.js";
 import type { McpRunnerSelectionResult } from "./contracts/runner-selection.js";
 import { resolveRuntimeConfiguration } from "./runtime-config.js";
+import { developmentReleaseCacheUpdate } from "./registry/release-cache.js";
 import { PackedJobHistory } from "./job-history-store.js";
 import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
 import { ExternalAuditHistory } from "./external-audit.js";
@@ -652,11 +653,9 @@ export class RegistryDO {
         return cached === undefined ? new Response("not found", { status: 404, headers: { "cache-control": "no-store" } }) : Response.json(cached, { headers: { "cache-control": "no-store" } });
       }
       if (request.method === "POST") {
-        const verifiedAtMs = integerField(input, "verified_at_ms");
-        if (input.schema_version !== 1 || verifiedAtMs === undefined || verifiedAtMs <= 0 || verifiedAtMs > now + 60_000 || typeof input.descriptor !== "object" || input.descriptor === null || Array.isArray(input.descriptor)) return Response.json({ error: "invalid development release cache record" }, { status: 400 });
-        const current = await this.ctx.storage.get<{ readonly verified_at_ms?: unknown }>(VERIFIED_DEV_RELEASE_STORAGE_KEY);
-        if (current !== undefined && Number.isSafeInteger(current.verified_at_ms) && Number(current.verified_at_ms) >= verifiedAtMs) return new Response(null, { status: 204 });
-        await this.ctx.storage.put(VERIFIED_DEV_RELEASE_STORAGE_KEY, input);
+        const update = developmentReleaseCacheUpdate(input, await this.ctx.storage.get<unknown>(VERIFIED_DEV_RELEASE_STORAGE_KEY), now);
+        if (update.kind === "invalid") return Response.json({ error: "invalid development release cache record" }, { status: 400 });
+        if (update.kind === "write") await this.ctx.storage.put(VERIFIED_DEV_RELEASE_STORAGE_KEY, update.record);
         return new Response(null, { status: 204 });
       }
       return new Response("not found", { status: 404 });
