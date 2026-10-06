@@ -18,7 +18,7 @@ async function setup() {
   const lifecycleId = await runInDurableObject(registry(), (instance, state) => {
     // Seed the Registry's authenticated-session evidence, independently of the
     // candidate Runner's wire schema. The HTTP requests below use the real Worker.
-    state.storage.sql.exec("UPDATE runners SET state = 'online', session_id = 'old-session', connection_epoch = 4, current_runner_version = ? WHERE runner_id = ?", originalVersion, runnerId);
+    state.storage.sql.exec("UPDATE runners SET state = 'online', session_id = 'old-session', connection_epoch = 4, current_runner_version = ?, last_heartbeat_ms = ? WHERE runner_id = ?", originalVersion, Date.now(), runnerId);
     return instance.getRunnerExecutionState(runnerId)!.lifecycle_id;
   });
   const owner = { operation_id: crypto.randomUUID(), lifecycle_id: lifecycleId, manager_id: "released-manager-v1" };
@@ -73,7 +73,7 @@ describe("released manager maintenance HTTP v1 compatibility", () => {
     if (terminal !== "failed") {
       await expect(f.client.report(f.owner, terminal, details)).rejects.toThrow("maintenance_http_409");
       await runInDurableObject(registry(), (_instance, state) => {
-        state.storage.sql.exec("UPDATE runners SET connection_epoch = 5, session_id = 'replacement-session', current_runner_version = ? WHERE runner_id = ?", terminal === "succeeded" ? targetVersion : originalVersion, f.runnerId);
+        state.storage.sql.exec("UPDATE runners SET state = 'online', connection_epoch = 5, session_id = 'replacement-session', current_runner_version = ?, last_heartbeat_ms = ? WHERE runner_id = ?", terminal === "succeeded" ? targetVersion : originalVersion, Date.now(), f.runnerId);
       });
     }
     const completed = await f.client.report(f.owner, terminal, details);
