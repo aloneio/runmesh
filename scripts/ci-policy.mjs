@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { parseDocument } from "yaml";
-import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, githubReportUpload, gitlabReportArtifacts, GITLAB_EVENTS } from "./ci-contract.mjs";
+import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, githubReportUpload, gitlabReportArtifacts, GITLAB_EVENTS } from "./ci-contract.mjs";
 
 export function parseCi(source) {
   assert.ok(typeof source === "string" && Buffer.byteLength(source) <= 1048576, "CI YAML byte budget");
@@ -70,6 +70,14 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   eq(gh.jobs["runner-lts"].strategy?.matrix, { node: ["22.23.2", "24.21.0"] }, "LTS matrix must execute every declared runtime");
   for (const command of NATIVE_COMMANDS) requiredStep(gh.jobs["native-runner"].steps, command);
   requiredStep(gh.jobs["native-runner"].steps, WINDOWS_TRANSPORT_STEP.run, WINDOWS_TRANSPORT_STEP.if);
+  const nativeSteps = gh.jobs["native-runner"].steps;
+  requiredStep(nativeSteps, WINDOWS_REPORT_INITIALIZATION_STEP.run, WINDOWS_REPORT_INITIALIZATION_STEP.if);
+  const initialization = nativeSteps.findIndex(step => step.run === WINDOWS_REPORT_INITIALIZATION_STEP.run);
+  const nativeRuntime = nativeSteps[initialization - 1];
+  assert.ok(nativeRuntime?.uses?.startsWith("actions/setup-node@"), "Windows report initialization must immediately follow Node setup");
+  assert.equal(nativeRuntime.with?.["node-version-file"], ".node-version", "Windows reports must use the reviewed Node runtime");
+  assert.ok(nativeRuntime.if === undefined && nativeRuntime["continue-on-error"] === undefined, "native Node setup must be unconditional and blocking");
+  assert.equal(nativeSteps.findIndex(step => step.run !== undefined), initialization, "Windows reports must exist before any prerequisite command can fail");
   for (const command of LTS_COMMANDS) requiredStep(gh.jobs["runner-lts"].steps, command);
   const ltsSteps = gh.jobs["runner-lts"].steps;
   const runtimeSetup = ltsSteps.filter(step => step.uses?.startsWith("actions/setup-node@")).at(-1);

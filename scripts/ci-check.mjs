@@ -9,6 +9,14 @@ import { writeSupplement } from "./ci-supplement.mjs";
 import { readEvidenceJson } from "./evidence-io.mjs";
 import { resolveTrustedTaskkillPath } from "./windows-tools.mjs";
 
+if (process.argv[2] === "--initialize") {
+  assert.deepEqual(process.argv.slice(3), ["transport"], "Use --initialize transport");
+  const source = sourceObservation();
+  await writeGateReport(gateEvidence("transport", "not_run", 0, null, source));
+  await writeSupplement("transport-tests", { schema_version: 1, state: "not_run", source });
+  process.exit(0);
+}
+
 const id = process.argv[2];
 assert.ok(process.argv.length === 3 && Object.hasOwn(CI_CHECKS, id), "Use one declared CI gate ID");
 const source = sourceObservation(), started = Date.now();
