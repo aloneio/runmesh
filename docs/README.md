@@ -14,6 +14,7 @@ Choose a guide for the task you want to complete. Start with the user guide to c
 | Complete OAuth sign-in or reconnect an MCP account | [Account authorization](central-oauth.md) |
 | Prepare a Skill folder and update its contents | [Skill installation](central-skills.md) |
 | Update an existing installation and preserve its data | [Upgrade guide](upgrading.md) |
+| Remotely upgrade a Runner or choose an earlier version | [Runner versions](runner-versions.md) |
 | Resolve connection, permission, installation or Job problems | [Troubleshooting](troubleshooting.md) |
 | Read version changes and upgrade guidance | [Release notes](release-notes.md) |
 

@@ -211,7 +211,7 @@ it.each(["create", "rotate", "enrollment", "rename", "version-policy"])("retains
   } }) } } as unknown as typeof env;
   const path = action === "create" ? "/admin/runners" : "/admin/runners/" + runnerId + "/" + action;
   const response = await worker.fetch(new Request("https://audit.test" + path, { method: "POST", headers: f.headers,
-    body: new URLSearchParams({ csrf_token: f.csrf, runner_id: runnerId, display_name: "Test Runner", execution_mode: "dedicated_user", expected_execution_mode: "dedicated_user", update_channel: "stable" }),
+    body: new URLSearchParams({ csrf_token: f.csrf, operation_id: crypto.randomUUID(), runner_id: runnerId, display_name: "Test Runner", execution_mode: "dedicated_user", expected_execution_mode: "dedicated_user", update_channel: "stable" }),
   }), localEnv, {} as ExecutionContext);
   expect(response.status).toBe(503); expect(response.headers.get("set-cookie")).toBeNull();
   const page = await response.text();

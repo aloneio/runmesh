@@ -1,6 +1,6 @@
 import { ZH_UI_TEXT } from "../src/ui-catalog.js";
 import { env, SELF, runInDurableObject } from "cloudflare:test";
-import { hmacHex, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
+import { hmacHex, internalHeaders, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import { RegistryDO, RunnerDO, runnerReleaseDescriptor } from "../src/index.js";
 import { FIXED_ARTIFACT_URL, FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, FIXED_RELEASE_VERSION, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { describe, expect, it, vi } from "vitest";
@@ -649,16 +649,26 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(regeneratedText).toContain("One-time enrollment code");
     expect(runnerInternalPaths).toContain("/begin-policy-mutation");
     expect(runnerInternalPaths).toContain("/cancel-policy-mutation");
-    const stablePolicy = await submit("https://worker.test/admin/runners/dashboard-runner/version-policy", { csrf_token: csrf, update_channel: "stable", desired_runner_version: "" }, adminJar);
-    expect(stablePolicy.status).toBe(303);
+    const stablePolicy = await submit("https://worker.test/admin/runners/dashboard-runner/version-policy", { csrf_token: csrf, operation_id: "dashboard-stable", update_channel: "stable", desired_runner_version: "" }, adminJar);
+    // This portable test environment has no signed hosted release; a real update cannot be queued from metadata alone.
+    expect(stablePolicy.status).toBe(503); await stablePolicy.body?.cancel();
     const clientsRegistry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     await expect(runInDurableObject(clientsRegistry, (instance) => instance.getRunner("dashboard-runner"))).resolves.toMatchObject({ update_channel: "stable", latest_runner_version: null, update_status: "unknown" });
-    const pinned = await submit("https://worker.test/admin/runners/dashboard-runner/version-policy", { csrf_token: csrf, update_channel: "pinned", desired_runner_version: "1.2.0" }, adminJar);
-    expect(pinned.status).toBe(303);
+    const pinned = await submit("https://worker.test/admin/runners/dashboard-runner/version-policy", { csrf_token: csrf, operation_id: "dashboard-invalid", update_channel: "pinned", desired_runner_version: "1.2.0-beta.1" }, adminJar);
+    expect(pinned.status).toBe(400); await pinned.body?.cancel();
+    // Seed a control-plane receipt for this rendering fixture. Signed browser selection is covered by runner-update-admin.
+    await runInDurableObject(clientsRegistry, async instance => {
+      const current = instance.getRunnerExecutionState("dashboard-runner")!;
+      const path = "/auth/runners/dashboard-runner/update";
+      const body = JSON.stringify({ operation_id: "dashboard-queued", expected_lifecycle_id: current.lifecycle_id, update_channel: "pinned", target_version: "1.2.0", target_channel: "stable", manifest_sha256: "a".repeat(64), artifact_sha256: "b".repeat(64) });
+      const queued = await instance.fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers: await internalHeaders("test-internal-control-secret-not-for-production", "POST", path, body), body }));
+      expect(queued.status).toBe(200); await queued.body?.cancel();
+    });
     const runnerDetail = await SELF.fetch("https://worker.test/admin/runners/dashboard-runner", { headers: { cookie: cookies(adminJar) } });
     expect(runnerDetail.status).toBe(200);
     const runnerDetailHtml = await runnerDetail.text();
     expect(runnerDetailHtml).toContain("Version policy"); expect(runnerDetailHtml).toContain("Stable/latest version"); expect(runnerDetailHtml).toContain("value=\"1.2.0\""); expect(runnerDetailHtml).toContain("Pinned");
+    expect(runnerDetailHtml).toContain("Waiting for the host manager"); expect(runnerDetailHtml).toContain('name="operation_id"');
     expect(runnerDetailHtml).toContain("<!doctype html>"); expect(runnerDetailHtml).toContain('<meta name="color-scheme" content="light">'); expect(runnerDetailHtml).toContain('class="app-header"'); expect(runnerDetailHtml).toContain('class="active" aria-current="page" href="/admin/runners"'); expect(runnerDetailHtml).not.toContain('data-theme-toggle'); expect(runnerDetailHtml).not.toContain("localStorage.getItem('runmesh-theme')"); expect(runnerDetailHtml).not.toContain(':root[data-theme="dark"]'); expect(runnerDetailHtml).not.toContain("Add Runner</a>"); expect(runnerDetailHtml).not.toContain("Add MCP Client</a>"); expect(runnerDetailHtml).not.toContain("token_verifier");
     const headerLogoSvgTag = /<svg\b[^>]*\bclass=["'][^"']*\bheader-mesh-mark\b[^"']*["'][^>]*role=["']img["'][^>]*aria-label=["'][^"']+["'][^>]*>/i;
     expect(runnerDetailHtml).toMatch(headerLogoSvgTag);

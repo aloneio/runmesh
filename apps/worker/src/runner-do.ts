@@ -4,6 +4,7 @@ import { BridgeReplies } from "./platform/bridge-replies.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
 import { consumeInternalNonceStatus } from "./platform/control-plane.js";
 import { appliedPolicyIdentity } from "./contracts/runner-selection.js";
+import { RunnerUpdateMaintenance, type MaintenanceConnection } from "./platform/runner-update-maintenance.js";
 
 /** @internal Trusted composition, never an HTTP or deployment option. */
 export interface RunnerDoDependencies { readonly registryRequest?: RegistryRequestPort; readonly replies?: BridgeReplyPort }
@@ -42,6 +43,8 @@ interface ConnectionAttachment {
   historyProtocol?: 2;
   /** Bounded extension capabilities; absent on attachments from older Workers. */
   contextMethods?: Array<"context.storage" | "context.prune">;
+  /** Kept after bridge timeout until a real reply proves that dispatch finished. */
+  pendingUpdateRpcIds?: string[];
 }
 
 const HELLO_DEADLINE_MS = 10_000;
@@ -110,6 +113,7 @@ export class RunnerDO {
   private admissionState: AdmissionState | undefined;
   private admissionWriteQueue: Promise<void> = Promise.resolve();
   private restartReconcilePromise: Promise<boolean> | undefined;
+  private readonly updateMaintenance: RunnerUpdateMaintenance;
   public constructor(
     private readonly ctx: DurableObjectState<unknown>,
     private readonly env: WorkerEnv,
@@ -118,6 +122,9 @@ export class RunnerDO {
     this.env = resolveRuntimeConfiguration(env);
     this.replies = dependencies.replies ?? new BridgeReplies();
     this.requestRegistry = dependencies.registryRequest ?? ((runnerId, action, init) => requestRunnerRegistry(this.env, runnerId, action, init));
+    this.updateMaintenance = new RunnerUpdateMaintenance({ storage: ctx.storage, registry: this.requestRegistry,
+      connections: () => ctx.getWebSockets("runner").map(socket => this.updateConnection(socket)).filter((connection): connection is MaintenanceConnection => connection !== undefined),
+      pendingReplies: () => this.replies.size });
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.ctx.setHibernatableWebSocketEventTimeout(30_000);
   }
@@ -128,6 +135,11 @@ export class RunnerDO {
   }
 
   private async handleRequest(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname.startsWith("/update-maintenance/")) {
+      const body = await readCappedText(request, 4096);
+      if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      return this.updateMaintenance.handle(request, body);
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/begin-policy-mutation") {
       const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
       if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
@@ -431,6 +443,9 @@ export class RunnerDO {
     }
     if (requiresSessionProbe && !(await this.verifySocketSession(ws, attachment))) return;
     if (message.type === "rpc.response" || message.type === "rpc.error") {
+      const latest = ws.deserializeAttachment() as ConnectionAttachment;
+      latest.pendingUpdateRpcIds = (latest.pendingUpdateRpcIds ?? []).filter(id => id !== message.request_id);
+      ws.serializeAttachment(latest);
       this.replies.deliver(ws, message);
       return;
     }
@@ -535,11 +550,15 @@ export class RunnerDO {
   }
 
   public async webSocketClose(ws: WebSocket): Promise<void> {
+    const connection = this.updateConnection(ws);
+    if (connection !== undefined) await this.updateMaintenance.disconnected(connection);
     this.rejectBridgeWaiters(ws, "runner connection closed");
     try { await this.markSocket(ws, "offline"); }
     finally { await this.scheduleHelloDeadline(); }
   }
-  public webSocketError(ws: WebSocket): Promise<void> {
+  public async webSocketError(ws: WebSocket): Promise<void> {
+    const connection = this.updateConnection(ws);
+    if (connection !== undefined) await this.updateMaintenance.disconnected(connection);
     this.rejectBridgeWaiters(ws, "runner connection error");
     return this.markSocket(ws, "stale");
   }
@@ -551,10 +570,13 @@ export class RunnerDO {
     let input: { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown; mcp_authorization?: unknown };
     try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown; mcp_authorization?: unknown }; } catch { return preDispatchError("invalid_request", "invalid JSON object", 400); }
     if (typeof input !== "object" || input === null || Array.isArray(input)) return preDispatchError("invalid_request", "invalid JSON object", 400);
+    await this.updateMaintenance.load();
     const socket = await this.currentRunnerSocket();
     const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
     if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return preDispatchError("runner_offline", "runner is not connected", 503);
+    if (this.updateMaintenance.blocksLifecycle(attachment.lifecycleId)) return preDispatchError("runner_updating", "Runner is preparing a version change", 409);
     if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
+    if ((attachment.pendingUpdateRpcIds?.length ?? 0) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
     const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) && input.policy_revision > 0 ? input.policy_revision : undefined;
     const expectedPolicyRevision = typeof input.expected_policy_revision === "number" && Number.isSafeInteger(input.expected_policy_revision) && input.expected_policy_revision > 0 ? input.expected_policy_revision : undefined;
     const expectedPolicyChecksum = typeof input.expected_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(input.expected_policy_checksum) ? input.expected_policy_checksum : undefined;
@@ -632,6 +654,7 @@ export class RunnerDO {
     }
     // No await is allowed between this final local fence and socket.send.
     // Otherwise a policy mutation can win while Registry authorization awaits.
+    if (this.updateMaintenance.blocksLifecycle(attachment.lifecycleId)) return preDispatchError("runner_updating", "Runner is preparing a version change", 409);
     if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined
       && (this.admissionState === undefined || !this.admitsProtectedRpc(this.admissionState, attachment, requestPolicyRevision, expectedPolicyChecksum))) {
       return preDispatchError("stale_policy", "Runner policy changed before dispatch", 409);
@@ -648,12 +671,17 @@ export class RunnerDO {
     // Authorization above awaits I/O. Recheck capacity at the synchronous
     // reservation point so concurrent admissions cannot all pass the first gate.
     if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
+    if (((socket.deserializeAttachment() as ConnectionAttachment).pendingUpdateRpcIds?.length ?? 0) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
     const reply = await new Promise<BridgeReply>((resolve) => {
       const timer = setTimeout(() => {
         this.replies.forget(requestId);
         resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "timeout", message: "runner RPC timed out", ...failureMetadata("timeout", "unknown") } });
       }, BRIDGE_TIMEOUT_MS);
       this.replies.register(requestId, { resolve, timer, socket });
+      // Read the attachment again: another dispatch may have updated it while authorization awaited.
+      const currentAttachment = socket.deserializeAttachment() as ConnectionAttachment;
+      currentAttachment.pendingUpdateRpcIds = [...(currentAttachment.pendingUpdateRpcIds ?? []), requestId];
+      socket.serializeAttachment(currentAttachment);
       try { socket.send(encodeWireFrame(parsed.data)); } catch (error) {
         clearTimeout(timer); this.replies.forget(requestId);
         // Keep the error-code check resilient when the protocol package is
@@ -665,6 +693,8 @@ export class RunnerDO {
             ? "frame_too_large"
             : undefined;
         if (protocolCode === "frame_too_large") {
+          currentAttachment.pendingUpdateRpcIds = currentAttachment.pendingUpdateRpcIds.filter(id => id !== requestId);
+          socket.serializeAttachment(currentAttachment);
           resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit", ...failureMetadata("request_too_large", "not_started") } });
           return;
         }
@@ -1238,9 +1268,14 @@ export class RunnerDO {
     throw new ControlPlaneUnavailableError();
   }
 
+  private updateConnection(socket: WebSocket): MaintenanceConnection | undefined {
+    const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
+    return attachment === null ? undefined : { lifecycle_id: attachment.lifecycleId, epoch: attachment.epoch, session_id: attachment.sessionId,
+      pending: attachment.pendingUpdateRpcIds?.length ?? 0, open: socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING };
+  }
   private async verifyInternalRequest(body: string, request: Request): Promise<boolean> {
     const url = new URL(request.url);
-    const consumeNonce = request.method === "GET" && url.pathname === "/admission-state"
+    const consumeNonce = request.method === "GET" && url.pathname === "/admission-state" || url.pathname.startsWith("/update-maintenance/")
       ? async () => true
       : async (nonce: string, expiresAtMs: number) => {
         const status = await consumeInternalNonceStatus(this.env, nonce, expiresAtMs);

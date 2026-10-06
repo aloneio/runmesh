@@ -4,6 +4,7 @@ import type { AdminData } from "../contracts/admin-views.js";
 import type { RunnerReleaseDescriptor } from "../contracts/runner-release.js";
 import type { HistoryView } from "../history-ui.js";
 import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
+import { RunnerUpdateOperationSchema } from "@aloneio/runmesh-protocol";
 import { historyControls, historySettingsForm } from "../history-ui.js";
 import { JOBS_EXPLANATION, jobSnapshotNote } from "./job-views.js";
 import { validityStatus } from "../validity.js";
@@ -51,6 +52,9 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
   const latestVersion = typeof runner.latest_runner_version === "string" ? runner.latest_runner_version : release.distributable ? release.latest_version : "Not configured";
   const distributionNotice = release.distributable ? "" : `<p class="muted font-12">${message("text.hosted.distribution.is.not.configured.portable.artifact.manual.version.management.only", "en")}</p>`;
   const desiredVersion = typeof runner.desired_runner_version === "string" ? runner.desired_runner_version : "";
+  const updateParsed = RunnerUpdateOperationSchema.safeParse(runner.update_operation);
+  const update = updateParsed.success ? updateParsed.data : null;
+  const updateState = update === null ? "" : message(`runner.update.${update.state}`, "en");
   const protocolCompatibility = runner.protocol_compatibility === "compatible" || runner.protocol_compatibility === "incompatible" ? runner.protocol_compatibility : "unknown";
   const protocolRange = `${String(runner.protocol_min_version ?? "Unknown")}–${String(runner.protocol_max_version ?? "Unknown")}`;
   const permissions = record(runner.runner_permissions);
@@ -220,14 +224,15 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
       ${distributionNotice}
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid version-policy-form">
         <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+        <input type="hidden" name="operation_id" value="${escapeHtml(typeof runner.update_request_id === "string" ? runner.update_request_id : "")}">
         <label>Channel
           <select name="update_channel">
-            <option value="stable"${updateChannel === "stable" ? " selected" : ""}>${message("text.stable", "en")}</option>
+            <option value="stable"${updateChannel === "stable" ? " selected" : ""}>${message("runner.update.latest.environment", "en")}</option>
             <option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>${message("text.pinned", "en")}</option>
           </select>
         </label>
         <label>Desired version
-          <input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+">
+          <input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3 or 1.2.3-dev.4" pattern="[0-9]+\\.[0-9]+\\.[0-9]+(-dev\\.[0-9]+)?">
         </label>
         <div class="version-stat">
           <span class="form-stat-label">${message("text.current", "en")}</span>
@@ -241,7 +246,8 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
           <button class="button">${message("text.save.version.policy", "en")}</button>
         </div>
       </form>
-      <p class="muted policy-status-foot font-12">${message("text.status.2", "en")}<span class="mono">${escapeHtml(String(runner.update_status ?? "unknown"))}</span></p>
+      <p class="muted policy-status-foot font-12">${message("text.status.2", "en")}<span>${escapeHtml(update === null ? String(runner.update_status ?? "unknown") : updateState)}</span>${update === null ? "" : ` · <span class="mono">${escapeHtml(update.target_version)}</span>`}</p>
+      ${update?.error_code === null || update === null ? "" : `<p class="warning font-12">${message(`runner.update.error.${update.error_code}`, "en")}</p>`}
     </section>
     <section class="panel">
       <div class="section-title">

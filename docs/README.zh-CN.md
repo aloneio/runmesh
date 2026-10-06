@@ -14,6 +14,7 @@
 | 完成 OAuth 登录或重新授权 MCP 账号 | [账号授权](central-oauth.zh-CN.md) |
 | 准备 Skill 文件夹与更新内容 | [Skill 安装](central-skills.zh-CN.md) |
 | 更新已有实例，同时保留数据和配置 | [升级指南](upgrading.zh-CN.md) |
+| 远程升级 Runner 或切换到旧版 | [Runner 版本管理](runner-versions.zh-CN.md) |
 | 排查连接、权限、安装和任务问题 | [故障排查](troubleshooting.zh-CN.md) |
 | 查看版本变化与升级指引 | [版本说明](release-notes.zh-CN.md) |
 

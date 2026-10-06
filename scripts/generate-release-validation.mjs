@@ -5,12 +5,12 @@ import { dependencies } from "./architecture-graph.mjs";
 
 /** Compile authored pure TypeScript, never import/evaluate the input. */
 export async function releaseValidationModule(root) {
-  const path = "apps/worker/src/domain/release-manifest.ts";
+  const path = "packages/protocol/src/release-manifest.ts";
   const source = await readFile(resolve(root, path), "utf8");
   if (Buffer.byteLength(source) > 32768 || dependencies(source, path).length !== 0)
     throw new Error("release field validator must be bounded and have no runtime or type imports");
   const { code } = await transform(source, { loader: "ts", format: "iife", globalName: "RunmeshReleaseContract", target: "es2022", minify: false, legalComments: "none" });
-  return `// Generated from domain/release-manifest.ts. Do not edit.\nexport const RELEASE_VALIDATION_SOURCE = ${JSON.stringify(code)};\n`;
+  return `// Generated from packages/protocol/src/release-manifest.ts. Do not edit.\nexport const RELEASE_VALIDATION_SOURCE = ${JSON.stringify(code)};\n`;
 }
 
 export async function writeReleaseValidation(root) {

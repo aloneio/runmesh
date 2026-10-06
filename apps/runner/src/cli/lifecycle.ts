@@ -28,6 +28,19 @@ import { serviceManifestFor } from "./service-plan.js";
 import { servicePrivilegeState } from "../service.js";
 import { serviceProfilePath } from "../service.js";
 import type { ServiceProvisioner } from "../service.js";
+import { hostMaintenanceManager } from "../updates/manager-install.js";
+import type { MaintenanceManagerInstaller, MaintenanceManagerOptions } from "../updates/manager-install.js";
+
+function maintenanceInstaller(dependencies: CliDependencies): MaintenanceManagerInstaller | undefined {
+  // An injected native service adapter owns the whole test/operator boundary;
+  // never escape it to register a second real service on the executing host.
+  return dependencies.maintenanceManager ?? (dependencies.serviceManager === undefined && dependencies.serviceFilesystem === undefined && dependencies.purgeInstallation === undefined ? hostMaintenanceManager : undefined);
+}
+
+function maintenanceOptions(platform: MaintenanceManagerOptions["platform"], mode: "system" | "user", profilePath: string): MaintenanceManagerOptions {
+  const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode });
+  return { ...(platform === undefined ? {} : { platform }), mode, profilePath, installRoot: layout.installRoot };
+}
 
 export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   if (parsed.command === "migrate" && parsed.values.user === true) {
@@ -195,6 +208,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore,
           throw new Error(`Runner service identity does not match execution mode (expected ${expectedServiceIdentity(manifest) ?? "interactive"}, got ${verified.identity ?? "unknown"})`);
         }
       }
+      const maintenance = await maintenanceInstaller(dependencies)?.install(maintenanceOptions(manifest.platform, manifest.mode, store.filePath));
       const identity = verified?.identity ?? provisioned.identity;
       report(output, parsed.json, {
         action: parsed.command,
@@ -208,6 +222,8 @@ export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore,
         profile_secured: provisioned.profileSecured,
         manifest_changed: manifestChanged,
         restarted: (manifestChanged || modeChanged) && previousStatus?.active === true,
+        remote_version_management: maintenance?.enabled === true ? "available" : "manual",
+        ...(maintenance?.reason === undefined ? {} : { remote_version_management_reason: maintenance.reason }),
         commands: serviceCommandNames("install", manifest),
       });
       return;
@@ -358,6 +374,7 @@ export async function uninstall(parsed: ParsedCommand, store: ProfileStore, outp
     if (platform === "win32" && process.execPath.toLowerCase().startsWith(layout.installRoot.toLowerCase() + "\\")) {
       throw new Error("Run the hosted uninstall command so maintenance can remove the in-use runtime from a temporary location");
     }
+    await maintenanceInstaller(dependencies)?.uninstall(maintenanceOptions(platform, mode, store.filePath));
     const result = await (dependencies.purgeInstallation ?? purgeInstallation)({ platform, mode, ...(parsed.json ? {} : { progress: output }) });
     if (parsed.json) output(JSON.stringify(result));
     else {
@@ -374,6 +391,7 @@ export async function uninstall(parsed: ParsedCommand, store: ProfileStore, outp
   assertSystemInstallationPrivilege(manifest, dependencies);
   const managed = await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
   const lifecycleStatus = managed ? await probeServiceStatus(manager, manifest, "uninstall") : undefined;
+  await maintenanceInstaller(dependencies)?.uninstall(maintenanceOptions(manifest.platform, manifest.mode, store.filePath));
   // If the native probe proves that the registration is already absent, only
   // remove our managed manifest. Calling disable/delete in that state can
   // report a confusing error and, on some platforms, target a newly-created

@@ -19,10 +19,11 @@ import { runnerEnrollmentPage } from "./admin-presentation.js";
 import { runnerExecutionSnapshot } from "../application/runner-queries.js";
 import { runnerQueryPorts } from "../platform/control-plane-receipts.js";
 import { runnerRegistryRequest } from "../platform/control-plane.js";
-import { runnerReleaseDescriptor, resolveRunnerReleaseDescriptor } from "../distribution/release.js";
+import { resolveRunnerReleaseDescriptor } from "../distribution/release.js";
+import { resolveExactRunnerRelease } from "../distribution/exact-release.js";
+import { RunnerExactVersionSchema } from "@aloneio/runmesh-protocol";
 import { runnerWindowFromForm } from "./input.js";
 import { validLabel } from "./input.js";
-import { validRunnerVersion } from "./input.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { developmentReleaseDependencies } from "./release-cache.js";
 
@@ -62,11 +63,23 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
   if (action === "version-policy") {
     const updateChannel = form.get("update_channel"); const desired = form.get("desired_runner_version");
     if ((updateChannel !== "stable" && updateChannel !== "pinned") || (typeof desired !== "string" && desired !== null)) return adminRunnerError(400, "Runner update policy is invalid.");
-    const latest = runnerReleaseDescriptor(env).distributable ? runnerReleaseDescriptor(env).package_version : null;
-    const payload = { update_channel: updateChannel, ...(updateChannel === "pinned" && typeof desired === "string" && desired.length > 0 ? { desired_runner_version: desired } : {}), ...(updateChannel === "stable" && latest !== null ? { latest_runner_version: latest } : {}) };
-    if (updateChannel === "pinned" && !(typeof desired === "string" && validRunnerVersion(desired))) return adminRunnerError(400, "Pinned Runner version must be an exact version.");
-    const response = await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/version-policy`, payload);
-    return response.ok ? adminUpstreamRedirect(response, `/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner update policy could not be updated.", 400, adminRunnerError);
+    const operationId = form.get("operation_id");
+    if (typeof operationId !== "string" || !isSafeIdentifier(operationId)) return adminRunnerError(400, "Runner update request is invalid. Reload the page and try again.");
+    if (updateChannel === "pinned" && !RunnerExactVersionSchema.safeParse(desired).success) return adminRunnerError(400, "Choose an exact Runner version, such as 1.2.3 or 1.2.3-dev.4.");
+    const state = await runnerExecutionSnapshot(runnerQueryPorts(env), runnerId);
+    if (state.snapshot === undefined) return adminRunnerError(state.status === 404 ? 404 : 503, "Runner update could not read the Runner state.");
+    let target;
+    try {
+      const latest = updateChannel === "stable" ? await resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(env), scheduleRefresh) : undefined;
+      if (latest !== undefined && !latest.distributable) return adminRunnerError(503, "The current environment has no verified Runner release.");
+      target = await resolveExactRunnerRelease(latest?.package_version ?? desired as string);
+    } catch { return adminRunnerError(503, "The selected Runner release could not be verified. No version change was requested."); }
+    const response = await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/update`, {
+      operation_id: operationId, expected_lifecycle_id: state.snapshot.lifecycleId, update_channel: updateChannel,
+      target_version: target.package_version, target_channel: target.package_version.includes("-dev.") ? "dev" : "stable",
+      manifest_sha256: target.manifest_sha256, artifact_sha256: target.artifact_sha256,
+    });
+    return response.ok ? adminUpstreamRedirect(response, `/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner version change could not be queued. Check whether another update is in progress.", response.status === 409 ? 409 : 400, adminRunnerError);
   }
   if (action === "permissions") {
     const permissions = permissionsFromForm(form);

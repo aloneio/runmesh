@@ -142,7 +142,7 @@ test("pre-install release version, publication, and public-key checks run withou
   try {
     const inputs = [
       "package.json", "package-lock.json", "apps/runner/package.json", "apps/worker/package.json", "packages/protocol/package.json",
-      "apps/worker/src/generated-version.ts", "apps/worker/src/domain/release-config.ts", "release/trust-keyring.json",
+      "apps/worker/src/generated-version.ts", "apps/worker/src/domain/release-config.ts", "packages/protocol/src/release-trust.ts", "release/trust-keyring.json",
       "scripts/check-versions.mjs", "scripts/runtime-config-tools.mjs", "scripts/product-version.mjs",
       "scripts/stable-publication.mjs", "scripts/release-signature.mjs", "scripts/release-io.mjs",
     ];
@@ -156,7 +156,7 @@ test("pre-install release version, publication, and public-key checks run withou
     const candidate = { version: productVersion, state: "candidate", release_branch: "main" };
     await writeFile(join(f.root, "release/release-state.json"), JSON.stringify(candidate));
     await writeFile(join(f.root, "apps/worker/src/generated-release.ts"), reviewedReleaseSource(productVersion, candidate));
-    const installer = await readFile(join(f.root, "apps/worker/src/domain/release-config.ts"), "utf8");
+    const installer = await readFile(join(f.root, "packages/protocol/src/release-trust.ts"), "utf8");
     const keyId = JSON.parse(/^export const FIXED_RELEASE_KEY_ID = ("[^"]+");$/mu.exec(installer)[1]);
     for (const args of [
       ["scripts/check-versions.mjs"],
@@ -507,8 +507,9 @@ test("release publication rejects stale or incomplete public deployment contract
 test("AR15 generates one bounded field validator without evaluating source", async () => {
   const f = await fixture();
   try {
-    const directory = join(f.root, "apps/worker/src/domain");
+    const directory = join(f.root, "packages/protocol/src");
     await mkdir(directory, { recursive: true });
+    await mkdir(join(f.root, "apps/worker/src"), { recursive: true });
     const input = join(directory, "release-manifest.ts");
     await writeFile(input, 'throw new Error("must not evaluate authored input"); export const marker: number = 1;\n');
     assert.equal(await writeReleaseValidation(f.root), true);

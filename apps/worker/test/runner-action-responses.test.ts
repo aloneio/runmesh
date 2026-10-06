@@ -1,9 +1,14 @@
 import { env } from "cloudflare:test";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { handleBrowserAdmin } from "../src/http/admin.js";
 import { handleBrowserRunnerAction } from "../src/http/runner-actions.js";
 import { ADMIN_CSRF_COOKIE, ADMIN_SESSION_COOKIE } from "../src/http/constants.js";
 import { sha256Hex } from "../src/security.js";
+
+// This suite owns response disposal; release authenticity is exercised by the release and update-admin suites.
+vi.mock("../src/distribution/exact-release.js", () => ({ resolveExactRunnerRelease: vi.fn(async (version: string) => ({
+  package_version: version, manifest_sha256: "a".repeat(64), artifact_sha256: "b".repeat(64),
+})) }));
 
 const actions = ["permissions", "emergency-lock", "workspace-create", "workspace-update", "workspace-delete", "rename", "validity", "version-policy"] as const;
 
@@ -34,7 +39,7 @@ function actionForm(action: typeof actions[number]): FormData {
   const form = new FormData();
   for (const [key, value] of Object.entries({ read: "true", edit: "true", shell: "true", job_control: "true",
     workspace_id: "w", display_name: "Workspace", root_path: "/workspace", enabled: "true", profile: "coding",
-    update_channel: "pinned", desired_runner_version: "0.1.6", confirmation: action === "workspace-delete" ? "w" : "r" })) form.set(key, value);
+    operation_id: "receipt-operation", update_channel: "pinned", desired_runner_version: "0.1.6", confirmation: action === "workspace-delete" ? "w" : "r" })) form.set(key, value);
   return form;
 }
 

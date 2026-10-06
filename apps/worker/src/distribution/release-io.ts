@@ -1,4 +1,4 @@
-import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
+import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, verifyRunnerReleaseSignature } from "@aloneio/runmesh-protocol";
 import { FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS, FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, MAX_RELEASE_ASSET_BYTES, installerReleaseTarget } from "../domain/release-config.js";
 import { isRecord, isDevelopmentReleaseVersion, validatedCachedDevelopmentRelease } from "../domain/release-selection.js";
 import { releaseManifestProblem } from "../domain/release-manifest.js";
@@ -99,7 +99,7 @@ export async function boundedJson(response: Response): Promise<unknown> {
   });
 }
 
-async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof fetch, phase: DevelopmentReleaseFailure["phase"]): Promise<Uint8Array> {
+export async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof fetch, phase: DevelopmentReleaseFailure["phase"]): Promise<Uint8Array> {
   let current = new URL(url);
   for (let redirect = 0; redirect <= 4; redirect++) {
     if (current.protocol !== "https:" || !ALLOWED_RELEASE_ORIGINS.has(current.origin)) throw new Error("development release redirect origin is not trusted");
@@ -127,18 +127,7 @@ async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof
   throw new Error("development release redirect limit exceeded");
 }
 
-function canonicalBase64(value: string): Uint8Array {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) throw new Error("invalid base64");
-  const binary = atob(value); if (btoa(binary) !== value) throw new Error("non-canonical base64");
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
-}
-function publicKeySpki(pem: string): Uint8Array {
-  const match = /^-----BEGIN PUBLIC KEY-----\n([A-Za-z0-9+/=]+)\n-----END PUBLIC KEY-----\n?$/u.exec(pem);
-  if (match?.[1] === undefined) throw new Error("invalid Ed25519 public key");
-  return canonicalBase64(match[1]);
-}
 function parseJsonBytes(bytes: Uint8Array): unknown { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
-function ownedBuffer(bytes: Uint8Array): ArrayBuffer { const copy = new Uint8Array(bytes.byteLength); copy.set(bytes); return copy.buffer; }
 
 export interface DevelopmentReleaseTrust { readonly key_id: string; readonly public_key_pem: string; }
 const FIXED_DEVELOPMENT_TRUST: DevelopmentReleaseTrust = { key_id: FIXED_RELEASE_KEY_ID, public_key_pem: FIXED_RELEASE_PUBLIC_KEY_PEM };
@@ -154,12 +143,7 @@ export async function verifyDevelopmentRunnerRelease(descriptor: RunnerReleaseDe
   const signatureDescriptorBytes = await releasePhase("signature_descriptor", "invalid_response", () => boundedReleaseBytes(target.signature_descriptor_url, 16 * 1024, fetchImpl, "signature_descriptor"));
   const signatureDescriptor = await releasePhase("signature_descriptor", "invalid_response", () => parseJsonBytes(signatureDescriptorBytes));
   if (!isRecord(signatureDescriptor) || signatureDescriptor.schema_version !== 1 || signatureDescriptor.algorithm !== "ed25519" || signatureDescriptor.key_id !== trust.key_id || signatureDescriptor.encoding !== "base64" || signatureDescriptor.signed_file !== "manifest.json") throw new DevelopmentReleaseError("development release signature descriptor is invalid", { phase: "signature_descriptor", reason: "invalid_signature" });
-  await releasePhase("verification", "invalid_signature", async () => {
-    const signature = canonicalBase64(new TextDecoder("utf-8", { fatal: true }).decode(signatureBytes).trim());
-    if (signature.byteLength !== 64) throw new Error("development release signature length is invalid");
-    const key = await crypto.subtle.importKey("spki", ownedBuffer(publicKeySpki(trust.public_key_pem)), { name: "Ed25519" }, false, ["verify"]);
-    if (!await crypto.subtle.verify({ name: "Ed25519" }, key, ownedBuffer(signature), ownedBuffer(manifestBytes))) throw new Error("development release signature does not verify");
-  });
+  await releasePhase("verification", "invalid_signature", () => verifyRunnerReleaseSignature(manifestBytes, signatureBytes, signatureDescriptorBytes, trust));
   const manifest = await releasePhase("verification", "invalid_manifest", () => parseJsonBytes(manifestBytes));
   const problem = releaseManifestProblem(manifest, { version: target.version, channel: target.channel,
     artifact_name: target.artifact_name, artifact_url: target.artifact_url,

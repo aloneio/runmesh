@@ -1,4 +1,6 @@
 import type { FixedReleaseDescriptor, InstallerReleaseTarget } from "../contracts/runner-release.js";
+import { FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM } from "@aloneio/runmesh-protocol";
+export { FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, MAX_RELEASE_ASSET_BYTES, FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS } from "@aloneio/runmesh-protocol";
 
 /**
  * Fixed, source-reviewed hosted-bootstrap contract. The Worker HTTPS endpoint
@@ -9,8 +11,6 @@ import type { FixedReleaseDescriptor, InstallerReleaseTarget } from "../contract
 export const FIXED_RELEASE_VERSION = "0.1.7";
 export const FIXED_NODE_VERSION = "22.23.2";
 export const FIXED_NODE_BASE_URL = `https://nodejs.org/dist/v${FIXED_NODE_VERSION}`;
-export const FIXED_RELEASE_KEY_ID = "runmesh-preview-2026-01";
-export const FIXED_RELEASE_PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEASXdEYS7UorlzNJ8ij2gftFIX2rrTvhNlZm3MqE/BWXI=\n-----END PUBLIC KEY-----\n";
 export const FIXED_RELEASE_CHANNEL = "stable" as const;
 export const FIXED_RELEASE_TAG = `v${FIXED_RELEASE_VERSION}`;
 export const FIXED_ARTIFACT_NAME = `runmesh-runner-${FIXED_RELEASE_VERSION}.tgz`;
@@ -40,11 +40,6 @@ export function installerReleaseTarget(version: string, channel: "dev" | "stable
 
 export const FIXED_INSTALLER_RELEASE = installerReleaseTarget(FIXED_RELEASE_VERSION, "stable");
 
-// Bound every fixed release asset before signature verification. The current
-// Runner package is about 0.5 MiB; leave room for ordinary growth while still
-// preventing an over-sized allowed-origin response from filling a host's
-// temporary filesystem.
-export const MAX_RELEASE_ASSET_BYTES = 8 * 1024 * 1024;
 export const MAX_NODE_RUNTIME_BYTES = 64 * 1024 * 1024;
 // Node is shipped inside the Runmesh installation so the service does not
 // depend on a host-provided Node/npm installation.  These are the official
@@ -77,18 +72,3 @@ export function fixedReleaseDescriptor(available: boolean): FixedReleaseDescript
     checksums_url: FIXED_CHECKSUMS_URL, release_key_id: FIXED_RELEASE_KEY_ID, published_at: null,
   };
 }
-
-/**
- * GitHub currently serves release assets from one of these HTTPS origins after
- * the fixed release URL redirects.  Keep this list deliberately finite: a
- * redirect to an arbitrary HTTPS endpoint must not turn the installer into an
- * SSRF/download oracle, even though the detached signature would eventually
- * reject a tampered artifact.
- */
-export const FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS = [
-  "https://github.com",
-  "https://objects.githubusercontent.com",
-  "https://release-assets.githubusercontent.com",
-  "https://github-releases.githubusercontent.com",
-  "https://github-cloud.s3.amazonaws.com",
-] as const;

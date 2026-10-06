@@ -338,7 +338,8 @@ describe("Worker runner transport", () => {
     await runInDurableObject(registry, instance => { expect(instance.getRunnerExecutionState(target)).toBeUndefined(); });
   });
 
-  it.each(["validity", "permissions", "version-policy", "emergency-lock", "workspace-create", "workspace-update", "workspace-delete"].flatMap(action => [false, true].map(encoded => ({ action, encoded }))))("manages Runner $action through the browser with encoded identifiers=$encoded", async ({ action, encoded }) => {
+  // Version changes now resolve signed releases and have their own update-control integration cases.
+  it.each(["validity", "permissions", "emergency-lock", "workspace-create", "workspace-update", "workspace-delete"].flatMap(action => [false, true].map(encoded => ({ action, encoded }))))("manages Runner $action through the browser with encoded identifiers=$encoded", async ({ action, encoded }) => {
     const target = (encoded ? "policy:runner:" : "policy-runner-") + crypto.randomUUID();
     const workspaceId = encoded ? "workspace:one" : "workspace-one";
     const registered = await enroll(target);

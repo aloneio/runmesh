@@ -140,14 +140,18 @@ async function securePosixTree(required: (file: string, args: readonly string[])
  * the executable/read bits selected by the verified package itself. */
 async function securePosixInstallTree(required: (file: string, args: readonly string[]) => Promise<void>, root: string, owner: string, platform: ServicePlatform = currentServicePlatform()): Promise<void> {
   const traversal = platform === "darwin" ? ["-P", "-x", root] : ["-P", root, "-xdev"];
-  await required("find", [...traversal, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
-  await required("find", [...traversal, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
+  // The independent manager owns private recovery journals and a separate
+  // runtime. Runner provisioning must never widen those permissions or alter
+  // a manager that can be coordinating this installation's recovery.
+  const packageTree = [...traversal, "-path", `${root}/manager`, "-prune", "-o"];
+  await required("find", [...packageTree, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", [...packageTree, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
   // Bootstrap uses umask 077. Removing write access alone strands the
   // dedicated account outside private package directories. Package code is
   // public; normalize read/traverse access while keeping every inode read-only
   // and preserving which files are executable. Credentials live elsewhere.
-  await required("find", [...traversal, "-type", "d", "-exec", "chmod", "0555", "{}", "+"]);
-  await required("find", [...traversal, "-type", "f", "-exec", "chmod", "a=rX", "{}", "+"]);
+  await required("find", [...packageTree, "-type", "d", "-exec", "chmod", "0555", "{}", "+"]);
+  await required("find", [...packageTree, "-type", "f", "-exec", "chmod", "a=rX", "{}", "+"]);
 }
 
 async function provisionMacIdentity(execute: (file: string, args: readonly string[]) => Promise<ServiceCommandResult>, required: (file: string, args: readonly string[]) => Promise<void>, user: string, group: string): Promise<void> {
@@ -179,11 +183,12 @@ function parseDarwinId(value: string | undefined): string | undefined { const ma
 
 function windowsProvisionScript(layout: ServiceLayout, profilePath: string, executionMode: ExecutionMode = "dedicated_user"): string {
   const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
-  const acl = (path: string, grants: readonly string[], recursive = true): string =>
+  const aclExpression = (path: string, grants: readonly string[], recursive = true): string =>
     // Reset first so a pre-existing install cannot retain an explicit
     // Users/Everyone ACE that /grant:r alone would leave in place. Then turn
     // inheritance off and grant only the service identities we require.
-    `& icacls ${quote(path)} /reset${recursive ? " /T" : ""} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls reset failed' }; & icacls ${quote(path)} /inheritance:r /grant:r ${grants.map(quote).join(" ")}${recursive ? " /T" : ""} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }; `;
+    `& icacls ${path} /reset${recursive ? " /T" : ""} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls reset failed' }; & icacls ${path} /inheritance:r /grant:r ${grants.map(quote).join(" ")}${recursive ? " /T" : ""} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }; `;
+  const acl = (path: string, grants: readonly string[], recursive = true): string => aclExpression(quote(path), grants, recursive);
   const roots = [layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot].map(quote).join(", ");
   // SYSTEM is the only service principal needed by privileged_host.  Keep
   // Local Service out of that ACL so a restricted account cannot read or
@@ -202,7 +207,10 @@ function windowsProvisionScript(layout: ServiceLayout, profilePath: string, exec
   // New-Item has no -LiteralPath parameter in Windows PowerShell. Use the
   // literal .NET API, which also keeps repeated provisioning idempotent.
   return `$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest; $paths = @(${roots}); foreach ($path in $paths) { [System.IO.Directory]::CreateDirectory($path) | Out-Null }; `
-    + acl(layout.installRoot, readGrants)
+    // The manager root has a protected ACL. Do not recurse into it when
+    // reprovisioning the Runner's package tree and restricted service account.
+    + acl(layout.installRoot, readGrants, false)
+    + `foreach($entry in [System.IO.Directory]::EnumerateFileSystemEntries(${quote(layout.installRoot)})) { if([System.IO.Path]::GetFileName($entry) -ine 'manager') { ${aclExpression("$entry", readGrants)} } }; `
     + acl(layout.configRoot, readGrants)
     + acl(layout.stateRoot, modifyGrants)
     + acl(layout.logRoot, modifyGrants)

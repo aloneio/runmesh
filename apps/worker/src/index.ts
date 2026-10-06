@@ -11,6 +11,7 @@ import { handleLanding } from "./http/auth.js";
 import { handleMcpSecret } from "./http/mcp.js";
 import { handleRunnerAdmin } from "./http/runner-api.js";
 import { handleRunnerEnrollment } from "./http/enrollment.js";
+import { handleRunnerUpdate } from "./http/runner-update.js";
 import { isConfiguredSecret } from "./security.js";
 import { isMcpPath } from "./http/mcp.js";
 import { isRunnerAdminRequest } from "./http/session.js";
@@ -104,6 +105,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
   if (url.pathname === "/mcp") return mcpHttpError(404, "Not found", await readRejectedMcpRequestId(request));
   if (url.pathname.startsWith("/internal/runners/")) return forwardRunnerRpc(request, env, url);
   if (url.pathname === "/runner/enroll") return handleRunnerEnrollment(request, env);
+  if (/^\/runner\/[^/]+\/update(?:\/|$)/.test(url.pathname)) return handleRunnerUpdate(request, env, url);
   if (url.pathname.startsWith("/admin/runners")) {
     return isRunnerAdminRequest(request, env) ? handleRunnerAdmin(request, env, url) : handleBrowserAdmin(request, env, url, scheduleReleaseRefresh);
   }

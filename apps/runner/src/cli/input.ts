@@ -36,7 +36,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     if (arg === "--confirm-privileged-host") { values.confirmPrivilegedHost = true; continue; }
     if (arg === "--code-stdin") { values.codeStdin = true; continue; }
     if (arg === "--shareable" && command === "doctor") { values.shareable = true; continue; }
-    const key = arg === "--execution-mode" ? "executionMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
+    const key = arg === "--install-root" && command === "maintenance-agent" ? "installRoot" : arg === "--execution-mode" ? "executionMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
     const value = rest[index + 1]; if (key === undefined || value === undefined || value.startsWith("--")) throw new Error(`unknown or incomplete option: ${arg}`);
     values[key] = value; index += 1;
   }
