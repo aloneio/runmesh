@@ -12,6 +12,8 @@ Read the [release notes](release-notes.md) and [release status](release-readines
 
 Keep the MCP and Skill bindings alongside the existing Registry and Runner namespaces. Preserve resource identities and both existing secrets; OAuth encryption uses `INTERNAL_CONTROL_SECRET`. Deploy the production release and verify the running Worker before updating Runners. The managed system-service procedure below updates Runner 0.1.6 to 0.1.7.
 
+To enable remote version management for the first time, use a [verified development Runner package](dev-runner-prereleases.md) with `maintenance-agent` in its `--help`, then follow [manager setup](runner-versions.md#enable-remote-version-management-on-an-existing-computer). Successful setup reports `remote_version_management: available`. The published 0.1.7 package used in the manual migration example below predates this feature.
+
 Plan these updates separately:
 
 | Component | Update action |

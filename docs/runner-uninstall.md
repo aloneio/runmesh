@@ -45,7 +45,7 @@ Project workspaces, other services and installations, system accounts/groups and
 
 ## Handle an interrupted cleanup
 
-Run one installation, enrollment refresh or uninstall at a time. These operations share a lock. After an interruption, check for running maintenance processes before removing a stale lock or changing installation files.
+Run one installation, enrollment refresh or uninstall at a time. Hosted maintenance commands share an installation lock. After an interruption, check for running maintenance processes before removing a stale lock or changing installation files.
 
 If cleanup reports a symlinked parent directory, a same-named service from another installation, or a mounted data filesystem, inspect that path or service and confirm its ownership before retrying. Removing a selected symlink preserves its target.
 
