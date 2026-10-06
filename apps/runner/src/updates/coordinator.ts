@@ -1,7 +1,7 @@
 import { isTerminalRunnerUpdate } from "@aloneio/runmesh-protocol";
 import { UpdateFailure } from "./contracts.js";
 import { MaintenanceHttpError } from "./cloud.js";
-import type { CloudUpdateObservation, LocalUpdatePhase, UpdateCoordinatorOptions, UpdateErrorCode, UpdateJournal, UpdateOwner } from "./contracts.js";
+import type { CloudUpdateObservation, LocalUpdatePhase, UpdateCoordinatorOptions, UpdateErrorCode, UpdateJournal, UpdateJournalRecord, UpdateOwner, UpdatePreparation } from "./contracts.js";
 
 const terminal = (phase: LocalUpdatePhase): phase is "succeeded" | "rolled_back" | "failed" => ["succeeded", "rolled_back", "failed"].includes(phase);
 const needsRecovery = (phase: LocalUpdatePhase): boolean => ["stopping", "switching", "starting", "checking", "rolling_back"].includes(phase);
@@ -19,13 +19,36 @@ export class UpdateCoordinator {
     this.sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   }
   private guard(): void { this.options.assertInstallationLock?.(); }
-  private owner(journal: UpdateJournal): UpdateOwner { return { operation_id: journal.operation.operation_id, lifecycle_id: journal.operation.lifecycle_id, manager_id: journal.manager_id }; }
-  private matches(journal: UpdateJournal, observation: CloudUpdateObservation): boolean {
+  private owner(journal: UpdateJournalRecord): UpdateOwner { return { operation_id: journal.operation.operation_id, lifecycle_id: journal.operation.lifecycle_id, manager_id: journal.manager_id }; }
+  private matches(journal: UpdateJournalRecord, observation: CloudUpdateObservation): boolean {
     return observation.operation?.operation_id === journal.operation.operation_id && observation.operation.lifecycle_id === journal.operation.lifecycle_id && observation.operation.manager_id === journal.manager_id;
   }
   private async write(journal: UpdateJournal, phase: LocalUpdatePhase, errorCode?: UpdateErrorCode): Promise<UpdateJournal> {
     const next: UpdateJournal = { ...journal, phase, ...(errorCode === undefined ? {} : { error_code: errorCode }) };
     await this.options.journal.save(next); return next;
+  }
+  private async finishPreparation(preparation: UpdatePreparation): Promise<void> {
+    this.guard();
+    const observed = await this.options.cloud.poll();
+    const operation = observed.operation;
+    if (operation === null || operation.operation_id !== preparation.operation.operation_id || operation.lifecycle_id !== preparation.operation.lifecycle_id
+      || operation.manager_id !== null && operation.manager_id !== preparation.manager_id) {
+      // No native action occurred. Authoritative replacement or another owner
+      // permits retiring only this local intent, never sending a cloud mutation.
+      this.guard(); await this.options.journal.complete(preparation); return;
+    }
+    if (operation.manager_id === null && operation.state === "queued") {
+      // A crash or timeout before claim committed leaves the offer retryable.
+      this.guard(); await this.options.journal.complete(preparation); return;
+    }
+    if (operation.manager_id !== preparation.manager_id || operation.state !== "verifying"
+      && !(operation.state === "failed" && operation.error_code === "invalid_installation")) throw new UpdateFailure("local_state_invalid");
+    this.guard();
+    // The server may have committed failed before its maintenance finalizer
+    // became unavailable. Keep this record until the explicit POST succeeds.
+    const result = await this.options.cloud.report(this.owner(preparation), "failed", { error_code: "invalid_installation" });
+    if (!this.matches(preparation, result) || result.operation?.state !== "failed" || result.operation.error_code !== "invalid_installation") throw new UpdateFailure("activation_failed");
+    this.guard(); await this.options.journal.complete(preparation);
   }
   private async finish(journal: UpdateJournal): Promise<void> {
     if (!terminal(journal.phase)) throw new UpdateFailure("local_state_invalid");
@@ -165,6 +188,7 @@ export class UpdateCoordinator {
     const saved = await this.options.journal.load();
     if (saved !== undefined) {
       if (saved.manager_id !== this.options.managerId) throw new UpdateFailure("local_state_invalid");
+      if (saved.phase === "preparing") { await this.finishPreparation(saved); return; }
       if (terminal(saved.phase)) { await this.finish(saved); return; }
       if (saved.phase === "recovery_required") {
         const observed = await this.options.cloud.poll();
@@ -180,8 +204,12 @@ export class UpdateCoordinator {
     const offered = await this.options.cloud.poll();
     const offeredOperation = offered.operation;
     if (offeredOperation === null || isTerminalRunnerUpdate(offeredOperation.state) || (offeredOperation.manager_id !== null && offeredOperation.manager_id !== this.options.managerId)) return;
+    if (!["queued", "verifying"].includes(offeredOperation.state)) throw new UpdateFailure("local_state_invalid");
     const owner = { operation_id: offeredOperation.operation_id, lifecycle_id: offeredOperation.lifecycle_id, manager_id: this.options.managerId };
     const recoveryIdentity = await this.options.recoveryIdentity();
+    const preparation: UpdatePreparation = { schema_version: 1, operation: offeredOperation, manager_id: this.options.managerId, recovery_identity: recoveryIdentity, phase: "preparing" };
+    // Failure to persist here must not claim a cloud fence with no recovery record.
+    this.guard(); await this.options.journal.save(preparation); this.guard();
     const claimed = await this.options.cloud.claim(owner);
     if (claimed.operation?.operation_id !== offeredOperation.operation_id || claimed.operation.lifecycle_id !== offeredOperation.lifecycle_id || claimed.operation.manager_id !== this.options.managerId) throw new UpdateFailure("activation_failed");
     const operation = claimed.operation;
@@ -193,11 +221,13 @@ export class UpdateCoordinator {
       const service = await this.options.service.snapshot();
       if (!service.registered) throw new UpdateFailure("invalid_installation");
       journal = { schema_version: 1, operation, manager_id: this.options.managerId, recovery_identity: recoveryIdentity, previous, service, phase: "claimed" };
-      await this.options.journal.save(journal);
     } catch {
-      await this.options.cloud.report(owner, "failed", { error_code: "invalid_installation" });
+      await this.finishPreparation(preparation);
       throw new UpdateFailure("invalid_installation");
     }
+    // An uncertain replacement write can leave either preparing or claimed on
+    // disk. Recover that record next time before sending any failure receipt.
+    await this.options.journal.save(journal);
     let failureCode: UpdateErrorCode = "verification_failed";
     try {
       await this.options.cloud.report(owner, "verifying"); this.guard();

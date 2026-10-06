@@ -113,6 +113,7 @@
         "apps/runner/test/snapshot-cursors.test.ts",
         "apps/runner/test/update-cloud.test.ts",
         "apps/runner/test/update-coordinator.test.ts",
+        "apps/runner/test/update-launchers.test.ts",
         "apps/runner/test/update-manager-install.test.ts",
         "apps/runner/test/update-manager-lifecycle.test.ts",
         "apps/runner/test/update-manager-provisioning.test.ts",

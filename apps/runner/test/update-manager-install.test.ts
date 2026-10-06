@@ -30,6 +30,7 @@ function fixture(platform: ServicePlatform) {
   file(options.profilePath, "existing credential profile");
   file(paths.path.join(version, "runtime", platform === "win32" ? "node.exe" : "node"), "runtime bytes");
   file(platform === "win32" ? paths.path.join(version, "runmesh.cjs") : paths.path.join(version, "lib", "node_modules", "@aloneio", "runmesh-runner", "dist", "runmesh.cjs"), "bundle bytes");
+  for (const name of platform === "win32" ? ["runmesh.cmd", "runmesh-runner.cmd"] : ["bin/runmesh", "bin/runmesh-runner"]) file(paths.path.join(version, ...name.split("/")), "original launcher");
   const filesystem: MaintenanceManagerFilesystem = {
     read: async path => files.get(path), stat: async path => stats.get(path), realpath: async path => path === current ? version : path,
     mkdir: async path => { if (stats.has(path)) throw new Error("exists"); directory(path); },
@@ -44,17 +45,21 @@ function fixture(platform: ServicePlatform) {
     },
     remove: async root => { for (const path of [...stats.keys()]) if (path === root || path.startsWith(root + paths.path.sep)) { stats.delete(path); files.delete(path); } },
     chmod: async (path, mode) => { const value = stats.get(path)!; stats.set(path, { ...value, mode }); },
+    symlink: async (source, destination) => { file(destination, files.get(source)!); stats.set(destination, { ...stats.get(destination)!, symlink: true }); },
   };
   const executor: ServiceCommandExecutor = { execute: async (name, args) => {
     calls.push([name, ...args]);
     if (args[1] === "--help") return { exitCode: 0, stdout: supportsManager ? "usage: runmesh <start|maintenance-agent|stop>" : "usage: runmesh <start|stop>" };
     if (name === "systemctl") {
+      if (args.some(argument => argument.startsWith("--property=User,Group,FragmentPath,DropInPaths,NeedDaemonReload"))) return { exitCode: 0, stdout: `User=runmesh\nGroup=runmesh\nFragmentPath=${layout.manifestPath}\nDropInPaths=\nNeedDaemonReload=no\nRootDirectory=\nRootImage=\nBindPaths=\nBindReadOnlyPaths=\nTemporaryFileSystem=\nDynamicUser=no\n` };
+      if (args.includes("daemon-reload")) registered = files.has(paths.manifestPath);
       if (args.includes("--property=LoadState")) return { exitCode: 0, stdout: registered ? "loaded\n" : "not-found\n" };
       if (args.includes("--property=ActiveState,MainPID")) return { exitCode: 0, stdout: `ActiveState=${active ? "active" : "inactive"}\nMainPID=${active ? 12 : 0}\n` };
       if (args.includes("enable")) { registered = true; active = true; }
       if (args.includes("disable")) active = false;
       if (args.includes("is-active") && failStart) return { exitCode: 1 };
     }
+    if (name === "busctl") return { exitCode: 0, stdout: JSON.stringify({ type: "a(sasbttttuii)", data: [[layout.executablePath, [layout.executablePath, "start", "--profile", options.profilePath, "--state-dir", layout.stateRoot], false, 0, 0, 0, 0, 0, 0, 0]] }) };
     if (name === "launchctl") {
       if (args[0] === "print") return registered ? { exitCode: 0, stdout: "state = running\npid = 12\n" } : { exitCode: 113, stderr: "Could not find service" };
       if (args[0] === "bootstrap") { registered = true; active = true; }
@@ -105,6 +110,18 @@ it("rolls back a failed new manager installation while retaining all Runner stat
   expect(test.files.has(test.paths.manifestPath)).toBe(false);
   expect(test.files.get(test.manifest.path)).toBe(test.manifest.content);
   expect(test.files.get(test.options.profilePath)).toBe("existing credential profile");
+  expect(test.files.get(test.paths.path.join(test.paths.layout.installRoot, "versions", "0.1.7", "bin", "runmesh"))).toBe("original launcher");
+});
+
+it("retains the stable management package across ordinary uninstall and reinstall of an older Runner", async () => {
+  const test = fixture("linux"); await managerInstall(test.options);
+  await managerUninstall({ ...test.options, preservePackage: true });
+  expect(test.files.has(test.paths.manifestPath)).toBe(false); expect(test.files.has(test.paths.bundlePath)).toBe(true);
+  test.oldRunner(); await managerInstall(test.options);
+  expect(test.copies).toHaveLength(2); expect(test.isActive()).toBe(true);
+  await managerUninstall({ ...test.options, preservePackage: true });
+  await managerUninstall(test.options);
+  expect(test.stats.has(test.paths.managerRoot)).toBe(false);
 });
 
 it("does not register maintenance for a custom Runner executable", async () => {

@@ -53,6 +53,7 @@ it("removes the independent manager before removing the Runner service", async (
   const test = fixture();
   await uninstall(command("uninstall"), test.store, () => undefined, test.dependencies);
   expect(test.calls).toEqual(["uninstall-manager", "uninstall-runner", "remove-runner-manifest"]);
+  expect(test.maintenanceCalls[0]?.preservePackage).toBe(true);
 });
 
 it("does not purge when the independent manager still needs recovery", async () => {
@@ -65,4 +66,14 @@ it("does not purge when the independent manager still needs recovery", async () 
   })).rejects.toThrow("maintenance is unfinished");
   expect(purged).toBe(false);
   expect(test.contents.get(test.manifest.path)).toBe(test.manifest.content);
+});
+
+it("keeps the independent CLI available when complete purge reports a cleanup failure", async () => {
+  const test = fixture();
+  await expect(uninstall(command("uninstall", { purge: true, yes: true }), test.store, () => undefined, {
+    ...test.dependencies,
+    purgeInstallation: async () => ({ action: "uninstall", purged: false, removed: [], absent: [], failures: [{ path: "/var/lib/runmesh", reason: "workspace retained" }], preserved: ["project workspaces"] }),
+  })).rejects.toThrow("uninstall incomplete");
+  expect(test.calls).toEqual(["uninstall-manager"]);
+  expect(test.maintenanceCalls[0]?.preservePackage).toBe(true);
 });

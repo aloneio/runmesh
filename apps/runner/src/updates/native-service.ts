@@ -156,6 +156,58 @@ export function hasStandardMaintenanceLaunch(content: string, options: NativeSer
   } catch { return false; }
 }
 
+/** Bind the stored manifest to systemd's effective definition, including drop-ins. */
+export async function hasStandardEffectiveMaintenanceLaunch(content: string, options: NativeServiceMaintenanceOptions): Promise<boolean> {
+  if (!hasStandardMaintenanceLaunch(content, options)) return false;
+  const { platform, mode, layout } = maintenanceLayout(options);
+  if (platform !== "linux") return true;
+  const executor = options.executor ?? hostServiceCommandExecutor;
+  const prefix = mode === "user" ? ["--user"] : [];
+  const requiredProperties = ["User", "Group", "FragmentPath", "DropInPaths", "NeedDaemonReload", "RootDirectory", "RootImage", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem", "DynamicUser"];
+  // Older systemd versions omit image/extension properties they do not support.
+  const filesystemProperties = ["RootDirectory", "RootImage", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem", "MountImages", "ExtensionImages", "ExtensionDirectories"];
+  const properties = [...requiredProperties, "MountImages", "ExtensionImages", "ExtensionDirectories"];
+  const metadata = async (): Promise<Map<string, string> | undefined> => {
+    const result = await executor.execute("systemctl", [...prefix, "show", LINUX_SERVICE_NAME, `--property=${properties.join(",")}`]);
+    if (result.exitCode !== 0) return undefined;
+    const fields = new Map<string, string>();
+    for (const line of (result.stdout ?? "").split(/\r?\n/u).filter(Boolean)) {
+      const separator = line.indexOf("=");
+      if (separator < 0 || fields.has(line.slice(0, separator))) return undefined;
+      fields.set(line.slice(0, separator), line.slice(separator + 1));
+    }
+    return requiredProperties.every(property => fields.has(property)) ? fields : undefined;
+  };
+  try {
+    const before = await metadata();
+    if (before === undefined || before.get("FragmentPath") !== layout.manifestPath || before.get("NeedDaemonReload") !== "no") return false;
+    // Identical absolute argv can name different files inside a root image or
+    // mount namespace. The manager's host-side job scan cannot cover that layout.
+    if (before.get("DynamicUser") !== "no" || filesystemProperties.some(property => (before.get(property) ?? "") !== "")) return false;
+    for (const property of ["User", "Group"]) {
+      const declarations = [...content.matchAll(new RegExp(`^${property}=([^\\r\\n]*)\\r?$`, "gmu"))];
+      if (declarations.length > 1 || before.get(property) !== (declarations[0]?.[1] ?? "")) return false;
+    }
+    const expected = /^ExecStart=([^\r\n]+)\r?$/mu.exec(content)![1]!.split(/[ \t]+/u).map(systemdArgument);
+    const uid = options.uid ?? process.geteuid?.();
+    if (mode === "user" && (uid === undefined || !Number.isSafeInteger(uid) || uid < 0)) return false;
+    // systemctl's human-readable argv[] joins arguments with spaces and loses
+    // their boundaries. D-Bus preserves the exact array, including spaced paths.
+    const bus = mode === "user" ? ["--user", `--address=unix:path=/run/user/${uid}/bus`] : ["--system"];
+    const result = await executor.execute("busctl", [...bus, "--json=short", "get-property", "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1/unit/runmesh_2drunner_2eservice", "org.freedesktop.systemd1.Service", "ExecStart"]);
+    if (result.exitCode !== 0) return false;
+    const value = JSON.parse(result.stdout ?? "") as { type?: unknown; data?: unknown };
+    if (value.type !== "a(sasbttttuii)" || !Array.isArray(value.data) || value.data.length !== 1) return false;
+    const command: unknown = value.data[0];
+    if (!Array.isArray(command) || command.length !== 10 || command[0] !== expected[0] || command[2] !== false || !Array.isArray(command[1])
+      || command[1].length !== expected.length || command[1].some((argument: unknown, index: number) => argument !== expected[index])) return false;
+    // A reload between the two native reads must not authorize a mixed identity.
+    const after = await metadata();
+    return after !== undefined && properties.every(property => (before.get(property) ?? "") === (after.get(property) ?? ""));
+  } catch { return false; }
+}
+
 const windowsTask = "$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); $t=$s.GetFolder('\\').GetTask('RunmeshRunner'); ";
 
 export function createNativeServiceMaintenance(options: NativeServiceMaintenanceOptions): NativeServiceMaintenancePort {
@@ -179,6 +231,7 @@ export function createNativeServiceMaintenance(options: NativeServiceMaintenance
     const content = await filesystem.read(layout.manifestPath);
     if (content === undefined || !isManagedService(content)) throw new Error("Runner maintenance requires an intact managed service manifest");
     if (!hasStandardMaintenanceLaunch(content, options)) throw new Error("Runner maintenance requires the standard current executable path and matching profile/state directories");
+    if (!await hasStandardEffectiveMaintenanceLaunch(content, options)) throw new Error("Runner maintenance requires an effective service definition matching its managed executable, profile, state and identity");
   };
   const linuxState = async () => {
     const result = await execute("systemctl", [...prefix, "show", LINUX_SERVICE_NAME, "--property=LoadState,ActiveState,MainPID,UnitFileState"]);

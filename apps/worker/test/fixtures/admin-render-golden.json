@@ -395,8 +395,8 @@
           "distributable": true
         }
       ],
-      "sha256": "28c90562dbf06051deeb22e8fbbd6313aa0a0b5cf3136d18b7ec69c394fc116a",
-      "bytes": 14469,
+      "sha256": "12061f03e8747210f22afeee4a357432700caeaafa6af233e56ba5728f15513d",
+      "bytes": 14332,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
@@ -749,5 +749,10 @@
         "previous_sha256": "3afab9d73c58fd93a0d3d69a8fb08d048d7863edf8f303c97c7f4f483331570d"
       }
     ]
+  },
+  "runner_remote_update_copy_review": {
+    "reviewed_change": "Use the Runner version heading and one sentence describing latest or exact version selection. Substituting only these two text changes reproduces the previous byte count and hash.",
+    "previous_bytes": 14469,
+    "previous_sha256": "28c90562dbf06051deeb22e8fbbd6313aa0a0b5cf3136d18b7ec69c394fc116a"
   }
 }

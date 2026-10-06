@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { UpdateCoordinator } from "../src/updates/coordinator.js";
 import { UpdateFailure } from "../src/updates/contracts.js";
 import { MaintenanceHttpError } from "../src/updates/cloud.js";
-import type { CloudUpdateOperation, CloudUpdateObservation, UpdateCoordinatorOptions, UpdateJournal } from "../src/updates/contracts.js";
+import type { CloudUpdateOperation, CloudUpdateObservation, UpdateCoordinatorOptions, UpdateJournal, UpdateJournalRecord } from "../src/updates/contracts.js";
 
 const operation = (): CloudUpdateOperation => ({ operation_id: "upgrade_1", lifecycle_id: "lifecycle_1", target_version: "0.1.6", target_channel: "stable", manifest_sha256: "a".repeat(64), artifact_sha256: "b".repeat(64), original_version: "0.1.7", manager_id: null, state: "queued", error_code: null, created_at_ms: 1, updated_at_ms: 1 });
 function fixture() {
-  const events: string[] = []; let now = 0; let active: UpdateJournal | undefined; let cloudOperation = operation();
+  const events: string[] = []; let now = 0; let active: UpdateJournalRecord | undefined; let cloudOperation = operation();
   let version = "0.1.7"; let connectedVersion: string | null = "0.1.7"; let newSession = false; let cloudDrained = true; let cloudUncertain = false;
   const observe = (): CloudUpdateObservation => ({ operation: cloudOperation, cloud_drained: cloudDrained, cloud_uncertain: cloudUncertain, observed_version: connectedVersion, observed_new_session: newSession });
   const options: UpdateCoordinatorOptions = {
@@ -29,7 +29,7 @@ function fixture() {
     jobs: async () => ({ idle: true, active: 0 }),
   };
   return { options, events, active: () => active, operation: () => cloudOperation,
-    setJournal: (journal: UpdateJournal) => { active = journal; cloudOperation = journal.operation; },
+    setJournal: (journal: UpdateJournalRecord) => { active = journal; cloudOperation = journal.operation; },
     setNewSession: (value: boolean) => { newSession = value; },
     setCloudDrained: (value: boolean) => { cloudDrained = value; },
     setCloudUncertain: (value: boolean) => { cloudUncertain = value; },
@@ -43,6 +43,7 @@ function recovering(): UpdateJournal {
 describe("independent update coordinator", () => {
   it("allows an exact signed downgrade and persists success before releasing the cloud fence", async () => {
     const test = fixture(); await new UpdateCoordinator(test.options).runOnce();
+    expect(test.events.indexOf("local:preparing")).toBeLessThan(test.events.indexOf("claim"));
     expect(test.events).toContain("stage:0.1.6");
     expect(test.events.indexOf("local:stopping")).toBeLessThan(test.events.indexOf("stop"));
     expect(test.events.indexOf("stop")).toBeLessThan(test.events.indexOf("switch"));
@@ -80,6 +81,117 @@ describe("independent update coordinator", () => {
     await expect(new UpdateCoordinator(test.options).runOnce()).rejects.toThrow("invalid_installation");
     expect(test.events).not.toContain("stop"); expect(test.events.some(item => item.startsWith("stage:"))).toBe(false);
     expect(test.operation().state).toBe("failed");
+  });
+
+  it("does not claim cloud ownership when local storage cannot persist preparation", async () => {
+    const test = fixture();
+    const coordinator = new UpdateCoordinator({ ...test.options, journal: { ...test.options.journal, save: async () => { throw new Error("read-only storage"); } } });
+    await expect(coordinator.runOnce()).rejects.toThrow("read-only storage");
+    expect(test.active()).toBeUndefined(); expect(test.operation()).toMatchObject({ state: "queued", manager_id: null });
+    expect(test.events).toEqual([]);
+  });
+
+  it.each(["inspect", "snapshot"])("retries pre-journal %s failure after cloud commit but failed fence finalization", async failure => {
+    const test = fixture(); let fenced = false; let loseFinalization = true;
+    const cloud = { ...test.options.cloud,
+      claim: async (owner: Parameters<typeof test.options.cloud.claim>[0]) => { fenced = true; return test.options.cloud.claim(owner); },
+      report: async (...args: Parameters<typeof test.options.cloud.report>) => {
+        const result = await test.options.cloud.report(...args);
+        if (loseFinalization) { loseFinalization = false; throw new MaintenanceHttpError(503); }
+        fenced = false; return result;
+      },
+    };
+    const options = { ...test.options, cloud,
+      ...(failure === "inspect" ? { installation: { ...test.options.installation, inspect: async () => { throw new Error("invalid pointer"); } } }
+        : { service: { ...test.options.service, snapshot: async () => { throw new Error("invalid service"); } } }),
+    };
+    await expect(new UpdateCoordinator(options).runOnce()).rejects.toThrow("maintenance_http_503");
+    expect(test.active()?.phase).toBe("preparing"); expect(fenced).toBe(true);
+    expect(test.operation()).toMatchObject({ state: "failed", error_code: "invalid_installation" });
+    await new UpdateCoordinator(options).runOnce();
+    expect(test.active()).toBeUndefined(); expect(fenced).toBe(false);
+    expect(test.events.filter(event => event === "cloud:failed")).toHaveLength(2);
+    const completedEvents = [...test.events]; await new UpdateCoordinator(options).runOnce();
+    expect(test.events).toEqual(completedEvents);
+    expect(test.events).not.toContain("stop"); expect(test.events.some(event => event.startsWith("stage:"))).toBe(false);
+  });
+
+  it.each(["before", "after"])("recovers an uncertain full journal write %s replacement without losing its failure receipt", async point => {
+    const test = fixture(); let failWrite = true;
+    const options = { ...test.options, journal: { ...test.options.journal, save: async (value: UpdateJournalRecord) => {
+      if (value.phase === "claimed" && failWrite) {
+        failWrite = false;
+        if (point === "after") await test.options.journal.save(value);
+        throw new Error("journal replacement failed");
+      }
+      await test.options.journal.save(value);
+    } } };
+    await expect(new UpdateCoordinator(options).runOnce()).rejects.toThrow("journal replacement failed");
+    expect(test.active()?.phase).toBe(point === "before" ? "preparing" : "claimed");
+    expect(test.events).not.toContain("cloud:failed");
+    await new UpdateCoordinator(options).runOnce();
+    expect(test.active()).toBeUndefined(); expect(test.operation().state).toBe("failed");
+    expect(test.events).not.toContain("stop"); expect(test.events.some(event => event.startsWith("stage:"))).toBe(false);
+  });
+
+  it.each(["before", "after"])("recovers a lost claim response %s ownership commits", async point => {
+    const test = fixture(); let loseClaim = true;
+    const options = { ...test.options, cloud: { ...test.options.cloud, claim: async (owner: Parameters<typeof test.options.cloud.claim>[0]) => {
+      if (loseClaim) {
+        loseClaim = false;
+        if (point === "after") await test.options.cloud.claim(owner);
+        throw new MaintenanceHttpError(503);
+      }
+      return test.options.cloud.claim(owner);
+    } } };
+    await expect(new UpdateCoordinator(options).runOnce()).rejects.toThrow("maintenance_http_503");
+    expect(test.active()?.phase).toBe("preparing");
+    await new UpdateCoordinator(options).runOnce();
+    expect(test.active()).toBeUndefined();
+    if (point === "after") {
+      expect(test.operation()).toMatchObject({ state: "failed", error_code: "invalid_installation" });
+      expect(test.events.some(event => event.startsWith("stage:"))).toBe(false);
+    } else {
+      expect(test.operation()).toMatchObject({ state: "queued", manager_id: null });
+      expect(test.events).not.toContain("cloud:failed");
+      await new UpdateCoordinator(options).runOnce(); expect(test.operation().state).toBe("succeeded");
+    }
+  });
+
+  it("retains preparation through a cloud outage and never releases another manager's claim", async () => {
+    const test = fixture();
+    await expect(new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, claim: async () => {
+      test.setOperation({ ...test.operation(), manager_id: "other-manager", state: "verifying" });
+      throw new MaintenanceHttpError(409);
+    } } }).runOnce()).rejects.toThrow("maintenance_http_409");
+    const saved = test.active(); expect(saved?.phase).toBe("preparing");
+    await expect(new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, poll: async () => { throw new TypeError("offline"); } } }).runOnce()).rejects.toThrow("offline");
+    expect(test.active()).toEqual(saved);
+    await new UpdateCoordinator(test.options).runOnce();
+    expect(test.active()).toBeUndefined(); expect(test.operation()).toMatchObject({ manager_id: "other-manager", state: "verifying" });
+    expect(test.events.some(event => event.startsWith("cloud:"))).toBe(false); expect(test.events).not.toContain("stop");
+  });
+
+  it.each(["removed", "operation", "lifecycle"])("retires an unstarted preparation after authenticated %s replacement without a cloud mutation", async replacement => {
+    const test = fixture(); test.setJournal({ schema_version: 1, manager_id: "manager_1", phase: "preparing", operation: operation() });
+    await new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, poll: async () => ({
+      ...await test.options.cloud.poll(), operation: replacement === "removed" ? null : { ...test.operation(),
+        ...(replacement === "operation" ? { operation_id: "new-operation" } : { lifecycle_id: "new-lifecycle" }) },
+    }) } }).runOnce();
+    expect(test.active()).toBeUndefined(); expect(test.events).toEqual(["complete"]);
+  });
+
+  it("retains preparation when an operation replacement races its failure receipt", async () => {
+    const test = fixture(); test.setJournal({ schema_version: 1, manager_id: "manager_1", phase: "preparing", operation: operation() });
+    test.setOperation({ ...operation(), manager_id: "manager_1", state: "verifying" });
+    const options = { ...test.options, cloud: { ...test.options.cloud, report: async () => {
+      test.setOperation({ ...operation(), operation_id: "new-operation" }); throw new MaintenanceHttpError(409);
+    } } };
+    await expect(new UpdateCoordinator(options).runOnce()).rejects.toThrow("maintenance_http_409");
+    expect(test.active()?.phase).toBe("preparing");
+    await new UpdateCoordinator(options).runOnce();
+    expect(test.active()).toBeUndefined(); expect(test.operation()).toMatchObject({ operation_id: "new-operation", state: "queued", manager_id: null });
+    expect(test.events).toEqual(["complete"]);
   });
 
   it("resolves disconnected uncertain RPCs only after two idle scans and confirmed native stop", async () => {
@@ -122,6 +234,9 @@ describe("independent update coordinator", () => {
     } } }).runOnce()).rejects.toThrow("local_state_invalid");
     expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("cloud:failed");
     expect(test.operation().state).toBe("installing");
+    expect(test.active()?.phase).toBe("preparing");
+    await expect(new UpdateCoordinator(test.options).runOnce()).rejects.toThrow("local_state_invalid");
+    expect(test.events).not.toContain("cloud:failed");
   });
 
   it("requires a new authenticated target session, then restores the old package on failure", async () => {

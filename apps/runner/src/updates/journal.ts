@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { RunnerUpdateOperationSchema } from "@aloneio/runmesh-protocol";
 import { isExactUpdateVersion, UPDATE_ERRORS, UPDATE_IDENTIFIER, UpdateFailure } from "./contracts.js";
-import type { UpdateJournal, UpdateJournalPort } from "./contracts.js";
+import type { UpdateJournalRecord, UpdateJournalPort, UpdatePreparation } from "./contracts.js";
 
 const absent = (error: unknown): boolean => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -50,11 +50,18 @@ async function atomicJson(directory: string, name: string, value: unknown): Prom
   catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
 }
 
-function parseJournal(value: unknown): UpdateJournal {
-  if (!object(value) || value.schema_version !== 1 || !UPDATE_IDENTIFIER.test(String(value.manager_id))) throw new UpdateFailure("local_state_invalid");
+function parseJournal(value: unknown): UpdateJournalRecord {
+  if (!object(value) || value.schema_version !== 1 || typeof value.manager_id !== "string" || !UPDATE_IDENTIFIER.test(value.manager_id)) throw new UpdateFailure("local_state_invalid");
   if (value.recovery_identity !== undefined && (typeof value.recovery_identity !== "string" || !/^[a-f0-9]{64}$/u.test(value.recovery_identity))) throw new UpdateFailure("local_state_invalid");
   const operation = RunnerUpdateOperationSchema.safeParse(value.operation);
-  if (!operation.success || operation.data.manager_id !== value.manager_id) throw new UpdateFailure("local_state_invalid");
+  if (!operation.success) throw new UpdateFailure("local_state_invalid");
+  if (value.phase === "preparing") {
+    if (operation.data.manager_id !== null && operation.data.manager_id !== value.manager_id
+      || !["queued", "verifying"].includes(operation.data.state)
+      || Object.keys(value).some(key => !["schema_version", "operation", "manager_id", "recovery_identity", "phase"].includes(key))) throw new UpdateFailure("local_state_invalid");
+    return value as unknown as UpdatePreparation;
+  }
+  if (operation.data.manager_id !== value.manager_id) throw new UpdateFailure("local_state_invalid");
   const release = (candidate: unknown): boolean => object(candidate) && typeof candidate.version === "string" && isExactUpdateVersion(candidate.version)
     && typeof candidate.directory === "string" && candidate.directory.length <= 4096 && !/[\0\r\n]/u.test(candidate.directory);
   if (!release(value.previous) || (value.next !== undefined && !release(value.next))) throw new UpdateFailure("local_state_invalid");
@@ -64,18 +71,18 @@ function parseJournal(value: unknown): UpdateJournal {
   if (!object(service) || service.schema_version !== 1 || !["linux", "darwin", "win32"].includes(String(service.platform)) || !["user", "system"].includes(String(service.mode))
     || typeof service.registered !== "boolean" || typeof service.active !== "boolean" || typeof service.enabled !== "boolean" || typeof service.enablement !== "string" || service.enablement.length > 128
     || (service.pid !== undefined && (!Number.isSafeInteger(service.pid) || Number(service.pid) < 0))) throw new UpdateFailure("local_state_invalid");
-  return value as unknown as UpdateJournal;
+  return value as unknown as UpdateJournalRecord;
 }
 
 export class FileUpdateJournal implements UpdateJournalPort {
   public constructor(private readonly directory: string) {}
-  public async load(): Promise<UpdateJournal | undefined> {
+  public async load(): Promise<UpdateJournalRecord | undefined> {
     await assertManagerDirectory(this.directory);
     const value = await readManagerJson(join(this.directory, "active-operation.json"));
     return value === undefined ? undefined : parseJournal(value);
   }
-  public async save(journal: UpdateJournal): Promise<void> { await atomicJson(this.directory, "active-operation.json", parseJournal(journal)); }
-  public async complete(journal: UpdateJournal): Promise<void> {
+  public async save(journal: UpdateJournalRecord): Promise<void> { await atomicJson(this.directory, "active-operation.json", parseJournal(journal)); }
+  public async complete(journal: UpdateJournalRecord): Promise<void> {
     await atomicJson(this.directory, "last-operation.json", parseJournal(journal));
     await unlink(join(this.directory, "active-operation.json")); await syncDirectory(this.directory);
   }

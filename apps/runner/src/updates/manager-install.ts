@@ -1,4 +1,4 @@
-import { chmod, copyFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -6,7 +6,8 @@ import type { ServiceCommandExecutor, ServiceMode, ServicePlatform } from "../se
 import { hashContent, hostServiceCommandExecutor, isManagedService } from "../service.js";
 import { escapeSystemdArgument, escapeXml, windowsArguments } from "../services/escaping.js";
 import { nativeProbeReliable } from "../services/probes.js";
-import { hasStandardMaintenanceLaunch, maintenanceLayout } from "./native-service.js";
+import { hasStandardEffectiveMaintenanceLaunch, hasStandardMaintenanceLaunch, maintenanceLayout } from "./native-service.js";
+import { renderManagedLauncher, renderWindowsMaintenanceUninstall } from "./launchers.js";
 import type { MaintenanceLayout } from "./native-service.js";
 import { trustedWindowsEnvironment, trustedWindowsRoot } from "../windows-tools.js";
 
@@ -29,6 +30,7 @@ export interface MaintenanceManagerFilesystem {
   rename(source: string, destination: string): Promise<void>;
   remove(path: string): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
+  symlink(source: string, destination: string): Promise<void>;
 }
 
 export interface MaintenanceManagerOptions {
@@ -40,6 +42,8 @@ export interface MaintenanceManagerOptions {
   readonly uid?: number;
   readonly executor?: ServiceCommandExecutor;
   readonly filesystem?: MaintenanceManagerFilesystem;
+  /** Ordinary service removal retains the stable CLI for a later reinstall. */
+  readonly preservePackage?: boolean;
 }
 
 export interface MaintenanceManagerInstaller {
@@ -66,6 +70,7 @@ const hostFilesystem: MaintenanceManagerFilesystem = {
   rename,
   remove: path => rm(path, { recursive: true, force: true }),
   chmod,
+  symlink: (source, destination) => symlink(source, destination),
 };
 
 const LINUX_MANAGER = "runmesh-manager.service";
@@ -222,6 +227,56 @@ function managerHost(options: MaintenanceManagerOptions) {
   return { ...layout, filesystem, executor, prefix, domain, target, execute, ps, trusted, trustedTreePath, registered, stop };
 }
 
+async function installManagementLaunchers(host: ReturnType<typeof managerHost>, onRollback: (rollback: () => Promise<void>) => void): Promise<void> {
+  const { filesystem, path, layout, platform } = host;
+  const current = path.join(layout.installRoot, "current");
+  if (!(await filesystem.stat(current))?.symlink) throw new Error("managed current must be a link");
+  const version = await filesystem.realpath(current); const versions = path.join(layout.installRoot, "versions");
+  const relative = path.relative(versions, version);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || relative.includes(path.sep)) throw new Error("managed current escapes its versions directory");
+  await host.trustedTreePath(version, "directory", layout.installRoot);
+  const names = platform === "win32" ? ["runmesh.cmd", "runmesh-runner.cmd"] : ["bin/runmesh", "bin/runmesh-runner"];
+  const wrapper = renderManagedLauncher(platform, layout.installRoot);
+  const packageBundle = platform === "win32" ? path.join(version, "runmesh.cjs") : path.join(version, "lib", "node_modules", "@aloneio", "runmesh-runner", "dist", "runmesh.cjs");
+  const changed: { destination: string; content: string | undefined; info: MaintenanceManagerFileStat | undefined }[] = [];
+  const rollback = async () => {
+    for (const previous of [...changed].reverse()) {
+      if (await filesystem.read(previous.destination) !== wrapper) throw new Error("managed launcher changed during rollback");
+      if (previous.info === undefined) { await filesystem.remove(previous.destination); continue; }
+      const temporary = `${previous.destination}.${randomUUID()}.tmp`;
+      try {
+        if (previous.info.symlink) await filesystem.symlink(packageBundle, temporary);
+        else {
+          await filesystem.write(temporary, previous.content!);
+          if (platform !== "win32") await filesystem.chmod(temporary, previous.info.mode & 0o777);
+        }
+        await filesystem.rename(temporary, previous.destination);
+      } finally { await filesystem.remove(temporary).catch(() => undefined); }
+    }
+  };
+  onRollback(rollback);
+  for (const name of names) {
+    const destination = path.join(version, ...name.split("/"));
+    await host.trustedTreePath(path.dirname(destination), "directory", layout.installRoot);
+    const existing = await filesystem.stat(destination);
+    const content = existing === undefined ? undefined : await filesystem.read(destination);
+    if (existing !== undefined) {
+      if (existing.symlink) {
+        if (await filesystem.realpath(destination) !== packageBundle) throw new Error("managed launcher points outside its package");
+      } else await host.trustedTreePath(destination, "file", layout.installRoot);
+      if (!existing.symlink && content === wrapper) continue;
+    }
+    const temporary = `${destination}.${randomUUID()}.tmp`;
+    try {
+      await filesystem.write(temporary, wrapper);
+      if (platform !== "win32") await filesystem.chmod(temporary, 0o755);
+      // Rename replaces an npm bin symlink itself, never its signed target.
+      await filesystem.rename(temporary, destination);
+      changed.push({ destination, content, info: existing });
+    } finally { await filesystem.remove(temporary).catch(() => undefined); }
+  }
+}
+
 /** Initial installation copies once. Runner package changes never overwrite a live manager. */
 export async function managerInstall(options: MaintenanceManagerOptions): Promise<MaintenanceManagerInstallResult> {
   const host = managerHost(options);
@@ -230,6 +285,7 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
   if (runnerManifest === undefined || !isManagedService(runnerManifest)) throw new Error("maintenance manager requires a managed Runner installation");
   // Existing custom service definitions remain supported by the ordinary CLI.
   if (!hasStandardMaintenanceLaunch(runnerManifest, options)) return { enabled: false, reason: "custom_service_layout" };
+  if (!await hasStandardEffectiveMaintenanceLaunch(runnerManifest, options)) return { enabled: false, reason: "custom_service_layout" };
   await host.trustedTreePath(layout.installRoot, "directory", layout.installRoot);
   await host.trustedTreePath(layout.manifestPath, "file", path.dirname(layout.manifestPath));
   const profileBoundary = mode === "system" ? layout.configRoot : path.dirname(options.profilePath);
@@ -243,6 +299,7 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
   const existingRoot = await filesystem.stat(managerRoot);
   let created = false;
   let serviceAttempted = false;
+  let rollbackLaunchers: (() => Promise<void>) | undefined;
   const manifest = renderMaintenanceManager(options);
   const temporary = `${managerRoot}.staging.${randomUUID()}`;
   const temporaryManifest = `${manifestPath}.${randomUUID()}.tmp`;
@@ -291,6 +348,13 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
     } else if (previousManifest !== manifest.content) {
       throw new Error("maintenance manager definition differs from this installation");
     }
+    if (platform === "win32") {
+      const helper = path.join(managerRoot, "uninstall.ps1");
+      if (await filesystem.stat(helper) === undefined) await filesystem.write(helper, renderWindowsMaintenanceUninstall());
+      await host.trustedTreePath(helper, "file", layout.installRoot);
+      if (await filesystem.read(helper) !== renderWindowsMaintenanceUninstall()) throw new Error("maintenance uninstall helper differs from this installation");
+    }
+    await installManagementLaunchers(host, rollback => { rollbackLaunchers = rollback; });
     serviceAttempted = true;
     if (platform === "linux") {
       await host.execute("systemctl", [...host.prefix, "daemon-reload"]);
@@ -309,10 +373,12 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
   } catch (cause) {
     // Only a new manager belongs to this attempt. Preserve an existing one and
     // leave its independent package available for recovery after any failure.
+    let launchersRestored = true;
+    if (rollbackLaunchers !== undefined) { try { await rollbackLaunchers(); } catch { launchersRestored = false; } }
     if (created) {
       let stopped = !serviceAttempted;
       if (serviceAttempted) { try { await host.stop(); stopped = true; } catch { /* retain executable while its process may still exist */ } }
-      if (stopped) {
+      if (stopped && launchersRestored) {
         if (platform === "win32" && serviceAttempted) await host.execute("schtasks", ["/Delete", "/TN", WINDOWS_MANAGER, "/F"]).catch(() => undefined);
         if (previousManifest === undefined && await filesystem.read(manifestPath) === manifest.content) await filesystem.remove(manifestPath).catch(() => undefined);
         await filesystem.remove(managerRoot).catch(() => undefined);
@@ -325,12 +391,30 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
   }
 }
 
+async function assertFinishedManagerJournal(host: ReturnType<typeof managerHost>): Promise<void> {
+  const journalPath = host.path.join(host.managerRoot, "state", "active-operation.json");
+  if (await host.filesystem.stat(journalPath) === undefined) return;
+  await host.trustedTreePath(journalPath, "file", host.managerRoot);
+  let journal: unknown;
+  try { journal = JSON.parse(await host.filesystem.read(journalPath) ?? ""); } catch { throw new Error("maintenance journal is invalid; retain the manager for recovery"); }
+  if (typeof journal !== "object" || journal === null || !("phase" in journal) || !["succeeded", "rolled_back", "failed"].includes(String(journal.phase))) {
+    throw new Error("Runner maintenance is unfinished; recover it before uninstalling or purging the installation");
+  }
+}
+
 /** Stop the independent manager before removing its package or purging Runner state. */
 export async function managerUninstall(options: MaintenanceManagerOptions): Promise<void> {
   const host = managerHost(options);
   const existing = await host.filesystem.read(host.manifestPath);
   if (existing === undefined) {
-    if (await host.filesystem.stat(host.managerRoot) !== undefined) throw new Error("maintenance manager manifest is missing; refusing to remove an unverified package");
+    if (await host.filesystem.stat(host.managerRoot) !== undefined) {
+      const metadata = host.path.join(host.managerRoot, "installation.json");
+      await host.trustedTreePath(metadata, "file", host.layout.installRoot);
+      const expected = JSON.stringify({ schema_version: 1, platform: host.platform, mode: host.mode, profile_path: options.profilePath, install_root: host.layout.installRoot });
+      if (await host.filesystem.read(metadata) !== expected || await host.registered()) throw new Error("maintenance manager manifest is missing; refusing to remove an unverified package");
+      await assertFinishedManagerJournal(host);
+      if (!options.preservePackage) await host.filesystem.remove(host.managerRoot);
+    }
     return;
   }
   if (!managedManager(existing)) throw new Error("refusing to remove an unmanaged maintenance service");
@@ -340,21 +424,12 @@ export async function managerUninstall(options: MaintenanceManagerOptions): Prom
   // Native stop releases the manager's installer lease before this read. A
   // crash or interrupted switch must keep its independent runtime and journal
   // available for recovery; uninstall/purge may not destroy that evidence.
-  const journalPath = host.path.join(host.managerRoot, "state", "active-operation.json");
-  const journalInfo = await host.filesystem.stat(journalPath);
-  if (journalInfo !== undefined) {
-    await host.trustedTreePath(journalPath, "file", host.managerRoot);
-    let journal: unknown;
-    try { journal = JSON.parse(await host.filesystem.read(journalPath) ?? ""); } catch { throw new Error("maintenance journal is invalid; retain the manager for recovery"); }
-    if (typeof journal !== "object" || journal === null || !("phase" in journal) || !["succeeded", "rolled_back", "failed"].includes(String(journal.phase))) {
-      throw new Error("Runner maintenance is unfinished; recover it before uninstalling or purging the installation");
-    }
-  }
+  await assertFinishedManagerJournal(host);
   if (host.platform === "win32" && await host.registered()) await host.execute("schtasks", ["/Delete", "/TN", WINDOWS_MANAGER, "/F"]);
   if (await host.filesystem.read(host.manifestPath) !== existing) throw new Error("maintenance service changed during removal");
   await host.filesystem.remove(host.manifestPath);
   if (host.platform === "linux") await host.execute("systemctl", [...host.prefix, "daemon-reload"]);
-  await host.filesystem.remove(host.managerRoot);
+  if (!options.preservePackage) await host.filesystem.remove(host.managerRoot);
 }
 
 export const hostMaintenanceManager: MaintenanceManagerInstaller = { install: managerInstall, uninstall: managerUninstall };
