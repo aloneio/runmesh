@@ -21,14 +21,14 @@ const TOOL_RESULT_MARKER = "RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=";
 const WORKER_MARKER = "RUNMESH_E2E_MCP_WORKER_EVENT=";
 const jobStatuses = ["queued", "running", "cancelling", "succeeded", "failed", "cancelled", "interrupted", "unknown", "absent", "other"];
 const toolResultFields = {
-  phase: ["inspect_search_initial", "inspect_search_continuation", "other"],
+  phase: ["inspect_search_initial", "inspect_search_continuation", "job_logs_initial", "job_logs_continuation", "job_logs_stderr", "other"],
   result: ["error", "success", "absent", "other"],
   // Fixed public RPC codes relevant to native tool admission and bounded reads.
   // Other codes remain classified as "other", never reflected from the result.
   error_code: ["invalid_params", "invalid_request", "invalid_path", "path_traversal", "invalid_workspace", "runner_not_selected",
     "permission_denied", "insufficient_scope", "readonly_workspace", "stale_policy", "policy_pending", "runner_not_active", "runner_expired", "runner_not_authorized",
     "runner_offline", "service_unavailable", "registry_unavailable", "control_plane_unavailable", "timeout", "runner_access_unavailable",
-    "runner_upgrade_required", "runner_unavailable", "no_runners_available", "file_changed", "path_changed", "cursor_mismatch", "cursor_expired",
+    "runner_upgrade_required", "runner_unavailable", "no_runners_available", "job_history_unavailable", "log_unavailable", "log_changed", "file_changed", "path_changed", "cursor_mismatch", "cursor_expired",
     "search_snapshot_changed", "not_found", "read_budget_exhausted", "snapshot_too_large", "file_too_large", "queue_full", "busy",
     "authorization_response_invalid", "internal_error", "runner_rpc_failed", "tool_result_invalid", "absent", "other"],
   failure_class: ["validation", "authorization", "availability", "conflict", "resource", "execution", "internal", "unknown", "absent", "other"],

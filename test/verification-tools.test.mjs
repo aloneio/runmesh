@@ -289,6 +289,22 @@ test("MCP tool-result diagnostics normalize unknown, missing and malformed resul
     failure_class: "other", operation_state: "other", next_action: "other" });
 });
 
+test("Job log failure assertions preserve the original tool classification in browser evidence", () => {
+  for (const phase of ["job_logs_initial", "job_logs_continuation", "job_logs_stderr"]) {
+    for (const code of ["job_history_unavailable", "log_unavailable", "log_changed", "timeout", "runner_offline"]) {
+      const result = { isError: true, structuredContent: { error: { code, message: "private-error", details: { job_id: "private-job", data: "private-output" } } } };
+      const marker = mcpToolResultDiagnostic(phase, result);
+      const detail = { phase, result: "error", error_code: code, failure_class: "absent", operation_state: "absent", next_action: "absent" };
+      const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
+        "AssertionError: " + marker + ": expected true to not be true\n    at /private/test/e2e/mcp-runner.e2e.test.ts:510:42",
+      ] }] }] });
+      assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: detail,
+        location: { file: "test/e2e/mcp-runner.e2e.test.ts", line: 510, column: 42 } }]);
+      assert.ok(!JSON.stringify(summary).includes("private"));
+    }
+  }
+});
+
 test("MCP tool-result decoder projects a bounded enum record and rejects forged fields and marker lines", () => {
   const detail = { phase: "inspect_search_initial", result: "error", error_code: "timeout", failure_class: "availability", operation_state: "unknown", next_action: "inspect_job" };
   const marker = value => "RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=" + JSON.stringify(value);

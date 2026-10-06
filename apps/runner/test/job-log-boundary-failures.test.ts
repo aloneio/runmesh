@@ -29,6 +29,31 @@ async function completed(manager: JobManager, source = "") {
 }
 
 describe.sequential("public Job log fault boundaries", () => {
+  it.each([1, 3])("paginates completed multibyte stdout to EOF across %s-byte OS reads", async readBytes => {
+    const f = await fixture({ ...nativeJobFiles, openJobLog: async (path, mode) => {
+      const handle = await nativeJobFiles.openJobLog(path, mode);
+      if (mode === "read") {
+        const read = handle.read.bind(handle);
+        handle.read = (async (buffer: Buffer, offset: number, length: number, position: number | null) => read(buffer, offset, Math.min(readBytes, length), position)) as FileHandle["read"];
+      }
+      return handle;
+    } });
+    const job = await completed(f.manager, "process.stdout.write('😀é😀'); process.stderr.write('stderr-page\\n')");
+    const expected = [
+      { data: "😀", offset: 0, returned_bytes: 4, next_cursor: "4", resume_offset: 4, page_state: "more" },
+      { data: "é", offset: 4, returned_bytes: 2, next_cursor: "6", resume_offset: 6, page_state: "more" },
+      { data: "😀", offset: 6, returned_bytes: 4, next_cursor: null, resume_offset: 10, page_state: "end" },
+    ];
+    let cursor: string | undefined;
+    for (const page of expected) {
+      const actual = await f.manager.logs(job.job_id, { stream: "stdout", limit: 4, ...(cursor === undefined ? {} : { cursor }) });
+      expect(actual).toMatchObject({ ...page, page_protocol: 1, size: 10, total_bytes: 10, pending_bytes: 0 });
+      cursor = typeof actual.next_cursor === "string" ? actual.next_cursor : undefined;
+    }
+    expect(cursor).toBeUndefined();
+    expect(await f.manager.logs(job.job_id, { stream: "stderr", limit: 1024 })).toMatchObject({ data: "stderr-page\n", returned_bytes: 12, page_state: "end" });
+  });
+
   it.each(["live", "append"])("aligns %s UTF-8 offsets and tails across short OS reads", async consistency => {
     const f = await fixture({ ...nativeJobFiles, openJobLog: async (path, mode) => {
       const handle = await nativeJobFiles.openJobLog(path, mode);
