@@ -498,7 +498,7 @@ const definitions = {
   "text.unique.runtime": { en: "Unique runtime", "zh-CN": "唯一运行时" },
   "text.revision.applied.desired": { en: "Revision applied / desired", "zh-CN": "已应用 / 期望版本" },
   "text.heartbeat": { en: "Heartbeat", "zh-CN": "心跳" },
-  "text.choose.target.version.and.update.runner.host": { en: "Choose the latest release for this environment or an exact version. The host manager verifies it, waits for current work to finish, then switches the service. Hosts without a managed installation remain queued.", "zh-CN": "选择当前环境的最新版本或指定精确版本。主机管理器会验证版本、等待当前任务完成，再切换服务。未安装受管管理器的主机会保持等待状态。" },
+  "text.choose.target.version.and.update.runner.host": { en: "Choose the latest release for this environment or enter an exact version.", "zh-CN": "选择当前环境的最新版本，或输入精确版本号。" },
   "text.hosted.distribution.is.not.configured.portable.artifact.manual.version.management.only": { en: "Hosted distribution is not configured. Portable artifact/manual version management only.", "zh-CN": "托管分发尚未配置；目前只能使用便携版制品并手动管理版本。" },
   "text.effective.global.scopes": { en: "Effective Global Scopes", "zh-CN": "生效的全局权限范围" },
   "text.read.2": { en: "Read", "zh-CN": "读取" },

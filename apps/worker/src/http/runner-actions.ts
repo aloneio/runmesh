@@ -21,6 +21,7 @@ import { runnerQueryPorts } from "../platform/control-plane-receipts.js";
 import { runnerRegistryRequest } from "../platform/control-plane.js";
 import { resolveRunnerReleaseDescriptor } from "../distribution/release.js";
 import { resolveExactRunnerRelease } from "../distribution/exact-release.js";
+import { developmentReleaseFailure } from "../distribution/release-io.js";
 import { RunnerExactVersionSchema } from "@aloneio/runmesh-protocol";
 import { runnerWindowFromForm } from "./input.js";
 import { validLabel } from "./input.js";
@@ -73,7 +74,10 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
       const latest = updateChannel === "stable" ? await resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(env), scheduleRefresh) : undefined;
       if (latest !== undefined && !latest.distributable) return adminRunnerError(503, "The current environment has no verified Runner release.");
       target = await resolveExactRunnerRelease(latest?.package_version ?? desired as string);
-    } catch { return adminRunnerError(503, "The selected Runner release could not be verified. No version change was requested."); }
+    } catch (error) {
+      console.warn({ event: "runner_update_release_verification_failed", ...developmentReleaseFailure(error, "verification") });
+      return adminRunnerError(503, "The selected Runner release could not be verified. No version change was requested.");
+    }
     const response = await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/update`, {
       operation_id: operationId, expected_lifecycle_id: state.snapshot.lifecycleId, update_channel: updateChannel,
       target_version: target.package_version, target_channel: target.package_version.includes("-dev.") ? "dev" : "stable",

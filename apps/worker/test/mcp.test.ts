@@ -667,7 +667,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const runnerDetail = await SELF.fetch("https://worker.test/admin/runners/dashboard-runner", { headers: { cookie: cookies(adminJar) } });
     expect(runnerDetail.status).toBe(200);
     const runnerDetailHtml = await runnerDetail.text();
-    expect(runnerDetailHtml).toContain("Version policy"); expect(runnerDetailHtml).toContain("Stable/latest version"); expect(runnerDetailHtml).toContain("value=\"1.2.0\""); expect(runnerDetailHtml).toContain("Pinned");
+    expect(runnerDetailHtml).toContain("Runner version"); expect(runnerDetailHtml).toContain("Stable/latest version"); expect(runnerDetailHtml).toContain("value=\"1.2.0\""); expect(runnerDetailHtml).toContain("Pinned");
     expect(runnerDetailHtml).toContain("Waiting for the host manager"); expect(runnerDetailHtml).toContain('name="operation_id"');
     expect(runnerDetailHtml).toContain("<!doctype html>"); expect(runnerDetailHtml).toContain('<meta name="color-scheme" content="light">'); expect(runnerDetailHtml).toContain('class="app-header"'); expect(runnerDetailHtml).toContain('class="active" aria-current="page" href="/admin/runners"'); expect(runnerDetailHtml).not.toContain('data-theme-toggle'); expect(runnerDetailHtml).not.toContain("localStorage.getItem('runmesh-theme')"); expect(runnerDetailHtml).not.toContain(':root[data-theme="dark"]'); expect(runnerDetailHtml).not.toContain("Add Runner</a>"); expect(runnerDetailHtml).not.toContain("Add MCP Client</a>"); expect(runnerDetailHtml).not.toContain("token_verifier");
     const headerLogoSvgTag = /<svg\b[^>]*\bclass=["'][^"']*\bheader-mesh-mark\b[^"']*["'][^>]*role=["']img["'][^>]*aria-label=["'][^"']+["'][^>]*>/i;

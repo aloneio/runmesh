@@ -39,7 +39,7 @@ export function developmentReleaseFailure(error: unknown, phase: DevelopmentRele
 function releaseError(error: unknown, phase: DevelopmentReleaseFailure["phase"], reason: DevelopmentReleaseFailure["reason"]): DevelopmentReleaseError {
   return error instanceof DevelopmentReleaseError ? error : new DevelopmentReleaseError(error instanceof Error ? error.message : "development release failed", { phase, reason });
 }
-async function releasePhase<T>(phase: DevelopmentReleaseFailure["phase"], reason: DevelopmentReleaseFailure["reason"], work: () => T | Promise<T>): Promise<T> {
+export async function releasePhase<T>(phase: DevelopmentReleaseFailure["phase"], reason: DevelopmentReleaseFailure["reason"], work: () => T | Promise<T>): Promise<T> {
   try { return await work(); }
   catch (error) { throw releaseError(error, phase, error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name) ? "timeout" : reason); }
 }
