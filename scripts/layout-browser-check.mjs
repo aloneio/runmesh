@@ -17,6 +17,7 @@ import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
 // Reuse public render fixtures; measurements exercise the shipped CSS and browser bundle.
 const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage, clientsPage, clientDetailPage, runnersPage, runnerDetailPage };
 const viewports = [320, 390, 768, 800, 801, 900, 1024, 1050, 1051, 1064, 1365, 1440, 1787];
+const runnerUpdateOperation = 'layout-update-operation';
 async function fixtureDocuments() {
   const { cases } = JSON.parse(await readFile(new URL('../apps/worker/test/fixtures/admin-render-golden.json', import.meta.url), 'utf8'));
   const documents = new Map();
@@ -25,6 +26,7 @@ async function fixtureDocuments() {
     if (fixture.fn === 'runnersPage') args.unshift({ ...fixture.presentation, configuredModes: new Map(Object.entries(fixture.presentation.configuredModes)) });
     if (fixture.fn === 'runnerDetailPage') {
       const [runner, workspaces, jobs, environment, csrf, release] = args;
+      runner.update_request_id = runnerUpdateOperation;
       args.splice(0, args.length, { presentation: fixture.presentation,
         runner, workspaces, jobs: jobs ?? undefined, environment: environment ?? undefined, csrf, release });
     }
@@ -40,6 +42,15 @@ async function fixtureDocuments() {
   clientData.clients.push({ ...clientData.clients[0], client_id: 'client-revoked', revoked_at_ms: Date.UTC(2026, 9, 4) });
   documents.set('/layout/clients-long-values', adminDocument('Client layout fixture', clientsPage(clientData, csrf), 'clients'));
   documents.set('/layout/client-detail-long-values', adminDocument('Client detail layout fixture', clientDetailPage(clientData.clients[0], clientData.runners, [], csrf), 'clients'));
+  const runnerFixture = cases.find(fixture => fixture.name === 'runners-populated');
+  const [runnerData, runnerCsrf] = structuredClone(runnerFixture.args);
+  const configuredModes = new Map(Object.entries(runnerFixture.presentation.configuredModes));
+  const originalRunnerId = runnerData.runners[0].runner_id;
+  runnerData.runners[0] = { ...runnerData.runners[0], display_name: 'ProductionRunnerWithoutSpaces'.repeat(5),
+    runner_id: 'runner-' + '0123456789abcdef'.repeat(2), last_heartbeat_ms: Date.UTC(2026, 9, 4, 0, 50, 21, 590) };
+  configuredModes.set(runnerData.runners[0].runner_id, configuredModes.get(originalRunnerId));
+  configuredModes.delete(originalRunnerId);
+  documents.set('/layout/runners-long-values', adminDocument('Runner layout fixture', runnersPage({ ...runnerFixture.presentation, configuredModes }, runnerData, runnerCsrf), 'runners'));
   documents.set('/layout/central', adminDocument('MCP & Skill', centralPage('fixture-csrf', true, true), 'central'));
   for (const [name, bootstrap, executionMode] of [
     ['one-command', true, 'dedicated_user'], ['privileged', true, 'privileged_host'], ['manual', false, 'dedicated_user'],
@@ -76,8 +87,34 @@ async function layoutIssues(page) {
     const inside = (a, b) => a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && a.bottom <= b.bottom + 1;
     if (document.documentElement.scrollWidth > innerWidth + 1) issues.push('page overflows horizontally');
     const header = document.querySelector('.app-header');
-    if (header) for (const node of header.querySelectorAll('.brand,.control-nav,.header-actions')) {
+    if (header) for (const node of header.querySelectorAll('.brand,.header-actions')) {
       if (!inside(rect(node), rect(header))) issues.push('header clips ' + node.className);
+    }
+    const navigation = document.querySelector('.control-nav'), rail = document.querySelector('.nav-rail');
+    if (navigation) {
+      if (!rail || !rail.contains(navigation)) issues.push('main navigation is outside its rail');
+      else {
+        if (!inside(rect(navigation), rect(rail))) issues.push('navigation crosses its rail boundary');
+        for (const link of navigation.querySelectorAll('a')) {
+          if (!visible(link)) issues.push('navigation link is hidden: ' + link.textContent.trim());
+          if (!inside(rect(link), rect(navigation)) || !inside(rect(link), rect(rail))) issues.push('navigation link is clipped: ' + link.textContent.trim());
+          const range = document.createRange(); range.selectNodeContents(link);
+          if ([...range.getClientRects()].some(line => !inside(line, rect(link)))) issues.push('navigation link clips its content: ' + link.textContent.trim());
+        }
+        const main = document.querySelector('#main-content');
+        if (main) {
+          const content = rect(main), area = rect(rail);
+          if (getComputedStyle(rail).position === 'fixed') {
+            if (content.left < area.right - 1 && content.right > area.left + 1 && content.top < area.bottom - 1 && content.bottom > area.top + 1) issues.push('fixed navigation rail overlaps main content');
+          } else {
+            // The mobile rail belongs to the sticky header. Compare the main's
+            // document origin with the header's normal-flow space, not its
+            // viewport position after filling a field has scrolled the page.
+            const occupiedHeight = header?.contains(rail) ? rect(header).height : area.bottom + scrollY;
+            if (content.top + scrollY < occupiedHeight - 1) issues.push('mobile navigation overlaps main content');
+          }
+        }
+      }
     }
     for (const button of document.querySelectorAll('button,.button')) {
       if (!visible(button) || !button.textContent.trim()) continue;
@@ -92,34 +129,38 @@ async function layoutIssues(page) {
       const button = form.querySelector('button'), area = rect(form), control = rect(button);
       if (['top', 'bottom', 'left', 'right'].some(edge => Math.abs(area[edge] - control[edge]) > 1)) issues.push('client action button does not fill its grid cell');
     }
-    for (const cell of document.querySelectorAll('.client-table td')) {
-      const area = rect(cell), column = cell.cellIndex + 1;
-      if (column === 5 && getComputedStyle(cell).display === 'block') {
+    for (const cell of document.querySelectorAll('.client-table td,.runner-table td')) {
+      const area = rect(cell), column = cell.cellIndex + 1, table = cell.closest('table').classList.contains('client-table') ? 'client' : 'runner';
+      if (table === 'client' && column === 5 && getComputedStyle(cell).display === 'block') {
         const label = getComputedStyle(cell, '::before').content.slice(1, -1);
         const heading = cell.closest('table').querySelector('th:nth-child(5)').textContent.trim();
         if (label.toLowerCase() !== heading.toLowerCase()) issues.push('mobile client status loses its credential context');
       }
-      for (const control of cell.querySelectorAll('input:not([type=hidden]),select,button,a,.runner-selection-controls,.runner-selection-form')) {
-        if (visible(control) && !inside(rect(control), area)) issues.push('client column ' + column + ' control crosses its cell boundary');
+      for (const control of cell.querySelectorAll('input:not([type=hidden]),select,button,a,summary,.runner-selection-controls,.runner-selection-form,.runner-actions')) {
+        if (visible(control) && !inside(rect(control), area)) issues.push(table + ' column ' + column + ' control crosses its cell boundary');
       }
       const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
       for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-        if (!text.textContent.trim() || text.parentElement.closest('select,option') || !visible(text.parentElement)) continue;
+        if (!text.textContent.trim() || text.parentElement.closest('select,option,.sr-only,[hidden],[aria-hidden="true"]') || !visible(text.parentElement)) continue;
         const range = document.createRange(); range.selectNodeContents(text);
-        if ([...range.getClientRects()].some(line => !inside(line, area))) issues.push('client column ' + column + ' text crosses its cell boundary');
+        if ([...range.getClientRects()].some(line => !inside(line, area))) issues.push(table + ' column ' + column + ' text crosses its cell boundary');
       }
     }
-    for (const node of document.querySelectorAll('.client-table .credential-badge,.client-table .timestamp>span')) {
+    for (const node of document.querySelectorAll('.client-table .credential-badge,.client-table .timestamp>span,.runner-table .badge,.runner-table .timestamp>span')) {
+      if (!visible(node)) continue;
+      const table = node.closest('table').classList.contains('client-table') ? 'client' : 'runner';
       const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
       for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-        if (!text.textContent.trim()) continue;
+        if (!text.textContent.trim() || text.parentElement.closest('.sr-only,[hidden],[aria-hidden="true"]')) continue;
         const range = document.createRange(); range.selectNodeContents(text);
-        if (range.getClientRects().length !== 1) issues.push('client status or timestamp line wraps inside its text');
+        if (range.getClientRects().length !== 1) issues.push(table + ' status or timestamp line wraps inside its text');
       }
     }
-    for (const timestamp of document.querySelectorAll('.client-table .timestamp')) {
+    for (const timestamp of document.querySelectorAll('.client-table .timestamp,.runner-table .timestamp')) {
+      if (!visible(timestamp)) continue;
+      const table = timestamp.closest('table').classList.contains('client-table') ? 'client' : 'runner';
       const [date, clock] = [...timestamp.children].map(rect);
-      if (clock.top < date.bottom - 1 || Math.abs(clock.left - date.left) > 1) issues.push('client date and UTC time are not aligned on separate lines');
+      if (clock.top < date.bottom - 1 || Math.abs(clock.left - date.left) > 1) issues.push(table + ' date and UTC time are not aligned on separate lines');
     }
     const recording = document.querySelector('form[action$="/recording"]');
     if (recording) {
@@ -150,6 +191,39 @@ async function layoutIssues(page) {
     }
     return [...new Set(issues)];
   });
+}
+
+async function checkRunnerVersionForm(page) {
+  const form = page.locator('.version-policy-form');
+  const channel = form.locator('select[name="update_channel"]');
+  const desired = form.locator('input[name="desired_runner_version"]');
+  assert.equal(await channel.isVisible(), true, 'Runner version channel must be visible');
+  assert.equal(await desired.isVisible(), true, 'Runner target version must be visible');
+  assert.equal(await form.getAttribute('method'), 'post');
+  assert.match(await form.getAttribute('action'), /^\/admin\/runners\/[^/]+\/version-policy$/);
+  const initial = await form.evaluate(node => Object.fromEntries(new FormData(node)));
+  assert.deepEqual(Object.keys(initial).sort(), ['csrf_token', 'desired_runner_version', 'operation_id', 'update_channel']);
+  assert.ok(initial.csrf_token.length > 0, 'Runner version form keeps its CSRF value');
+  assert.equal(initial.operation_id, runnerUpdateOperation);
+  assert.deepEqual(await channel.locator('option').evaluateAll(options => options.map(option => option.value)), ['stable', 'pinned']);
+
+  // Exercise old releases and development versions locally; never submit a version change.
+  await channel.selectOption('pinned');
+  for (const version of ['0.1.6', '0.1.8-dev.45']) {
+    await desired.fill(version);
+    assert.equal(await form.evaluate(node => node.checkValidity()), true);
+    assert.deepEqual(await form.evaluate(node => Object.fromEntries(new FormData(node))), {
+      ...initial, update_channel: 'pinned', desired_runner_version: version,
+    });
+  }
+  await channel.selectOption('stable');
+  await desired.fill('');
+  assert.equal(await form.evaluate(node => node.checkValidity()), true, 'Latest release selection needs no exact version');
+  assert.deepEqual(await form.evaluate(node => Object.fromEntries(new FormData(node))), {
+    ...initial, update_channel: 'stable', desired_runner_version: '',
+  });
+  await channel.selectOption('pinned');
+  await desired.fill('0.1.6');
 }
 
 /** Geometry and text only: never capture screenshots or use a user's browser. */
@@ -193,6 +267,12 @@ export async function checkAdminLayout(executable) {
         const after = await fields.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().toJSON()));
         if (before.some((r, index) => ['x', 'y', 'width', 'height'].some(key => Math.abs(r[key] - after[index][key]) > 1))) failures.push({ locale, width, path, issue: 'opening permissions moves input fields' });
         await measure('permissions-open');
+        for (const disclosure of await page.locator('.client-table .row-actions-disclosure').all()) {
+          await disclosure.locator('summary').click();
+          assert.equal(await disclosure.evaluate(node => node.open), true);
+          for (const action of await disclosure.locator('button,input:not([type=hidden])').all()) assert.equal(await action.isVisible(), true);
+        }
+        await measure('client-actions-open');
       }
       if (path.endsWith('/central')) {
         await page.locator('[data-central-tab=skills]').click();
@@ -202,9 +282,30 @@ export async function checkAdminLayout(executable) {
         for (const summary of await page.locator('.row-actions-more summary').all()) await summary.click();
         await measure('actions-open');
       }
+      if (path.includes('runner-detail')) {
+        await checkRunnerVersionForm(page);
+        await measure('pinned-version');
+      }
       if (path.includes('/enrollment-')) {
         await page.getByRole('tab', { name: 'Windows', exact: true }).click();
         await measure('windows-command');
+        if (width === 390) {
+          // Exercise the shipped copy handler without touching the host clipboard.
+          await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true,
+            value: { writeText: async text => { window.removalCommandCopied = text; } } }));
+          const removal = page.locator('.runner-removal-commands');
+          await removal.locator('summary').click();
+          const commands = await removal.locator('pre code').allTextContents();
+          const buttons = await removal.locator('button[data-copy]').all();
+          assert.equal(buttons.length, 2, 'Both host command variants have a copy action');
+          for (let index = 0; index < buttons.length; index++) {
+            assert.equal(await buttons[index].getAttribute('data-copy'), commands[index]);
+            await buttons[index].click();
+            assert.equal(await page.evaluate(() => window.removalCommandCopied), commands[index], 'Copy exactly the displayed uninstall command');
+            assert.equal(await buttons[index].textContent(), locale === 'en' ? 'Copied' : '已复制');
+          }
+          await measure('removal-commands-copied');
+        }
       }
     }
     // A resized command panel must return to its natural wide-layout height.
@@ -219,7 +320,9 @@ export async function checkAdminLayout(executable) {
     assert.ok(Math.abs(resizedHeight - freshHeight) <= 1, 'Command panels must release the height measured on a narrow viewport');
     assert.deepEqual(errors, [], 'Layout fixtures must not throw browser errors');
     assert.deepEqual(failures, [], 'UI geometry regressions: ' + JSON.stringify(failures));
-    return { state: 'passed', measurements, locales: ['en', 'zh-CN'], viewports, client_cell_content_contained: true, recording_form_order_and_alignment: true, screenshots: 0 };
+    return { state: 'passed', measurements, locales: ['en', 'zh-CN'], viewports, navigation_rail_contained: true,
+      client_cell_content_contained: true, runner_cell_content_contained: true, runner_version_form_preserved: true,
+      recording_form_order_and_alignment: true, uninstall_command_copy_preserved: true, screenshots: 0 };
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 }
 

@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "6febec1cb83a2292135e9d635e677a4f59c1039d461e18d74c87a5098c32ce9d",
-      "bytes": 136013,
+      "sha256": "73acd0cd43f2f3a54eaa2ddf9c0d940aee19b85891e83c33ad66dac643cdb2d9",
+      "bytes": 134309,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "7fdf33344aaa59c76e2f34fd6dd9dda8d5760a10a0ec5f87262d4947945b2d2f",
-      "bytes": 136601,
+      "sha256": "ba98d71e3a4310d4d4adaaaef710c3681ebfc4ec86927a45d4b2aadd7b3f1599",
+      "bytes": 134897,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "edf1981eb2f7d1b0433f2157b398e3553df07f11d529e8ed806c540257e1430e",
-      "bytes": 137749,
+      "sha256": "5cfc950ecb81698f6daeb36c5060665f096f0a91d1698da812c54d9d6071ca2e",
+      "bytes": 137259,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -76,8 +76,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "78bd5604b1ee384d37945e130fda94c5b30b2069e2c971796dcf814155e3e53f",
-      "bytes": 2065
+      "sha256": "c9c66a4253ae0393de6b44435768da766706f32f88e3b3139b3be4f8c3902302",
+      "bytes": 2954
     },
     {
       "name": "overview-populated",
@@ -127,8 +127,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "1b0e675c5e2f1bdba0c966779a0370c6e2da363f9cd3f894e1f89af090f56371",
-      "bytes": 3196,
+      "sha256": "6c4b375d2c3591f8a4509790acef4a170a364e5334e6c4779835622179a496ef",
+      "bytes": 3803,
       "original_sha256": "b94fb8d802373820755732a807fc8cdc9d4f579a0d40b21cafdcac121ff7a957",
       "original_bytes": 3219,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -158,8 +158,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "209ac6830d6fd1c86aef6bd8ae7446c7242e0a6f42cbaadaa3e120339b5e558e",
-      "bytes": 1999,
+      "sha256": "a217ca10d2d96f7f489cbf91724511c759f1ff8d672bd369e177600a44c7be2c",
+      "bytes": 2542,
       "pre_presence_bytes": 1658,
       "pre_presence_sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
       "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
@@ -217,8 +217,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "e93e35d3ae5f68d0ccfc78bd4c1af2851e4e29a22ee7a886edab9df427cfe41f",
-      "bytes": 4738,
+      "sha256": "0b5c90bd200d5775433e45205688f3d96cd15445fd7147aa13cb4a8e1b1ff867",
+      "bytes": 5568,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -273,8 +273,8 @@
         [],
         "fixture-csrf-<>&\""
       ],
-      "sha256": "face56acc8c36fcc28b5a6bbc105881920c50e4bebdd0db367c9b521e034152d",
-      "bytes": 7170,
+      "sha256": "9cff359b35e30c0d225a81d9de21a636205a450a223afc070864dfa6f8f8f074",
+      "bytes": 6701,
       "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
       "original_bytes": 6638,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -295,8 +295,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "59e21717a2a06e07ab125f4348bf1ff7e92399efbfc88c33d27dd84471a4a74d",
-      "bytes": 3200,
+      "sha256": "c9042eb621c6444b78480febb1e64215bc9c405f0f6765d36e1a08b539d21848",
+      "bytes": 3479,
       "presentation": {
         "configuredModes": {},
         "maxValidityDays": 3650
@@ -350,8 +350,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "ef01b4d6eb79d546e439f3549a337d9c36df526e52ed8c808560fa7143b6eba6",
-      "bytes": 6852,
+      "sha256": "fbb37a0a2b39e2dd433d4205f6e9827c196903d6049821cf6c024a8e0f715ee6",
+      "bytes": 7269,
       "presentation": {
         "configuredModes": {
           "runner-fixture": null
@@ -395,8 +395,8 @@
           "distributable": true
         }
       ],
-      "sha256": "12061f03e8747210f22afeee4a357432700caeaafa6af233e56ba5728f15513d",
-      "bytes": 14332,
+      "sha256": "c5f62420ef4d8d42437700bec9427b4b82315515d7e4fa3d7dce8b7e68956b40",
+      "bytes": 14727,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "a9d78455154bf06d9183931567f2f3c1e7e012315848c7bc20958bd27207dc2f",
-      "bytes": 138098,
+      "sha256": "d5e78511d5a3e3e5b5cfa6c986d7f10c2a15ce59dac1212c0b055705b13dd479",
+      "bytes": 137608,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -754,5 +754,71 @@
     "reviewed_change": "Use the Runner version heading and one sentence describing latest or exact version selection. Substituting only these two text changes reproduces the previous byte count and hash.",
     "previous_bytes": 14469,
     "previous_sha256": "28c90562dbf06051deeb22e8fbbd6313aa0a0b5cf3136d18b7ec69c394fc116a"
+  },
+  "console_ui_review": {
+    "source_base": "1414824e3ee71acefd558e553e31f615a438ffea",
+    "reviewed_change": "Reviewed persistent sidebar navigation, shared style modules, resource-first lists, grouped management actions, prioritized Runner version controls, accessible table headings and two-line timestamps. Existing form actions, fields, CSRF and translation annotations were compared by renderer and browser checks.",
+    "previous": [
+      {
+        "name": "login",
+        "bytes": 136013,
+        "sha256": "6febec1cb83a2292135e9d635e677a4f59c1039d461e18d74c87a5098c32ce9d"
+      },
+      {
+        "name": "setup",
+        "bytes": 136601,
+        "sha256": "7fdf33344aaa59c76e2f34fd6dd9dda8d5760a10a0ec5f87262d4947945b2d2f"
+      },
+      {
+        "name": "secret",
+        "bytes": 137749,
+        "sha256": "edf1981eb2f7d1b0433f2157b398e3553df07f11d529e8ed806c540257e1430e"
+      },
+      {
+        "name": "overview-empty",
+        "bytes": 2065,
+        "sha256": "78bd5604b1ee384d37945e130fda94c5b30b2069e2c971796dcf814155e3e53f"
+      },
+      {
+        "name": "overview-populated",
+        "bytes": 3196,
+        "sha256": "1b0e675c5e2f1bdba0c966779a0370c6e2da363f9cd3f894e1f89af090f56371"
+      },
+      {
+        "name": "clients-empty",
+        "bytes": 1999,
+        "sha256": "209ac6830d6fd1c86aef6bd8ae7446c7242e0a6f42cbaadaa3e120339b5e558e"
+      },
+      {
+        "name": "clients-populated",
+        "bytes": 4738,
+        "sha256": "e93e35d3ae5f68d0ccfc78bd4c1af2851e4e29a22ee7a886edab9df427cfe41f"
+      },
+      {
+        "name": "client-detail",
+        "bytes": 7170,
+        "sha256": "face56acc8c36fcc28b5a6bbc105881920c50e4bebdd0db367c9b521e034152d"
+      },
+      {
+        "name": "runners-empty",
+        "bytes": 3200,
+        "sha256": "59e21717a2a06e07ab125f4348bf1ff7e92399efbfc88c33d27dd84471a4a74d"
+      },
+      {
+        "name": "runners-populated",
+        "bytes": 6852,
+        "sha256": "ef01b4d6eb79d546e439f3549a337d9c36df526e52ed8c808560fa7143b6eba6"
+      },
+      {
+        "name": "runner-detail",
+        "bytes": 14332,
+        "sha256": "12061f03e8747210f22afeee4a357432700caeaafa6af233e56ba5728f15513d"
+      },
+      {
+        "name": "admin-document",
+        "bytes": 138098,
+        "sha256": "a9d78455154bf06d9183931567f2f3c1e7e012315848c7bc20958bd27207dc2f"
+      }
+    ]
   }
 }

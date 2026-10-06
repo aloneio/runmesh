@@ -438,6 +438,30 @@ function controlsFixture() {
   return { controls, copied, root };
 }
 
+test("same-page anchors use their own page and current header without replacing native navigation", () => {
+  const header = { offsetHeight: 154 }, stale = element(), current = element();
+  stale.id = current.id = "add-client";
+  const document = { documentElement: { lang: "en" }, querySelector: selector => selector === ".app-header" ? header : null };
+  const location = { href: "https://worker.test/admin/clients" };
+  const controls = createPageControls({ document, location, window: {}, navigator: {}, locale: createLocale({ document }),
+    navigate() { assert.fail("A native fragment must not invoke full navigation"); } });
+  const link = element(); link.setAttribute("href", "#add%2Dclient");
+  const root = { querySelector: () => null, querySelectorAll: selector => selector === 'a[href^="#"]' ? [link] : selector === "[id]" ? [current] : [] };
+  document.querySelectorAll = selector => selector === "[id]" ? [stale] : [];
+  controls.bindPageControls(root); controls.bindPageControls(root);
+  assert.equal(current.style.scrollMarginTop, "170px");
+  assert.equal(stale.style.scrollMarginTop, undefined, "A mounted page must not update its predecessor's target");
+  assert.equal(link.events.get("click").length, 1);
+  header.offsetHeight = 196;
+  link.dispatch("click", { preventDefault() { assert.fail("Fragment clicks retain their native default action"); } });
+  assert.equal(current.style.scrollMarginTop, "212px");
+  assert.equal(location.href, "https://worker.test/admin/clients");
+  for (const href of ["#%invalid", "#missing", "#"]) {
+    link.setAttribute("href", href); link.dispatch("click");
+    assert.equal(current.style.scrollMarginTop, "212px");
+  }
+});
+
 test("language controls delegate the full destination to the navigation owner", () => {
   const document = { documentElement: { lang: "en" } }, destinations = [];
   const location = { href: "https://worker.test/admin/central?connected=example#tools" };

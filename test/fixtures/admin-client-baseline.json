@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "afa1cfa0a59cde78f7a0b1b9b0bd684a6fb0b8acbe47d36edc2e218ddd283ab2",
+      "sha256": "fa2179aa50f671b30c99dfea6586b4457026ede9f6e3e4067fd7f89321c7b7d9",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "98c7b0d877eeaa3999172df54cf6e96c43c0cc17662310c0f78708b8f42b57f7",
+      "sha256": "02a17ffacc521fb288f184dd879b73ec81b42ee78fab1c89db62d18b950e4c5c",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -198,5 +198,27 @@
     ],
     "reviewed_change": "Validate the fields consumed from successful profile, OAuth and Skill mutation receipts before continuing. Incomplete receipts use the existing refresh-required recovery without replaying writes. Independently rebuilding the source-base browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes; substituting only that bundle restores every prior output.",
     "non_script_markup_unchanged": true
+  },
+  "console_ui_review": {
+    "source_base": "1414824e3ee71acefd558e553e31f615a438ffea",
+    "reviewed_change": "Adds the central-file-preview CSS class and measures the current sticky header before native same-page fragment navigation. Fragment history and unsaved form state remain native; MCP/OAuth control flow is unchanged.",
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "afa1cfa0a59cde78f7a0b1b9b0bd684a6fb0b8acbe47d36edc2e218ddd283ab2",
+        "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
+        "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
+        "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
+        "pre_controller_split_sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "98c7b0d877eeaa3999172df54cf6e96c43c0cc17662310c0f78708b8f42b57f7",
+        "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
+        "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
+        "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
+        "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
+      }
+    ]
   }
 }

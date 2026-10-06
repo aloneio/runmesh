@@ -132,9 +132,11 @@ it("I18N08 UI-like user labels and identifiers are never translated as interface
  expect(translated).toContain('<span class="workspace-pill" data-no-i18n>Settings</span>');
  expect(translated).toContain('<td class="mono job-id-cell" data-no-i18n>running</td>');
  expect(translated).toContain('<td class="mono font-12" data-no-i18n>Read</td>');
- expect(translated).toContain('<span data-no-i18n> · permission_denied</span>');
+ expect(translated).toMatch(/<span\b[^>]*\bdata-no-i18n>permission_denied<\/span>/);
  expect(translated).toContain('已取消');expect(translated).toContain('错误');expect(translated).toContain('17 毫秒');
- expect(translated).toContain('读取、执行');
+ expect(translated).toContain('<input type="checkbox" name="scopes" value="coding:read" checked> <span><strong>读取</strong>');
+ expect(translated).toContain('<input type="checkbox" name="scopes" value="coding:write"> <span><strong>写入</strong>');
+ expect(translated).toContain('<input type="checkbox" name="scopes" value="coding:exec" checked> <span><strong>执行</strong>');
 });
 
 it("I18N09 long untranslated text and non-HTML responses remain intact",async()=>{

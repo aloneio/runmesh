@@ -62,6 +62,30 @@ function createPageControls({
   function bindPageControls(root) {
     if (!root) return;
     bindPermissionControls(root, claim);
+    root.querySelectorAll('a[href^="#"]').forEach(function (link) {
+      if (!claim(link, "fragment-offset")) return;
+      function syncTargetOffset() {
+        var id;
+        try {
+          id = decodeURIComponent((link.getAttribute("href") || "").slice(1));
+        } catch {
+          return;
+        }
+        if (!id) return;
+        // Resolve within the mounted page while its predecessor may still
+        // exist. The initial document also owns the persistent skip link.
+        var target = root.id === id ? root : Array.prototype.find.call(root.querySelectorAll("[id]"), function (node) {
+          return node.id === id;
+        });
+        if (!target) return;
+        var header = document.querySelector(".app-header");
+        target.style.scrollMarginTop = ((header ? header.offsetHeight : 0) + 16) + "px";
+      }
+      syncTargetOffset();
+      // Keep native fragment focus, history and Back/Forward behavior. Re-read
+      // the header before each click because its mobile navigation can wrap.
+      link.addEventListener("click", syncTargetOffset);
+    });
     root.querySelectorAll("[data-lang-toggle]").forEach(function (link) {
       if (!claim(link, "locale")) return;
       link.addEventListener("click", function (event) {

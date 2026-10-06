@@ -30,6 +30,14 @@ describe("verified one-command enrollment", () => {
     expect(commands[2]).toContain("powershell.exe -NoProfile -NonInteractive");
     expect(html).toContain("Copy installer command");
     expect(html).toContain('<p class="eyebrow">One-command Runner setup</p>');
+    const uninstallCommands = [...html.matchAll(/<pre><code>([^<]*)<\/code><\/pre><button\b[^>]*\bdata-copy="([^"]+)"[^>]*>Copy uninstall command<\/button>/g)];
+    expect(uninstallCommands).toHaveLength(2);
+    for (const [index, command] of uninstallCommands.entries()) {
+      expect(command[2]).toBe(command[1]);
+      expect(command[2]).toContain(`${origin}/runner/uninstall.${index === 0 ? "sh" : "ps1"}`);
+      expect(command[2]).toContain("--purge --yes");
+      expect(command[2]).not.toContain(code);
+    }
   });
 
   it("keeps the default restricted without requiring a multi-step install", async () => {
