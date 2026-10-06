@@ -407,18 +407,19 @@ test("mounted navigation places focus and scroll at " + (fragment || "the page")
     children: [], style: {}, appendChild(node) { this.children.push(node); }, querySelectorAll() { return this.children; },
   };
   const main = { id: "main-content", style: {}, focus: () => focused.push("main"), scrollIntoView: options => scrolled.push(["main", options]) };
-  const target = element(); target.tabIndex = -1;
+  const target = element(); target.id = "add-client"; target.tabIndex = -1;
   target.focus = options => focused.push(["fragment", options]);
   target.scrollIntoView = options => scrolled.push(["fragment", options]);
   const make = () => {
     const node = element();
     node.appendChild = () => { node.querySelector = () => main; };
+    node.querySelectorAll = selector => selector === "[id]" ? [main, target] : [];
     node.remove = () => viewport.children.splice(viewport.children.indexOf(node), 1);
     return node;
   };
   const document = { title: "Previous", createElement: make, querySelectorAll: () => [],
     querySelector: selector => selector === "[data-admin-viewport]" ? viewport : selector === ".app-header" ? { offsetHeight: 124 } : null,
-    getElementById: id => id === "add-client" ? target : null,
+    getElementById() { assert.fail("A mounted page resolves fragments within its own container"); },
   };
   const url = new URL("https://worker.test/admin/clients" + fragment);
   const view = createAdminPages({ document, location: { href: "https://worker.test/admin/central" }, history: { pushState() {} }, bindPage() {}, locale: { applyLocale() {}, requestedLocale: () => "en" } });

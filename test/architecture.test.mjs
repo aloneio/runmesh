@@ -28,6 +28,30 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["update contracts through native-service contracts to adapter", {
+    "apps/runner/src/updates/contracts.ts": 'export type { Snapshot } from "../services/contracts.js";',
+    "apps/runner/src/services/contracts.ts": 'export type { Snapshot } from "../updates/native-service.js";',
+    "apps/runner/src/updates/native-service.ts": 'export type Snapshot = {};',
+  }],
+  ["native-service contracts to HTTP adapter", { "apps/runner/src/services/contracts.ts": 'export * from "../updates/cloud.js";', "apps/runner/src/updates/cloud.ts": 'export {};' }],
+  ["native-service contracts through intermediary", { "apps/runner/src/services/contracts.cts": 'export * from "./helper.js";', "apps/runner/src/services/helper.ts": 'export * from "../updates/cloud.js";', "apps/runner/src/updates/cloud.ts": 'export {};' }],
+  ["native-service contracts to platform types", { "apps/runner/src/services/contracts.mts": 'import type { PathLike } from "node:fs";' }],
+  ["native-service contracts own process state", { "apps/runner/src/services/contracts.ts": 'export const platform = process.platform;' }],
+  ["native-service contracts own scheduling", { "apps/runner/src/services/contracts.ts": 'export const delay = () => setTimeout(() => {}, 100);' }],
+  ["update coordinator to HTTP adapter", { "apps/runner/src/updates/coordinator.ts": 'import "./cloud.js";', "apps/runner/src/updates/cloud.ts": "export {};" }],
+  ["update contracts to native adapter types", { "apps/runner/src/updates/contracts.mts": 'import type { Snapshot } from "./native-service.js";', "apps/runner/src/updates/native-service.ts": "export type Snapshot = {};" }],
+  ["update coordinator through intermediary", { "apps/runner/src/updates/coordinator.cts": 'export * from "./helper.js";', "apps/runner/src/updates/helper.ts": 'export * from "./cloud.js";', "apps/runner/src/updates/cloud.ts": "export {};" }],
+  ["update coordinator to filesystem", { "apps/runner/src/updates/coordinator.ts": 'import "node:fs/promises";' }],
+  ["update contracts to platform types", { "apps/runner/src/updates/contracts.ts": 'import type { PathLike } from "node:fs";' }],
+  ["update coordinator owns network", { "apps/runner/src/updates/coordinator.ts": 'export const poll = () => fetch("https://example.invalid");' }],
+  ["update contracts own process state", { "apps/runner/src/updates/contracts.ts": 'export const platform = process.platform;' }],
+  ["shared deadline to feature implementation", { "apps/worker/src/async-deadline.ts": 'import "./application/connectors/deadline.js";', "apps/worker/src/application/connectors/deadline.ts": "export {};" }],
+  ["shared deadline to platform dependency", { "apps/worker/src/async-deadline.mts": 'import "./platform/control-plane.js";', "apps/worker/src/platform/control-plane.ts": "export {};" }],
+  ["shared deadline to package", { "apps/worker/src/async-deadline.ts": 'import "zod";' }],
+  ["shared deadline owns network", { "apps/worker/src/async-deadline.ts": 'export const execute = () => fetch("https://example.invalid");' }],
+  ["central deadline exception does not expose other foundations", { "apps/worker/src/application/connectors/deadline.ts": 'import "../../security.js";', "apps/worker/src/security.ts": "export {};" }],
+  ["central deadline exception does not expose arbitrary callers", { "apps/worker/src/application/skills/service.ts": 'import "../../async-deadline.js";', "apps/worker/src/async-deadline.ts": "export {};" }],
+  ["fragment utility to page lifecycle", { "apps/worker/browser/fragment.js": 'import "./admin-pages.js";', "apps/worker/browser/admin-pages.js": "export {};" }],
   ["maintenance entry to ordinary CLI", { "apps/runner/src/maintenance-entry.ts": 'import "./cli.js";', "apps/runner/src/cli.ts": "export {};" }],
   ["maintenance agent to Runner runtime", { "apps/runner/src/updates/agent.ts": 'import "../runtime.js";', "apps/runner/src/runtime.ts": "export {};" }],
   ["maintenance agent to ordinary supervisor", { "apps/runner/src/updates/agent.ts": 'import "../cli/supervisor.js";', "apps/runner/src/cli/supervisor.ts": "export {};" }],
@@ -208,6 +232,28 @@ test("maintenance shares host adapters and types without acquiring execution dep
     "apps/runner/src/updates/agent.ts": 'import "./job-drain.js";',
     "apps/runner/src/updates/job-drain.ts": 'import "../maintenance-contract.js"; import "node:fs/promises";',
     "apps/runner/src/maintenance-contract.ts": 'export const terminal = (value: string) => value === "succeeded";',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
+test("update coordination uses shared ports while retaining local scheduling", async t => {
+  const f = await fixture(t, {
+    "apps/runner/src/updates/coordinator.ts": 'import { Failure } from "./contracts.js"; export const delay = () => new Promise(resolve => setTimeout(resolve, performance.now()));',
+    "apps/runner/src/updates/contracts.ts": 'import type { Snapshot } from "../services/contracts.js"; import "@aloneio/runmesh-protocol"; export class Failure extends Error {}',
+    "apps/runner/src/services/contracts.ts": 'import type { SharedState } from "@aloneio/runmesh-protocol"; export type Snapshot = SharedState;',
+    "packages/protocol/src/index.ts": 'export type SharedState = {};',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
+test("feature deadline wrappers share scheduling without exposing peer implementations", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/application/connectors/deadline.ts": 'import "../../async-deadline.js";',
+    "apps/worker/src/application/capabilities/remote-deadline.ts": 'import "../../async-deadline.js";',
+    "apps/worker/src/async-deadline.ts": 'export const delay = () => setTimeout(() => new AbortController().abort(), 100);',
+    "apps/worker/browser/page-controls.js": 'import "./fragment.js";',
+    "apps/worker/browser/admin-pages.js": 'import "./fragment.js";',
+    "apps/worker/browser/fragment.js": 'export const target = (root, id) => root.querySelector(id);',
   });
   assert.deepEqual((await checkArchitecture(f.root)).failures, []);
 });

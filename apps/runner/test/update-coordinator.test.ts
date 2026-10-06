@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { UpdateCoordinator } from "../src/updates/coordinator.js";
-import { UpdateFailure } from "../src/updates/contracts.js";
-import { MaintenanceHttpError } from "../src/updates/cloud.js";
+import { MaintenanceHttpError, UpdateFailure } from "../src/updates/contracts.js";
 import type { CloudUpdateOperation, CloudUpdateObservation, UpdateCoordinatorOptions, UpdateJournal, UpdateJournalRecord } from "../src/updates/contracts.js";
 
 const operation = (): CloudUpdateOperation => ({ operation_id: "upgrade_1", lifecycle_id: "lifecycle_1", target_version: "0.1.6", target_channel: "stable", manifest_sha256: "a".repeat(64), artifact_sha256: "b".repeat(64), original_version: "0.1.7", manager_id: null, state: "queued", error_code: null, created_at_ms: 1, updated_at_ms: 1 });

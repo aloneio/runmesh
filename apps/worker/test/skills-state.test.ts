@@ -6,7 +6,7 @@ import { makeSkillBundle } from "../src/domain/skills/bundle.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
 import { createSkillService } from "../src/application/skills/service.js";
 import type { CapabilityTarget } from "../src/contracts/capabilities.js";
-import type { SkillBundle, SkillPorts } from "../src/contracts/skills.js";
+import { SKILL_LIMITS, SKILL_STORED_BUNDLE_BYTES, type SkillBundle, type SkillPorts } from "../src/contracts/skills.js";
 
 const owner = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.get((env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.idFromName(crypto.randomUUID()));
 const principal = { client_id: "client-skills", secret_version: 1 };
@@ -45,6 +45,31 @@ it("Skill repository is lazy and preserves approved old bodies across updates, r
     expect(store.activate(a.skill_id, a.digest, 5)).toMatchObject({ state: "written", head: { active_digest: a.digest, revision: 6 } });
     expect(store.stage(b, 2)).toEqual({ state: "conflict", current_revision: 6 });
     expect(store.bundle(b.skill_id, b.digest)).toEqual(b);
+  });
+});
+it("accepted Skill metadata remains readable after JSON escaping and storage recreation", async () => {
+  const dependencies: CapabilityTarget[] = Array.from({ length: SKILL_LIMITS.dependencies }, (_, index) => ({
+    kind: "remote_tool", resource_id: String(index) + "r".repeat(127), version: "a".repeat(64), connection_profile_id: "p".repeat(128),
+  }));
+  const value = await makeSkillBundle({ skill_id: "long-metadata", source: 's' + '"'.repeat(2047), license: '"'.repeat(256), files: [
+    { path: "SKILL.md", text: "---\nname: long-metadata\ndescription: A " + '"'.repeat(1022) + "\n---\nInstructions" },
+    { path: "runmesh.json", text: JSON.stringify({ schema_version: 1, requiredCapabilities: dependencies }) },
+  ] }, catalogSha256);
+  expect(value).toBeDefined();
+  const { files: _files, schema_version: _schema, ...summary } = value!;
+  expect(JSON.stringify(summary).length).toBeGreaterThan(8192);
+  expect(new TextEncoder().encode(JSON.stringify(value)).byteLength).toBeLessThanOrEqual(SKILL_STORED_BUNDLE_BYTES);
+  await runInDurableObject(owner(), async (_instance, state) => {
+    const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize());
+    expect(store.install(value!, 0)).toMatchObject({ state: "written", head: { enabled: true } });
+    const reopened = new SkillState(state.storage, () => schema.initialize());
+    expect(reopened.bundle(value!.skill_id, value!.digest)).toEqual(value);
+    expect(reopened.summary(value!.skill_id, value!.digest)).toEqual(summary);
+    const service = createSkillService({ repository: reopened, digest: catalogSha256, admin: async () => "allowed",
+      identity: async p => ({ state: "allowed", identity: { schema_version: 2, ...p, label: "fixture", native_scopes: [] } }) });
+    const signal = new AbortController().signal;
+    expect(await service.library("session", undefined, signal)).toMatchObject({ state: "listed", skills: [{ summary }] });
+    expect(await service.list(principal, {}, signal)).toMatchObject({ state: "listed", skills: [{ ...summary, revision: 1 }] });
   });
 });
 it("Skill stage rolls back content if head publication fails and rejects unknown schema versions", async () => {

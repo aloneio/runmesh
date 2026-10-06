@@ -6,10 +6,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runnerArchiveFiles } from "./release-archive.js";
 import { renderManagedLauncher } from "./launchers.js";
+import type { ReleaseTarget, VerifiedStagedRelease } from "./contracts.js";
 
-export interface RunnerReleaseTarget { readonly version: string; readonly channel: "dev" | "stable"; readonly manifest_sha256?: string; readonly artifact_sha256?: string; }
 export interface RunnerReleaseStageContext { readonly installRoot: string; readonly operationId: string; readonly runtimePath: string; readonly fetch?: typeof fetch; }
-export interface VerifiedStagedRelease { readonly version: string; readonly versionDirectory: string; readonly artifactSha256: string; readonly manifestSha256: string; }
 const origins = new Set<string>(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS);
 function digest(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 
@@ -63,7 +62,7 @@ async function validateInstallRoot(path: string): Promise<string> {
 }
 
 /** A fresh, immutable directory per operation preserves old binaries for rollback. */
-export async function stageRunnerRelease(target: RunnerReleaseTarget, context: RunnerReleaseStageContext, dependencies: { readonly trust?: ReleaseTrust } = {}): Promise<VerifiedStagedRelease> {
+export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerReleaseStageContext, dependencies: { readonly trust?: ReleaseTrust } = {}): Promise<VerifiedStagedRelease> {
   const release = exactRunnerRelease(target.version);
   if (release.channel !== target.channel || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(context.operationId)) throw new Error("Runner update target is invalid.");
   for (const value of [target.manifest_sha256, target.artifact_sha256]) if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) throw new Error("Runner release requires both selected digests.");

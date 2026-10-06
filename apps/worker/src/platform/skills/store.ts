@@ -1,4 +1,4 @@
-import { SKILL_LIMITS, type SkillBundle, type SkillHead, type SkillMutation, type SkillRepository, type SkillSummary } from "../../contracts/skills.js";
+import { SKILL_LIMITS, SKILL_STORED_BUNDLE_BYTES, type SkillBundle, type SkillHead, type SkillMutation, type SkillRepository, type SkillSummary } from "../../contracts/skills.js";
 import { insertSkillContent, readSkillContent } from "./content.js";
 import { initializeSkillSchema } from "./schema.js";
 
@@ -32,7 +32,7 @@ export class SkillState implements SkillRepository {
     this.initialize();
     const row = this.storage.sql.exec<{ summary_json: string }>("SELECT summary_json FROM skill_bundles_v2 WHERE skill_id=? AND digest=?", id, digest).toArray()[0];
     if (!row) return undefined;
-    if (row.summary_json.length > 8192) throw new Error("skill_record_invalid");
+    if (new TextEncoder().encode(row.summary_json).byteLength > SKILL_STORED_BUNDLE_BYTES) throw new Error("skill_record_invalid");
     return JSON.parse(row.summary_json) as Omit<SkillSummary, "revision">;
   }
   public approved(id: string, digest: string): boolean {

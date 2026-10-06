@@ -4,25 +4,7 @@ import { nativeProbeReliable, systemdEnablementState } from "../services/probes.
 import { stopWindowsTask, windowsTaskMissingCatch } from "../services/task-scheduler.js";
 import { LINUX_SERVICE_NAME, MACOS_LABEL } from "../services/values.js";
 import { posix, win32 } from "node:path";
-
-/** JSON-only native state, retained in the update journal before stopping a Runner. */
-export interface NativeServiceSnapshot {
-  readonly schema_version: 1;
-  readonly platform: ServicePlatform;
-  readonly mode: ServiceMode;
-  readonly registered: boolean;
-  readonly active: boolean;
-  readonly enabled: boolean;
-  readonly enablement: string;
-  readonly pid?: number;
-}
-
-export interface NativeServiceMaintenancePort {
-  snapshot(): Promise<NativeServiceSnapshot>;
-  stop(): Promise<void>;
-  start(): Promise<void>;
-  restoreEnabled(snapshot: NativeServiceSnapshot): Promise<void>;
-}
+import type { NativeServiceMaintenancePort, NativeServiceSnapshot } from "./contracts.js";
 
 export interface NativeServiceMaintenanceOptions {
   readonly platform?: ServicePlatform;

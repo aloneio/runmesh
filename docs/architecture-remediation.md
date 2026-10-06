@@ -57,6 +57,18 @@ Renderers import display shapes directly from `contracts/admin-views.ts`.
 `runnerDetailPage` takes one named input object so optional diagnostics, history
 and enrollment values cannot be confused by positional arguments.
 
+Runner and Client lists use `admin/responsive-table.ts`: one column definition
+supplies desktop headings, translated mobile labels and cell order. CSS owns
+layout; visible mobile labels reuse the same message keys as table headings.
+`browser/fragment.js` supplies target lookup and sticky-header offsets to initial
+page controls and dynamic page mounting. Each caller retains its navigation lifecycle.
+
+Connector and remote-capability deadlines share `async-deadline.ts` for local
+cancellation, timers and cleanup. Their feature wrappers own the budget and
+timeout outcome. Skill content and summary readers share the stored JSON budget
+derived from bundle admission plus its digest field, including UTF-8 and JSON
+escaping. An accepted bundle remains readable after storage is reopened.
+
 ## Native adapters and package declarations
 
 JobManager owns admission, maps, terminal persistence and cancellation/recovery
@@ -79,6 +91,12 @@ Registry schema initialization owns the settings table. History storage validate
 retention against the same protocol values.
 
 ## Runner version manager
+
+`updates/contracts.ts` owns update ports, native-service snapshots and adapter
+failure types. The update coordinator imports those contracts and the shared
+protocol; composition supplies HTTP, native-service, storage and release adapters.
+Release staging consumes the same target and verified-release types. Architecture
+fixtures enforce this direction for runtime and type imports.
 
 `apps/runner/src/maintenance-entry.ts` and `maintenance-cli.ts` build the independent
 `dist/maintenance.cjs` artifact. Initial manager installation copies this artifact

@@ -4,6 +4,9 @@ import type { AdminDecision } from "./connectors.js";
 
 export const SKILL_LIMITS = Object.freeze({ files: 256, file_bytes: 1_048_576, bundle_bytes: 8_388_608, request_bytes: 12_582_912,
   skills: 1_000, versions: 32, storage_bytes: 268_435_456, page: 128, dependencies: 8, operation_ms: 5_000 });
+/** Stored bundles add one digest field to the admitted JSON. Metadata and
+ * summaries are subsets of that bundle and share its serialized byte budget. */
+export const SKILL_STORED_BUNDLE_BYTES = SKILL_LIMITS.bundle_bytes + JSON.stringify({ digest: "0".repeat(64) }).length - 1;
 export type SkillDependencyState = "configured" | "not_configured" | "disabled" | "incompatible" | "unavailable";
 export interface SkillDependency { readonly target: CapabilityTarget; readonly state: SkillDependencyState }
 export interface SkillFile { readonly path: string; readonly text: string }

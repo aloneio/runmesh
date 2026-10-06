@@ -1,10 +1,7 @@
 import { RunnerUpdateClaimSchema, RunnerUpdateDrainProofSchema, RunnerUpdateResponseSchema, RunnerUpdateStatusSchema } from "@aloneio/runmesh-protocol";
 import type { RunnerMaintenanceIdentity } from "../maintenance-contract.js";
+import { MaintenanceHttpError } from "./contracts.js";
 import type { CloudMaintenancePort, CloudUpdateObservation, CloudUpdateState, UpdateErrorCode, UpdateOwner } from "./contracts.js";
-
-export class MaintenanceHttpError extends Error {
-  public constructor(public readonly status: number) { super(`maintenance_http_${status}`); this.name = "MaintenanceHttpError"; }
-}
 
 export function maintenanceEndpoint(profile: RunnerMaintenanceIdentity): URL {
   const url = new URL(profile.server_url);

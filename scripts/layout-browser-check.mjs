@@ -21,7 +21,7 @@ const runnerUpdateOperation = 'layout-update-operation';
 async function fixtureDocuments() {
   const { cases } = JSON.parse(await readFile(new URL('../apps/worker/test/fixtures/admin-render-golden.json', import.meta.url), 'utf8'));
   const documents = new Map();
-  for (const fixture of cases.filter(f => !f.name.endsWith('-empty') && f.fn !== 'adminDocument')) {
+  for (const fixture of cases.filter(f => f.fn !== 'adminDocument')) {
     const args = structuredClone(fixture.args);
     if (fixture.fn === 'runnersPage') args.unshift({ ...fixture.presentation, configuredModes: new Map(Object.entries(fixture.presentation.configuredModes)) });
     if (fixture.fn === 'runnerDetailPage') {
@@ -131,10 +131,18 @@ async function layoutIssues(page) {
     }
     for (const cell of document.querySelectorAll('.client-table td,.runner-table td')) {
       const area = rect(cell), column = cell.cellIndex + 1, table = cell.closest('table').classList.contains('client-table') ? 'client' : 'runner';
-      if (table === 'client' && column === 5 && getComputedStyle(cell).display === 'block') {
-        const label = getComputedStyle(cell, '::before').content.slice(1, -1);
-        const heading = cell.closest('table').querySelector('th:nth-child(5)').textContent.trim();
-        if (label.toLowerCase() !== heading.toLowerCase()) issues.push('mobile client status loses its credential context');
+      const mobileLabel = cell.querySelector('.table-mobile-label');
+      if (cell.colSpan > 1) {
+        if (mobileLabel) issues.push(table + ' empty state has a column label');
+      } else {
+        const heading = cell.closest('table').querySelectorAll('th[scope="col"]')[cell.cellIndex];
+        if (!mobileLabel || mobileLabel.textContent.trim() !== heading?.textContent.trim()) issues.push(table + ' column ' + column + ' mobile label differs from its heading');
+        if (mobileLabel?.getAttribute('aria-hidden') !== 'true') issues.push(table + ' column ' + column + ' repeats its heading for assistive technology');
+        if (mobileLabel && visible(mobileLabel) !== (getComputedStyle(cell).display === 'block')) issues.push(table + ' column ' + column + ' label visibility does not match the layout');
+        if (mobileLabel && visible(mobileLabel)) {
+          const range = document.createRange(); range.selectNodeContents(mobileLabel);
+          if ([...range.getClientRects()].some(line => !inside(line, area))) issues.push(table + ' column ' + column + ' clips its mobile label');
+        }
       }
       for (const control of cell.querySelectorAll('input:not([type=hidden]),select,button,a,summary,.runner-selection-controls,.runner-selection-form,.runner-actions')) {
         if (visible(control) && !inside(rect(control), area)) issues.push(table + ' column ' + column + ' control crosses its cell boundary');

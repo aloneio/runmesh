@@ -11,6 +11,7 @@ import { html, htmlHeaders, redirect } from "../src/http/html-response.js";
 import { localizeHtmlResponse } from "../src/i18n/html.js";
 import { permissionForm, managedWorkspaceForm, workspaceProfile } from "../src/admin/forms.js";
 import { workspacePermissionPreset } from "../src/contracts/permission-profiles.js";
+import type { AdminData } from "../src/contracts/admin-views.js";
 
 // Hashes were captured by evaluating the pre-refactor renderers at the fixed
 // baseline. Reviewed i18n annotations and login copy changes retain their
@@ -61,6 +62,24 @@ describe("AR04 rendering compatibility", () => {
     expect(typeof content).toBe("string");
     expect(content).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(content).not.toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it.each(["en", "zh-CN"] as const)("uses one translated heading for desktop and mobile inventory cells in %s", async locale => {
+    const data: AdminData = { clients: [{ client_id: "test-client", label: "Client <label>", scopes: [], revoked_at_ms: null,
+      last_used_at_ms: null, active_runner_id: null }], runners: [{ runner_id: "test-runner", display_name: "Runner <label>",
+      state: "offline", last_heartbeat_ms: null, configured_execution_mode: null, public_info: null }], jobs: [], snapshot: {}, notices: [] };
+    const presentation = { configuredModes: new Map(), maxValidityDays: 3650 };
+    for (const render of [(value: AdminData) => runnersPage(presentation, value, "fixture-csrf"), (value: AdminData) => clientsPage(value, "fixture-csrf")]) {
+      const localized = await localizeHtmlResponse(new Request('https://worker.test/admin?lang=' + locale),
+        new Response('<html><body>' + render(data) + '</body></html>', { headers: { "content-type": "text/html" } })).text();
+      const headings = [...localized.matchAll(/<th scope="col" data-column="[^"]+">([^<]+)<\/th>/gu)].map(match => match[1]);
+      const labels = [...localized.matchAll(/<span class="table-mobile-label" aria-hidden="true">([^<]+)<\/span>/gu)].map(match => match[1]);
+      expect(headings).toHaveLength(6);
+      expect(labels).toEqual(headings);
+      expect(headings.at(-1)).toBe(locale === "en" ? "Actions" : "操作");
+      expect(localized).toContain('&lt;label&gt;');
+      expect(render({ ...data, clients: [], runners: [] })).not.toContain('class="table-mobile-label"');
+    }
   });
 
   it("renders permission dependencies and workspace presets from the shared policy", () => {

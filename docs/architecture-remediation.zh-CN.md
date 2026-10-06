@@ -46,6 +46,16 @@ Registry 管理 HMAC 路由与同步事务，RunnerDO 管理会话派发。
 渲染器直接引用 `contracts/admin-views.ts` 的展示类型。`runnerDetailPage` 接收一个
 具名输入对象，避免诊断、历史和注册码等可选数据在位置参数中混淆。
 
+Runner 和 Client 列表通过 `admin/responsive-table.ts` 共用列定义，统一生成桌面表头、
+移动端翻译标签及单元格顺序。CSS 负责布局，两种标签使用相同的翻译键。
+`browser/fragment.js` 为首次页面加载和动态页面挂载提供目标查找与固定页头偏移，
+导航生命周期仍由各自的调用者管理。
+
+Connector 和远程能力的超时包装共用 `async-deadline.ts` 管理本地取消、定时器与清理，
+各功能分别提供等待时长和超时结果。Skill 正文与摘要读取使用同一份存储 JSON 预算，
+由导入时的 bundle 上限加 `digest` 字段的开销推导，涵盖 UTF-8 编码和 JSON 转义。
+通过导入校验的内容在重新打开存储后仍可读取。
+
 ## 原生适配器与包声明
 
 JobManager 管理准入、运行记录、终态落盘及取消／恢复顺序。ContextStore 管理
@@ -62,6 +72,10 @@ systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、�
 建表归 Registry schema 管理，历史存储使用同一份协议取值校验保留天数。
 
 ## Runner 版本管理器
+
+`updates/contracts.ts` 统一定义更新端口、原生服务快照和适配器错误类型。
+更新协调器依赖这些契约和共享协议，由装配层提供 HTTP、原生服务、存储及发行版适配器。
+发行版准备过程复用同一份目标与验证结果类型，架构回归检查普通导入和类型导入的依赖方向。
 
 `apps/runner/src/maintenance-entry.ts` 与 `maintenance-cli.ts` 构建独立的
 `dist/maintenance.cjs`。首次安装管理器时，该产物复制到

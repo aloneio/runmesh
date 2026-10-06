@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "73acd0cd43f2f3a54eaa2ddf9c0d940aee19b85891e83c33ad66dac643cdb2d9",
-      "bytes": 134309,
+      "sha256": "96682c11209a14126997d4f96af86ea1f8d675555cac7627145568f05da5e709",
+      "bytes": 132674,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "ba98d71e3a4310d4d4adaaaef710c3681ebfc4ec86927a45d4b2aadd7b3f1599",
-      "bytes": 134897,
+      "sha256": "fae96851c5bb443e06abf512f127497f64f30658ac8820beb26a6bd4e93b2303",
+      "bytes": 133262,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "5cfc950ecb81698f6daeb36c5060665f096f0a91d1698da812c54d9d6071ca2e",
-      "bytes": 137259,
+      "sha256": "11bbff975827aca2a9d49f829e80d1b646eea53c253426cbb86ea7f3f9b0901a",
+      "bytes": 135624,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -158,8 +158,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "a217ca10d2d96f7f489cbf91724511c759f1ff8d672bd369e177600a44c7be2c",
-      "bytes": 2542,
+      "sha256": "b879d6618d05273a12453ebe52d26bdfd2dc8323d57b39f658c97479b07b2324",
+      "bytes": 2675,
       "pre_presence_bytes": 1658,
       "pre_presence_sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
       "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
@@ -217,8 +217,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "0b5c90bd200d5775433e45205688f3d96cd15445fd7147aa13cb4a8e1b1ff867",
-      "bytes": 5568,
+      "sha256": "84e6d63076aced0351a585247c97ad4599289b87cf9764f746593f1147b5aa0a",
+      "bytes": 6079,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -295,8 +295,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "c9042eb621c6444b78480febb1e64215bc9c405f0f6765d36e1a08b539d21848",
-      "bytes": 3479,
+      "sha256": "b14cdb9d3d33608deca974bbfd99f71e7bfda34b57f2c8cdf0e0c336a664de72",
+      "bytes": 3615,
       "presentation": {
         "configuredModes": {},
         "maxValidityDays": 3650
@@ -350,8 +350,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "fbb37a0a2b39e2dd433d4205f6e9827c196903d6049821cf6c024a8e0f715ee6",
-      "bytes": 7269,
+      "sha256": "5804285d2503ba0f7bcfa14a96a27fed7066c74a4c56e7f2bd82a26146d4f4b4",
+      "bytes": 7830,
       "presentation": {
         "configuredModes": {
           "runner-fixture": null
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "d5e78511d5a3e3e5b5cfa6c986d7f10c2a15ce59dac1212c0b055705b13dd479",
-      "bytes": 137608,
+      "sha256": "fd57bc0bdc9d4a7fcff1e0d6d4a43973fe6c513f39b10e300385f5bd2ccec00d",
+      "bytes": 135973,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -818,6 +818,52 @@
         "name": "admin-document",
         "bytes": 138098,
         "sha256": "a9d78455154bf06d9183931567f2f3c1e7e012315848c7bc20958bd27207dc2f"
+      }
+    ]
+  },
+  "maintainability_review": {
+    "source_base": "70ee2619999794b8703907981a1d774cc00af792",
+    "reviewed_change": "Reviewed shared table column definitions for headings, localized mobile labels and cell order. Semantic column keys replace positional CSS. Empty rows use the column count without mobile labels; existing forms, fields, CSRF and dynamic value escaping are retained.",
+    "previous": [
+      {
+        "name": "login",
+        "bytes": 134309,
+        "sha256": "73acd0cd43f2f3a54eaa2ddf9c0d940aee19b85891e83c33ad66dac643cdb2d9"
+      },
+      {
+        "name": "setup",
+        "bytes": 134897,
+        "sha256": "ba98d71e3a4310d4d4adaaaef710c3681ebfc4ec86927a45d4b2aadd7b3f1599"
+      },
+      {
+        "name": "secret",
+        "bytes": 137259,
+        "sha256": "5cfc950ecb81698f6daeb36c5060665f096f0a91d1698da812c54d9d6071ca2e"
+      },
+      {
+        "name": "clients-empty",
+        "bytes": 2542,
+        "sha256": "a217ca10d2d96f7f489cbf91724511c759f1ff8d672bd369e177600a44c7be2c"
+      },
+      {
+        "name": "clients-populated",
+        "bytes": 5568,
+        "sha256": "0b5c90bd200d5775433e45205688f3d96cd15445fd7147aa13cb4a8e1b1ff867"
+      },
+      {
+        "name": "runners-empty",
+        "bytes": 3479,
+        "sha256": "c9042eb621c6444b78480febb1e64215bc9c405f0f6765d36e1a08b539d21848"
+      },
+      {
+        "name": "runners-populated",
+        "bytes": 7269,
+        "sha256": "fbb37a0a2b39e2dd433d4205f6e9827c196903d6049821cf6c024a8e0f715ee6"
+      },
+      {
+        "name": "admin-document",
+        "bytes": 137608,
+        "sha256": "d5e78511d5a3e3e5b5cfa6c986d7f10c2a15ce59dac1212c0b055705b13dd479"
       }
     ]
   }
