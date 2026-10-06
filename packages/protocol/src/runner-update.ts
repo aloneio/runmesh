@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { exactRunnerRelease } from "./release-trust.js";
 
-/** Independent HTTPS control contract, deliberately outside the Runner wire protocol. */
+/**
+ * Frozen maintenance HTTP v1 at /runner/:id/update, including claim/status/drain-proof.
+ * Installed managers retain these strict parsers across Runner upgrades. Even an
+ * additive response field or enum value requires a separately negotiated contract;
+ * ordinary Runner wire/schema changes must not alter this endpoint. The released
+ * client fixture in worker/test/fixtures/maintenance-v1-client.ts is independent.
+ */
 export const RunnerExactVersionSchema = z.string().max(64).refine(value => { try { exactRunnerRelease(value); return true; } catch { return false; } });
 const UpdateIdentifierSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 export const RunnerUpdateStateSchema = z.enum(["queued", "verifying", "draining", "installing", "checking", "succeeded", "rolled_back", "failed"]);

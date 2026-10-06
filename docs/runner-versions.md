@@ -24,6 +24,8 @@ Allow running tasks to finish before switching. If a task needs attention, resol
 
 The [current development Runner releases](dev-runner-prereleases.md) include the version manager for standard managed installations. It runs separately from the selected Runner package, so choosing an older Runner leaves remote version management available.
 
+Changing the Runner version keeps the version manager already installed on that computer.
+
 Service commands such as `restart`, `install` and `uninstall` also use this independent manager after a version change. See [removing a Runner](runner-uninstall.md) for service removal and complete cleanup.
 
 To enable it on an older installation, deploy one of these verified development packages while retaining the existing profile and service layout. Run the updated service executable's `--help` and confirm it lists `maintenance-agent`, then run `install` with the existing profile. Use an administrator session for a system service, or the owning account with `--user` for a user service. Confirm the installation result reports `remote_version_management: available`.

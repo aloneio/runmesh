@@ -30,6 +30,8 @@ function fixture(platform: ServicePlatform) {
   file(options.profilePath, "existing credential profile");
   file(paths.path.join(version, "runtime", platform === "win32" ? "node.exe" : "node"), "runtime bytes");
   file(platform === "win32" ? paths.path.join(version, "runmesh.cjs") : paths.path.join(version, "lib", "node_modules", "@aloneio", "runmesh-runner", "dist", "runmesh.cjs"), "bundle bytes");
+  const maintenanceBundle = platform === "win32" ? paths.path.join(version, "node_modules", "@aloneio", "runmesh-runner", "dist", "maintenance.cjs") : paths.path.join(version, "lib", "node_modules", "@aloneio", "runmesh-runner", "dist", "maintenance.cjs");
+  file(maintenanceBundle, "independent maintenance bytes");
   for (const name of platform === "win32" ? ["runmesh.cmd", "runmesh-runner.cmd"] : ["bin/runmesh", "bin/runmesh-runner"]) file(paths.path.join(version, ...name.split("/")), "original launcher");
   const filesystem: MaintenanceManagerFilesystem = {
     read: async path => files.get(path), stat: async path => stats.get(path), realpath: async path => path === current ? version : path,
@@ -49,7 +51,10 @@ function fixture(platform: ServicePlatform) {
   };
   const executor: ServiceCommandExecutor = { execute: async (name, args) => {
     calls.push([name, ...args]);
-    if (args[1] === "--help") return { exitCode: 0, stdout: supportsManager ? "usage: runmesh <start|maintenance-agent|stop>" : "usage: runmesh <start|stop>" };
+    if (args[1] === "--help") {
+      if (args[0] !== maintenanceBundle) throw new Error("ordinary Runner entry must not initialize the manager");
+      return { exitCode: 0, stdout: supportsManager ? "Runmesh maintenance <maintenance-agent|install|stop>" : "incompatible maintenance artifact" };
+    }
     if (name === "systemctl") {
       if (args.some(argument => argument.startsWith("--property=User,Group,FragmentPath,DropInPaths,NeedDaemonReload"))) return { exitCode: 0, stdout: `User=runmesh\nGroup=runmesh\nFragmentPath=${layout.manifestPath}\nDropInPaths=\nNeedDaemonReload=no\nRootDirectory=\nRootImage=\nBindPaths=\nBindReadOnlyPaths=\nTemporaryFileSystem=\nDynamicUser=no\n` };
       if (args.includes("daemon-reload")) registered = files.has(paths.manifestPath);
@@ -75,7 +80,7 @@ function fixture(platform: ServicePlatform) {
     }
     return { exitCode: 0 };
   } };
-  return { options: { ...options, filesystem, executor }, paths, calls, copies, files, stats, manifest,
+  return { options: { ...options, filesystem, executor }, paths, calls, copies, files, stats, manifest, maintenanceBundle,
     failStartup: () => { failStart = true; }, oldRunner: () => { supportsManager = false; }, isActive: () => active };
 }
 
@@ -84,7 +89,8 @@ it.each(["linux", "darwin", "win32"] as const)("installs an independent %s manag
   await managerInstall(test.options);
   expect(test.isActive()).toBe(true);
   expect(test.files.get(test.paths.runtimePath)).toBe("runtime bytes");
-  expect(test.files.get(test.paths.bundlePath)).toBe("bundle bytes");
+  expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  expect(test.copies[1]?.[0]).toBe(test.maintenanceBundle);
   expect(test.files.get(test.options.profilePath)).toBe("existing credential profile");
   expect(test.files.get(test.manifest.path)).toBe(test.manifest.content);
   expect(test.stats.get(test.paths.path.join(test.paths.layout.installRoot, "current"))?.symlink).toBe(true);
@@ -147,12 +153,20 @@ it("rejects an unmanaged manager manifest before copying executable files", asyn
   expect(test.copies).toEqual([]);
 });
 
-it("refuses to copy an older current bundle that lacks maintenance-agent", async () => {
+it("refuses to copy an incompatible maintenance artifact", async () => {
   const test = fixture("linux");
   test.oldRunner();
   await expect(managerInstall(test.options)).rejects.toThrow("does not support maintenance-agent");
   expect(test.copies).toEqual([]);
   expect(test.calls.some(call => call.includes("enable"))).toBe(false);
+});
+
+it.each(["linux", "darwin", "win32"] as const)("does not seed a %s manager from a legacy Runner-only package", async platform => {
+  const test = fixture(platform);
+  test.files.delete(test.maintenanceBundle); test.stats.delete(test.maintenanceBundle);
+  await expect(managerInstall(test.options)).rejects.toThrow("lacks its independent maintenance artifact");
+  expect(test.copies).toEqual([]);
+  expect(test.calls.some(call => call.includes("--help"))).toBe(false);
 });
 
 it("rejects a profile whose parent is writable by the dedicated Runner", async () => {

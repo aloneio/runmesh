@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { MAX_RELEASE_ASSET_BYTES } from "./release-io.mjs";
+import { checkPackedMaintenance } from "./packed-maintenance-check.mjs";
 
 const exec = promisify(execFile);
 // On Windows npm is exposed as a .cmd shim rather than a native executable;
@@ -27,6 +28,7 @@ try {
   const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   if (manifest.private === true || manifest.bin?.["runmesh-runner"] !== "./dist/runmesh.cjs" || Object.keys(manifest.dependencies ?? {}).length !== 0) throw new Error("Runner tarball is not self-contained");
   for (const file of ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]) await readFile(join(packageRoot, file));
+  await checkPackedMaintenance(packageRoot, manifest.version);
   const bin = process.platform === "win32" ? join(root, "node_modules", ".bin", "runmesh-runner.cmd") : join(root, "node_modules", ".bin", "runmesh-runner");
   const binExecOptions = process.platform === "win32" ? { shell: true } : {};
   const version = await exec(bin, ["--version"], { cwd: root, ...binExecOptions });

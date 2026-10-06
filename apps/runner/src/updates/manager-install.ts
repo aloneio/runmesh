@@ -319,13 +319,17 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
       await host.trusted(versionsRoot, "directory");
       await host.trusted(version, "directory");
       const sourceRuntime = path.join(version, "runtime", platform === "win32" ? "node.exe" : "node");
-      const sourceBundle = platform === "win32" ? path.join(version, "runmesh.cjs") : path.join(version, "lib", "node_modules", "@aloneio", "runmesh-runner", "dist", "runmesh.cjs");
+      // Only the signed maintenance artifact may seed the independent manager.
+      // The ordinary Runner entry can be broken without affecting this program.
+      const packageRoot = platform === "win32" ? path.join(version, "node_modules", "@aloneio", "runmesh-runner") : path.join(version, "lib", "node_modules", "@aloneio", "runmesh-runner");
+      const sourceBundle = path.join(packageRoot, "dist", "maintenance.cjs");
+      if (await filesystem.stat(sourceBundle) === undefined) throw new Error("current Runner package lacks its independent maintenance artifact; install a compatible verified Runner package first");
       for (const source of [sourceRuntime, sourceBundle]) {
         await host.trustedTreePath(source, "file", layout.installRoot);
       }
       const help = options.executor === undefined ? await sourceHelp(sourceRuntime, sourceBundle, version)
         : (await host.execute(sourceRuntime, [sourceBundle, "--help"])).stdout ?? "";
-      if (!/(?:^|[\s|<])maintenance-agent(?:[\s|>]|$)/u.test(help)) throw new Error("current Runner does not support maintenance-agent; install a compatible verified Runner package first");
+      if (!/(?:^|[\s|<])maintenance-agent(?:[\s|>]|$)/u.test(help)) throw new Error("current maintenance artifact does not support maintenance-agent; install a compatible verified Runner package first");
       await filesystem.mkdir(temporary, 0o700);
       await filesystem.mkdir(path.join(temporary, "runtime"), 0o700);
       await filesystem.copy(sourceRuntime, path.join(temporary, "runtime", path.basename(runtimePath)));

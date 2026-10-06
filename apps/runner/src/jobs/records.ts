@@ -1,4 +1,6 @@
-export type LocalJobStatus = "queued" | "running" | "cancelling" | "cancelled" | "succeeded" | "failed" | "unknown" | "interrupted";
+import { isMaintenanceJobStatus, safeMaintenanceJobId, type MaintenanceJobStatus } from "../maintenance-contract.js";
+
+export type LocalJobStatus = MaintenanceJobStatus;
 
 export interface RecoveryLiveness {
   readonly checked_at_ms: number;
@@ -47,7 +49,7 @@ export type JobEvent = { readonly type: "started" | "output" | "status" | "compl
 /** Metadata ordering must survive same-millisecond updates and wall-clock rollback. */
 export function nextJobUpdate(job: JobRecord, now = Date.now()): number { return Math.max(now, job.updated_at_ms + 1); }
 
-export function isJobStatus(value: unknown): value is LocalJobStatus { return typeof value === "string" && ["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(value); }
+export const isJobStatus = isMaintenanceJobStatus;
 
 export function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }
 
@@ -62,7 +64,7 @@ export function sameJobProcessIdentity(left: JobRecord, right: JobRecord): boole
 /** Unknown is a recovered live-process state and must occupy a start slot. */
 export function occupiesProcessSlot(job: JobRecord): boolean { return isActive(job) || job.status === "unknown"; }
 
-export function safeJobId(value: string): boolean { return /^job-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value); }
+export const safeJobId = safeMaintenanceJobId;
 
 export function normalizeJobRecord(value: unknown, expectedJobId?: string): JobRecord | undefined {
   if (!isRecord(value)) return undefined;

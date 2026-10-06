@@ -6,6 +6,7 @@ import type { RegistryDO } from "../src/registry.js";
 import { handleRunnerUpdate } from "../src/http/runner-update.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import { RunnerUpdateMaintenance } from "../src/platform/runner-update-maintenance.js";
+import { maintenanceV1Response } from "./fixtures/maintenance-v1-client.js";
 
 const secret = "test-internal-control-secret-not-for-production";
 const token = "remote-manager-test-token-0123456789abcdef";
@@ -36,7 +37,7 @@ describe("independent Runner update control", () => {
         for (let n = 0; n < 20; n++) {
           const url = new URL(`https://worker.test/runner/${runnerId}/update`);
           const response = await handleRunnerUpdate(new Request(url, { headers: { authorization: `Bearer ${token}` } }), localEnv, url);
-          expect(await response.json()).toEqual({ operation: null, cloud_drained: false, cloud_uncertain: false, observed_version: null, observed_new_session: false });
+          expect(maintenanceV1Response.parse(await response.json())).toEqual({ operation: null, cloud_drained: false, cloud_uncertain: false, observed_version: null, observed_new_session: false });
         }
         expect(written).toBe(0);
       } finally { spy.mockRestore(); }
@@ -63,7 +64,7 @@ describe("independent Runner update control", () => {
         for (let n = 0; n < 20; n++) {
           const url = new URL(`https://worker.test/runner/${runnerId}/update`);
           const response = await handleRunnerUpdate(new Request(url, { headers: { authorization: `Bearer ${token}` } }), localEnv, url);
-          expect(response.status).toBe(200); expect((await response.json() as RunnerUpdateResponse).operation).toEqual(saved);
+          expect(response.status).toBe(200); expect(maintenanceV1Response.parse(await response.json()).operation).toEqual(saved);
         }
         expect(runnerFetch).not.toHaveBeenCalled(); expect(written).toBe(0);
         expect(put).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();

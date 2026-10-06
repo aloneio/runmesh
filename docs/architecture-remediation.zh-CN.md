@@ -61,6 +61,43 @@ systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、�
 保留天数及双方共用的严格解析。Worker 的默认配置和分页大小保持为纯数据，历史设置
 建表归 Registry schema 管理，历史存储使用同一份协议取值校验保留天数。
 
+## Runner 版本管理器
+
+`apps/runner/src/maintenance-entry.ts` 与 `maintenance-cli.ts` 构建独立的
+`dist/maintenance.cjs`。首次安装管理器时，该产物复制到
+`<installRoot>/manager/runmesh.cjs`，Node 复制到管理器自己的 runtime 目录。
+原生服务始终使用这些固定路径；选定的 Runner 通过 `current` 切换。
+服务管理命令交给固定管理器，Runner 启动命令使用选定发行版。
+管理器复用配置文件 I/O 和原生服务适配器，依赖图与任务执行、普通 Runner CLI 分离。
+
+已有管理器在 Runner 版本切换和重复执行 `install` 时保留原运行时与程序包。
+管理器自身的修复需要单独部署并在主机上验证。仅发布或安装新的 Runner 包，
+已有管理器仍使用原代码；交付记录应分别确认 Runner 和管理器的实际部署结果。
+
+`apps/runner/src/maintenance-contract.ts` 定义跨版本读取的本地字段。
+凭据加载复用受保护的配置文件读取器，只取得服务地址、Runner ID、令牌和本地开发标记。
+工作区与执行设置由 Runner 的完整配置校验处理。任务排空通过同一份小契约读取持久化
+Job ID、时间戳和状态；写入端与读取端共用 ID 规则、状态分类和元数据字节上限。
+修改配置版本、命令内容或恢复注解时，保持这些字段可读。新增 Job 状态需要先明确
+它表示任务仍在运行还是已经结束，再用于管理器的排空判断。
+
+`packages/protocol/src/runner-update.ts` 定义独立的 HTTPS v1 契约。
+`apps/worker/test/fixtures/maintenance-v1-client.ts` 冻结 `0.1.8-dev.45` 发布的客户端；
+`runner-update-v1-compatibility.test.ts` 通过真实 Worker 路由发送请求，并用该旧客户端
+解析响应。实现演进时保留这份夹具。将测试两端一起改成新格式会掩盖已安装管理器的
+兼容问题。新版本契约使用独立定义与夹具，同时保留面向现有安装的 v1 回归。
+`test/public-contract-baseline.test.mjs` 将 CRLF 统一为 LF 后核对已审阅夹具的 SHA-256，
+因此同步修改当前 Schema 和旧客户端夹具时，各平台仍会在基线检查中发现变化。
+
+三个既有 CI 环节共同检查隔离边界：
+
+- `check:architecture` 检查维护模块的直接和传递依赖，允许复用经过审阅的主机适配器与契约。
+- `build-runner-bundle.mjs` 在写入维护产物前检查真实 esbuild 输入图；普通 CLI、执行模块
+  和未经审阅的包依赖会使构建失败。
+- `pack:smoke` 与 `test-packed-runner.mjs` 将实际包内的维护产物单独放入临时目录，
+  配置一个故意损坏的普通 Runner，检查维护入口的版本、帮助、参数校验与命令边界。
+  这些检查纳入原生平台验证和准确发行包验证。
+
 ## 浏览器源码与文案
 
 `apps/worker/browser/admin-client.js` 是浏览器入口。中央产品模块位于

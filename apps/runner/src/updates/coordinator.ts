@@ -137,15 +137,20 @@ export class UpdateCoordinator {
     throw new UpdateFailure("activation_failed");
   }
   private async rollback(journal: UpdateJournal, errorCode: UpdateErrorCode): Promise<void> {
+    const retryingRecovery = journal.phase === "recovery_required";
     let identity: string;
     let observed: CloudUpdateObservation | undefined;
     try {
       identity = await this.options.recoveryIdentity();
+      // Retrying a failed native recovery needs the same durable local owner
+      // and a fresh authenticated cloud fence. It must not adopt credentials
+      // or fall back to offline authority after the installation became uncertain.
+      if (retryingRecovery && journal.recovery_identity !== identity) throw new UpdateFailure("invalid_installation");
       try { observed = await this.options.cloud.poll(); }
       catch (error) {
         // A network outage does not prevent restoring our original install.
         // Changed/re-enrolled credentials always need authenticated ownership.
-        if (!unavailableObservation(error) || journal.recovery_identity !== identity) throw error;
+        if (retryingRecovery || !unavailableObservation(error) || journal.recovery_identity !== identity) throw error;
       }
     } catch {
       // No authenticated answer is not proof of replacement. Keep this phase
@@ -191,10 +196,14 @@ export class UpdateCoordinator {
       if (saved.phase === "preparing") { await this.finishPreparation(saved); return; }
       if (terminal(saved.phase)) { await this.finish(saved); return; }
       if (saved.phase === "recovery_required") {
-        const observed = await this.options.cloud.poll();
-        const errorCode = saved.error_code ?? "rollback_failed";
-        if (this.matches(saved, observed) && (observed.operation?.state !== "checking" || observed.operation.error_code !== errorCode)) await this.options.cloud.report(this.owner(saved), "checking", { error_code: errorCode });
-        throw new UpdateFailure(errorCode);
+        // A transient native failure remains retryable after the next poll.
+        // rollback revalidates cloud ownership, identity and every pointer
+        // before stopping a process or restoring the original installation.
+        // rollback_failed deliberately retains the server fence even on a
+        // terminal receipt. A verified retry resolves that failure, so its
+        // final rolled_back receipt must describe the unsuccessful activation.
+        const errorCode = saved.error_code === undefined || saved.error_code === "rollback_failed" ? "activation_failed" : saved.error_code;
+        await this.rollback(saved, errorCode); return;
       }
       if (needsRecovery(saved.phase)) { await this.rollback(saved, saved.error_code ?? "activation_failed"); return; }
       // Before stopping the service, a crashed operation is safe to abandon.

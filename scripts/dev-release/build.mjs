@@ -15,7 +15,7 @@ assert.ok(npm && isAbsolute(npm) && basename(npm) === "npm-cli.js", "Invoke thro
 // inputs too, rather than relying on files left behind by source verification.
 await command(process.execPath, [npm, "run", "build"]);
 await command(process.execPath, [npm, "run", "prepack", "--workspace=@aloneio/runmesh-runner"]);
-for (const [entry, output] of [["runmesh-entry.ts", "runmesh.cjs"], ["config.ts", "config.cjs"], ["index.ts", "index.bundle.cjs"]]) {
+for (const [entry, output] of [["runmesh-entry.ts", "runmesh.cjs"], ["maintenance-entry.ts", "maintenance.cjs"], ["config.ts", "config.cjs"], ["index.ts", "index.bundle.cjs"]]) {
   await bundleRunner(join(root, "apps/runner/src", entry), join(root, "apps/runner/dist", output), "cjs", plan.version);
 }
 const stage = join(root, ".dev-release/package"), assets = join(root, ".dev-release/assets");

@@ -16,6 +16,43 @@ export function layer(path) {
 }
 /** All parser-supported extensions receive the same architecture role. */
 const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
+const runnerRoot = "apps/runner/src/";
+const maintenanceSharedSources = new Set([
+  "profile.ts", "service.ts", "purge.ts", "windows-tools.ts", "platform-types.ts",
+  "version.ts", "generated-version.ts", "config.ts", "environment-contracts.ts", "maintenance-contract.ts", "enrollment.ts",
+  "cli/contracts.ts", "cli/input.ts", "cli/lifecycle.ts", "cli/service-plan.ts", "cli/reporting.ts", "cli/enrollment.ts",
+]);
+export function isMaintenanceSource(path) {
+  const source = canonicalSource(path);
+  return source === runnerRoot + "maintenance-entry.ts" || source === runnerRoot + "maintenance-cli.ts" || source.startsWith(runnerRoot + "updates/");
+}
+/** The independently installed manager may share host adapters and stable
+ * contracts, but must never load the selected Runner's execution stack. */
+export function maintenanceRuntimeInputProblem(path) {
+  const source = canonicalSource(path.replaceAll("\\", "/"));
+  if (!source.startsWith(runnerRoot)) return undefined;
+  if (isMaintenanceSource(source) || source.startsWith(runnerRoot + "services/") || maintenanceSharedSources.has(source.slice(runnerRoot.length))) return undefined;
+  return "Maintenance must remain independent of Runner execution and ordinary CLI modules";
+}
+export function maintenanceGraphProblems(files, edges) {
+  const graph = new Map();
+  for (const edge of edges.filter(edge => !edge.typeOnly)) {
+    const targets = graph.get(edge.from) ?? [];
+    targets.push(edge.to); graph.set(edge.from, targets);
+  }
+  const pending = files.filter(isMaintenanceSource), visited = new Set(), failures = [];
+  while (pending.length > 0) {
+    const from = pending.pop();
+    if (visited.has(from)) continue;
+    visited.add(from);
+    for (const to of graph.get(from) ?? []) {
+      const reason = maintenanceRuntimeInputProblem(to);
+      if (reason) failures.push(`${from} -> ${to}: ${reason}`);
+      else pending.push(to);
+    }
+  }
+  return failures;
+}
 const browserRoot = "apps/worker/browser/";
 const browserDependencies = {
   "admin-client.ts": ["central/controller.ts", "runner-actions.ts", "locale.ts", "page-controls.ts", "admin-pages.ts", "admin-navigation.ts"],
@@ -79,7 +116,7 @@ const runnerIoModules = new Set([
 /** New Job/Context/Patch/Connection modules are pure until an adapter role is reviewed. */
 function isPureRunner(path) {
   const name = canonicalSource(path).replace(/^apps\/runner\/src\//u, "");
-  return name === "path-contracts.ts" || name === "environment-contracts.ts" || /^(?:jobs|context|patch|connection)\//u.test(name) && !runnerIoModules.has(name);
+  return name === "path-contracts.ts" || name === "environment-contracts.ts" || name === "maintenance-contract.ts" || /^(?:jobs|context|patch|connection)\//u.test(name) && !runnerIoModules.has(name);
 }
 const cloudPlatform = /^(?:cloudflare:|cloudflare(?:\/|$)|workerd(?:\/|$)|@cloudflare\/)/u;
 const serverSdk = /^(?:@modelcontextprotocol\/|agents(?:\/|$))/u;
@@ -92,6 +129,8 @@ export function specifierProblem(from, specifier, typeOnly) {
   if (centralProblem) return centralProblem;
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
+  if (isMaintenanceSource(source) && external && !builtin && !purePackages.test(specifier))
+    return "Maintenance dependencies are host primitives and shared protocol contracts";
   if (source === "apps/runner/src/environment-contracts.ts" && external && !purePackages.test(specifier))
     return "Environment contracts must not load platform implementations or types";
   if ((runnerUseCase(source) || requestUseCase(source) || registryCoordinator(source)) && external && !purePackages.test(specifier))
@@ -157,6 +196,10 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  if (isMaintenanceSource(from)) {
+    const reason = maintenanceRuntimeInputProblem(to);
+    if (reason) return reason;
+  }
   // This pure admission policy shares release validation and cadence rules;
   // the Registry facade and other domains retain their existing boundaries.
   if (from === "apps/worker/src/registry/release-cache.ts") return [

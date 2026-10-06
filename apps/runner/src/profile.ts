@@ -4,6 +4,7 @@ import { chmod, chown, lstat, mkdir, open, readFile, rename, rm, writeFile } fro
 import { homedir } from "node:os";
 import { dirname, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
+import { maintenanceIdentity, type RunnerMaintenanceIdentity } from "./maintenance-contract.js";
 import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
 import type { HostPlatform } from "./platform-types.js";
@@ -80,7 +81,6 @@ export interface ProfileOwnershipCheck {
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SAFE_GROUP = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const MAX_WORKSPACES = 64;
-const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 // The validated profile is small (64 workspaces with bounded fields).  Keep a
 // hard byte ceiling before JSON parsing so a tampered profile cannot force an
 // unbounded allocation in the long-lived Runner process.
@@ -126,6 +126,13 @@ export class ProfileStore {
   /** Service manifests must not depend on the service manager's working cwd. */
   public get filePath(): string { return this.absolutePath; }
   public async load(): Promise<RunnerProfile | undefined> {
+    return validateProfile(await this.loadDocument());
+  }
+  /** Reuse the exact protected read without depending on mutable Runner settings. */
+  public async loadMaintenanceIdentity(): Promise<RunnerMaintenanceIdentity | undefined> {
+    return maintenanceIdentity(await this.loadDocument());
+  }
+  private async loadDocument(): Promise<unknown> {
     // Pass the same ownership decision used by save()/doctor into the
     // descriptor-based reader.  This is important for injected canonical
     // paths in tests and for service wrappers that deliberately force the
@@ -136,7 +143,7 @@ export class ProfileStore {
     if (raw === undefined) return undefined;
     let value: unknown;
     try { value = JSON.parse(raw) as unknown; } catch { throw new Error("runner profile is not valid JSON"); }
-    return validateProfile(value);
+    return value;
   }
   public async save(profile: RunnerProfile, options: ProfileSaveOptions = {}): Promise<void> {
     const valid = validateProfile(profile);
@@ -439,7 +446,8 @@ function canReadProfileMode(mode: number, gid: number, uid: number): boolean {
 export function validateProfile(value: unknown): RunnerProfile | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const item = value as Record<string, unknown>;
-  if (item.version !== 1 || !validServerUrl(item.server_url, item.insecure_local === true) || !validString(item.runner_id, 1, 128) || !SAFE_ID.test(item.runner_id as string) || !validString(item.token, 16, 4_096) || /\s/.test(item.token as string) || CONTROL_CHARACTER_PATTERN.test(item.token as string)) return undefined;
+  const identity = maintenanceIdentity(item);
+  if (item.version !== 1 || identity === undefined) return undefined;
   if (!Array.isArray(item.workspaces) || item.workspaces.length > MAX_WORKSPACES) return undefined;
   const workspaces: StoredWorkspace[] = [];
   const seen = new Set<string>();
@@ -457,13 +465,10 @@ export function validateProfile(value: unknown): RunnerProfile | undefined {
   if (!validExecutionMode(item.execution_mode) || item.management_mode !== "central" || workspaces.length !== 0) return undefined;
   const result: RunnerProfile = {
     version: 1 as const,
-    server_url: item.server_url as string,
-    runner_id: item.runner_id as string,
-    token: item.token as string,
+    ...identity,
     workspaces,
     management_mode: "central",
     execution_mode: item.execution_mode,
-    ...(item.insecure_local === true ? { insecure_local: true } : {}),
   };
   return withMaxConcurrentJobs(result, item.max_concurrent_jobs);
 }
@@ -474,17 +479,6 @@ function withMaxConcurrentJobs(profile: RunnerProfile, value: unknown): RunnerPr
   return { ...profile, max_concurrent_jobs: value };
 }
 function validString(value: unknown, min: number, max: number): value is string { return typeof value === "string" && value.length >= min && value.length <= max && !/[\r\n]/.test(value); }
-function validServerUrl(value: unknown, insecureLocal: boolean): value is string {
-  if (!validString(value, 2, 2_048)) return false;
-  if (CONTROL_CHARACTER_PATTERN.test(value)) return false;
-  try {
-    const url = new URL(value);
-    const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
-    const safe = url.username === "" && url.password === "" && url.search === "" && url.hash === "";
-    if (!safe || !(url.protocol === "wss:" || (url.protocol === "ws:" && loopback && insecureLocal))) return false;
-    return url.toString().length <= 2_048;
-  } catch { return false; }
-}
 function isErrno(error: unknown, code: string): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code; }
 
 /** Resolve explicit profile paths with the target host's path semantics. */

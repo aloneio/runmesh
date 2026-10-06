@@ -16,3 +16,12 @@ test("architecture refactoring preserves the checked-in wire schema byte for byt
   const schema = await readFile(new URL("../packages/protocol/schema/wire-message.schema.json", import.meta.url));
   assert.equal(digest(schema), baseline.wire_schema_sha256);
 });
+
+test("published maintenance v1 client stays frozen while current protocol code evolves", async () => {
+  // Preserve the reviewed client derived from the published dev.45 contract.
+  // A new protocol gets its own fixture and baseline; changing this fixture
+  // together with current schemas would erase the installed-client regression.
+  const fixture = await readFile(new URL("../apps/worker/test/fixtures/maintenance-v1-client.ts", import.meta.url), "utf8");
+  assert.equal(digest(fixture.replaceAll("\r\n", "\n")), baseline.maintenance_v1.fixture_sha256,
+    `Preserve the ${baseline.maintenance_v1.runner_release} maintenance client from ${baseline.maintenance_v1.source_commit}; add a separate fixture for a new protocol`);
+});

@@ -1,4 +1,4 @@
-import { exactRunnerRelease, FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS, MAX_RELEASE_ASSET_BYTES, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, releaseManifestProblem, verifyRunnerReleaseSignature, type ReleaseTrust } from "@aloneio/runmesh-protocol";
+import { exactRunnerRelease, FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS, MAX_RELEASE_ASSET_BYTES, releaseManifestProblem, verifyRunnerReleaseSignature, type ReleaseTrust } from "@aloneio/runmesh-protocol";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, copyFile, lstat, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
@@ -66,14 +66,20 @@ async function validateInstallRoot(path: string): Promise<string> {
 export async function stageRunnerRelease(target: RunnerReleaseTarget, context: RunnerReleaseStageContext, dependencies: { readonly trust?: ReleaseTrust } = {}): Promise<VerifiedStagedRelease> {
   const release = exactRunnerRelease(target.version);
   if (release.channel !== target.channel || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(context.operationId)) throw new Error("Runner update target is invalid.");
-  for (const value of [target.manifest_sha256, target.artifact_sha256]) if (value !== undefined && !/^[a-f0-9]{64}$/u.test(value)) throw new Error("Runner release digest is invalid.");
+  for (const value of [target.manifest_sha256, target.artifact_sha256]) if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) throw new Error("Runner release requires both selected digests.");
   const root = await validateInstallRoot(context.installRoot);
   const fetchImpl = context.fetch ?? fetch;
   const manifestBytes = await downloadRunnerReleaseAsset(release.manifest_url, 65536, fetchImpl);
   const signature = await downloadRunnerReleaseAsset(release.signature_url, 1024, fetchImpl);
   const descriptor = await downloadRunnerReleaseAsset(release.signature_descriptor_url, 16384, fetchImpl);
   const manifest = await verifyRunnerReleaseSignature(manifestBytes, signature, descriptor, dependencies.trust);
-  if (releaseManifestProblem(manifest, { ...release, protocol_min: PROTOCOL_MIN_VERSION, protocol_max: PROTOCOL_CURRENT_VERSION,
+  // The Worker authorizes wire compatibility when it fixes the release digests.
+  // This independent manager validates the signed range without inheriting the
+  // wire version of the Runner package from which it was originally installed.
+  const protocol = typeof manifest === "object" && manifest !== null ? manifest as Record<string, unknown> : undefined;
+  const minimum = protocol?.protocol_min, maximum = protocol?.protocol_max;
+  if (!Number.isSafeInteger(minimum) || !Number.isSafeInteger(maximum) || Number(minimum) < 1 || Number(minimum) > Number(maximum)) throw new Error("Runner release protocol range is invalid.");
+  if (releaseManifestProblem(manifest, { ...release, protocol_min: Number(minimum), protocol_max: Number(maximum),
     max_asset_bytes: MAX_RELEASE_ASSET_BYTES, compatibility: "overlap", node_major: Number(process.versions.node.split(".")[0]) }) !== undefined) throw new Error("Runner release requires a different protocol or Node runtime.");
   const artifact = (manifest as { artifacts: [{ size: number; sha256: string }] }).artifacts[0];
   const manifestSha256 = digest(manifestBytes);

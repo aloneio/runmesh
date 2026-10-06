@@ -351,13 +351,65 @@ describe("independent update coordinator", () => {
     expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("restore");
   });
 
-  it("retains recovery state and the cloud fence when rollback cannot be verified", async () => {
+  it("retains the fence after a native failure and retries the owned recovery when it becomes available", async () => {
     const test = fixture(); test.setJournal(recovering());
     await expect(new UpdateCoordinator({ ...test.options, installation: { ...test.options.installation, restore: async () => { throw new Error("disk unavailable"); } } }).runOnce()).rejects.toThrow("rollback_failed");
     expect(test.active()?.phase).toBe("recovery_required"); expect(test.operation()).toMatchObject({ state: "checking", error_code: "rollback_failed" });
     const events = test.events.length;
-    await expect(new UpdateCoordinator(test.options).runOnce()).rejects.toThrow("rollback_failed");
-    expect(test.events).toHaveLength(events);
+    await new UpdateCoordinator(test.options).runOnce();
+    expect(test.events.slice(events)).toEqual(["preflight", "local:rolling_back", "stop", "restore", "start", "restore-enabled", "local:rolled_back", "cloud:rolled_back", "complete"]);
+    // A terminal rollback_failed receipt still blocks the Worker fence and
+    // future updates; successful recovery must clear that unresolved marker.
+    expect(test.active()).toBeUndefined(); expect(test.operation()).toMatchObject({ state: "rolled_back", error_code: "activation_failed" });
+  });
+
+  it("keeps a repeated native recovery failure retryable without releasing the cloud fence", async () => {
+    const test = fixture(); test.setJournal({ ...recovering(), phase: "recovery_required", error_code: "rollback_failed" });
+    const coordinator = new UpdateCoordinator({ ...test.options, installation: { ...test.options.installation, restore: async () => { throw new Error("disk remains unavailable"); } } });
+    await expect(coordinator.runOnce()).rejects.toThrow("rollback_failed");
+    await expect(coordinator.runOnce()).rejects.toThrow("rollback_failed");
+    expect(test.active()).toMatchObject({ phase: "recovery_required", error_code: "rollback_failed" });
+    expect(test.operation()).toMatchObject({ state: "checking", error_code: "rollback_failed" });
+    expect(test.events.filter(event => event === "preflight")).toHaveLength(2);
+    expect(test.events).not.toContain("cloud:rolled_back"); expect(test.events).not.toContain("complete");
+  });
+
+  it.each(["removed", "operation", "lifecycle", "manager", "terminal"])("refuses a recovery-required retry after cloud ownership changes: %s", async replacement => {
+    const test = fixture(); test.setJournal({ ...recovering(), phase: "recovery_required", error_code: "rollback_failed" });
+    const cloud = { ...test.options.cloud, poll: async (): Promise<CloudUpdateObservation> => ({
+      ...await test.options.cloud.poll(), operation: replacement === "removed" ? null : { ...test.operation(),
+        ...(replacement === "operation" ? { operation_id: "other-operation" } : replacement === "lifecycle" ? { lifecycle_id: "other-lifecycle" }
+          : replacement === "manager" ? { manager_id: "other-manager" } : { state: "succeeded" as const }) },
+    }) };
+    await expect(new UpdateCoordinator({ ...test.options, cloud }).runOnce()).rejects.toThrow("invalid_installation");
+    expect(test.events).not.toContain("preflight"); expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("restore");
+    expect(test.events.some(event => event.startsWith("cloud:"))).toBe(false);
+    expect(test.active()?.phase).toBe("recovery_required");
+  });
+
+  it.each(["changed", "unbound", "offline"])("requires both unchanged identity and online cloud authority to retry recovery: %s", async condition => {
+    const test = fixture(); const saved = { ...recovering(), phase: "recovery_required" as const, error_code: "rollback_failed" as const };
+    if (condition === "unbound") delete (saved as { recovery_identity?: string }).recovery_identity;
+    test.setJournal(saved);
+    await expect(new UpdateCoordinator({ ...test.options,
+      recoveryIdentity: async () => (condition === "changed" ? "f" : "e").repeat(64),
+      ...(condition === "offline" ? { cloud: { ...test.options.cloud, poll: async () => { throw new TypeError("offline"); } } } : {}),
+    }).runOnce()).rejects.toThrow("invalid_installation");
+    expect(test.events).toEqual([]); expect(test.active()).toEqual(saved);
+  });
+
+  it("does not retry native recovery against a replaced installation path", async () => {
+    const test = fixture(); test.setJournal({ ...recovering(), phase: "recovery_required", error_code: "rollback_failed" });
+    await expect(new UpdateCoordinator({ ...test.options, installation: { ...test.options.installation, assertRecoverable: async () => { throw new UpdateFailure("invalid_installation"); } } }).runOnce()).rejects.toThrow("invalid_installation");
+    expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("restore");
+    expect(test.events.some(event => event.startsWith("cloud:"))).toBe(false); expect(test.active()?.phase).toBe("recovery_required");
+  });
+
+  it("rechecks retry ownership after the installation preflight and before native stop", async () => {
+    const test = fixture(); test.setJournal({ ...recovering(), phase: "recovery_required", error_code: "rollback_failed" }); let reads = 0;
+    await expect(new UpdateCoordinator({ ...test.options, recoveryIdentity: async () => (++reads === 1 ? "e" : "f").repeat(64) }).runOnce()).rejects.toThrow("invalid_installation");
+    expect(test.events).toContain("preflight"); expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("restore");
+    expect(test.events.some(event => event.startsWith("cloud:"))).toBe(false); expect(test.active()?.phase).toBe("recovery_required");
   });
 
   it("never switches or restores after losing the OS installation lease", async () => {

@@ -1,12 +1,12 @@
 import { RunnerUpdateClaimSchema, RunnerUpdateDrainProofSchema, RunnerUpdateResponseSchema, RunnerUpdateStatusSchema } from "@aloneio/runmesh-protocol";
-import type { RunnerProfile } from "../profile.js";
+import type { RunnerMaintenanceIdentity } from "../maintenance-contract.js";
 import type { CloudMaintenancePort, CloudUpdateObservation, CloudUpdateState, UpdateErrorCode, UpdateOwner } from "./contracts.js";
 
 export class MaintenanceHttpError extends Error {
   public constructor(public readonly status: number) { super(`maintenance_http_${status}`); this.name = "MaintenanceHttpError"; }
 }
 
-export function maintenanceEndpoint(profile: RunnerProfile): URL {
+export function maintenanceEndpoint(profile: RunnerMaintenanceIdentity): URL {
   const url = new URL(profile.server_url);
   if (url.username || url.password || url.search || url.hash || !url.pathname.endsWith("/runner/connect")) throw new Error("invalid maintenance origin");
   if (url.protocol === "wss:") url.protocol = "https:";
@@ -18,7 +18,7 @@ export function maintenanceEndpoint(profile: RunnerProfile): URL {
 
 /** The existing protected profile is reloaded for every request, so credential
  * rotation does not create a second persistent secret or require agent reinstall. */
-export function createCloudMaintenance(options: { readonly profile: () => Promise<RunnerProfile>; readonly fetch?: typeof fetch; readonly signal?: AbortSignal }): CloudMaintenancePort {
+export function createCloudMaintenance(options: { readonly profile: () => Promise<RunnerMaintenanceIdentity>; readonly fetch?: typeof fetch; readonly signal?: AbortSignal }): CloudMaintenancePort {
   const fetchImpl = options.fetch ?? fetch;
   const request = async (suffix: string, body?: unknown): Promise<CloudUpdateObservation> => {
     const profile = await options.profile(); const url = maintenanceEndpoint(profile); url.pathname += suffix;

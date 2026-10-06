@@ -78,6 +78,55 @@ Worker history defaults and page sizes remain pure display/configuration values;
 Registry schema initialization owns the settings table. History storage validates
 retention against the same protocol values.
 
+## Runner version manager
+
+`apps/runner/src/maintenance-entry.ts` and `maintenance-cli.ts` build the independent
+`dist/maintenance.cjs` artifact. Initial manager installation copies this artifact
+to `<installRoot>/manager/runmesh.cjs` and copies Node to the manager's own runtime
+directory. Its native service keeps these fixed paths while the selected Runner
+changes through `current`. Service-management launchers use the fixed manager;
+Runner startup uses the selected release. The manager shares profile I/O and native
+service adapters, with a separate dependency graph from task execution and the
+ordinary Runner CLI.
+
+An existing manager keeps its installed runtime and bundle during Runner changes
+and repeated `install` commands. Manager fixes therefore need their own deployment
+and host verification. Shipping a new Runner package alone leaves existing manager
+code in place; record Runner and manager delivery separately.
+
+`apps/runner/src/maintenance-contract.ts` defines the local fields consumed across
+versions. Credential loading reuses the protected profile reader and projects the
+server URL, Runner ID, token and local-development allowance. Workspace settings
+and execution configuration belong to the Runner's profile validation. Job draining
+reads the durable Job ID, timestamps and state through the same small contract;
+writers and readers share its ID rules, status classification and metadata byte limit. Keep these fields
+readable when changing profile versions, command payloads or recovery annotations.
+A new Job state needs an explicit active-or-terminal interpretation before a
+manager can use it to decide that tasks have finished.
+
+The independent HTTPS contract in `packages/protocol/src/runner-update.ts` is v1.
+`apps/worker/test/fixtures/maintenance-v1-client.ts` freezes the client shipped in
+`0.1.8-dev.45`; `runner-update-v1-compatibility.test.ts` sends its requests through
+the real Worker routes and parses responses with that client. Preserve this fixture
+when evolving the implementation. Updating both peers in the test would hide a
+break for installed managers. Add a separate contract and fixture for a new version,
+while retaining the v1 checks for existing installations.
+`test/public-contract-baseline.test.mjs` freezes the reviewed fixture's SHA-256
+after normalizing CRLF to LF, so changing both the current schema and the old-client
+fixture still fails the baseline check on every platform.
+
+Three existing CI gates protect the separation:
+
+- `check:architecture` checks direct and transitive maintenance dependencies against
+  reviewed host adapters and contracts.
+- `build-runner-bundle.mjs` inspects the real esbuild input graph before writing the
+  maintenance artifact. Ordinary CLI, execution modules and unreviewed package
+  dependencies fail the build.
+- `pack:smoke` and `test-packed-runner.mjs` run the exact packaged maintenance bundle
+  alone in a temporary directory with a broken ordinary Runner. They check its
+  version, help, argument validation and command boundary. These checks run in
+  native-platform verification and exact release-package validation.
+
 ## Browser source and messages
 
 `apps/worker/browser/admin-client.js` is the browser entry. Central product
