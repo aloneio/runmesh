@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { inspectLocalJobs } from "../src/updates/job-drain.js";
 import { ManagedInstallationPointer } from "../src/updates/installation.js";
@@ -52,6 +52,17 @@ async function installation() {
 }
 
 describe("managed version pointer and durable journal", () => {
+  it("rejects an installation reached through an aliased ancestor while accepting its canonical root", async () => {
+    const test = await installation(); const container = await temporary(); const alias = join(container, "temp-alias");
+    await symlink(dirname(test.root), alias, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const aliasedRoot = join(alias, basename(test.root));
+      expect((await lstat(aliasedRoot)).isSymbolicLink()).toBe(false);
+      expect(await realpath(aliasedRoot)).toBe(test.root);
+      await expect(new ManagedInstallationPointer(aliasedRoot).inspect()).rejects.toThrow("invalid_installation");
+      await expect(test.pointer.inspect()).resolves.toEqual(test.previous);
+    } finally { await unlink(alias); }
+  });
   it("switches to a verified operation-specific older directory and restores the original", async () => {
     const test = await installation(); await expect(test.pointer.inspect()).resolves.toEqual(test.previous);
     await expect(test.pointer.assertRecoverable(test.previous, undefined, "upgrade_1")).resolves.toBeUndefined();
