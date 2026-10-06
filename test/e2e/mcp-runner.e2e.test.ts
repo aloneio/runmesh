@@ -503,17 +503,26 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await waitForJobSuccess(jobId);
     let cursor: string | undefined;
     let output = "";
+    let pages = 0;
     do {
       const page = await mcpTool("job", { action: "logs", job_id: jobId, stream: "stdout", ...(cursor === undefined ? {} : { cursor }), limit: 4 });
-      expect(page.structuredContent?.returned_bytes).toBe(Buffer.byteLength(String(page.structuredContent?.data)));
-      expect(page.structuredContent?.page_protocol).toBe(1);
+      const diagnostic = mcpToolResultDiagnostic(cursor === undefined ? "job_logs_initial" : "job_logs_continuation", page);
+      expect(page.isError, diagnostic).not.toBe(true);
+      expect(typeof page.structuredContent?.data, diagnostic).toBe("string");
+      expect(page.structuredContent?.returned_bytes, diagnostic).toBe(Buffer.byteLength(String(page.structuredContent?.data)));
+      expect(page.structuredContent?.page_protocol, diagnostic).toBe(1);
       output += page.structuredContent?.data as string;
       const next = page.structuredContent?.next_cursor;
+      if (typeof next === "string") expect(Number(next), diagnostic).toBeGreaterThan(Number(cursor ?? 0));
+      pages += 1;
+      expect(pages, diagnostic).toBeLessThanOrEqual(3);
       cursor = typeof next === "string" ? next : undefined;
     } while (cursor !== undefined);
     expect(output).toBe("😀é😀");
     const stderr = await mcpTool("job", { action: "logs", job_id: jobId, stream: "stderr", limit: 1024 });
-    expect(stderr.structuredContent?.data).toBe("stderr-page\n");
+    const stderrDiagnostic = mcpToolResultDiagnostic("job_logs_stderr", stderr);
+    expect(stderr.isError, stderrDiagnostic).not.toBe(true);
+    expect(stderr.structuredContent?.data, stderrDiagnostic).toBe("stderr-page\n");
   });
 
   it("paginates large real-runner logs and handles concurrent stateless MCP calls", async () => {
