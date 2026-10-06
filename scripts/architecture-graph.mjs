@@ -3,7 +3,7 @@ import { centralNodeProblem } from "./central-architecture-policy.mjs";
 import { builtinModules } from "node:module";
 import { readdir, readFile, lstat } from "node:fs/promises";
 import { join, posix } from "node:path";
-import { SOURCE_ROOTS, SOURCE_PACKAGES, MISSING_GENERATED, RETIRED_PATTERNS, layer, dependencyProblem, specifierProblem, boundaryNodeProblem } from "./architecture-policy.mjs";
+import { SOURCE_ROOTS, SOURCE_PACKAGES, MISSING_GENERATED, RETIRED_PATTERNS, layer, dependencyProblem, specifierProblem, boundaryNodeProblem, maintenanceGraphProblems } from "./architecture-policy.mjs";
 
 const builtin = new Set(builtinModules.map(name => name.replace(/^node:/u, "")));
 const extensions = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
@@ -129,6 +129,7 @@ export async function checkArchitecture(root) {
     }
   }
   const files = [...sources.keys()].sort();
+  failures.push(...maintenanceGraphProblems(files, edges));
   const runtimeCycles = cycles(files, edges.filter(edge => !edge.typeOnly));
   for (const cycle of runtimeCycles) failures.push(`runtime dependency cycle: ${cycle.join(" -> ")}`);
   const allCycles = cycles(files, edges);

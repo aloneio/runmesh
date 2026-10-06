@@ -2,7 +2,8 @@ import { lstat, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { isTerminalRunnerUpdate } from "@aloneio/runmesh-protocol";
-import { ProfileStore, type RunnerProfile } from "../profile.js";
+import { ProfileStore } from "../profile.js";
+import type { RunnerMaintenanceIdentity } from "../maintenance-contract.js";
 import type { ServiceMode, ServicePlatform } from "../service.js";
 import { createCloudMaintenance } from "./cloud.js";
 import { UpdateFailure } from "./contracts.js";
@@ -47,10 +48,10 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
   }
   if (!equal(await realpath(process.execPath), layout.runtimePath) || process.argv[1] === undefined || !equal(await realpath(process.argv[1]), layout.bundlePath)) throw new UpdateFailure("invalid_installation");
   const store = new ProfileStore({ filePath: options.profilePath, platform: layout.platform, enforceServiceOwnership: layout.mode === "system" });
-  const initial = await store.load();
+  const initial = await store.loadMaintenanceIdentity();
   if (initial === undefined) throw new UpdateFailure("invalid_installation");
-  const profile = async (): Promise<RunnerProfile> => {
-    const current = await store.load();
+  const profile = async (): Promise<RunnerMaintenanceIdentity> => {
+    const current = await store.loadMaintenanceIdentity();
     if (current === undefined || current.runner_id !== initial.runner_id || current.server_url !== initial.server_url) throw new UpdateFailure("invalid_installation");
     return current;
   };

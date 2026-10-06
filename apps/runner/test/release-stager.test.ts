@@ -20,14 +20,14 @@ function archive(entries: { name: string; value: string; type?: string }[]): Buf
   }
   parts.push(Buffer.alloc(1024)); return gzipSync(Buffer.concat(parts));
 }
-function fixture(version = "0.1.6") {
+function fixture(version = "0.1.6", policy: { protocolMin?: unknown; protocolMax?: unknown; nodeMajor?: number } = {}) {
   const release = exactRunnerRelease(version);
   const bytes = archive([{ name: "package/package.json", value: JSON.stringify({ name: "@aloneio/runmesh-runner", version, dependencies: {} }) },
     { name: "package/dist/runmesh.cjs", value: `console.log(${JSON.stringify(version)});` }]);
   const sha = createHash("sha256").update(bytes).digest("hex");
   const manifest = Buffer.from(JSON.stringify({ schema_version: 1, project: "runmesh", version, tag: release.tag, channel: release.channel,
-    prerelease: release.channel === "dev", commit_sha: "a".repeat(40), protocol_min: 2, protocol_max: 2, published_at: "2026-10-06T00:00:00Z",
-    artifacts: [{ name: release.artifact_name, platform: "node", architecture: "portable", node_major_min: 22, url: release.artifact_url, size: bytes.length, sha256: sha }] }));
+    prerelease: release.channel === "dev", commit_sha: "a".repeat(40), protocol_min: policy.protocolMin ?? 2, protocol_max: policy.protocolMax ?? 2, published_at: "2026-10-06T00:00:00Z",
+    artifacts: [{ name: release.artifact_name, platform: "node", architecture: "portable", node_major_min: policy.nodeMajor ?? 22, url: release.artifact_url, size: bytes.length, sha256: sha }] }));
   const key = generateKeyPairSync("ed25519");
   const trust = { key_id: "test-release", public_key_pem: key.publicKey.export({ type: "spki", format: "pem" }).toString() };
   const payload = new Map<string, Uint8Array>([[release.manifest_url, manifest], [release.signature_url, Buffer.from(sign(null, manifest, key.privateKey).toString("base64"))],
@@ -60,7 +60,7 @@ describe("Runner exact release staging", () => {
   it("rejects an asset changed after selection before extracting any files", async () => {
     const f = fixture(); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
     try {
-      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", manifest_sha256: "b".repeat(64) },
+      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: "b".repeat(64) },
         { installRoot: root, operationId: "changed-release", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toThrow("changed after");
       expect(await readdir(root)).toEqual([]);
     } finally { await rm(root, { recursive: true, force: true }); }
@@ -68,7 +68,7 @@ describe("Runner exact release staging", () => {
   it("does not accept a downloaded key as its trust root", async () => {
     const f = fixture(); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
     try {
-      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable" },
+      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
         { installRoot: root, operationId: "untrusted", runtimePath: process.execPath, fetch: f.fetchImpl })).rejects.toThrow("signature descriptor");
       expect(await readdir(root)).toEqual([]);
     } finally { await rm(root, { recursive: true, force: true }); }
@@ -76,13 +76,47 @@ describe("Runner exact release staging", () => {
   it("rejects corrupted package bytes after validating the signed metadata", async () => {
     const f = fixture(); f.payload.set(f.release.artifact_url, Buffer.from("tampered")); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
     try {
-      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable" },
+      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
         { installRoot: root, operationId: "corrupt", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toThrow("checksum");
     } finally { await rm(root, { recursive: true, force: true }); }
   });
   it("blocks untrusted redirects and oversized responses", async () => {
     await expect(downloadRunnerReleaseAsset("https://github.com/example", 16, (async () => new Response(null, { status: 302, headers: { location: "https://example.com/private" } })) as typeof fetch)).rejects.toThrow("origin");
     await expect(downloadRunnerReleaseAsset("https://github.com/example", 16, (async () => new Response("x".repeat(17))) as typeof fetch)).rejects.toThrow("size");
+  });
+
+  it("stages a cloud-selected signed wire v3 release independently of the manager's older wire protocol", async () => {
+    const f = fixture("0.1.8-dev.99", { protocolMin: 3, protocolMax: 3 }); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    try {
+      const result = await stageRunnerRelease({ version: f.release.version, channel: "dev", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "wire-v3", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust });
+      expect(result).toMatchObject({ version: f.release.version, manifestSha256: f.manifestSha, artifactSha256: f.sha });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }, 30000);
+
+  it.each([{ protocolMin: 0, protocolMax: 3 }, { protocolMin: 4, protocolMax: 3 }, { protocolMin: 2.5, protocolMax: 3 }, { protocolMin: "3", protocolMax: 3 }, { protocolMin: 3, protocolMax: Number.MAX_SAFE_INTEGER + 1 }])("rejects an invalid signed protocol range %j before extraction", async policy => {
+    const f = fixture("0.1.6", policy); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    try {
+      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "invalid-wire", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toThrow("protocol range");
+      expect(await readdir(root)).toEqual([]); expect(f.calls).toHaveLength(3);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("retains the private Node runtime compatibility gate for a cloud-selected release", async () => {
+    const f = fixture("0.1.6", { nodeMajor: Number(process.versions.node.split(".")[0]) + 1 }); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    try {
+      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "future-node", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toThrow("Node runtime");
+      expect(await readdir(root)).toEqual([]); expect(f.calls).toHaveLength(3);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(["manifest_sha256", "artifact_sha256"] as const)("requires the cloud-selected %s before fetching a release", async missing => {
+    const f = fixture(); const target = { version: "0.1.6", channel: "stable" as const, artifact_sha256: f.sha, manifest_sha256: f.manifestSha };
+    const { [missing]: _missing, ...withoutDigest } = target;
+    await expect(stageRunnerRelease(withoutDigest, { installRoot: "unused", operationId: "unpinned", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toThrow("both selected digests");
+    expect(f.calls).toEqual([]);
   });
 });
 

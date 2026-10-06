@@ -7,6 +7,9 @@ import { inspectLocalJobs } from "../src/updates/job-drain.js";
 import { ManagedInstallationPointer } from "../src/updates/installation.js";
 import { FileUpdateJournal, loadManagerId } from "../src/updates/journal.js";
 import type { UpdateJournal, UpdatePreparation } from "../src/updates/contracts.js";
+import { isJobStatus } from "../src/jobs/records.js";
+import { MAINTENANCE_JOB_STATES } from "../src/maintenance-contract.js";
+import { atomicJson } from "../src/jobs/storage.js";
 
 const roots: string[] = [];
 async function temporary(): Promise<string> { const root = await mkdtemp(join(tmpdir(), "runmesh-update-")); roots.push(root); return root; }
@@ -17,6 +20,24 @@ async function jobsRoot(): Promise<string> { const root = await temporary(); awa
 async function writeJob(root: string, value: unknown): Promise<void> { await mkdir(join(root, "jobs", jobId), { recursive: true }); await writeFile(join(root, "jobs", jobId, "meta.json"), JSON.stringify(value)); }
 
 describe("complete local job drain", () => {
+  it("keeps the persisted v1 task state readable independently of execution payload changes", async () => {
+    const root = await jobsRoot(); await mkdir(join(root, "jobs", jobId));
+    // Freeze the installed v1 manager's semantics at runtime: test files are
+    // transpiled, so a TypeScript exhaustiveness assertion alone is no gate.
+    const statuses = { queued: true, running: true, cancelling: true, unknown: true, cancelled: false, succeeded: false, failed: false, interrupted: false };
+    expect(MAINTENANCE_JOB_STATES).toEqual(statuses);
+    for (const [status, active] of Object.entries(statuses)) {
+      expect(isJobStatus(status)).toBe(true);
+      await atomicJson(join(root, "jobs", jobId, "meta.json"), { job_id: jobId, status, created_at_ms: 1, updated_at_ms: 2,
+        command: { executable: "future-runner" }, workspace: { policy_id: "next" }, future: { schema: 2 } });
+      await expect(inspectLocalJobs(root)).resolves.toEqual({ idle: !active, active: active ? 1 : 0 });
+    }
+    expect(isJobStatus("new-unknown-state")).toBe(false);
+    await writeJob(root, { ...job("new-unknown-state"), command: { executable: "future-runner" } });
+    await expect(inspectLocalJobs(root)).rejects.toThrow("local_state_invalid");
+    await writeJob(root, { ...job("succeeded"), job_id: "job-00000000-0000-0000-0000-000000000000" });
+    await expect(inspectLocalJobs(root)).rejects.toThrow("local_state_invalid");
+  });
   it.each(["queued", "running", "cancelling", "unknown"])("blocks %s jobs even with record_history=false", async status => {
     const root = await jobsRoot(); await writeJob(root, job(status));
     await expect(inspectLocalJobs(root)).resolves.toEqual({ idle: false, active: 1 });

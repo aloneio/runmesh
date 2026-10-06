@@ -2,12 +2,13 @@ import { parse } from "@babel/parser";
 import { checkArchitecture } from "../scripts/architecture-graph.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile, cp, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, cp, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { checkCommand } from "../scripts/ci-contract.mjs";
+import { bundleRunner } from "../scripts/build-runner-bundle.mjs";
 
 const project = fileURLToPath(new URL("../", import.meta.url));
 async function fixture(t, sources) {
@@ -27,6 +28,14 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["maintenance entry to ordinary CLI", { "apps/runner/src/maintenance-entry.ts": 'import "./cli.js";', "apps/runner/src/cli.ts": "export {};" }],
+  ["maintenance agent to Runner runtime", { "apps/runner/src/updates/agent.ts": 'import "../runtime.js";', "apps/runner/src/runtime.ts": "export {};" }],
+  ["maintenance agent to ordinary supervisor", { "apps/runner/src/updates/agent.ts": 'import "../cli/supervisor.js";', "apps/runner/src/cli/supervisor.ts": "export {};" }],
+  ["maintenance imports concrete job metadata", { "apps/runner/src/updates/job-drain.ts": 'import "../jobs/records.js";', "apps/runner/src/jobs/records.ts": "export {};" }],
+  ["maintenance to unreviewed new Runner module", { "apps/runner/src/updates/new.mts": 'import "../new-runtime.js";', "apps/runner/src/new-runtime.ts": "export {};" }],
+  ["maintenance to WebSocket package", { "apps/runner/src/updates/new.ts": 'import "ws";' }],
+  ["maintenance reaches runtime through a shared helper", { "apps/runner/src/maintenance-cli.ts": 'import "./cli/lifecycle.js";', "apps/runner/src/cli/lifecycle.ts": 'import "../runtime.js";', "apps/runner/src/runtime.ts": "export {};" }],
+  ["maintenance reaches new execution code through profile", { "apps/runner/src/updates/agent.ts": 'import "../profile.js";', "apps/runner/src/profile.ts": 'import "./new-runtime.js";', "apps/runner/src/new-runtime.ts": "export {};" }],
   ["Registry facade to release rules", { "apps/worker/src/registry.ts": 'import "./domain/release-selection.js";', "apps/worker/src/domain/release-selection.ts": "export {};" }],
   ["Registry release admission to other domain", { "apps/worker/src/registry/release-cache.ts": 'import "../domain/release-config.js";', "apps/worker/src/domain/release-config.ts": "export {};" }],
   ["Registry release admission to storage", { "apps/worker/src/registry/release-cache.ts": 'import "./storage.js";', "apps/worker/src/registry/storage.ts": "export {};" }],
@@ -186,6 +195,35 @@ const bad = [
   ["MCP concrete Registry type", { "apps/worker/src/mcp/server.ts": 'import type { State } from "../registry.js";', "apps/worker/src/registry.ts": "export type State = {};" }],
   ["retired runtime setting", { "apps/runner/src/a.ts": 'export const x = "RUNMESH_SCHEMA_READY";' }],
 ];
+
+test("maintenance shares host adapters and types without acquiring execution dependencies", async t => {
+  const f = await fixture(t, {
+    "apps/runner/src/maintenance-entry.ts": 'import "./maintenance-cli.js";',
+    "apps/runner/src/maintenance-cli.ts": 'import "./cli/lifecycle.js"; import "./updates/agent.js";',
+    "apps/runner/src/cli/lifecycle.ts": 'import "../profile.js"; import "../service.js";',
+    "apps/runner/src/profile.ts": 'import type { Config } from "./config.js";',
+    "apps/runner/src/config.ts": 'export type Config = {};',
+    "apps/runner/src/service.ts": 'export * from "./services/layout.js";',
+    "apps/runner/src/services/layout.ts": 'import "node:path";',
+    "apps/runner/src/updates/agent.ts": 'import "./job-drain.js";',
+    "apps/runner/src/updates/job-drain.ts": 'import "../maintenance-contract.js"; import "node:fs/promises";',
+    "apps/runner/src/maintenance-contract.ts": 'export const terminal = (value: string) => value === "succeeded";',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
+test("actual maintenance bundling rejects execution modules before emitting its artifact", async t => {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-maintenance-build-"));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const entry = join(root, "maintenance-entry.ts"), output = join(root, "maintenance.cjs");
+  const source = name => JSON.stringify(join(project, "apps/runner/src", name).replaceAll("\\", "/"));
+  await writeFile(entry, `export { serviceLayout } from ${source("service.ts")};\n`);
+  await bundleRunner(entry, output);
+  assert.ok((await stat(output)).size > 0);
+  await writeFile(entry, `import ${source("cli.ts")};\nexport const manager = true;\n`);
+  await assert.rejects(bundleRunner(entry, output), /Maintenance bundle includes .*apps\/runner\/src\//u);
+  await assert.rejects(stat(output), { code: "ENOENT" });
+});
 for (const [name, sources] of bad) test(`AR01 rejects ${name}`, async t => {
   const f = await fixture(t, sources), result = f.run();
   assert.notEqual(result.status, 0, `${name} incorrectly passed: ${result.stdout}`);

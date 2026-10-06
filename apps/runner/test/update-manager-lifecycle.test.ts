@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { serviceCommand, uninstall } from "../src/cli/lifecycle.js";
+import { runMaintenanceCli } from "../src/maintenance-cli.js";
 import type { CliDependencies, ParsedCommand } from "../src/cli/contracts.js";
 import { ProfileStore, type RunnerProfile } from "../src/profile.js";
 import { renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
@@ -32,7 +33,7 @@ const command = (name: string, values: ParsedCommand["values"] = {}): ParsedComm
 it("registers the independent manager after a successful existing Runner install", async () => {
   const test = fixture();
   const reports: string[] = [];
-  await serviceCommand(command("install"), test.store, value => reports.push(value), { ...test.dependencies,
+  await runMaintenanceCli(["install", "--json"], { ...test.dependencies, store: test.store, stdout: value => reports.push(value),
     maintenanceManager: { ...test.dependencies.maintenanceManager!, install: async options => { await test.dependencies.maintenanceManager!.install(options); return { enabled: true }; } } });
   expect(test.calls).toEqual(["install-runner", "install-manager"]);
   expect(test.maintenanceCalls[0]).toEqual({ platform: "linux", mode: "system", installRoot: "/opt/runmesh", profilePath: "/etc/runmesh/profile.json" });
@@ -51,9 +52,21 @@ it("reports manual maintenance without failing a custom service install", async 
 
 it("removes the independent manager before removing the Runner service", async () => {
   const test = fixture();
-  await uninstall(command("uninstall"), test.store, () => undefined, test.dependencies);
+  await runMaintenanceCli(["uninstall", "--json"], { ...test.dependencies, store: test.store, stdout: () => undefined });
   expect(test.calls).toEqual(["uninstall-manager", "uninstall-runner", "remove-runner-manifest"]);
   expect(test.maintenanceCalls[0]?.preservePackage).toBe(true);
+});
+
+it.each(["stop", "restart"] as const)("dispatches %s through the independent maintenance CLI", async action => {
+  const test = fixture();
+  await runMaintenanceCli([action, "--json"], { ...test.dependencies, store: test.store, stdout: () => undefined });
+  expect(test.calls).toEqual([`${action}-runner`]);
+});
+
+it("dispatches an explicit service migration through the independent maintenance CLI", async () => {
+  const test = fixture();
+  await runMaintenanceCli(["migrate", "--execution-mode", "dedicated_user", "--json"], { ...test.dependencies, store: test.store, stdout: () => undefined });
+  expect(test.calls).toEqual(["install-runner", "install-manager"]);
 });
 
 it("does not purge when the independent manager still needs recovery", async () => {

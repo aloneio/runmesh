@@ -1,8 +1,9 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PRODUCT_VERSION } from "./product-version.mjs";
+import { maintenanceRuntimeInputProblem } from "./architecture-policy.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "..");
@@ -13,7 +14,8 @@ export async function bundleRunner(entry, output, format = "cjs", version = PROD
   if (version !== PRODUCT_VERSION && !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dev\.(0|[1-9]\d*)$/u.test(version)) throw new Error("Only a development prerelease may override the bundled source version");
   await mkdir(dirname(resolve(output)), { recursive: true });
   await rm(resolve(output), { force: true });
-  await build({
+  const maintenance = /^maintenance-entry\.(?:[cm]?[jt]s|[jt]sx)$/u.test(basename(entry));
+  const result = await build({
   entryPoints: [resolve(entry)],
   outfile: resolve(output),
   bundle: true,
@@ -26,7 +28,20 @@ export async function bundleRunner(entry, output, format = "cjs", version = PROD
   legalComments: "none",
   sourcemap: false,
   minify: false,
+  metafile: maintenance,
+  write: !maintenance,
   });
+  if (maintenance) {
+    // Inspect the actual bundle graph, including transitive adapters and
+    // tree-shaken modules. A source-only rule cannot prove package isolation.
+    for (const input of Object.keys(result.metafile.inputs)) {
+      const path = relative(repositoryRoot, resolve(input)).replaceAll("\\", "/");
+      const reason = maintenanceRuntimeInputProblem(path);
+      const external = /(?:^|\/)node_modules\//u.test(path) && !/(?:^|\/)node_modules\/zod\//u.test(path);
+      if (reason || external) throw new Error(`Maintenance bundle includes ${path}: ${reason ?? "unreviewed maintenance runtime dependency"}`);
+    }
+    for (const file of result.outputFiles) await writeFile(file.path, file.contents);
+  }
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

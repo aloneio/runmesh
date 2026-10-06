@@ -4,12 +4,13 @@ import { chmod, lstat, open, mkdir, rename, rm, readdir } from "node:fs/promises
 import { dirname, join, parse, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { JobFilePort } from "./ports.js";
+import { MAX_MAINTENANCE_METADATA_BYTES } from "../maintenance-contract.js";
 
 // Recovery metadata is generated from bounded command/identity fields, but a
 // corrupted or attacker-created file must not make startup allocate without a
 // limit.  Eight MiB accommodates the legal worst-case UTF-8 command array
 // while keeping recovery memory bounded.
-export const MAX_METADATA_BYTES = 8 * 1024 * 1024;
+export const MAX_METADATA_BYTES = MAX_MAINTENANCE_METADATA_BYTES;
 
 export const METADATA_READ_CHUNK_BYTES = 64 * 1024;
 

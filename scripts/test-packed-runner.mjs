@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { command, readPlan, assertSource } from "./dev-release/io.mjs";
+import { checkPackedMaintenance } from "./packed-maintenance-check.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 assert.ok(process.argv.length === 3 || process.argv.length === 4, "pass the exact Runner tarball and optional frozen development plan");
@@ -28,6 +29,7 @@ try {
   assert.equal(manifest.version,devPlan?.version ?? source.version);
   if (devPlan !== undefined) assert.deepEqual(JSON.parse(await readFile(join(pkg,"build-inputs.json"),"utf8")), devPlan);
   assert.equal(Object.keys(manifest.dependencies ?? {}).length,0);
+  await checkPackedMaintenance(pkg, manifest.version);
   const entry = join(pkg,"dist","runmesh.cjs");
   await run(process.execPath,[entry,"--version"]);
   assert.equal((await command(process.execPath,[entry,"--version"])).stdout.trim(), manifest.version, "installed runtime version differs from package metadata");

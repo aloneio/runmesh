@@ -1,8 +1,7 @@
 import { lstat, open, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join, parse, relative, resolve, sep } from "node:path";
-import { normalizeJobRecord, safeJobId } from "../jobs/records.js";
-import { MAX_METADATA_BYTES } from "../jobs/storage.js";
+import { maintenanceJobState, safeMaintenanceJobId, MAX_MAINTENANCE_METADATA_BYTES } from "../maintenance-contract.js";
 import { UpdateFailure, type LocalJobDrainObservation } from "./contracts.js";
 
 async function regularDirectory(path: string): Promise<void> {
@@ -25,11 +24,11 @@ export async function inspectLocalJobs(stateRoot: string): Promise<LocalJobDrain
     if (entries.length > 10_000) throw new UpdateFailure("local_state_invalid");
     let active = 0;
     for (const entry of entries) {
-      if (!safeJobId(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) throw new UpdateFailure("local_state_invalid");
+      if (!safeMaintenanceJobId(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) throw new UpdateFailure("local_state_invalid");
       const path = join(jobsRoot, entry.name, "meta.json");
       await regularDirectory(dirname(path));
       const initial = await lstat(path);
-      if (!initial.isFile() || initial.isSymbolicLink() || initial.size <= 0 || initial.size > MAX_METADATA_BYTES) throw new UpdateFailure("local_state_invalid");
+      if (!initial.isFile() || initial.isSymbolicLink() || initial.size <= 0 || initial.size > MAX_MAINTENANCE_METADATA_BYTES) throw new UpdateFailure("local_state_invalid");
       const handle = await open(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
       let value: unknown;
       try {
@@ -41,9 +40,9 @@ export async function inspectLocalJobs(stateRoot: string): Promise<LocalJobDrain
         if (length !== initial.size || final.size !== initial.size || final.mtimeMs !== opened.mtimeMs || current.isSymbolicLink() || current.dev !== initial.dev || current.ino !== initial.ino) throw new UpdateFailure("local_state_invalid");
         value = JSON.parse(bytes.subarray(0, length).toString("utf8"));
       } finally { await handle.close(); }
-      const job = normalizeJobRecord(value, entry.name);
+      const job = maintenanceJobState(value, entry.name);
       if (job === undefined) throw new UpdateFailure("local_state_invalid");
-      if (["queued", "running", "cancelling", "unknown"].includes(job.status)) active++;
+      if (job.active) active++;
     }
     const after = await lstat(jobsRoot);
     if (after.isSymbolicLink() || after.dev !== before.dev || after.ino !== before.ino || after.mtimeMs !== before.mtimeMs) throw new UpdateFailure("local_state_invalid");
