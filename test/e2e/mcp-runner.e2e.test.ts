@@ -200,7 +200,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await waitFor(async () => {
       const status = await fetch(`${workerUrl}/admin/runners/${runnerId}`, { headers: { cookie: cookieHeader(policyAdminJar) } });
       const html = await status.text();
-      return /Policy status<\/span>\s*<strong[^>]*>applied\s*·/.test(html);
+      return status.status === 200 && runnerPolicyApplied(html);
     }, 15_000, runnerLog);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
@@ -944,7 +944,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       expect(created.status).toBe(303);
       await waitFor(async () => {
         const response = await fetch(`${workerUrl}/admin/runners/${rootRunnerId}`, { headers: { cookie: cookieHeader(adminJar) } });
-        return /Policy status<\/span>\s*<strong[^>]*>applied\s*·/.test(await response.text());
+        const html = await response.text();
+        return response.status === 200 && runnerPolicyApplied(html);
       }, 10000, logs);
       const client = await createMcpClient("Root Git E2E", ["coding:read"], adminJar, csrf);
       expect((await mcpTool("runner_select", { runner_id: rootRunnerId }, client)).isError).not.toBe(true);
@@ -1216,6 +1217,11 @@ function nodeCommand(script: string): string {
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
 }
 function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
+function runnerPolicyApplied(html: string): boolean {
+  // The summary presents the policy state alongside the workspace count.
+  // Require that labelled state; an arbitrary "applied" elsewhere is not readiness.
+  return /<span\b[^>]*class="[^"]*\bmetric-meta\b[^"]*"[^>]*>\s*Policy status\s*·\s*applied\s*<\/span>/u.test(html);
+}
 function formToken(html: string): string {
   const token = /name="csrf_token" value="([A-Za-z0-9_-]{43})"/.exec(html)?.[1];
   if (token === undefined) throw new Error("CSRF token absent");
