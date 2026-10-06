@@ -14,9 +14,9 @@ import { RemoteFault } from "../src/contracts/remote.js";
 const endpoint = "https://sessions.example.com/mcp", token = "synthetic-session-bearer";
 const profile: ConnectionProfile = { schema_version: 1, profile_id: "docs", connector_id: "docs", endpoint, revision: 1,
   enabled: true, authentication: "oauth", credential: null, owner: { kind: "instance_admin" } };
-function fixture(afterCleanup: () => void = () => undefined) {
+function fixture(afterCleanup: () => void = () => undefined, reflectedSession?: string) {
   const sessions = new Set<string>(), seen: Array<{ method: string; session: string | null }> = [];
-  const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "done" }] }));
+  const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: reflectedSession ?? "done" }] }));
   const server = createMcpHandler(() => {
     const s = new McpServer({ name: "ephemeral-fixture", version: "1" });
     s.registerTool("read", { inputSchema: z.object({}).strict() }, execute); return s;
@@ -31,7 +31,7 @@ function fixture(afterCleanup: () => void = () => undefined) {
     const response = await server.fetch(new Request(url, init));
     if (method === "tools/call" && changeOnResponse) allowSession = false;
     const headers = new Headers(response.headers);
-    if (method === "initialize") { const value = crypto.randomUUID(); sessions.add(value); headers.set("mcp-session-id", value); }
+    if (method === "initialize") { const value = reflectedSession ?? crypto.randomUUID(); sessions.add(value); headers.set("mcp-session-id", value); }
     else if (changed) headers.set("mcp-session-id", "unexpected-new-session");
     return new Response(response.body, { status: response.status, headers });
   });
@@ -168,6 +168,17 @@ it("W06 session replacement is rejected instead of silently switching identities
   const f = fixture(), session = await f.open(); f.change();
   await expect(session.listTools()).rejects.toMatchObject({ code: "upstream_protocol_error" });
   await session.close(); expect(f.execute).not.toHaveBeenCalled();
+});
+it.each(["synthetic-private-session", 'synthetic"private-session', "synthetic\\private-session"])("W06 direct reflection of opaque session %s is withheld and cleaned up", async id => {
+  const f = fixture(() => undefined, id), session = await f.open();
+  try {
+    const tools = await session.listTools();
+    await expect(session.callTool(tools[0]!, {}, async () => undefined)).rejects.toMatchObject({ code: "result_invalid" });
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(f.seen.filter(request => request.method === "tools/call")).toEqual([{ method: "tools/call", session: id }]);
+  } finally { await session.close(); }
+  expect(f.seen.filter(request => request.method === "DELETE")).toEqual([{ method: "DELETE", session: id }]);
+  expect(f.sessions.size).toBe(0);
 });
 it("W06 expired-session tool calls are not replayed after a new handshake", async () => {
   const f = fixture(), session = await f.open(), tools = await session.listTools(); f.expire();

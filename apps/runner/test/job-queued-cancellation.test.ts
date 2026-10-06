@@ -51,6 +51,21 @@ async function fixture() {
   };
 }
 
+it.each([0, 1_000])("orders queued cancellation after admission with a clock rollback of %i ms", async rollbackMs => {
+  const f = await fixture();
+  const running = await f.launch("holding"), queued = await f.launch("waiting");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(queued.updated_at_ms - rollbackMs);
+  try {
+    const cancelled = await f.manager.cancel(queued.job_id);
+    expect(cancelled).toMatchObject({ status: "cancelled", completed_at_ms: queued.updated_at_ms - rollbackMs });
+    expect(cancelled.updated_at_ms).toBeGreaterThan(queued.updated_at_ms);
+    expect((await f.persisted(queued.job_id)).updated_at_ms).toBe(cancelled.updated_at_ms);
+    f.complete(f.children[0]!);
+    await vi.waitFor(() => expect(f.manager.get(running.job_id).status).toBe("succeeded"));
+    expect(f.manager.get(running.job_id).updated_at_ms).toBeGreaterThan(running.updated_at_ms);
+  } finally { await f.close(); clock.mockRestore(); }
+});
+
 it.each(["cancel", "get", "list", "sync", "deduplicated-launch"])("retries a queued cancellation through %s after storage recovers", async trigger => {
   const f = await fixture();
   try {

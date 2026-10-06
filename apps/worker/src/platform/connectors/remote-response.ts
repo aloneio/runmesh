@@ -1,6 +1,12 @@
 import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
 import { REMOTE_LIMITS, RemoteFault } from "../../contracts/remote.js";
 
+/** The response guard reserializes JSON before this check. Match its string
+ * encoding so opaque quote/backslash characters cannot hide direct reflection. */
+export function reflectsRemoteSecret(text: string, secret: string | undefined): boolean {
+  return secret !== undefined && secret.length >= 12 && text.includes(JSON.stringify(secret).slice(1, -1));
+}
+
 /** Reject excessive depth before JSON.parse or SDK recursive wire validation. */
 export function boundedWireJson(text: string): Record<string, unknown> {
   let depth = 0, quoted = false, escaped = false;

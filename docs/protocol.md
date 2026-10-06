@@ -110,6 +110,8 @@ Alongside the generated schema, validate:
 - monotonic Job `updated_at_ms` while applying updates;
 - `created_by_client_id` as creator metadata; authorization remains workspace-based.
 
+Give each changed Job snapshot a strictly later `updated_at_ms`, using `max(current_time_ms, previous_updated_at_ms + 1)`. Keep the timestamp when resending an unchanged snapshot. This orders cancellation recovery and completion even within one millisecond or after a clock adjustment; `started_at_ms` and `completed_at_ms` retain their event times.
+
 ## Handle structured failures
 
 `rpc.error.error` contains a code and bounded message, with optional:

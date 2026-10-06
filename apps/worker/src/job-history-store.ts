@@ -92,7 +92,13 @@ export class PackedJobHistory {
           // must still reach their terminal state after a client opts out.
           if (prior === undefined && !recordable.has(job.job_id)) continue;
           if (prior !== undefined && prior.workspace_id !== job.workspace_id) throw new JobHistoryUnavailableError();
-          if (prior !== undefined && (prior.updated_at_ms > job.updated_at_ms || statusRank(prior.status) > statusRank(job.status) || (terminal.has(prior.status) && prior.status !== job.status))) continue;
+          // Failed cancellation can resume running; recovered unknown work can
+          // enter cancellation. Require a newer observation for either reversal
+          // so delayed/equal-ms snapshots retain the existing rank fence.
+          if (prior !== undefined && (prior.updated_at_ms > job.updated_at_ms
+            || (statusRank(prior.status) > statusRank(job.status) && !(job.updated_at_ms > prior.updated_at_ms
+              && ((prior.status === "cancelling" && job.status === "running") || (prior.status === "unknown" && job.status === "cancelling"))))
+            || (terminal.has(prior.status) && prior.status !== job.status))) continue;
           map.set(job.job_id, { ...job, runner_id: runnerId });
         }
         const jobs = [...map.values()].sort((a,b) => b.updated_at_ms-a.updated_at_ms || b.job_id.localeCompare(a.job_id)).slice(0,MAX_JOBS);

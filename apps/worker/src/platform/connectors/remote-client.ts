@@ -7,7 +7,7 @@ import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
 import { parseRemoteTool } from "../../contracts/catalog-values.js";
 import { REMOTE_LIMITS, RemoteFault, type RemoteConnector, type RemoteEgressRule } from "../../contracts/remote.js";
 import { parseRemoteResult, publicMcpEndpoint } from "../../contracts/remote-values.js";
-import { guardedRemoteResponse, boundedWireJson } from "./remote-response.js";
+import { guardedRemoteResponse, boundedWireJson, reflectsRemoteSecret } from "./remote-response.js";
 import { BoundedRemoteValidator } from "./remote-validation.js";
 import { createRemoteSessionState } from "./remote-session.js";
 
@@ -126,7 +126,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           const text = await guarded.text();
           if (!credentialCurrent() || !egressCurrent()) throw new RemoteFault("result_withheld");
           // Detect direct reflection of our bearer; this is not a general DLP promise.
-          if (credential !== null && credential.token.length >= 12 && text.includes(credential.token)) throw new RemoteFault("result_invalid");
+          if (reflectsRemoteSecret(text, credential?.token)) throw new RemoteFault("result_invalid");
           if (sessionState.reflected(text)) throw new RemoteFault("result_invalid");
           if (method === "tools/list") {
             const reply = boundedWireJson(text), result = catalogObject(reply.result);
