@@ -16,7 +16,7 @@ Use this guide when validating a source change or preparing an installation for 
 | Build and release tooling | `npm run test:release-tools` | Build, installer, release, architecture and verification-tool behavior |
 | Local source transport | `npm run test:e2e` | Real local MCP through Worker and a source Runner |
 | Installed package transport | `npm run test:package:e2e` | The newly packed, independently installed Runner participates in the same real local transport scenarios |
-| Browser flows | `npm run browser:install`, then `npm run test:browser` | Browser behavior against a local Worker |
+| Browser flows | `npm run browser:install`, then `npm run test:browser` | Chromium navigation against a local Worker, plus MCP, Skill and OAuth page interactions |
 | Tracked security regressions | `npm run test:security` on Linux with a clean checkout | Regression results and release-readiness evidence for the checked-out candidate |
 
 `npm run test:unit` combines domain, contract, workspace and selected presentation tests. `npm test` adds source E2E. The complete release CI also runs the package, browser, platform, tooling and security checks. Worker and browser test commands use local test environments; deployed-instance checks follow the [upgrade guide](upgrading.md).
@@ -25,7 +25,24 @@ Run candidate-bound `test:security` on Linux from a clean checkout. For developm
 
 When adding a test file, assign it one owner in `test/verification-plan.json`. Run `npm run check:verification` to detect missing or duplicate ownership and confirm that root Node tests appear in executable commands.
 
+Transport tests live in `test/e2e/`; browser tests live in `test/browser/`. Each suite starts its own temporary Worker, and the browser gate also runs isolated product scenarios. The collection check compares each suite with its ownership manifest. Add new cases to the entry point for their module.
+
 Exercise domain rules through public APIs and keep adapter integration in its dedicated suites. The [source dependency checks](architecture-gates.md) define the allowed imports, including deterministic `node:crypto`.
+
+## Read CI results
+
+GitHub runs verification for pushes to `dev` and `main`, and for pull requests. GitLab runs full verification for merge requests, pushes to `main`, manual runs and schedules. To verify the development branch there, choose `dev` under **New pipeline**. This keeps routine development checks on GitHub while providing an independent GitLab result for cross-forge acceptance.
+
+| Job | Main checks |
+| --- | --- |
+| `verify` | Protocol, domain, Worker, Runner, documentation, architecture, and source and installed-package transport |
+| `browser` | Real Chromium navigation, layout, MCP connections, OAuth and Skill interactions |
+| `Runner native checks` | Native behavior on Windows, Linux and macOS; Windows also runs the complete transport suite |
+| `Runner LTS` | Runner behavior on the declared Node LTS versions |
+
+GitHub's `verify-all` aggregates every required job. GitLab acceptance checks both `verify` and `browser`; Worker deployment builds have a separate result.
+
+Open `ci-results/` in the job artifacts for JSON summaries and JUnit reports. Transport evidence includes source identity, platform, test counts, and source locations and error categories on failure. Browser checks use the same diagnostic rules. Reports are retained for 14 days after GitHub verification, browser and Windows transport jobs, and after GitLab verification and browser jobs. To investigate log-pagination failures, use the reported field states, byte counts and source location to identify the failing step.
 
 ## Verify the installed package
 

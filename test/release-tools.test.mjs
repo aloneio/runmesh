@@ -285,10 +285,10 @@ test("keeps worker validation fail-closed when a false dry-run value is supplied
 test("uses a verified absolute Windows taskkill path for process-tree cleanup", async () => {
   assert.equal(resolveTrustedTaskkillPath({ SystemRoot: "D:\\WinNT" }), "D:\\WinNT\\System32\\taskkill.exe");
   assert.throws(() => resolveTrustedTaskkillPath({ SystemRoot: "D:\\Temp" }), /invalid synthetic Windows system root/u);
-  for (const script of ["validate-worker.mjs", "run-e2e.mjs"]) {
+  for (const script of ["validate-worker.mjs", "worker-fixture.mjs"]) {
     const source = (await readFile(join(repositoryRoot, "scripts", script), "utf8")).replace(/\r\n/gu, "\n");
     assert.equal(source.includes('execFile("taskkill.exe"'), false, `${script} must not resolve taskkill through PATH`);
-    assert.equal(source.includes("execFile(taskkill,"), true, `${script} must use the trusted absolute path`);
+    assert.equal(source.includes("resolveTrustedTaskkillPath("), true, `${script} must use the trusted absolute path`);
   }
 });
 
@@ -297,7 +297,7 @@ test("E2E wrapper exits promptly when its test process cannot spawn", async () =
   try {
     const scripts = join(f.root, "scripts");
     await mkdir(scripts);
-    for (const name of ["run-e2e.mjs", "windows-tools.mjs"])
+    for (const name of ["run-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
       await writeFile(join(scripts, name), await readFile(join(repositoryRoot, "scripts", name)));
     // Isolate provenance generation; the real wrapper and OS spawn failure
     // still run in a separate Node process.
@@ -307,8 +307,9 @@ test("E2E wrapper exits promptly when its test process cannot spawn", async () =
     await assert.rejects(execFileAsync(process.execPath, ["--import", pathToFileURL(preload).href, join(scripts, "run-e2e.mjs")], {
       cwd: f.root, windowsHide: true, timeout: 5000,
       env: { ...process.env, RUNMESH_E2E_TIMEOUT_MS: "30000" },
-    }), error => error.code === 1 && error.killed === false && /ENOENT/u.test(error.stderr)
-      && !/E2E tests did not finish/u.test(error.stderr));
+    }), error => error.code === 1 && error.killed === false && /"kind":"file_or_command_missing"/u.test(error.stderr)
+      && !error.stderr.includes(f.root));
+    assert.equal(JSON.parse(await readFile(join(f.root, "ci-results/transport.json"), "utf8")).state, "failed");
   } finally { await f.cleanup(); }
 });
 

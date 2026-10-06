@@ -219,6 +219,7 @@
       "files": [
         "test/architecture.test.mjs",
         "test/browser-assets.test.mjs",
+        "test/browser-fixture.test.mjs",
         "test/build-provenance.test.mjs",
         "test/ci-layout.test.mjs",
         "test/ci-remediation.test.mjs",
@@ -262,6 +263,13 @@
       "description": "Real local Worker-Runner MCP integration; run twice for source and installed package",
       "files": [
         "test/e2e/mcp-runner.e2e.test.ts"
+      ]
+    },
+    {
+      "id": "browser",
+      "description": "Chromium against an isolated real Worker, with separate guided product scenarios",
+      "files": [
+        "test/browser/admin-ui.browser.test.ts"
       ]
     }
   ],

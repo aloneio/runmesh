@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 const LANES = Object.freeze({
   protocol: "packages/protocol/vitest.config.ts", runner: "apps/runner/vitest.config.ts", worker: "apps/worker/vitest.config.ts",
-  domain: "vitest.domain.config.mjs", contracts: "vitest.contracts.config.mjs", transport: "vitest.e2e.config.ts",
+  domain: "vitest.domain.config.mjs", contracts: "vitest.contracts.config.mjs", transport: "vitest.e2e.config.ts", browser: "vitest.browser.config.ts",
 });
 /** Validate a complete tool collection, not source text resembling a test glob. */
 export function validateCollectedFiles(root, expected, document) {

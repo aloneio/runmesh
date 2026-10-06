@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { waitForWorker } from "../scripts/worker-fixture.mjs";
 import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWiring } from "../scripts/verification-plan.mjs";
-import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
+import { summarizeVitest, packageEvidence, testFailureEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
 import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
@@ -19,6 +19,95 @@ import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferenc
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plan = JSON.parse(await readFile(join(root, "test/verification-plan.json"), "utf8"));
 const files = plan.groups.flatMap(g => g.files);
+
+async function transportFixture(t) {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh-transport-wrapper-"));
+  t.after(async () => {
+    try { process.kill(Number(await readFile(join(directory, "descendant.pid"), "utf8"))); } catch { /* Already terminated. */ }
+    await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  });
+  await mkdir(join(directory, "scripts"));
+  await mkdir(join(directory, "node_modules/vitest"), { recursive: true });
+  for (const file of ["run-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+    await writeFile(join(directory, "scripts", file), await readFile(join(root, "scripts", file)));
+  await writeFile(join(directory, "scripts/build-provenance.mjs"), "export async function writeBuildProvenance() {}\n");
+  await writeFile(join(directory, "node_modules/vitest/vitest.mjs"), `
+    import { writeFileSync } from 'node:fs';
+    import { spawn } from 'node:child_process';
+    import { mcpToolResultDiagnostic } from '../../scripts/mcp-diagnostics.mjs';
+    const mode = process.env.TRANSPORT_FIXTURE_MODE;
+    if (mode === 'hang') { await new Promise(resolve => setTimeout(resolve, 30000)); }
+    if (mode === 'inherited_pipe') {
+      const descendant = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
+      writeFileSync('descendant.pid', String(descendant.pid));
+      process.exit(0);
+    }
+    console.log('private-stdout'); console.error('private-stderr');
+    if (mode === 'missing_report') process.exit(0);
+    const failed = mode !== 'success';
+    const marker = mcpToolResultDiagnostic('job_logs_initial', { structuredContent: { data: 'é', returned_bytes: 1, page_protocol: 1, next_cursor: null } });
+    const result = { success: !failed, numFailedTestSuites: failed ? 1 : 0, numTotalTests: 1,
+      numPassedTests: failed ? 0 : 1, numFailedTests: failed ? 1 : 0, numPendingTests: 0, numTodoTests: 0,
+      testResults: [{ status: failed ? 'failed' : 'passed', name: '/private/test/e2e/mcp-runner.e2e.test.ts', assertionResults: [{
+        status: failed ? 'failed' : 'passed', title: 'private-title',
+        failureMessages: ['AssertionError: private-value' + marker + '\\n at /private/test/e2e/mcp-runner.e2e.test.ts:512:7']
+      }] }] };
+    writeFileSync(process.env.RUNMESH_TEST_RESULT_PATH, JSON.stringify(result));
+    process.exitCode = failed ? 4 : 0;
+  `);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:RUNMESH_|GIT_)/u.test(key)));
+  return { directory, invoke(mode, extra = {}) {
+    return spawnSync(process.execPath, [join(directory, "scripts/run-e2e.mjs")], { cwd: directory,
+      env: { ...env, TRANSPORT_FIXTURE_MODE: mode, ...extra }, encoding: "utf8", timeout: 14000, windowsHide: true });
+  }, async report(name = "transport-tests") { return JSON.parse(await readFile(join(directory, "ci-results", name + ".json"), "utf8")); } };
+}
+
+test("transport wrapper archives counts and replaces stale success with safe failure evidence", async t => {
+  const f = await transportFixture(t);
+  assert.equal(f.invoke("success").status, 0);
+  assert.equal((await f.report()).tests.passed, 1);
+  const result = f.invoke("failure"), report = await f.report();
+  assert.equal(result.status, 1);
+  assert.equal((await f.report("transport")).state, "failed");
+  assert.equal(report.state, "failed"); assert.equal(report.failed_tests, 1);
+  assert.deepEqual(report.failures[0].location, { file: "test/e2e/mcp-runner.e2e.test.ts", line: 512, column: 7 });
+  assert.deepEqual(report.failures[0].mcp_tool_result.pagination, { data_type: "string", data_bytes: 2, returned_bytes: 1, page_protocol: 1, next_cursor: "null" });
+  assert.ok(!JSON.stringify(report).includes("required_browser"));
+  assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(report), /private/);
+  assert.equal(f.invoke("missing_report").status, 1);
+  assert.equal((await f.report()).report_available, false);
+});
+
+test("installed transport keeps its caller's raw report without overwriting source transport evidence", async t => {
+  const f = await transportFixture(t);
+  assert.equal(f.invoke("success").status, 0);
+  const before = await f.report(), path = join(f.directory, "installed-private.json");
+  assert.equal(f.invoke("failure", { RUNMESH_E2E_RUNNER_ENTRY: "fixture", RUNMESH_TEST_RESULT_PATH: path }).status, 1);
+  assert.deepEqual(await f.report(), before);
+  assert.equal(JSON.parse(await readFile(path, "utf8")).numFailedTests, 1);
+  assert.equal(f.invoke("missing_report", { RUNMESH_E2E_RUNNER_ENTRY: "fixture", RUNMESH_TEST_RESULT_PATH: path }).status, 1);
+  await assert.rejects(readFile(path, "utf8"), { code: "ENOENT" });
+});
+
+test("transport timeout settles when an exited child leaves a descendant holding its output pipes", async t => {
+  const f = await transportFixture(t), started = Date.now();
+  const result = f.invoke("inherited_pipe", { RUNMESH_E2E_TIMEOUT_MS: "1000" });
+  assert.equal(result.error, undefined, "the wrapper must finish before its outer watchdog");
+  assert.equal(result.status, 1);
+  assert.ok(Date.now() - started < 13000);
+  // Windows may close the inherited handle when the immediate child exits;
+  // POSIX keeps the pipe open until the descendant is stopped.
+  const gate = await f.report("transport");
+  assert.ok(gate.state === "timed_out" || process.platform === "win32" && gate.state === "failed", result.stderr);
+  assert.equal((await f.report()).report_available, false);
+});
+
+test("transport process timeout writes durable failed observations before returning", async t => {
+  const f = await transportFixture(t), result = f.invoke("hang", { RUNMESH_E2E_TIMEOUT_MS: "1000" });
+  assert.equal(result.error, undefined); assert.equal(result.status, 1);
+  assert.equal((await f.report("transport")).state, "timed_out");
+  assert.equal((await f.report()).state, "failed");
+});
 
 test("Worker fixture discovers its owned port over IPC after a released candidate is occupied", async t => {
   const candidate = createServer();
@@ -141,8 +230,8 @@ test("failed browser diagnostics retain status counts without copying private re
     { title: "private fixture", status: "passed", failureMessages: ["private stdout"] },
     { status: "pending" },
   ] }] });
-  assert.deepEqual(summary, { report_available: true, required_browser_checks: 1, required_browser_status: "failed", failed_tests: 1, skipped_tests: 1,
-    failures: [{ test_index: 1, required_browser_check: true, kind: "unclassified" }], truncated: false });
+  assert.deepEqual(summary, { report_available: true, required_browser_checks: 1, required_browser_status: "failed", failed_files: 0, failed_tests: 1, skipped_tests: 1,
+    failures: [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: true, kind: "unclassified" }], truncated: false });
   assert.ok(!JSON.stringify(summary).includes("private"));
   assert.deepEqual(browserFailureEvidence(undefined), { report_available: false });
   assert.equal(browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "private-token" }] }] }).required_browser_status, "unknown");
@@ -153,7 +242,7 @@ test("browser failure messages preserve the failing assertion location without i
     "AssertionError [ERR_ASSERTION]: Expected private-cookie to equal private-token\n    at checkUiWithChromium (/private/build/scripts/ui-browser-check.mjs:63:17)\n    at /private/build/test/e2e/mcp-runner.e2e.test.ts:597:5",
   ] }] }] };
   const summary = browserFailureEvidence(raw);
-  assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind: "assertion_failed",
+  assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: true, kind: "assertion_failed",
     location: { file: "scripts/ui-browser-check.mjs", line: 63, column: 17 } }]);
   assert.ok(!JSON.stringify(summary).includes("private"));
 });
@@ -176,7 +265,7 @@ test("colored browser failure stacks retain safe assertion locations", () => {
   const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [
     "\u001b[31mAssertionError\u001b[39m: private-cookie\n    at check (\u001b[36m/private/build/scripts/ui-browser-check.mjs\u001b[39m:\u001b[33m63:17\u001b[39m)",
   ] }] }] });
-  assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind: "assertion_failed",
+  assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: true, kind: "assertion_failed",
     location: { file: "scripts/ui-browser-check.mjs", line: 63, column: 17 } }]);
   assert.ok(!JSON.stringify(summary).includes("private"));
 });
@@ -204,7 +293,7 @@ test("browser lifecycle summaries keep classified stages without private failure
     const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed",
       failureMessages: [`Error: ${message} (stage: dashboard_initial)\nprivate-cookie private-expression`],
     }] }] });
-    assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind, stage: "dashboard_initial" }]);
+    assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: true, kind, stage: "dashboard_initial" }]);
     assert.ok(!JSON.stringify(summary).includes("private"));
   }
 });
@@ -214,7 +303,7 @@ test("browser navigation diagnostics retain only complete fixed condition marker
     const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed",
       failureMessages: [`Browser navigation readiness timed out after 5000 ms\nRUNMESH_E2E_UI_NAVIGATION_STATE=${state} (stage: clients_navigation)\nprivate-cookie private-response`],
     }] }] });
-    assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind: "browser_navigation_timeout", stage: "clients_navigation", navigation_state: state }]);
+    assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: true, kind: "browser_navigation_timeout", stage: "clients_navigation", navigation_state: state }]);
     assert.doesNotMatch(JSON.stringify(summary), /private/u);
   }
   for (const marker of ["private_token", "navigation_busy?private-token", "navigation_busy private-token", "navigation_busy/secret", ""])
@@ -265,7 +354,7 @@ test("MCP tool-result diagnostics carry known classifications without inspecting
     const failure = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
       "AssertionError: " + marker + ": expected true to not be true",
     ] }] }] });
-    assert.deepEqual(failure.failures, [{ test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: detail }]);
+    assert.deepEqual(failure.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: detail }]);
     assert.deepEqual(browserErrorDiagnostic(new Error("Operation timed out" + marker)), { kind: "timeout", mcp_tool_result: detail });
     assert.ok(!marker.includes("private"));
     assert.ok(!JSON.stringify(failure).includes("private"));
@@ -298,7 +387,7 @@ test("Job log failure assertions preserve the original tool classification in br
       const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
         "AssertionError: " + marker + ": expected true to not be true\n    at /private/test/e2e/mcp-runner.e2e.test.ts:510:42",
       ] }] }] });
-      assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: detail,
+      assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: detail,
         location: { file: "test/e2e/mcp-runner.e2e.test.ts", line: 510, column: 42 } }]);
       assert.ok(!JSON.stringify(summary).includes("private"));
     }
@@ -315,9 +404,55 @@ test("MCP tool-result decoder projects a bounded enum record and rejects forged 
     const missing = { ...detail }; delete missing[key];
     assert.equal(mcpToolResultFailureDiagnostic(marker(missing)), undefined);
   }
-  for (const text of [undefined, {}, marker([]), marker(null), "private " + marker(detail), marker(detail) + "private", marker({ ...detail, private: "x".repeat(513) })])
+  for (const text of [undefined, {}, marker([]), marker(null), "private " + marker(detail), marker(detail) + "private", marker({ ...detail, private: "x".repeat(769) })])
     assert.equal(mcpToolResultFailureDiagnostic(text), undefined);
   assert.equal(mcpToolResultFailureDiagnostic("RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC={invalid}"), undefined);
+});
+
+test("job page diagnostics retain bounded byte observations without data or cursor values", () => {
+  const marker = mcpToolResultDiagnostic("job_logs_continuation", { structuredContent: {
+    data: "private-é", returned_bytes: 9, page_protocol: 1, next_cursor: "private-cursor", job_id: "private-job",
+  } });
+  const detail = mcpToolResultFailureDiagnostic(marker);
+  assert.deepEqual(detail.pagination, { data_type: "string", data_bytes: 10, returned_bytes: 9, page_protocol: 1, next_cursor: "string" });
+  assert.doesNotMatch(marker, /private/);
+  const encoded = value => "RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=" + JSON.stringify(value);
+  assert.deepEqual(mcpToolResultFailureDiagnostic(encoded({ ...detail, pagination: { ...detail.pagination, data: "private-data" } })), detail);
+  for (const value of [-1, 0.5, Number.MAX_SAFE_INTEGER, "private", null, {}, []]) {
+    const page = mcpToolResultFailureDiagnostic(mcpToolResultDiagnostic("job_logs_initial", { structuredContent: { returned_bytes: value, page_protocol: value } })).pagination;
+    assert.equal(page.returned_bytes, "other"); assert.equal(page.page_protocol, "other");
+    assert.equal(mcpToolResultFailureDiagnostic(encoded({ ...detail, pagination: { ...detail.pagination, data_bytes: value } })), undefined);
+  }
+  assert.equal(mcpToolResultFailureDiagnostic(encoded({ ...detail, phase: "inspect_search_initial" })), undefined);
+});
+
+test("shared failed-test evidence keeps suite failures and public module locations across all lanes", () => {
+  const report = { testResults: [
+    { name: "/private/test/browser/admin-ui.browser.test.ts", status: "failed", assertionResults: [],
+      message: "Hook timed out in 30000ms\n at /private/test/browser/admin-ui.browser.test.ts:20:4" },
+    { name: "C:\\private\\test\\e2e\\mcp-runner.e2e.test.ts", status: "failed", assertionResults: [
+      { title: "private-title", status: "failed", failureMessages: ["AssertionError: private-data"] },
+    ] },
+  ] };
+  const shared = testFailureEvidence(report), browser = browserFailureEvidence(report);
+  assert.equal(shared.failed_files, 2); assert.equal(shared.failed_tests, 1);
+  assert.deepEqual(shared.failures[0], { file_index: 1, file: "test/browser/admin-ui.browser.test.ts", scope: "suite", kind: "hook_timeout",
+    location: { file: "test/browser/admin-ui.browser.test.ts", line: 20, column: 4 } });
+  assert.deepEqual(browser.failures.map(({ required_browser_check, ...value }) => value), shared.failures);
+  assert.doesNotMatch(JSON.stringify(shared), /private/);
+  const huge = testFailureEvidence({ testResults: [{ status: "failed", assertionResults: Array.from({ length: 10001 }, () => ({ status: "failed" })) }] });
+  assert.equal(huge.failed_tests, 10000); assert.equal(huge.failures.length, 16); assert.equal(huge.truncated, true);
+});
+
+test("shared reporter permission errors retain only the browser fixture source location", () => {
+  for (const [code, source] of [["EACCES", "/private/scripts/browser-worker-fixture.mjs"], ["EPERM", "C:\\private\\scripts\\browser-worker-fixture.mjs"]]) {
+    const summary = testFailureEvidence({ testResults: [{ name: "/private/test/browser/admin-ui.browser.test.ts", status: "failed", assertionResults: [{
+      status: "failed", title: "private-title", failureMessages: [`Error: ${code}: permission denied, open '/private-token'\n at startBrowserFixture (${source}:27:9)`],
+    }] }] });
+    assert.deepEqual(summary.failures, [{ file_index: 1, file: "test/browser/admin-ui.browser.test.ts", scope: "test", test_index: 1, kind: "permission_denied",
+      location: { file: "scripts/browser-worker-fixture.mjs", line: 27, column: 9 } }]);
+    assert.doesNotMatch(JSON.stringify(summary), /private/);
+  }
 });
 
 test("MCP tool-result failure evidence preserves safe fields and the original assertion coordinates", () => {
@@ -327,7 +462,7 @@ test("MCP tool-result failure evidence preserves safe fields and the original as
     "AssertionError: \nRUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=" + JSON.stringify(diagnostic)
       + "\n: expected true to not be true\n    at /private/test/e2e/mcp-runner.e2e.test.ts:566:32",
   ] }] }] });
-  assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: diagnostic,
+  assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: false, kind: "assertion_failed", mcp_tool_result: diagnostic,
     location: { file: "test/e2e/mcp-runner.e2e.test.ts", line: 566, column: 32 } }]);
   assert.ok(!JSON.stringify(summary).includes("private"));
 });
@@ -337,7 +472,7 @@ test("MCP HTTP failures retain only a bounded status from the exact fixed marker
     const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
       `\u001b[31mError: RUNMESH_E2E_MCP_HTTP_STATUS=${status}\u001b[39m\r\n    at mcpMessage (/private/test/e2e/mcp-runner.e2e.test.ts:1001:13)\nprivate-cookie private-response`,
     ] }] }] });
-    assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "mcp_http_failure", http_status: status,
+    assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: false, kind: "mcp_http_failure", http_status: status,
       location: { file: "test/e2e/mcp-runner.e2e.test.ts", line: 1001, column: 13 } }]);
     assert.ok(!JSON.stringify(summary).includes("private"));
   }
@@ -450,7 +585,7 @@ test("MCP safe summaries validate every classification and never copy additional
   const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
     "Error: RUNMESH_E2E_MCP_HTTP_STATUS=500\n" + marker({ ...value, private: "private" }),
   ] }] }] });
-  assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "mcp_http_failure", http_status: 500, mcp_response: value }]);
+  assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: false, kind: "mcp_http_failure", http_status: 500, mcp_response: value }]);
 });
 
 test("Job completion evidence distinguishes terminal failures from timeouts without private fields", () => {
@@ -644,7 +779,7 @@ test("browser diagnostics bound retained failures and message inspection", () =>
   const messages = Array.from({ length: 8 }, () => " ".repeat(16384));
   messages.push("AssertionError at /private/scripts/ui-browser-check.mjs:1:1");
   const bounded = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: messages }] }] });
-  assert.deepEqual(bounded.failures, [{ test_index: 1, required_browser_check: false, kind: "unclassified" }]);
+  assert.deepEqual(bounded.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: false, kind: "unclassified" }]);
 });
 
 test("AR08 architecture references cannot name missing source paths", async () => {
@@ -665,7 +800,7 @@ test("AR08 a listed Node test omitted from execution cannot silently pass the ga
 });
 
 test("AR08 every existing test has exactly one declared layer", async () => {
-  assert.deepEqual(validateTestPlan(plan, await inventoryTests(root)), { groups: 8, files: files.length });
+  assert.deepEqual(validateTestPlan(plan, await inventoryTests(root)), { groups: 9, files: files.length });
 });
 test("AR08 missing, duplicate, unknown and misclassified tests fail the inventory gate", () => {
   for (const mutate of [p => p.groups.pop(), p => p.groups[0].files.pop(), p => p.groups[1].files.push(p.groups[0].files[0]),

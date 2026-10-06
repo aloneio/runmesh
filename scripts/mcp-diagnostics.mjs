@@ -37,6 +37,24 @@ const toolResultFields = {
 };
 const clean = value => value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "");
 const record = value => typeof value === "object" && value !== null && !Array.isArray(value);
+const boundedCount = value => Number.isSafeInteger(value) && value >= 0 && value <= 8 * 1024 * 1024;
+const countObservation = value => value === undefined ? "absent" : boundedCount(value) ? value : "other";
+const countField = value => boundedCount(value) || value === "absent" || value === "other";
+const logPhases = ["job_logs_initial", "job_logs_continuation", "job_logs_stderr"];
+function logPageObservation(structured) {
+  const data = structured?.data, cursor = structured?.next_cursor;
+  return { data_type: data === undefined ? "absent" : typeof data === "string" ? "string" : "other",
+    data_bytes: typeof data === "string" ? countObservation(Buffer.byteLength(data)) : "absent",
+    returned_bytes: countObservation(structured?.returned_bytes), page_protocol: countObservation(structured?.page_protocol),
+    next_cursor: cursor === undefined ? "absent" : cursor === null ? "null" : typeof cursor === "string" ? "string" : "other" };
+}
+function safeLogPage(value) {
+  if (!record(value) || !["absent", "string", "other"].includes(value.data_type)
+    || ![value.data_bytes, value.returned_bytes, value.page_protocol].every(countField)
+    || !["absent", "null", "string", "other"].includes(value.next_cursor)) return undefined;
+  return { data_type: value.data_type, data_bytes: value.data_bytes, returned_bytes: value.returned_bytes,
+    page_protocol: value.page_protocol, next_cursor: value.next_cursor };
+}
 
 async function boundedBody(response) {
   if (response.body === null) return { body_kind: "empty" };
@@ -145,6 +163,9 @@ export function mcpToolResultDiagnostic(phase, result) {
     operation_state: field("operation_state", errorField("operation_state")),
     next_action: field("next_action", errorField("next_action")),
   };
+  // Observe only byte counts and field kinds. No text, cursor value or job ID
+  // crosses into the assertion marker, even when successful pages are invalid.
+  if (logPhases.includes(detail.phase) && flag !== true) detail.pagination = logPageObservation(structured);
   // Assertion libraries prefix and suffix custom messages. Keep the marker on
   // its own complete line so the decoder never accepts surrounding free text.
   return `\n${TOOL_RESULT_MARKER}${JSON.stringify(detail)}\n`;
@@ -152,11 +173,17 @@ export function mcpToolResultDiagnostic(phase, result) {
 
 export function mcpToolResultFailureDiagnostic(text) {
   if (typeof text !== "string") return undefined;
-  const raw = /^RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=(\{[^\r\n]{1,512}\})\r?$/mu.exec(text)?.[1];
+  const raw = /^RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=(\{[^\r\n]{1,768}\})\r?$/mu.exec(text)?.[1];
   try {
     const value = JSON.parse(raw);
     if (!record(value) || Object.entries(toolResultFields).some(([key, allowed]) => !allowed.includes(value[key]))) return undefined;
-    return Object.fromEntries(Object.keys(toolResultFields).map(key => [key, value[key]]));
+    const detail = Object.fromEntries(Object.keys(toolResultFields).map(key => [key, value[key]]));
+    if (value.pagination !== undefined) {
+      const pagination = safeLogPage(value.pagination);
+      if (!logPhases.includes(detail.phase) || pagination === undefined) return undefined;
+      detail.pagination = pagination;
+    }
+    return detail;
   } catch { return undefined; }
 }
 

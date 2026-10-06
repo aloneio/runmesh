@@ -6,7 +6,7 @@ import { dependencies } from "./architecture-graph.mjs";
 
 export const TEST_ROOTS = ["packages/protocol/test", "apps/runner/test", "apps/worker/test", "test"];
 const PREFIXES = { protocol: "packages/protocol/test/", runner: "apps/runner/test/", worker: "apps/worker/test/",
-  domain: "test/domain/", contracts: "test/contracts/", tooling: "test/", presentation: "test/", transport: "test/e2e/" };
+  domain: "test/domain/", contracts: "test/contracts/", tooling: "test/", presentation: "test/", transport: "test/e2e/", browser: "test/browser/" };
 const testPath = /^[A-Za-z0-9._/-]+\.(?:test|spec)\.[cm]?[jt]sx?$/u;
 const pureExternal = new Set(["vitest", "zod", "node:crypto"]);
 

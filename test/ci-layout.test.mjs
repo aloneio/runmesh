@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { proposedCiFiles } from "../scripts/ci-remediation-layout.mjs";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
-import { UPLOAD_ACTION } from "../scripts/ci-contract.mjs";
+import { UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts } from "../scripts/ci-contract.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = path => readFile(new URL(path, root), "utf8");
@@ -25,9 +25,18 @@ test("CI integration preserves native, LTS and generated main-admission jobs", a
   expectedNative.steps.push({ run: "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs" });
   expectedNative.steps.push({ run: "node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs" });
   expectedNative.steps.push({ run: "npm run test:e2e", if: "matrix.os == 'windows-latest'" });
+  expectedNative.steps.push(githubReportUpload("native-runner"));
   assert.deepEqual(expectedNative, next.jobs["native-runner"]);
   assert.deepEqual(old.jobs["runner-lts"], next.jobs["runner-lts"]);
   assert.equal(result.files[".gitlab-ci.yml"].split("# BEGIN GENERATED MAIN SOURCE POLICY")[1], input.gitlab.split("# BEGIN GENERATED MAIN SOURCE POLICY")[1]);
+});
+
+test("CI integration retains sanitized failure evidence for every producing lane", async () => {
+  const result = proposedCiFiles(await baseline());
+  const gh = parseCi(result.files[".github/workflows/ci.yml"]), gl = parseCi(result.files[".gitlab-ci.yml"]);
+  for (const lane of ["verify", "browser", "native-runner"])
+    assert.deepEqual(gh.jobs[lane].steps.at(-1), githubReportUpload(lane));
+  for (const lane of ["verify", "browser"]) assert.deepEqual(gl[lane].artifacts, gitlabReportArtifacts());
 });
 test("Release proposal gates signing, preserves main/version/signature checks and does not cancel publication", async () => {
   const input = await baseline(), result = proposedCiFiles(input);

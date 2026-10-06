@@ -30,6 +30,24 @@ export const CI_CHECKS = Object.freeze({
 });
 export const CHECK_IDS = Object.freeze(Object.keys(CI_CHECKS));
 export const UPLOAD_ACTION = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const REPORT_PATHS = Object.freeze(["ci-results/*.json", "ci-results/*.xml"]);
+const REPORT_UPLOADS = Object.freeze({
+  verify: { name: "ci-verify-${{ github.run_id }}-${{ github.run_attempt }}", condition: "always()" },
+  browser: { name: "ci-browser-${{ github.run_id }}-${{ github.run_attempt }}", condition: "always()" },
+  "native-runner": { name: "ci-native-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}", condition: "always() && matrix.os == 'windows-latest'" },
+});
+/** Only lanes that produce sanitized reports upload them, even after failure. */
+export function githubReportUpload(job) {
+  if (!Object.hasOwn(REPORT_UPLOADS, job)) throw new Error("unreviewed CI report upload lane");
+  const rule = REPORT_UPLOADS[job];
+  return { name: "Preserve sanitized gate evidence", if: rule.condition, uses: UPLOAD_ACTION, with: {
+    name: rule.name, path: REPORT_PATHS.join("\n") + "\n", "if-no-files-found": "error", "retention-days": 14,
+    "include-hidden-files": false, overwrite: false, archive: true,
+  } };
+}
+export function gitlabReportArtifacts() {
+  return { when: "always", expire_in: "14 days", paths: [...REPORT_PATHS], reports: { junit: "ci-results/*.xml" } };
+}
 export const AGGREGATE_JOBS = Object.freeze(["verify", "native-runner", "runner-lts", "browser"]);
 /** Native gates added after the frozen CI migration input. */
 export const NATIVE_ADDED_COMMANDS = Object.freeze([
