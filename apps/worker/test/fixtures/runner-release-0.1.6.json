@@ -1,0 +1,8 @@
+{
+  "source": "https://github.com/aloneio/runmesh/releases/tag/v0.1.6",
+  "files": {
+    "manifest.json": "{\n  \"schema_version\": 1,\n  \"project\": \"runmesh\",\n  \"version\": \"0.1.6\",\n  \"tag\": \"v0.1.6\",\n  \"channel\": \"stable\",\n  \"prerelease\": false,\n  \"commit_sha\": \"85d5ea419c65d03ebc9d79c9b2e7f2491c6b256b\",\n  \"protocol_min\": 2,\n  \"protocol_max\": 2,\n  \"published_at\": \"2026-10-04T10:06:32Z\",\n  \"artifacts\": [\n    {\n      \"name\": \"runmesh-runner-0.1.6.tgz\",\n      \"platform\": \"node\",\n      \"architecture\": \"portable\",\n      \"node_major_min\": 22,\n      \"url\": \"https://github.com/aloneio/runmesh/releases/download/v0.1.6/runmesh-runner-0.1.6.tgz\",\n      \"size\": 830547,\n      \"sha256\": \"85874bc677fe9026160a02fc5aaabed099266501813fd76f133725f5f298e261\"\n    }\n  ]\n}\n",
+    "manifest.sig": "tlPaUMJraSYUht7Rpbbyfhvvs/CWPEtJ8hEmVlUrv67u6RuvTftJPdMwHaEbG9golffQ137GvW2u3XJDC/9OBA==\n",
+    "manifest.signature.json": "{\n  \"schema_version\": 1,\n  \"algorithm\": \"ed25519\",\n  \"key_id\": \"runmesh-preview-2026-01\",\n  \"encoding\": \"base64\",\n  \"signed_file\": \"manifest.json\"\n}\n"
+  }
+}

@@ -218,7 +218,7 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
     </section>
     <section class="panel">
       <div class="section-title">
-        <h2>${message("text.version.policy", "en")}</h2>
+        <h2>${message("text.runner.version", "en")}</h2>
       </div>
       <p class="muted font-12">${message("text.choose.target.version.and.update.runner.host", "en")}</p>
       ${distributionNotice}
