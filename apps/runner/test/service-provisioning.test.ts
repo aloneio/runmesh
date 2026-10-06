@@ -22,22 +22,27 @@ $script:serviceFixture | Add-Member ScriptMethod GetFolder { $script:folderFixtu
 function New-Object { param([string]$ComObject) if ($ComObject -ne 'Schedule.Service') { throw 'unexpected synthetic object' }; $script:serviceFixture };
 `;
   const systemRoot = trustedWindowsRoot();
+  // Windows PowerShell reconstructs module search paths even with the trusted
+  // environment. Load the inbox cmdlets used by the fixture and probe directly
+  // so discovery does not scan user or CI-installed modules.
   const source = "$ErrorActionPreference='Stop'; [Console]::Error.WriteLine('RUNMESH_TEST_TASK_PROBE=started');\n"
+    + "$PSModuleAutoLoadingPreference='None'; Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop; [Console]::Error.WriteLine('RUNMESH_TEST_TASK_PROBE=module_ready');\n"
     + fixture + "[Console]::Error.WriteLine('RUNMESH_TEST_TASK_PROBE=ready');\n" + script;
-  // Match the host executor's trusted environment and working directory. Keep
-  // this synthetic script literal and close stdin; inherited module paths,
-  // profiles and the workspace cwd do not affect the native observation.
+  // Match the host executor's trusted environment and working directory, keep
+  // this synthetic script literal, and close stdin.
   const result = spawnSync(resolveTrustedWindowsTool("powershell.exe", systemRoot), ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(source, "utf16le").toString("base64")], {
     encoding: "utf8", timeout: 12_000, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
     cwd: join(systemRoot, "System32"), env: trustedWindowsEnvironment(systemRoot),
   });
   const stdout = result.stdout ?? "", stderr = result.stderr ?? "";
-  const stage = stderr.includes("RUNMESH_TEST_TASK_PROBE=ready") ? "probe" : stderr.includes("RUNMESH_TEST_TASK_PROBE=started") ? "fixture_setup" : "startup";
+  const stage = stderr.includes("RUNMESH_TEST_TASK_PROBE=ready") ? "probe"
+    : stderr.includes("RUNMESH_TEST_TASK_PROBE=module_ready") ? "fixture_setup"
+      : stderr.includes("RUNMESH_TEST_TASK_PROBE=started") ? "module_load" : "startup";
   const code = result.error?.code;
   const diagnostic = JSON.stringify({ native_task_fixture: stage, status: result.status, signal: result.signal,
     error_code: code === undefined ? null : ["ETIMEDOUT", "ENOENT", "EACCES", "EPERM", "ENOBUFS"].includes(code) ? code : "other",
     stdout_bytes: Buffer.byteLength(stdout), stderr_bytes: Buffer.byteLength(stderr) });
-  return { ...result, diagnostic, stdout, stderr: stderr.replace(/^RUNMESH_TEST_TASK_PROBE=(?:started|ready)\r?\n/gmu, "") };
+  return { ...result, stage, diagnostic, stdout, stderr: stderr.replace(/^RUNMESH_TEST_TASK_PROBE=(?:started|module_ready|ready)\r?\n/gmu, "") };
 }
 
 function expectSyntheticProbeCompleted(result: ReturnType<typeof runSyntheticTaskProbe>): void {
@@ -46,6 +51,7 @@ function expectSyntheticProbeCompleted(result: ReturnType<typeof runSyntheticTas
   expect(result.error === undefined, result.diagnostic).toBe(true);
   expect(result.signal, result.diagnostic).toBeNull();
   expect(result.status, result.diagnostic).not.toBeNull();
+  expect(result.stage, result.diagnostic).toBe("probe");
 }
 
 describe("native service package ownership", () => {
