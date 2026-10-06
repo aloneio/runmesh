@@ -107,7 +107,7 @@ it("keeps a failed Runner history query distinct from a successfully loaded empt
 it.each(["/admin?history=1", "/admin/runners/jobs-runner?history=jobs&limit=20", "/admin/runners/jobs-runner/jobs/job-0"])("shows an explicit last-loaded timestamp on %s without polling", async (path) => {
   const f = await fixture(); const response = await f.open(path); const text = await response.text();
   expect(text).toContain('<span>Last loaded</span>');
-  expect(text).toMatch(/<time datetime="[0-9]{4}-[0-9]{2}-[0-9]{2}T[^" ]+Z">/);
+  expect(text).toMatch(/<time\b[^>]*\bdatetime="[0-9]{4}-[0-9]{2}-[0-9]{2}T[^" ]+Z"[^>]*>/);
   expect(text).not.toContain("setInterval(");
   expect(f.runnerFetch).not.toHaveBeenCalled();
 });

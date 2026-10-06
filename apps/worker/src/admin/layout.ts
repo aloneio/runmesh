@@ -6,14 +6,21 @@ import { meshMarkSvg, languageSwitch } from "./brand.js";
 import { adminScript } from "./client-script.js";
 
 export function controlHeader(active?: ControlNavSection): string {
+  const icons: Record<ControlNavSection, string> = {
+    dashboard: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    central: '<path d="m9 15 6-6M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 10a4 4 0 0 0 6 0l4-4a4 4 0 0 0-6-6l-1 1" transform="translate(1 0) scale(.9)"/>',
+    clients: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/><circle cx="9" cy="7" r="4"/>',
+    runners: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4m-5-12 3 3-3 3m6 0h4"/>',
+    settings: '<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="var(--panel)"/><circle cx="15" cy="17" r="3" fill="var(--panel)"/>',
+  };
   const nav = ([
     ["dashboard", "Dashboard", "/admin"],
     ["central", "MCP &amp; Skill", "/admin/central"],
     ["clients", "AI connections", "/admin/clients"],
     ["runners", "Runners", "/admin/runners"],
     ["settings", "Settings", "/admin/settings"],
-  ] as const).map(([key, label, href]) => `<a class="${active === key ? "active" : ""}"${active === key ? ' aria-current="page"' : ""} href="${href}">${label}</a>`).join("");
-  return `<header class="app-header" data-app-header><div class="header-inner"><div class="header-left"><a class="brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>${message("text.agent.control.plane", "en")}</small></span></a><nav class="control-nav" aria-label="Main navigation">${nav}</nav></div><div class="header-actions">${languageSwitch()}</div></div></header>`;
+  ] as const).map(([key, label, href]) => `<a class="${active === key ? "active" : ""}"${active === key ? ' aria-current="page"' : ""} href="${href}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${icons[key]}</svg><span>${label}</span></a>`).join("");
+  return `<header class="app-header" data-app-header><div class="header-inner"><div class="header-left"><a class="brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>${message("text.agent.control.plane", "en")}</small></span></a></div><div class="header-actions">${languageSwitch()}</div></div><div class="nav-rail"><nav class="control-nav" aria-label="Main navigation">${nav}</nav></div></header>`;
 }
 
 export function adminDocument(title: string, body: string, active: ControlNavSection, notices: readonly AdminNotice[] = []): string {

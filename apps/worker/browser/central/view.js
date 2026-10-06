@@ -24,7 +24,7 @@ export function createCentralView(app, t, run) {
     node.replaceChildren();
   }
   function details(parent, title, text) {
-    var d = el('details'),
+    var d = el('details', undefined, 'central-file-preview'),
       s = el('summary', title),
       p = el('pre', text);
     d.append(s, p);

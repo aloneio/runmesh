@@ -1,7 +1,7 @@
 import { message } from "../i18n/messages.js";
 import type { ClientViewModel, RunnerSummaryViewModel } from "../contracts/admin-views.js";
 import type { AdminData } from "../contracts/admin-views.js";
-import { record, escapeHtml, time, timeMarkup, displayScopeLabel } from "./format.js";
+import { record, escapeHtml, timeMarkup, displayScopeLabel } from "./format.js";
 import { permissionSelect, scopeCheckboxes } from "./forms.js";
 import { clientCredentialBadge } from "./tables.js";
 
@@ -49,8 +49,19 @@ export function clientDetailPage(client: ClientViewModel, runners: readonly Runn
     </tr>`;
   }).join("");
   const scopeValues = client.scopes;
-  if (scopeValues.length === 0) return '<section class="page-heading"><div><p class="eyebrow">AI connection</p><h1 data-no-i18n>' + escapeHtml(label) + '</h1><p>MCP and Skills</p></div><a class="button secondary" href="/admin/clients">Back to clients</a></section>'
-    + '<section class="panel"><h2>Available MCPs and Skills</h2><p>Use all enabled MCPs and Skills with this connection.</p><a class="button" href="/admin/central">Manage MCPs and Skills</a><p>' + clientCredentialBadge(isRevoked) + '</p><div class="actions">' + clientLifecycleActions(clientId, isRevoked, csrf) + '</div></section>';
+  if (scopeValues.length === 0) return `<section class="detail-header">
+    <div class="detail-title-group">
+      <p class="eyebrow">AI connection</p>
+      <div class="detail-title-row"><h1 class="detail-title" data-no-i18n>${escapeHtml(label)}</h1>${clientCredentialBadge(isRevoked)}</div>
+      <p class="detail-id mono" data-no-i18n>${escapeHtml(clientId)}</p>
+    </div>
+    <div class="detail-header-actions"><a class="button secondary" href="/admin/clients">Back to clients</a>${clientLifecycleActions(clientId, isRevoked, csrf)}</div>
+  </section>
+  <section class="panel client-library-panel">
+    <div class="section-title"><h2>Available MCPs and Skills</h2></div>
+    <p class="muted">Use all enabled MCPs and Skills with this connection.</p>
+    <a class="button" href="/admin/central">Manage MCPs and Skills</a>
+  </section>`;
   const scopeEditor = `<form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/scopes" class="scope-editor-form">
     <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
     <fieldset class="scope-fieldset">
@@ -65,29 +76,23 @@ export function clientDetailPage(client: ClientViewModel, runners: readonly Runn
   </form>`;
   return `<section class="detail-header">
     <div class="detail-title-group">
+      <p class="eyebrow">${message("text.mcp.client.detail", "en")}</p>
       <div class="detail-title-row">
-        <p class="eyebrow">${message("text.mcp.client.detail", "en")}</p>
         <h1 class="detail-title" data-no-i18n>${escapeHtml(label)}</h1>
         ${clientCredentialBadge(isRevoked)}
       </div>
       <p class="detail-id mono"><span data-no-i18n>${escapeHtml(clientId)}</span></p>
-      <p class="lede">${message("text.runner.specific.access.can.only.further.restrict.the.client.s.global.scopes.it.can.never.g", "en")}</p>
     </div>
     <div class="detail-header-actions">
-      ${clientLifecycleActions(clientId, isRevoked, csrf)}
       <a class="button secondary" href="/admin/clients">${message("text.back.to.clients", "en")}</a>
+      ${clientLifecycleActions(clientId, isRevoked, csrf)}
     </div>
   </section>
-  <div class="grid-two">
-    <section class="panel">
+  <div class="grid-two client-settings-grid">
+    <section class="panel client-permissions-panel">
       <div class="section-title">
         <h2>${message("text.global.permissions", "en")}</h2>
       </div>
-      <div class="active-scopes-box">
-        <span class="form-stat-label">${message("text.effective.global.scopes", "en")}</span>
-        <p class="muted scope-line">${escapeHtml(scopeValues.map(displayScopeLabel).join(", "))}</p>
-      </div>
-      <p class="muted scope-help">${message("text.each.base.scope.has.a.distinct.ceiling", "en")}<span class="mono">${message("text.read.2", "en")}</span>${message("text.permits.inspection", "en")}<span class="mono">${message("text.write", "en")}</span>${message("text.permits.approved.edits.and", "en")}<span class="mono">${message("text.exec", "en")}</span>${message("text.permits.host.shell.and.job.control.runner.and.workspace.policy.can.only.reduce.these.permi", "en")}</p>
       ${scopeEditor}
       <form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/recording" class="client-recording-form">
         <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
@@ -100,7 +105,7 @@ export function clientDetailPage(client: ClientViewModel, runners: readonly Runn
         <button class="button secondary">${message("text.save.recording.preference", "en")}</button>
       </form>
     </section>
-    <section class="panel">
+    <section class="panel client-routing-panel">
       <div class="section-title">
         <h2>Client Routing &amp; Status</h2>
       </div>
@@ -110,7 +115,7 @@ export function clientDetailPage(client: ClientViewModel, runners: readonly Runn
         <dt>${message("text.active.runner.2", "en")}</dt>
         <dd>${activeRunnerSelector(client, runners, csrf)}</dd>
         <dt>${message("text.last.used.2", "en")}</dt>
-        <dd class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</dd>
+        <dd class="time-cell">${timeMarkup(client.last_used_at_ms)}</dd>
         <dt>${message("client.credential.status", "en")}</dt>
         <dd>${message(isRevoked ? "client.credential.revoked" : "client.credential.active", "en")}</dd>
       </dl>
@@ -148,6 +153,57 @@ export function activeRunnerSelector(client: ClientViewModel, runners: readonly 
 }
 
 export function clientsPage(data: AdminData, csrf: string, centralEnabled = true): string {
-  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}"><span data-no-i18n>${escapeHtml(client.label)}</span></a><span class="sub-id mono" data-no-i18n>${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${(client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(s))}</span>`).join("") || '<span class="scope-pill">MCP &amp; Skill</span>')}</div></td><td>${activeRunnerSelector(client, data.runners, csrf)}</td><td class="time-cell">${timeMarkup(client.last_used_at_ms)}</td><td>${clientCredentialBadge(client.revoked_at_ms !== null, "compact")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">${message("text.view", "en")}</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Client name" maxlength="256"><button class="small secondary">${message("action.rename", "en")}</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">${message("text.rotate", "en")}</button></form>` : ""}${client.scopes.length > 0 ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">${message("text.reset.runner.selection", "en")}</button></form>` : ""}${clientLifecycleActions(client.client_id, client.revoked_at_ms !== null, csrf)}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>${message("text.no.mcp.clients.yet", "en")}</p></div></td></tr>`;
-  return `<section class="page-heading"><div><p class="eyebrow">${message("text.integrations", "en")}</p><h1>${message("nav.clients", "en")}</h1><p class="lede">${message("text.manage.labels.scopes.runner.routing.and.one.time.client.secrets", "en")}</p></div></section><section class="panel add-panel" id="add-client"><div class="section-title"><h2>${message("text.add.mcp.client", "en")}</h2></div><form method="post" action="/admin/clients" class="form-grid add-client-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>${message("text.label", "en")}<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label><label>Access type<select name="access_mode">${centralEnabled ? '<option value="central">MCP and Skills</option>' : ''}<option value="native">MCP, Skills and computer access</option></select></label><details data-client-computer-permissions${centralEnabled ? "" : " open"}><summary>Computer permissions</summary><fieldset><legend>${message("text.scopes", "en")}</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset></details><p class="muted">Choose computer access to work with files and run commands through a Runner.</p><div class="form-submit-wrap"><button class="button">${message("text.create.one.time.secret", "en")}</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table client-table"><caption class="sr-only">${message("text.mcp.clients", "en")}</caption><thead><tr><th>${message("text.label", "en")}</th><th>${message("text.scopes", "en")}</th><th>${message("text.active.runner", "en")}</th><th>${message("text.last.used", "en")}</th><th>${message("client.credential.status", "en")}</th><th>${message("text.actions", "en")}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  const rows = data.clients.map((client) => `<tr class="data-row">
+    <td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}"><span data-no-i18n>${escapeHtml(client.label)}</span></a><span class="sub-id mono" data-no-i18n>${escapeHtml(client.client_id)}</span></div></td>
+    <td><div class="scope-tags">${client.scopes.map((scope) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(scope))}</span>`).join("") || '<span class="scope-pill">MCP &amp; Skill</span>'}</div></td>
+    <td>${activeRunnerSelector(client, data.runners, csrf)}</td>
+    <td class="time-cell">${timeMarkup(client.last_used_at_ms)}</td>
+    <td>${clientCredentialBadge(client.revoked_at_ms !== null, "compact")}</td>
+    <td class="actions">${clientListActions(client, csrf)}</td>
+  </tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>${message("text.no.mcp.clients.yet", "en")}</p></div></td></tr>`;
+  return `<section class="page-heading">
+    <div><p class="eyebrow">${message("text.integrations", "en")}</p><h1>${message("nav.clients", "en")}</h1><p class="lede">${message("text.manage.labels.scopes.runner.routing.and.one.time.client.secrets", "en")}</p></div>
+    <a class="button" href="#add-client">${message("text.add.mcp.client", "en")}</a>
+  </section>
+  <section class="panel client-list-panel" aria-labelledby="client-list-title">
+    <div class="section-title"><div><h2 id="client-list-title">${message("product.home.connections", "en")}</h2><span class="count-badge" data-no-i18n>${data.clients.length}</span></div></div>
+    <div class="table-wrap"><table class="data-table client-table">
+      <caption class="sr-only">${message("text.mcp.clients", "en")}</caption>
+      <thead><tr><th scope="col">${message("text.label", "en")}</th><th scope="col">${message("text.scopes", "en")}</th><th scope="col">${message("text.active.runner", "en")}</th><th scope="col">${message("text.last.used", "en")}</th><th scope="col">${message("client.credential.status", "en")}</th><th scope="col">${message("text.actions", "en")}</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </section>
+  <section class="panel add-panel client-create-panel" id="add-client" aria-labelledby="add-client-title">
+    <div class="section-title"><h2 id="add-client-title">${message("text.add.mcp.client", "en")}</h2></div>
+    <form method="post" action="/admin/clients" class="form-grid add-client-grid">
+      <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+      <label>${message("text.label", "en")}<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label>
+      <label>Access type<select name="access_mode">${centralEnabled ? '<option value="central">MCP and Skills</option>' : ''}<option value="native">MCP, Skills and computer access</option></select></label>
+      <details data-client-computer-permissions${centralEnabled ? "" : " open"}>
+        <summary>Computer permissions</summary>
+        <fieldset><legend>${message("text.scopes", "en")}</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset>
+      </details>
+      <p class="muted">Choose computer access to work with files and run commands through a Runner.</p>
+      <div class="form-submit-wrap"><button class="button">${message("text.create.one.time.secret", "en")}</button></div>
+    </form>
+  </section>`;
+}
+
+function clientListActions(client: ClientViewModel, csrf: string): string {
+  const base = '/admin/clients/' + encodeURIComponent(client.client_id);
+  const token = '<input type="hidden" name="csrf_token" value="' + escapeHtml(csrf) + '">';
+  return `<div class="client-row-actions">
+    <a class="button small secondary" href="${base}">${message("text.view", "en")}</a>
+    <details class="row-actions-disclosure">
+      <summary>${message("text.actions", "en")}</summary>
+      <div class="action-btn-group client-management-actions">
+        <form method="post" action="${base}/rename" class="inline-action-form client-rename-form">
+          ${token}<input name="label" value="${escapeHtml(client.label)}" aria-label="Client name" maxlength="256"><button class="small secondary">${message("action.rename", "en")}</button>
+        </form>
+        ${client.revoked_at_ms === null ? `<form method="post" action="${base}/rotate" class="inline-action-form">${token}<button class="small secondary">${message("text.rotate", "en")}</button></form>` : ''}
+        ${client.scopes.length > 0 ? `<form method="post" action="${base}/reset-runner" class="inline-action-form">${token}<button class="small secondary">${message("text.reset.runner.selection", "en")}</button></form>` : ''}
+        ${clientLifecycleActions(client.client_id, client.revoked_at_ms !== null, csrf)}
+      </div>
+    </details>
+  </div>`;
 }

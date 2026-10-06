@@ -8,7 +8,7 @@ import { RunnerUpdateOperationSchema } from "@aloneio/runmesh-protocol";
 import { historyControls, historySettingsForm } from "../history-ui.js";
 import { JOBS_EXPLANATION, jobSnapshotNote } from "./job-views.js";
 import { validityStatus } from "../validity.js";
-import { record, escapeHtml, time, shortChecksum, statusClass } from "./format.js";
+import { record, escapeHtml, timeMarkup, shortChecksum, statusClass } from "./format.js";
 import { statusBadge, historyJobTable, mcpCallTable } from "./tables.js";
 import { managedWorkspaceForm, permissionForm } from "./forms.js";
 import { isFullHostPath } from "./host-path-label.js";
@@ -118,13 +118,12 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
   const warningRows = warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("");
   return `<section class="detail-header">
     <div class="detail-title-group">
+      <p class="eyebrow">${message("text.runner.details", "en")}</p>
       <div class="detail-title-row">
-        <p class="eyebrow">${message("text.runner.details", "en")}</p>
         <h1 class="detail-title"><span data-no-i18n>${escapeHtml(displayName)}</span></h1>
         ${statusBadge(state)}
       </div>
       <p class="detail-id mono"><span data-no-i18n>${escapeHtml(runnerId)}</span></p>
-      <p class="lede">${message("text.control.plane.workspace.roots.appear.only.in.this.authenticated.administrator.view", "en")}</p>
     </div>
     <div class="detail-header-actions">
       <a class="button secondary" href="/admin/runners">${message("text.back.to.runners", "en")}</a>
@@ -132,9 +131,9 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
   </section>
   <div class="metrics" aria-label="Runner summary">
     <div class="metric">
-      <span class="metric-label">${message("text.execution.mode", "en")}</span>
-      <strong class="metric-value mono font-16">${escapeHtml(executionMode ?? "not configured")}</strong>
-      <span class="metric-meta">${message("text.administrator.configuration", "en")}</span>
+      <span class="metric-label">${message("text.runner.version", "en")}</span>
+      <strong class="metric-value mono font-16">${escapeHtml(currentVersion)}</strong>
+      <span class="metric-meta">${message("text.current", "en")}</span>
     </div>
     <div class="metric">
       <span class="metric-label">${message("text.platform", "en")}</span>
@@ -142,31 +141,128 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
       <span class="metric-meta">${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</span>
     </div>
     <div class="metric">
-      <span class="metric-label">${message("text.policy.status", "en")}</span>
-      <strong class="metric-value">${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision === "—" && policyStatus === "applied" ? desiredRevision : appliedRevision)} / ${escapeHtml(desiredRevision)}</strong>
-      <span class="metric-meta">${message("text.revision.applied.desired", "en")}</span>
+      <span class="metric-label">${message("text.workspaces", "en")}</span>
+      <strong class="metric-value" data-no-i18n>${workspaces.length}</strong>
+      <span class="metric-meta">${message("text.policy.status", "en")} · ${escapeHtml(policyStatus)}</span>
     </div>
     <div class="metric">
       <span class="metric-label">${message("text.last.seen", "en")}</span>
-      <strong class="metric-value font-16">${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong>
+      <strong class="metric-value metric-time font-16">${timeMarkup(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null)}</strong>
       <span class="metric-meta">${message("text.heartbeat", "en")}</span>
     </div>
   </div>
-  <div class="grid-two">
+  <div class="grid-two runner-primary-grid">
+    <section class="panel runner-version-panel" id="runner-version">
+      <div class="section-title">
+        <h2>${message("text.runner.version", "en")}</h2>
+      </div>
+      <p class="muted font-12">${message("text.choose.target.version.and.update.runner.host", "en")}</p>
+      ${distributionNotice}
+      <div class="runner-version-summary">
+        <div class="version-stat">
+          <span class="form-stat-label">${message("text.current", "en")}</span>
+          <strong class="mono">${escapeHtml(currentVersion)}</strong>
+        </div>
+        <div class="version-stat">
+          <span class="form-stat-label">${message("text.latest", "en")}</span>
+          <strong class="mono">${escapeHtml(latestVersion)}</strong>
+        </div>
+      </div>
+      <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid version-policy-form">
+        <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+        <input type="hidden" name="operation_id" value="${escapeHtml(typeof runner.update_request_id === "string" ? runner.update_request_id : "")}">
+        <label>Channel
+          <select name="update_channel">
+            <option value="stable"${updateChannel === "stable" ? " selected" : ""}>${message("runner.update.latest.environment", "en")}</option>
+            <option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>${message("text.pinned", "en")}</option>
+          </select>
+        </label>
+        <label>Desired version
+          <input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3 or 1.2.3-dev.4" pattern="[0-9]+\\.[0-9]+\\.[0-9]+(-dev\\.[0-9]+)?">
+        </label>
+        <div class="form-submit-wrap full-width-submit">
+          <button class="button">${message("text.save.version.policy", "en")}</button>
+        </div>
+      </form>
+      <p class="muted policy-status-foot font-12">${message("text.status.2", "en")}<span>${escapeHtml(update === null ? String(runner.update_status ?? "unknown") : updateState)}</span>${update === null ? "" : ` · <span class="mono">${escapeHtml(update.target_version)}</span>`}</p>
+      ${update?.error_code === null || update === null ? "" : `<p class="warning font-12">${message(`runner.update.error.${update.error_code}`, "en")}</p>`}
+    </section>
+    <section class="panel runner-workspaces-panel" id="runner-workspaces">
+      <div class="section-title">
+        <h2>${message("text.managed.workspaces", "en")}</h2>
+        <span class="muted font-12">${message("text.each.save.increments.the.desired.policy.revision", "en")}</span>
+      </div>
+      <ul class="plain-list workspace-list">
+        ${workspaceRows}
+      </ul>
+      <div class="add-workspace-box">
+        <div class="box-title-row">
+          <h3>${message("text.add.workspace", "en")}</h3>
+        </div>
+        <ul class="plain-list">${managedWorkspaceForm(runnerId, undefined, csrf)}</ul>
+      </div>
+    </section>
+  </div>
+  <div class="grid-two runner-access-grid">
+    <section class="panel">
+      <div class="section-title">
+        <h2>${message("text.runner.permission.profile", "en")}</h2>
+      </div>
+      <p class="muted font-12">${message("text.changes.remain.pending.until.the.connected.runner.validates.and.applies.the.revision", "en")}</p>
+      ${permissionForm(runnerId, permissions, csrf)}
+      <div class="danger-zone">
+        <div class="danger-header">
+          <h3>${message("text.emergency.control", "en")}</h3>
+        </div>
+        <p class="muted font-12">${message("text.emergency.lock.does.not.automatically.stop.existing.jobs", "en")}</p>
+        <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack emergency-lock-form">
+          <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+          <label>Type the Runner ID to confirm emergency lock
+            <input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required placeholder="${escapeHtml(runnerId)}">
+          </label>
+          <button class="button danger">${message("text.emergency.lock.all.permissions", "en")}</button>
+        </form>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>${message("text.environment.tools", "en")}</h2>
+      </div>
+      ${toolRows}
+    </section>
+  </div>
+  <div class="grid-two runner-history-grid">
+    <section class="panel">
+      <div class="section-title">
+        <h2>${message("text.recent.shell.jobs", "en")}</h2>
+      </div>
+      <p class="muted">${JOBS_EXPLANATION}</p>
+      ${historyControls(runnerId,view)}
+      ${view.scope === "none" || view.scope === "audit" ? '<p class="muted">Jobs not loaded.</p>' : `${view.scope === "live" ? '<p class="muted">Runner live result</p>' : jobSnapshotNote()}${jobs === undefined ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : historyJobTable(jobs.filter(record) as Record<string, unknown>[],runnerId,view)}` }
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>${message("text.recent.mcp.calls", "en")}</h2>
+      </div>
+      ${view.scope === "audit" || view.scope === "all" ? (mcpCalls === undefined ? '<p class="muted">Audit history unavailable.</p>' : mcpCallTable(mcpCalls.filter(record) as Record<string, unknown>[])) : '<p class="muted">Audit not loaded.</p>'}
+      ${historySettingsForm(runnerId,csrf,historySettings)}
+    </section>
+  </div>
+  <div class="grid-two runner-enrollment-grid">
     <section class="panel">
       <div class="section-title"><h2>${message("text.runner.authorization.window", "en")}</h2><span class="badge ${runnerValidityStatus === "active" ? "online" : runnerValidityStatus === "scheduled" ? "pending" : "offline"}">${escapeHtml(runnerValidityStatus)}</span></div>
       <p class="muted font-12">${message("text.this.controls.whether.new.protected.operations.are.admitted.the.runner.may.remain.connecte", "en")}</p>
-      <dl class="details"><dt>${message("text.active.from", "en")}</dt><dd class="mono">${escapeHtml(time(runnerFrom))}</dd><dt>${message("text.expires.at", "en")}</dt><dd class="mono">${escapeHtml(time(runnerUntil))}</dd></dl>
+      <dl class="details"><dt>${message("text.active.from", "en")}</dt><dd class="mono">${timeMarkup(runnerFrom)}</dd><dt>${message("text.expires.at", "en")}</dt><dd class="mono">${timeMarkup(runnerUntil)}</dd></dl>
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/validity" class="form-grid validity-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>${message("text.valid.days", "en")}<input type="number" name="runner_valid_days" value="${escapeHtml(validityDaysInput(runnerUntil, true))}" min="0" max="${presentation.maxValidityDays}" step="1" inputmode="numeric" required></label><p class="muted font-12 full-width-submit">${message("text.0.means.no.expiry.saving.starts.a.new.authorization.window.now", "en")}</p><div class="form-submit-wrap full-width-submit"><button class="button">${message("text.save.authorization.window", "en")}</button></div></form>
     </section>
     <section class="panel">
       <div class="section-title"><h2>${message("text.latest.enrollment.code", "en")}</h2><span class="badge ${enrollmentStatus === "active" ? "online" : enrollmentStatus === "scheduled" ? "pending" : enrollmentStatus === "expired" || enrollmentStatus === "used" ? "offline" : "invalid"}">${enrollmentStatus === "used" ? message("text.enrollment.used", "en") : escapeHtml(enrollmentStatus)}</span></div>
       <p class="muted font-12">${message("text.enrollment.single.use.help", "en")}</p>
-      <dl class="details"><dt>${message("text.active.from", "en")}</dt><dd class="mono">${escapeHtml(time(enrollmentFrom))}</dd><dt>${message("text.expires.at", "en")}</dt><dd class="mono">${escapeHtml(time(enrollmentUntil))}</dd><dt>${message("text.consumed", "en")}</dt><dd class="mono">${escapeHtml(time(typeof enrollment?.used_at_ms === "number" ? enrollment.used_at_ms : null))}</dd></dl>
+      <dl class="details"><dt>${message("text.active.from", "en")}</dt><dd class="mono">${timeMarkup(enrollmentFrom)}</dd><dt>${message("text.expires.at", "en")}</dt><dd class="mono">${timeMarkup(enrollmentUntil)}</dd><dt>${message("text.consumed", "en")}</dt><dd class="mono">${timeMarkup(typeof enrollment?.used_at_ms === "number" ? enrollment.used_at_ms : null)}</dd></dl>
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment" class="form-grid validity-form">${executionModeFormFields(executionMode ?? undefined, csrf, false)}${windowFields("code", presentation.maxValidityDays)}<div class="form-submit-wrap full-width-submit"><button class="button secondary">${message("text.generate.new.enrollment.code", "en")}</button></div></form>
     </section>
   </div>
-  <div class="grid-two">
+  <div class="grid-two runner-diagnostics-grid">
     <section class="panel">
       <div class="section-title">
         <h2>${message("text.safe.metadata", "en")}</h2>
@@ -194,7 +290,7 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
     </section>
     <section class="panel">
       <div class="section-title">
-        <h2>${message("text.service.and.policy.diagnostics", "en")}</h2>
+        <h2>${message("text.service.and.policy.diagnostics", "en")}</h2><span class="badge ${policyStatus === "applied" ? "online" : policyStatus === "invalid" ? "invalid" : "pending"}">${escapeHtml(policyStatus)}</span>
       </div>
       <dl class="details">
         <dt>${message("text.configured.execution.mode.administrator", "en")}</dt>
@@ -215,97 +311,6 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
       ${warningRows === "" ? "" : `<ul class="warning diagnostic-warning-list">${warningRows}</ul>`}
       <h3 class="diagnostic-subheading">${message("text.workspace.validation.status", "en")}</h3>
       <ul class="plain-list diagnostic-list">${diagnosticRows}</ul>
-    </section>
-    <section class="panel">
-      <div class="section-title">
-        <h2>${message("text.runner.version", "en")}</h2>
-      </div>
-      <p class="muted font-12">${message("text.choose.target.version.and.update.runner.host", "en")}</p>
-      ${distributionNotice}
-      <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid version-policy-form">
-        <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
-        <input type="hidden" name="operation_id" value="${escapeHtml(typeof runner.update_request_id === "string" ? runner.update_request_id : "")}">
-        <label>Channel
-          <select name="update_channel">
-            <option value="stable"${updateChannel === "stable" ? " selected" : ""}>${message("runner.update.latest.environment", "en")}</option>
-            <option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>${message("text.pinned", "en")}</option>
-          </select>
-        </label>
-        <label>Desired version
-          <input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3 or 1.2.3-dev.4" pattern="[0-9]+\\.[0-9]+\\.[0-9]+(-dev\\.[0-9]+)?">
-        </label>
-        <div class="version-stat">
-          <span class="form-stat-label">${message("text.current", "en")}</span>
-          <strong class="mono">${escapeHtml(currentVersion)}</strong>
-        </div>
-        <div class="version-stat">
-          <span class="form-stat-label">${message("text.latest", "en")}</span>
-          <strong class="mono">${escapeHtml(latestVersion)}</strong>
-        </div>
-        <div class="form-submit-wrap full-width-submit">
-          <button class="button">${message("text.save.version.policy", "en")}</button>
-        </div>
-      </form>
-      <p class="muted policy-status-foot font-12">${message("text.status.2", "en")}<span>${escapeHtml(update === null ? String(runner.update_status ?? "unknown") : updateState)}</span>${update === null ? "" : ` · <span class="mono">${escapeHtml(update.target_version)}</span>`}</p>
-      ${update?.error_code === null || update === null ? "" : `<p class="warning font-12">${message(`runner.update.error.${update.error_code}`, "en")}</p>`}
-    </section>
-    <section class="panel">
-      <div class="section-title">
-        <h2>${message("text.environment.tools", "en")}</h2>
-      </div>
-      ${toolRows}
-    </section>
-    <section class="panel">
-      <div class="section-title">
-        <h2>${message("text.recent.shell.jobs", "en")}</h2>
-      </div>
-      <p class="muted">${JOBS_EXPLANATION}</p>
-      ${historyControls(runnerId,view)}
-      ${view.scope === "none" || view.scope === "audit" ? '<p class="muted">Jobs not loaded.</p>' : `${view.scope === "live" ? '<p class="muted">Runner live result</p>' : jobSnapshotNote()}${jobs === undefined ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : historyJobTable(jobs.filter(record) as Record<string, unknown>[],runnerId,view)}` }
-    </section>
-    <section class="panel">
-      <div class="section-title">
-        <h2>${message("text.recent.mcp.calls", "en")}</h2>
-      </div>
-      ${view.scope === "audit" || view.scope === "all" ? (mcpCalls === undefined ? '<p class="muted">Audit history unavailable.</p>' : mcpCallTable(mcpCalls.filter(record) as Record<string, unknown>[])) : '<p class="muted">Audit not loaded.</p>'}
-      ${historySettingsForm(runnerId,csrf,historySettings)}
-    </section>
-  </div>
-  <div class="grid-two">
-    <section class="panel">
-      <div class="section-title">
-        <h2>${message("text.runner.permission.profile", "en")}</h2>
-      </div>
-      <p class="muted font-12">${message("text.changes.remain.pending.until.the.connected.runner.validates.and.applies.the.revision", "en")}</p>
-      ${permissionForm(runnerId, permissions, csrf)}
-      <div class="danger-zone">
-        <div class="danger-header">
-          <h3>${message("text.emergency.control", "en")}</h3>
-        </div>
-        <p class="muted font-12">${message("text.emergency.lock.does.not.automatically.stop.existing.jobs", "en")}</p>
-        <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack emergency-lock-form">
-          <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
-          <label>Type the Runner ID to confirm emergency lock
-            <input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required placeholder="${escapeHtml(runnerId)}">
-          </label>
-          <button class="button danger">${message("text.emergency.lock.all.permissions", "en")}</button>
-        </form>
-      </div>
-    </section>
-    <section class="panel">
-      <div class="section-title">
-        <h2>${message("text.managed.workspaces", "en")}</h2>
-        <span class="muted font-12">${message("text.each.save.increments.the.desired.policy.revision", "en")}</span>
-      </div>
-      <ul class="plain-list workspace-list">
-        ${workspaceRows}
-      </ul>
-      <div class="add-workspace-box">
-        <div class="box-title-row">
-          <h3>${message("text.add.workspace", "en")}</h3>
-        </div>
-        ${managedWorkspaceForm(runnerId, undefined, csrf)}
-      </div>
     </section>
   </div>`;
 }

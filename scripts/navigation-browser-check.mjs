@@ -8,7 +8,7 @@ export async function checkAdminNavigation(executable) {
   const requests = [], errors = [];
   let phase, arrived, release;
   const pageFor = path => adminDocument('Navigation fixture', '<p data-navigation-fixture>' + path + '</p>'
-    + (path === '/admin/clients' ? '<div style="height:1800px"></div><section id="add-client"><h2>Add a client</h2><label>Connection label<input name="label"></label></section><div style="height:1000px"></div>' : '')
+    + (path === '/admin/clients' ? '<a href="#add-client" data-same-page-fragment-link>Add a client</a><div style="height:1800px"></div><section id="add-client"><h2>Add a client</h2><label>Connection label<input name="label"></label></section><div style="height:1000px"></div>' : '')
     + (path === '/admin/settings' ? '<a href="/admin/clients#add-client" data-fragment-link>Add a client</a>' : ''), 'dashboard');
   const server = createServer((req, res) => {
     const path = new URL(req.url, 'http://127.0.0.1').pathname;
@@ -97,9 +97,26 @@ export async function checkAdminNavigation(executable) {
         assert.equal(await label.inputValue(),'Unsaved connection label','Same-page '+action+' preserves entered values');
         assert.equal(requests.filter(request=>request.path==='/admin/clients').length,reads,'Same-page '+action+' does not reload the form');
       }
+      for (const width of [320, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        await page.locator('[data-same-page-fragment-link]').click();
+        await page.waitForURL(origin + '/admin/clients#add-client');
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.deepEqual(await page.locator('#add-client').evaluate(node => {
+          const header = document.querySelector('.app-header');
+          const gap = node.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+          return { currentHeaderOffset: node.style.scrollMarginTop === (header.offsetHeight + 16) + 'px', visibleBelowHeader: gap >= 0 && gap <= 32 };
+        }), { currentHeaderOffset: true, visibleBelowHeader: true }, 'Same-page fragment follows the resized mobile header at ' + width + 'px');
+        assert.equal(await label.inputValue(), 'Unsaved connection label', 'Same-page fragment keeps the draft after resize');
+        assert.equal(requests.filter(request => request.path === '/admin/clients').length, reads, 'Same-page fragment does not fetch a replacement form');
+        await page.goBack();
+        await page.waitForURL(origin + '/admin/clients#main-content');
+        assert.equal(await label.inputValue(), 'Unsaved connection label', 'Native Back after a same-page fragment keeps the draft');
+        assert.equal(requests.filter(request => request.path === '/admin/clients').length, reads, 'Native Back after a same-page fragment does not reload');
+      }
     } finally { await page.close(); }
     assert.deepEqual(errors, []);
-    return { state: 'passed', scenarios: scenarios.length + 5, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, fragment_focus_and_scroll_restored: true, same_page_forms_preserved: true, screenshots: 0 };
+    return { state: 'passed', scenarios: scenarios.length + 7, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, fragment_focus_and_scroll_restored: true, resized_same_page_fragments_visible: true, same_page_forms_preserved: true, screenshots: 0 };
   } finally {
     await browser?.close();
     server.closeAllConnections();
