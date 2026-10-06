@@ -44,6 +44,8 @@ GitHub's `verify-all` aggregates every required job. GitLab acceptance checks bo
 
 Open `ci-results/` in the job artifacts for JSON summaries and JUnit reports. Transport evidence includes source identity, platform, test counts, and source locations and error categories on failure. Browser checks use the same diagnostic rules. Reports are retained for 14 days after GitHub verification, browser and Windows transport jobs, and after GitLab verification and browser jobs. To investigate log-pagination failures, use the reported field states, byte counts and source location to identify the failing step.
 
+Windows initializes its transport reports before installing dependencies. A `not_run` result means the transport step has not started; check the preceding job steps for the failure.
+
 ## Verify the installed package
 
 The Linux verification jobs on GitHub and GitLab execute `test:package:e2e` after source E2E. The command packs the current Runner into a new private directory, requires exactly one tarball, hashes it and invokes `test-packed-runner.mjs`. Installation uses `--offline --ignore-scripts` and an empty dependency cache. The installed CLI runs against a temporary local Worker with isolated state and synthetic enrollment data.

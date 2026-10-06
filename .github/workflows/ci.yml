@@ -86,6 +86,9 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
+      - name: Initialize Windows transport evidence
+        if: matrix.os == 'windows-latest'
+        run: node scripts/ci-check.mjs --initialize transport
       - run: npm install --global npm@10.9.3
       - run: node scripts/check-toolchain.mjs
       - run: npm ci

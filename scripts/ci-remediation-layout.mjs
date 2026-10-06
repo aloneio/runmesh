@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "./ci-policy.mjs";
-import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_ADDED_COMMANDS, WINDOWS_TRANSPORT_STEP, BROWSER_COMMANDS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand, GITLAB_EVENTS } from "./ci-contract.mjs";
+import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_ADDED_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, BROWSER_COMMANDS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand, GITLAB_EVENTS } from "./ci-contract.mjs";
 
 const yaml = value => stringify(value, { aliasDuplicateObjects: false, lineWidth: 0 });
 const checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
@@ -63,6 +63,10 @@ export function proposedCiFiles(input) {
   gl.browser = { stage: "verify", timeout: "15m", interruptible: true, allow_failure: false, rules: rules(),
     script: [...BROWSER_COMMANDS], artifacts: gitlabReportArtifacts() };
   // Preserve historical checks and add only the declared later native gates.
+  const nativeSteps = gh.jobs["native-runner"].steps;
+  const nativeRuntime = nativeSteps.findIndex(step => step.uses?.startsWith("actions/setup-node@"));
+  assert.ok(nativeRuntime >= 0, "legacy native Node setup is required");
+  nativeSteps.splice(nativeRuntime + 1, 0, { ...WINDOWS_REPORT_INITIALIZATION_STEP });
   for (const command of NATIVE_ADDED_COMMANDS) {
     if (!gh.jobs["native-runner"].steps.some(step => step.run === command)) gh.jobs["native-runner"].steps.push({ run: command });
   }

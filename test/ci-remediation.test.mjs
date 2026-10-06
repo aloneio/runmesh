@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import { EventEmitter } from "node:events";
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
-import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, LTS_COMMANDS, BROWSER_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand } from "../scripts/ci-contract.mjs";
+import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand } from "../scripts/ci-contract.mjs";
 import { gateEvidence, gateJUnit, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
 import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
@@ -19,7 +20,10 @@ function fixture() {
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
   const gh = { on: { push: { branches: ["main", "dev"] }, pull_request: null, workflow_dispatch: null, workflow_call: null }, permissions: { contents: "read" }, jobs: {
     verify: { "runs-on": "ubuntu-latest", "timeout-minutes": 30, steps: [...CHECK_IDS.map(id => ({ run: checkCommand(id) })), githubReportUpload("verify")] },
-    "native-runner": { "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: [...NATIVE_COMMANDS.map(run => ({ run })), { ...WINDOWS_TRANSPORT_STEP }, githubReportUpload("native-runner")] },
+    "native-runner": { "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: [
+      { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version-file": ".node-version" } },
+      { ...WINDOWS_REPORT_INITIALIZATION_STEP }, ...NATIVE_COMMANDS.map(run => ({ run })), { ...WINDOWS_TRANSPORT_STEP }, githubReportUpload("native-runner"),
+    ] },
     "runner-lts": { strategy: { matrix: { node: ["22.23.2", "24.21.0"] } }, steps: [
       ...LTS_COMMANDS.slice(0, 3).map(run => ({ run })),
       { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version": "${{ matrix.node }}" } },
@@ -37,6 +41,7 @@ function fixture() {
 const verify = f => validateCiWiring(f.pkg, stringify(f.gh, { aliasDuplicateObjects: false }), stringify(f.gl, { aliasDuplicateObjects: false }));
 const browserStep = f => f.gh.jobs.browser.steps.find(step => step.run === "npm run test:browser");
 const transportStep = f => f.gh.jobs["native-runner"].steps.find(step => step.run === WINDOWS_TRANSPORT_STEP.run);
+const initializationStep = f => f.gh.jobs["native-runner"].steps.find(step => step.run === WINDOWS_REPORT_INITIALIZATION_STEP.run);
 test("CI02 normal closed execution grammar is accepted", () => assert.equal(verify(fixture()).critical_checks, CHECK_IDS.length));
 for (const [name, mutate] of Object.entries({
   "disabled step": f => f.gh.jobs.verify.steps[0].if = false,
@@ -98,6 +103,18 @@ for (const [name, mutate] of Object.entries({
   "Windows transport allows failure": f => transportStep(f)["continue-on-error"] = true,
   "Windows transport overrides shell": f => transportStep(f).shell = "pwsh -Command {0}; exit 0",
   "Windows transport duplicated": f => f.gh.jobs["native-runner"].steps.push({ ...WINDOWS_TRANSPORT_STEP }),
+  "Windows reports are not initialized": f => f.gh.jobs["native-runner"].steps = f.gh.jobs["native-runner"].steps.filter(step => step.run !== WINDOWS_REPORT_INITIALIZATION_STEP.run),
+  "Windows reports initialized on every platform": f => delete initializationStep(f).if,
+  "Windows report initialization disabled": f => initializationStep(f).if = false,
+  "Windows report initialization allows failure": f => initializationStep(f)["continue-on-error"] = true,
+  "Windows report initialization overrides shell": f => initializationStep(f).shell = "pwsh -Command {0}; exit 0",
+  "Windows report initialization duplicated": f => f.gh.jobs["native-runner"].steps.splice(2, 0, { ...WINDOWS_REPORT_INITIALIZATION_STEP }),
+  "Windows reports initialized before Node": f => f.gh.jobs["native-runner"].steps.unshift(f.gh.jobs["native-runner"].steps.splice(1, 1)[0]),
+  "Windows reports initialized after npm ci": f => f.gh.jobs["native-runner"].steps.splice(2, 0, f.gh.jobs["native-runner"].steps.splice(1, 1)[0]),
+  "Windows reports initialized after npm setup": f => f.gh.jobs["native-runner"].steps.splice(1, 0, { run: "npm install --global npm@10.9.3" }),
+  "native Node setup missing": f => f.gh.jobs["native-runner"].steps.shift(),
+  "native Node setup disabled": f => f.gh.jobs["native-runner"].steps[0].if = false,
+  "native Node setup allows failure": f => f.gh.jobs["native-runner"].steps[0]["continue-on-error"] = true,
   "native test optional": f => f.gh.jobs["native-runner"].steps[3].if = "false",
   "native soft failure": f => f.gh.jobs["native-runner"].steps[3]["continue-on-error"] = true,
   "missing LTS tests": f => f.gh.jobs["runner-lts"].steps.pop(),
@@ -196,6 +213,29 @@ test("CI08 failed attempts replace successful reports atomically", async t => {
   assert.equal(JSON.parse(await readFile(join(root, "ci-results/unit.json"), "utf8")).state, "failed");
   assert.match(await readFile(join(root, "ci-results/unit.xml"), "utf8"), /failures="1"/u);
 });
+test("CI08 Windows initialization creates and resets only transport evidence before dependency installation", async t => {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-ci-initialize-")); t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "scripts"));
+  for (const name of ["ci-check.mjs", "ci-contract.mjs", "ci-report.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+    await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, "scripts", name));
+  const initialize = () => {
+    const result = spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), "--initialize", "transport"], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  initialize();
+  assert.deepEqual((await readdir(join(root, "ci-results"))).sort(), ["transport-tests.json", "transport.json", "transport.xml"]);
+  await writeGateReport(gateEvidence("transport", "passed", 1, 0, source), root);
+  await writeSupplement("transport-tests", { state: "passed", stale_fixture: true }, root);
+  initialize();
+  const gate = JSON.parse(await readFile(join(root, "ci-results/transport.json"), "utf8"));
+  const supplement = JSON.parse(await readFile(join(root, "ci-results/transport-tests.json"), "utf8"));
+  assert.equal(gate.state, "not_run"); assert.equal(gate.exit_code, null); assert.equal(gate.elapsed_ms, 0); assert.equal(gate.test_counts, null);
+  assert.deepEqual(supplement, { schema_version: 1, state: "not_run", source: gate.source });
+  assert.match(await readFile(join(root, "ci-results/transport.xml"), "utf8"), /failures="0" skipped="1"/u);
+  const invalid = spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), "--initialize", "toolchain"], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true });
+  assert.notEqual(invalid.status, 0);
+});
+
 test("CI08 a new attempt cannot reuse old successful package/browser/transport/provider summaries", async t => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-ci-summary-")); t.after(() => rm(root, { recursive: true, force: true }));
   for (const name of ["package-e2e", "browser-tests", "transport-tests", "crossforge-evidence"]) {

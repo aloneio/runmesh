@@ -44,6 +44,8 @@ GitHub 的 `verify-all` 汇总全部必需作业。GitLab 验收同时检查 `ve
 
 从作业产物中的 `ci-results/` 读取 JSON 摘要和 JUnit 报告。传输结果包含源码身份、平台、测试计数，以及失败时的测试位置和错误分类；浏览器使用相同的诊断规则。GitHub 的综合、浏览器和 Windows 传输作业，以及 GitLab 的综合和浏览器作业，均在运行结束时保留报告 14 天。排查日志分页故障时，可结合报告中的字段状态、字节数和源码位置定位失败环节。
 
+Windows 在安装依赖前初始化传输报告。`not_run` 表示传输步骤尚未启动，可从前面的作业步骤查看失败原因。
+
 ## 验证实际安装包
 
 GitHub 和 GitLab 的 Linux 验证任务在源码 E2E 后执行 `test:package:e2e`：打包当前 Runner，要求新临时目录内只有一个 tarball，计算其 SHA256，再调用 `test-packed-runner.mjs`，使用空依赖缓存进行 `--offline --ignore-scripts` 安装。随后启动安装目录内的 CLI。

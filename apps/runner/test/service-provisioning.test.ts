@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServiceManager, createServiceProvisioner, renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
-import { resolveTrustedWindowsTool } from "../src/windows-tools.js";
+import { resolveTrustedWindowsTool, trustedWindowsEnvironment, trustedWindowsRoot } from "../src/windows-tools.js";
 
 function runSyntheticTaskProbe(script: string, state: "stopped" | "absent" | "running" | "queued" | "denied" | "unknown") {
   const task = state === "absent" ? "throw [System.IO.FileNotFoundException]::new()"
@@ -21,9 +21,31 @@ $script:serviceFixture | Add-Member ScriptMethod Connect {};
 $script:serviceFixture | Add-Member ScriptMethod GetFolder { $script:folderFixture };
 function New-Object { param([string]$ComObject) if ($ComObject -ne 'Schedule.Service') { throw 'unexpected synthetic object' }; $script:serviceFixture };
 `;
-  return spawnSync(resolveTrustedWindowsTool("powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", fixture + script], {
-    encoding: "utf8", timeout: 12_000, windowsHide: true,
+  const systemRoot = trustedWindowsRoot();
+  const source = "$ErrorActionPreference='Stop'; [Console]::Error.WriteLine('RUNMESH_TEST_TASK_PROBE=started');\n"
+    + fixture + "[Console]::Error.WriteLine('RUNMESH_TEST_TASK_PROBE=ready');\n" + script;
+  // Match the host executor's trusted environment and working directory. Keep
+  // this synthetic script literal and close stdin; inherited module paths,
+  // profiles and the workspace cwd do not affect the native observation.
+  const result = spawnSync(resolveTrustedWindowsTool("powershell.exe", systemRoot), ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(source, "utf16le").toString("base64")], {
+    encoding: "utf8", timeout: 12_000, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+    cwd: join(systemRoot, "System32"), env: trustedWindowsEnvironment(systemRoot),
   });
+  const stdout = result.stdout ?? "", stderr = result.stderr ?? "";
+  const stage = stderr.includes("RUNMESH_TEST_TASK_PROBE=ready") ? "probe" : stderr.includes("RUNMESH_TEST_TASK_PROBE=started") ? "fixture_setup" : "startup";
+  const code = result.error?.code;
+  const diagnostic = JSON.stringify({ native_task_fixture: stage, status: result.status, signal: result.signal,
+    error_code: code === undefined ? null : ["ETIMEDOUT", "ENOENT", "EACCES", "EPERM", "ENOBUFS"].includes(code) ? code : "other",
+    stdout_bytes: Buffer.byteLength(stdout), stderr_bytes: Buffer.byteLength(stderr) });
+  return { ...result, diagnostic, stdout, stderr: stderr.replace(/^RUNMESH_TEST_TASK_PROBE=(?:started|ready)\r?\n/gmu, "") };
+}
+
+function expectSyntheticProbeCompleted(result: ReturnType<typeof runSyntheticTaskProbe>): void {
+  // These assertions must stay outside the product's injected executor: status
+  // correctly catches probe failures, including an AssertionError thrown there.
+  expect(result.error === undefined, result.diagnostic).toBe(true);
+  expect(result.signal, result.diagnostic).toBeNull();
+  expect(result.status, result.diagnostic).not.toBeNull();
 }
 
 describe("native service package ownership", () => {
@@ -55,7 +77,7 @@ describe("native service package ownership", () => {
     } });
     await manager.stop(renderService({ platform: "win32", mode: "system" }));
     const result = runSyntheticTaskProbe(script, state);
-    expect(result.error).toBeUndefined();
+    expectSyntheticProbeCompleted(result);
     if (state === "running" || state === "queued") {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("Runner task is still active");
@@ -71,23 +93,40 @@ describe("native service package ownership", () => {
 
   it.skipIf(process.platform !== "win32").each(["absent", "denied", "unknown"] as const)("classifies a synthetic Windows %s exception through public status", async state => {
     const calls: string[][] = [];
+    const observations: ReturnType<typeof runSyntheticTaskProbe>[] = [];
     const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
       execute: async (file, args) => {
         calls.push([file, ...args]);
         if (file !== "powershell.exe") return { exitCode: 1, stderr: "native query unavailable" };
         const result = runSyntheticTaskProbe(args.at(-1)!, state);
-        expect(result.error).toBeUndefined();
+        observations.push(result);
         return { exitCode: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
       },
     } });
     const status = await manager.status?.(renderService({ platform: "win32", mode: "system" }));
+    expect(observations).toHaveLength(1);
+    observations.forEach(expectSyntheticProbeCompleted);
     if (state === "absent") expect(status).toMatchObject({ installed: false, active: false, registered: false, reliable: true });
     else {
       expect(status).toMatchObject({ reliable: false });
       expect(status?.registered).toBeUndefined();
       await expect(manager.uninstall(renderService({ platform: "win32", mode: "system" }))).rejects.toThrow("confirmed stopped");
+      expect(observations).toHaveLength(2);
+      observations.forEach(expectSyntheticProbeCompleted);
       expect(calls.some(call => call.includes("/Delete"))).toBe(false);
     }
+  });
+
+  it("keeps a timed-out Windows task query distinct from confirmed absence", async () => {
+    const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
+      execute: async file => {
+        if (file === "powershell.exe") throw Object.assign(new Error("native probe timed out"), { code: "ETIMEDOUT" });
+        return { exitCode: 1, stderr: "native query unavailable" };
+      },
+    } });
+    const status = await manager.status?.(renderService({ platform: "win32", mode: "system" }));
+    expect(status).toMatchObject({ installed: false, active: false, reliable: false });
+    expect(status?.registered).toBeUndefined();
   });
 
   it.each([0, 1])("keeps a running Windows task registered when stop returns %s but completion is unverified", async exitCode => {

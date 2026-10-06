@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { proposedCiFiles } from "../scripts/ci-remediation-layout.mjs";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
-import { UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts } from "../scripts/ci-contract.mjs";
+import { UPLOAD_ACTION, WINDOWS_REPORT_INITIALIZATION_STEP, githubReportUpload, gitlabReportArtifacts } from "../scripts/ci-contract.mjs";
 
 const root = new URL("../", import.meta.url);
 const read = path => readFile(new URL(path, root), "utf8");
@@ -22,6 +22,8 @@ test("CI integration preserves native, LTS and generated main-admission jobs", a
   const input = await baseline(), result = proposedCiFiles(input);
   const old = parseCi(input.github), next = parseCi(result.files[".github/workflows/ci.yml"]);
   const expectedNative = structuredClone(old.jobs["native-runner"]);
+  const runtime = expectedNative.steps.findIndex(step => step.uses?.startsWith("actions/setup-node@"));
+  expectedNative.steps.splice(runtime + 1, 0, { ...WINDOWS_REPORT_INITIALIZATION_STEP });
   expectedNative.steps.push({ run: "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs" });
   expectedNative.steps.push({ run: "node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs" });
   expectedNative.steps.push({ run: "npm run test:e2e", if: "matrix.os == 'windows-latest'" });
