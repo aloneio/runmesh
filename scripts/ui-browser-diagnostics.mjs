@@ -9,6 +9,43 @@ const statusCode = value => Number.isInteger(value) && value >= 100 && value <= 
 const count = (value, limit) => Number.isInteger(value) && value >= 0 && value <= limit;
 const requestType = value => value === "Fetch" ? "fetch" : value === "Document" ? "document" : "other";
 
+/** Failure-only, independent HTTP observations; never replace the browser result. */
+export async function probeUiNavigationServer(origin, cookie, { fetchImpl = fetch, timeoutMs = 2000 } = {}) {
+  const base = new URL(origin);
+  if (base.protocol !== "http:" || base.hostname !== "127.0.0.1" || base.username || base.password) throw new Error("UI server probe requires a local fixture");
+  const observe = async (path, authenticated) => {
+    const controller = new AbortController();
+    let timer;
+    const request = async () => {
+      try {
+        const response = await fetchImpl(new URL(path, base), { redirect: "manual", signal: controller.signal,
+          headers: authenticated ? { cookie } : {} });
+        void response.body?.cancel().catch(() => undefined);
+        return { state: "response", status: statusCode(response.status) ? response.status : null };
+      } catch { return { state: controller.signal.aborted ? "timeout" : "network_error", status: null }; }
+    };
+    try {
+      return await Promise.race([request(), new Promise(resolve => {
+        timer = setTimeout(() => { controller.abort(); resolve({ state: "timeout", status: null }); }, timeoutMs);
+      })]);
+    } finally { clearTimeout(timer); controller.abort(); }
+  };
+  const [health, clients] = await Promise.all([observe("/health", false), observe("/admin/clients", true)]);
+  return { health, clients };
+}
+
+function serverProbe(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const result = {};
+  for (const key of ["health", "clients"]) {
+    const item = value[key];
+    if (!item || !["response", "timeout", "network_error"].includes(item.state)
+      || (item.state === "response" ? !statusCode(item.status) : item.status !== null)) return undefined;
+    result[key] = { state: item.state, status: item.status };
+  }
+  return result;
+}
+
 export function createUiNavigationDiagnostic({ now = Date.now } = {}) {
   let active;
   return {
@@ -76,14 +113,17 @@ export function withUiNavigationDiagnostic(error, diagnostic) {
 
 export function uiNavigationFailureDiagnostic(text) {
   if (typeof text !== "string") return undefined;
-  const raw = /^RUNMESH_E2E_UI_NAVIGATION_DIAGNOSTIC=(\{[^\r\n]{1,512}\})\r?$/mu.exec(text)?.[1];
+  const raw = /^RUNMESH_E2E_UI_NAVIGATION_DIAGNOSTIC=(\{[^\r\n]{1,768}\})\r?$/mu.exec(text)?.[1];
   try {
     const value = JSON.parse(raw);
     if (!value || typeof value !== "object" || Array.isArray(value) || !locales.includes(value.locale)
       || !phases.includes(value.phase) || !(value.status === null || statusCode(value.status))
       || !count(value.elapsed_ms, elapsedLimit) || !count(value.exception_count, exceptionLimit)) return undefined;
+    const probes = value.server_probes === undefined ? undefined : serverProbe(value.server_probes);
+    if (value.server_probes !== undefined && probes === undefined) return undefined;
     const diagnostic = { locale: value.locale, phase: value.phase, status: value.status,
       elapsed_ms: value.elapsed_ms, exception_count: value.exception_count };
+    if (probes !== undefined) diagnostic.server_probes = probes;
     // Preserve earlier artifacts while requiring complete, validated new fields.
     const extended = ["request_count", "request_type", "first_phase", "first_status", "redirect_count", "navigation_error_count"];
     if (extended.every(key => value[key] === undefined)) return diagnostic;

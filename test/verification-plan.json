@@ -133,6 +133,7 @@
         "apps/worker/test/connector-credentials.test.ts",
         "apps/worker/test/connector-state.test.ts",
         "apps/worker/test/deployment-provenance.test.ts",
+        "apps/worker/test/dev-runner-cache-order.test.ts",
         "apps/worker/test/dev-runner-distribution.test.ts",
         "apps/worker/test/enrollment-fence-recovery.test.ts",
         "apps/worker/test/external-audit.test.ts",
@@ -242,6 +243,7 @@
         "test/security-config.test.mjs",
         "test/security-evidence.test.mjs",
         "test/test-collection.test.mjs",
+        "test/ui-navigation-probe.test.mjs",
         "test/verification-tools.test.mjs",
         "test/worker-validation.test.mjs"
       ]

@@ -21,6 +21,10 @@ export function isDevelopmentReleaseVersion(version: string): boolean {
   const dev = DEV_VERSION.exec(version);
   return dev !== null && dev.slice(1).every(value => Number.isSafeInteger(Number(value)));
 }
+/** Development publication uses one increasing cadence sequence across base versions. */
+export function compareDevelopmentReleaseVersions(left: string, right: string): number {
+  return Number(left.split("-dev.")[1]) - Number(right.split("-dev.")[1]);
+}
 export function unavailableDevelopmentRelease(): RunnerReleaseDescriptor {
   return { channel: "dev", distributable: false, current_version: "", latest_version: "", package_name: "", package_version: "", package_spec: "", artifact: null, artifacts: null, manifest_url: null, signature_url: null, signature_descriptor_url: null, checksums_url: null, release_key_id: null, published_at: null, protocol: protocol() };
 }

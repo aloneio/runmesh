@@ -27,6 +27,13 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["Registry facade to release rules", { "apps/worker/src/registry.ts": 'import "./domain/release-selection.js";', "apps/worker/src/domain/release-selection.ts": "export {};" }],
+  ["Registry release admission to other domain", { "apps/worker/src/registry/release-cache.ts": 'import "../domain/release-config.js";', "apps/worker/src/domain/release-config.ts": "export {};" }],
+  ["Registry release admission to storage", { "apps/worker/src/registry/release-cache.ts": 'import "./storage.js";', "apps/worker/src/registry/storage.ts": "export {};" }],
+  ["Registry release admission to network adapter", { "apps/worker/src/registry/release-cache.ts": 'import "../distribution/release-io.js";', "apps/worker/src/distribution/release-io.ts": "export {};" }],
+  ["Registry release admission ambient clock", { "apps/worker/src/registry/release-cache.ts": 'export const update = () => Date.now();' }],
+  ["Registry release admission network", { "apps/worker/src/registry/release-cache.mts": 'export const update = () => fetch("https://example.invalid");' }],
+  ["Registry release admission cannot yield", { "apps/worker/src/registry/release-cache.ts": 'export async function update() {}' }],
   ["history display defaults own SQL", { "apps/worker/src/job-history-settings.ts": 'export function initialize(sql: SqlStorage) { sql.exec("SELECT 1"); }' }],
   ["history display defaults own network", { "apps/worker/src/job-history-settings.mts": 'export const load = () => fetch("https://example.invalid");' }],
   ["application to concrete platform adapter", { "apps/worker/src/application/query.ts": 'import "../platform/control-plane.js";', "apps/worker/src/platform/control-plane.ts": "export {};" }],
@@ -193,6 +200,16 @@ test("request composition injects platform operations into application ports", a
     "apps/worker/src/index.ts": 'import { check } from "./application/auth-source.mjs"; import { port } from "./platform/source.js"; export const result = () => check(port);',
   });
   const result = f.run(); assert.equal(result.status, 0, result.stderr);
+});
+
+test("Registry release admission shares only the reviewed pure release rules", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/registry.ts": 'import { update } from "./registry/release-cache.js"; export const result = update(1);',
+    "apps/worker/src/registry/release-cache.ts": 'import { validate } from "../domain/release-selection.js"; import type { Record } from "../contracts/runner-release.js"; export const update = (value: number): Record => validate(value);',
+    "apps/worker/src/domain/release-selection.ts": 'export const validate = (value: number) => ({ value });',
+    "apps/worker/src/contracts/runner-release.ts": 'export type Record = { value: number };',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
 });
 
 test("architecture rejects type-only cycles without confusing them with runtime cycles", async t => {

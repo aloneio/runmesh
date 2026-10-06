@@ -1,5 +1,5 @@
 import type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler, CachedDevelopmentReleaseRecord, DevelopmentReleaseFailure } from "../contracts/runner-release.js";
-import { DEV_RELEASE_CACHE_MS, DEV_RELEASE_STALE_MS, DEV_RELEASE_REFRESH_BUDGET_MS, developmentDescriptor, usableCacheAge, isDevelopment, unavailableDevelopmentRelease, releaseGateDiagnostics, runnerReleaseDescriptor } from "../domain/release-selection.js";
+import { DEV_RELEASE_CACHE_MS, DEV_RELEASE_STALE_MS, DEV_RELEASE_REFRESH_BUDGET_MS, compareDevelopmentReleaseVersions, developmentDescriptor, usableCacheAge, isDevelopment, unavailableDevelopmentRelease, releaseGateDiagnostics, runnerReleaseDescriptor } from "../domain/release-selection.js";
 import { DEV_RELEASE_DISCOVERY_URL, releaseFetch, boundedJson, readDevelopmentReleaseCache, writeDevelopmentReleaseCache, DevelopmentReleaseError, developmentReleaseFailure } from "./release-io.js";
 
 export type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, ReleaseGateDiagnostics, DevelopmentReleaseCache, DevelopmentReleaseVerifier, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler } from "../contracts/runner-release.js";
@@ -12,9 +12,11 @@ const FAILED_REFRESH_RECOVERY_MS = 1_000;
 type VerifiedReleaseRecord = Pick<CachedDevelopmentReleaseRecord, "verified_at_ms" | "descriptor">;
 
 function newestUsableRelease(now: number, ...records: (VerifiedReleaseRecord | undefined)[]): VerifiedReleaseRecord | undefined {
-  // Match Registry's verification-time ordering; the first record wins ties.
-  return records.sort((a, b) => (b?.verified_at_ms ?? 0) - (a?.verified_at_ms ?? 0))
-    .find(value => value !== undefined && usableCacheAge(value.verified_at_ms, now, DEV_RELEASE_STALE_MS));
+  // Match Registry's version ordering, then verification time for the same
+  // version. Filtering first prevents a future record from hiding valid work.
+  return records.filter((value): value is VerifiedReleaseRecord => value !== undefined && usableCacheAge(value.verified_at_ms, now, DEV_RELEASE_STALE_MS))
+    .sort((a, b) => compareDevelopmentReleaseVersions(b.descriptor.package_version, a.descriptor.package_version)
+      || (a.descriptor.package_version === b.descriptor.package_version ? b.verified_at_ms - a.verified_at_ms : 0))[0];
 }
 
 /** Each caller owns its timer; only verified values cross request boundaries. */
@@ -36,7 +38,8 @@ async function waitForDevelopmentRelease(dependencies: DevelopmentReleaseDepende
 }
 
 /** One invocation owns its refresh I/O. The injected runtime owns values only. */
-async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number): Promise<RunnerReleaseDescriptor> {
+async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number, cached: CachedDevelopmentReleaseRecord | undefined,
+  onDiscoveryFallback: (failure: DevelopmentReleaseFailure) => void): Promise<RunnerReleaseDescriptor> {
   const { runtime, cache, now, verify } = dependencies;
   const deadline = AbortSignal.timeout(DEV_RELEASE_REFRESH_BUDGET_MS);
   const boundedFetch: typeof fetch = (input, init) => {
@@ -44,14 +47,29 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
     const signal = init?.signal == null ? deadline : AbortSignal.any([deadline, init.signal]);
     return dependencies.fetch(input, { ...init, signal });
   };
-  const response = await releaseFetch(DEV_RELEASE_DISCOVERY_URL, {
-    method: "GET", redirect: "manual", cache: "no-store", credentials: "omit",
-    headers: { accept: "application/vnd.github+json", "user-agent": "runmeshdev-release-discovery/1", "x-github-api-version": "2026-03-10" },
-  }, boundedFetch);
-  const releases = await boundedJson(response);
-  if (!Array.isArray(releases)) throw new DevelopmentReleaseError("development release discovery response is invalid", { phase: "discovery", reason: "invalid_response" });
-  const candidates = releases.flatMap(value => { const descriptor = developmentDescriptor(value); return descriptor === undefined ? [] : [descriptor]; });
-  candidates.sort((a, b) => Number(b.package_version.split("-dev.")[1]) - Number(a.package_version.split("-dev.")[1]));
+  let candidates: RunnerReleaseDescriptor[], revalidating = false;
+  try {
+    const response = await releaseFetch(DEV_RELEASE_DISCOVERY_URL, {
+      method: "GET", redirect: "manual", cache: "no-store", credentials: "omit",
+      headers: { accept: "application/vnd.github+json", "user-agent": "runmeshdev-release-discovery/1", "x-github-api-version": "2026-03-10" },
+    }, boundedFetch);
+    const releases = await boundedJson(response);
+    if (!Array.isArray(releases)) throw new DevelopmentReleaseError("development release discovery response is invalid", { phase: "discovery", reason: "invalid_response" });
+    candidates = releases.flatMap(value => { const descriptor = developmentDescriptor(value); return descriptor === undefined ? [] : [descriptor]; });
+    candidates.sort((a, b) => compareDevelopmentReleaseVersions(b.package_version, a.package_version));
+  } catch (error) {
+    const failure = developmentReleaseFailure(error);
+    const transient = failure.phase === "discovery" && (failure.reason === "network_error" || failure.reason === "timeout"
+      || failure.reason === "http_error" && (failure.http_status === 403 || failure.http_status === 429 || Number(failure.http_status) >= 500));
+    // Expiry removes permission to serve this record, not its value as a
+    // previously discovered immutable tag. Only a complete new signature and
+    // manifest verification may restore it, within this same refresh budget.
+    if (!transient || cached === undefined || cached.verified_at_ms > now() || now() - cached.verified_at_ms < DEV_RELEASE_STALE_MS) throw error;
+    deadline.throwIfAborted();
+    candidates = [cached.descriptor];
+    revalidating = true;
+    onDiscoveryFallback(failure);
+  }
   let candidateFailure: DevelopmentReleaseFailure | undefined;
   for (const descriptor of candidates) {
     try {
@@ -60,16 +78,37 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
       const verifiedAtMs = now();
       // An older request finishing late must not roll back a newer committed
       // refresh or extend the newer descriptor's original verification time.
+      const current = runtime.cached;
       if (sequence < runtime.committed_sequence) {
-        const current = runtime.cached;
         if (current !== undefined && usableCacheAge(current.verified_at_ms, verifiedAtMs, DEV_RELEASE_STALE_MS)) return current.descriptor;
         return descriptor;
       }
+      if (current !== undefined && usableCacheAge(current.verified_at_ms, verifiedAtMs, DEV_RELEASE_STALE_MS)
+        && compareDevelopmentReleaseVersions(current.descriptor.package_version, descriptor.package_version) >= 0 && current.descriptor.package_version !== descriptor.package_version) return current.descriptor;
       runtime.committed_sequence = sequence;
       runtime.cached = { expires_at_ms: verifiedAtMs + DEV_RELEASE_CACHE_MS, verified_at_ms: verifiedAtMs, descriptor };
       runtime.next_refresh_at_ms = verifiedAtMs + DEV_RELEASE_CACHE_MS;
       await writeDevelopmentReleaseCache(cache, descriptor, verifiedAtMs);
-      return descriptor;
+      if (revalidating) {
+        // Registry rejects an older version even if its re-verification finished
+        // later. Observe that winner before returning or retaining a local
+        // fallback that could otherwise hide another isolate's newer release.
+        // Signature/network work shares the original 20s deadline; this final
+        // cache convergence uses the same 1s bound as failed-refresh recovery,
+        // including when persistence outlasts that network deadline.
+        const persisted = await readDevelopmentReleaseCache(cache, FAILED_REFRESH_RECOVERY_MS);
+        const completedAtMs = now();
+        const winner = newestUsableRelease(completedAtMs, runtime.cached, persisted);
+        if (winner !== undefined && compareDevelopmentReleaseVersions(winner.descriptor.package_version, descriptor.package_version) > 0) {
+          runtime.cached = { expires_at_ms: Math.min(completedAtMs + DEV_RELEASE_CACHE_MS, winner.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: winner.verified_at_ms, descriptor: winner.descriptor };
+          return winner.descriptor;
+        }
+      }
+      // Persistence also yields. A newer refresh may commit while this write
+      // settles or while the bounded Registry readback is unavailable.
+      const completed = newestUsableRelease(now(), runtime.cached);
+      return completed !== undefined && compareDevelopmentReleaseVersions(completed.descriptor.package_version, descriptor.package_version) >= 0
+        ? completed.descriptor : descriptor;
     } catch (error) {
       const failure = developmentReleaseFailure(error, "verification");
       if (deadline.aborted) throw new DevelopmentReleaseError("no immutable signed development Runner release is available", { phase: failure.phase, reason: "timeout" });
@@ -106,7 +145,14 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
   // still owning it, immediately before the request-owned network budget starts.
   runtime.next_refresh_at_ms = clock() + DEV_RELEASE_REFRESH_BUDGET_MS;
   const refreshStartedAtMs = performance.now();
-  try { return await fetchDevelopmentRunnerRelease(dependencies, sequence); }
+  let discoveryFailure: DevelopmentReleaseFailure | undefined;
+  try {
+    const descriptor = await fetchDevelopmentRunnerRelease(dependencies, sequence, cached, failure => { discoveryFailure = failure; });
+    // A successfully reverified tag restores availability without erasing the
+    // discovery outage that required it. Diagnostics cannot change the result.
+    if (discoveryFailure !== undefined) { try { dependencies.onRefreshFailure?.({ ...discoveryFailure, recovery: "reverified" }); } catch { /* observations remain local */ } }
+    return descriptor;
+  }
   catch (error) {
     // Recovery belongs to the refresh: waiting requests must not observe a
     // terminal failure while its cross-isolate cache read is still pending.
@@ -127,7 +173,11 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
     }
     // Only the refresh owner reports after recovery; waiters and HTTP retries
     // share this outcome without producing duplicate diagnostics.
-    try { dependencies.onRefreshFailure?.(developmentReleaseFailure(error)); } catch { /* Diagnostics cannot change release availability. */ }
+    const actualFailure = developmentReleaseFailure(error);
+    const reportedFailure: DevelopmentReleaseFailure = discoveryFailure === undefined ? actualFailure : { ...discoveryFailure, recovery: "failed",
+      recovery_phase: actualFailure.phase, recovery_reason: actualFailure.reason,
+      ...(actualFailure.http_status === undefined ? {} : { recovery_http_status: actualFailure.http_status }) };
+    try { dependencies.onRefreshFailure?.(reportedFailure); } catch { /* Diagnostics cannot change release availability. */ }
     if (recovered !== undefined) {
       runtime.cached = { expires_at_ms: Math.min(completedAtMs + DEV_RELEASE_CACHE_MS, recovered.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: recovered.verified_at_ms, descriptor: recovered.descriptor };
       return recovered.descriptor;

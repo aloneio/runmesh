@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { internalHeaders, runnerTokenVerifier } from "../src/security.js";
+import { developmentDescriptor } from "../src/domain/release-selection.js";
 
 const secret = "test-internal-control-secret-not-for-production";
 const token = "synthetic-runner-token-for-outage-tests";
@@ -135,7 +136,10 @@ it("persists the verified development release descriptor behind the authenticate
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`dev-release-cache-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (instance) => {
     const path = "/distribution/dev-runner-release";
-    const descriptor = { channel: "dev", distributable: true, package_version: "0.1.4-dev.0" };
+    const version = "0.1.4-dev.0";
+    const descriptor = developmentDescriptor({ tag_name: `v${version}`, draft: false, prerelease: true, immutable: true, published_at: "2026-09-16T08:00:00Z",
+      assets: ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json", `runmesh-runner-${version}.tgz`].map(name => ({ name })) });
+    expect(descriptor).toBeDefined();
     const newer = { schema_version: 1, verified_at_ms: Date.now(), descriptor };
     const newerBody = JSON.stringify(newer);
     const write = new Request(`https://registry.internal${path}`, { method: "POST", body: newerBody, headers: await internalHeaders(secret, "POST", path, newerBody) });
@@ -147,10 +151,10 @@ it("persists the verified development release descriptor behind the authenticate
     expect(read.headers.get("cache-control")).toBe("no-store");
     expect(await read.json()).toEqual(newer);
 
-    const older = { ...newer, verified_at_ms: newer.verified_at_ms - 1_000, descriptor: { ...descriptor, package_version: "0.1.4-dev.99" } };
+    const older = { ...newer, verified_at_ms: newer.verified_at_ms - 1_000 };
     const olderBody = JSON.stringify(older);
     expect((await instance.fetch(new Request(`https://registry.internal${path}`, { method: "POST", body: olderBody, headers: await internalHeaders(secret, "POST", path, olderBody) }))).status).toBe(204);
-    const equalTimestamp = { ...newer, descriptor: { ...descriptor, package_version: "0.1.4-dev.98" } };
+    const equalTimestamp = { ...newer };
     const equalBody = JSON.stringify(equalTimestamp);
     expect((await instance.fetch(new Request(`https://registry.internal${path}`, { method: "POST", body: equalBody, headers: await internalHeaders(secret, "POST", path, equalBody) }))).status).toBe(204);
     const afterOlder = await instance.fetch(new Request(`https://registry.internal${path}`, { headers: await internalHeaders(secret, "GET", path, "") }));

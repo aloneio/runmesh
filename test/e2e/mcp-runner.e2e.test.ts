@@ -13,6 +13,7 @@ import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
 import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
+import { waitForWorker } from "../../scripts/worker-fixture.mjs";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -25,8 +26,7 @@ type CleanupJob = { readonly id: string | undefined; readonly client: McpClient 
 type CookieJar = Map<string, string>;
 type FormFields = Record<string, string | readonly string[]>;
 
-const workerPort = await freePort();
-const workerUrl = `http://127.0.0.1:${workerPort}`;
+let workerUrl = "";
 // Both fixtures launch Wrangler and build the Worker before serving requests.
 const WORKER_READINESS_TIMEOUT_MS = 60_000;
 const WORKER_FIXTURE_TIMEOUT_MS = 90_000;
@@ -139,14 +139,14 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await writeFile(join(workspace, "note.txt"), "hello from a real local runner\n");
     await writeFile(join(workspace, "utf8.txt"), "Hello你好😀éWorld", "utf8");
 
-    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc", "--port", String(workerPort), "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
-      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc", "--port", "0", "--inspector-port", "0", "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
+      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe", "ipc"], detached: true, ...childSpawnOptions,
     });
     workerLog = collectOutput(worker, true);
     worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
     worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
     worker.once("close", (code, signal) => recordWorkerEvent("close", code, signal));
-    await waitForWorker(workerUrl, WORKER_READINESS_TIMEOUT_MS, workerDiagnosticState);
+    workerUrl = await waitForWorker(worker, WORKER_READINESS_TIMEOUT_MS, workerDiagnosticState);
     const createdClients = await setupAdminAndClients();
     enrollmentCode = await createBrowserRunnerEnrollment();
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -1176,14 +1176,12 @@ describe.sequential("real local SQLite Runner sessions", () => {
     // This fixture needs SQLite history, independent of the main D1 suite.
     // Keep process startup outside the unchanged transport assertion budget.
     root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-sqlite-"));
-    const port = await freePort();
-    origin = `http://127.0.0.1:${port}`;
     worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc",
-      "--port", String(port), "--persist-to", root, "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
-      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+      "--port", "0", "--inspector-port", "0", "--persist-to", root, "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
+      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe", "ipc"], detached: true, ...childSpawnOptions,
     });
     const logs = collectOutput(worker);
-    await waitForWorker(origin, WORKER_READINESS_TIMEOUT_MS, logs);
+    origin = await waitForWorker(worker, WORKER_READINESS_TIMEOUT_MS, logs);
     const registration = await fetch(`${origin}/admin/runners`, { method: "POST", signal: AbortSignal.timeout(5_000),
       headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
       body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
@@ -1202,36 +1200,6 @@ describe.sequential("real local SQLite Runner sessions", () => {
       superseded_sync_acknowledged: true, same_credential_reconnected: true, new_session: true, recovery_echo: true });
   });
 });
-
-it("bounds Worker readiness when an accepted health request never responds", async () => {
-  const { createServer } = await import("node:http");
-  let disconnected = false;
-  const server = createServer((_request, response) => { response.on("close", () => { disconnected = true; }); });
-  await new Promise<void>(resolveListen => server.listen(0, "127.0.0.1", resolveListen));
-  try {
-    const address = server.address();
-    if (address === null || typeof address === "string") throw new Error("fixture did not bind a TCP port");
-    await expect(waitForWorker(`http://127.0.0.1:${address.port}`, 1_000, () => "health probe stalled"))
-      .rejects.toThrow("timed out after 1000ms\nhealth probe stalled");
-    await waitFor(() => disconnected, 1_000);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));
-  }
-}, 5_000);
-
-async function freePort(): Promise<number> {
-  const net = await import("node:net");
-  return new Promise<number>((resolvePort, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") { server.close(); reject(new Error("could not allocate a TCP port")); return; }
-      server.close((error) => error === undefined ? resolvePort(address.port) : reject(error));
-    });
-  });
-}
 
 async function readMcp(response: Response): Promise<JsonRpc> {
   const text = await response.text();
@@ -1276,16 +1244,6 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeout: num
   while (Date.now() < end) { if (await predicate()) return; await delay(100); }
   const output = detail?.() ?? "";
   throw new Error(`timed out after ${timeout}ms${output ? `\n${output}` : ""}`);
-}
-async function waitForWorker(origin: string, timeout: number, detail: () => string): Promise<void> {
-  // An accepted connection can stall before headers; the polling loop alone
-  // cannot enforce its deadline while awaiting that request.
-  const signal = AbortSignal.timeout(timeout);
-  await waitFor(async () => {
-    const response = await fetch(`${origin}/health`, { signal }).catch(() => undefined);
-    await response?.body?.cancel();
-    return response?.ok === true;
-  }, timeout, detail);
 }
 async function waitForExit(child: ChildProcess, timeout: number, detail: () => string): Promise<void> {
   await Promise.race([
