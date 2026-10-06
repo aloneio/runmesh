@@ -22,10 +22,10 @@ Runmesh 会验证发行包，暂停向这台 Runner 发送新请求，并等待�
 
 ## 为已有计算机启用远程版本管理
 
-新的受管安装会一并安装版本管理器。它独立于选定的 Runner 程序包运行，因此切换到旧版后仍可再次远程升级。
+[当前开发版 Runner](dev-runner-prereleases.zh-CN.md)为标准受管安装提供版本管理器。它独立于选定的 Runner 程序包运行，因此切换到旧版后仍可再次远程升级。
 
 切换版本后，`restart`、`install`、`uninstall` 等服务管理命令也继续使用独立管理器。服务卸载和完整清理步骤见 [Runner 卸载指南](runner-uninstall.md)。
 
-在此功能推出前安装的计算机，先按[已有实例升级指南](upgrading.zh-CN.md)更新程序包，再用更新后的程序和原配置执行 `install`。系统服务使用管理员会话；用户级服务使用所属账号，并添加 `--user`。这一步会安装版本管理器，同时保留注册信息和 Runner 的服务身份。
+旧安装首次启用时，先部署上述已经验签的开发包，保留原配置和服务布局。用更新后的服务程序运行 `--help`，确认包含 `maintenance-agent`，再使用原配置执行 `install`。系统服务使用管理员会话；用户级服务使用所属账号，并添加 `--user`。确认安装结果显示 `remote_version_management: available`。
 
 标准受管安装使用 `current` 链接和 `versions` 目录。自定义部署路径的服务，按原来的程序包部署流程更新。

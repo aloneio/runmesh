@@ -12,6 +12,8 @@
 
 保留 MCP、Skill 绑定，以及现有 Registry 和 Runner 命名空间。资源标识和已有的两个密钥保持不变；OAuth 加密使用 `INTERNAL_CONTROL_SECRET`。先部署正式版本，核对运行中的 Worker，再更新 Runner。下文的受管系统服务流程用于将 Runner 0.1.6 更新到 0.1.7。
 
+首次启用远程版本管理时，选择[已经验签的开发版 Runner](dev-runner-prereleases.zh-CN.md)，确认其 `--help` 包含 `maintenance-agent`，再按[管理器启用步骤](runner-versions.zh-CN.md#为已有计算机启用远程版本管理)操作。启用成功时，安装结果显示 `remote_version_management: available`。下文手工迁移示例使用的已发布 0.1.7 包早于此功能。
+
 分别安排以下更新：
 
 | 组件 | 更新步骤 |
