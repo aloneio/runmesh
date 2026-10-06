@@ -2,36 +2,61 @@
 // events; the retained failure record contains fixed labels and bounded counts.
 const phases = ["not_started", "headers_pending", "body_pending", "complete", "failed"];
 const locales = ["en", "zh-CN"];
+const requestTypes = ["fetch", "document", "other"];
 const marker = "RUNMESH_E2E_UI_NAVIGATION_DIAGNOSTIC=";
 const elapsedLimit = 600000, exceptionLimit = 1000;
 const statusCode = value => Number.isInteger(value) && value >= 100 && value <= 599;
 const count = (value, limit) => Number.isInteger(value) && value >= 0 && value <= limit;
+const requestType = value => value === "Fetch" ? "fetch" : value === "Document" ? "document" : "other";
 
 export function createUiNavigationDiagnostic({ now = Date.now } = {}) {
   let active;
   return {
     begin(url, locale, sessionId) {
-      active = { url, locale, sessionId, started: now(), phase: "not_started", status: null, exceptions: 0 };
+      active = { url, locale, sessionId, started: now(), exceptions: 0, requests: 0, redirects: 0, navigationErrors: 0 };
     },
     observe(message) {
       if (!active || message.sessionId !== active.sessionId) return;
       const event = message.params;
       if (message.method === "Runtime.exceptionThrown") active.exceptions = Math.min(exceptionLimit, active.exceptions + 1);
-      if (message.method === "Network.requestWillBeSent" && event?.request?.url === active.url) {
-        active.requestId = event.requestId; active.phase = "headers_pending"; active.status = null;
-      } else if (active.requestId !== undefined && event?.requestId === active.requestId) {
+      if (message.method === "Runtime.consoleAPICalled" && event?.type === "error"
+        && event.args?.[0]?.type === "string" && event.args[0].value === "Runmesh navigation failed") {
+        active.navigationErrors = Math.min(exceptionLimit, active.navigationErrors + 1);
+      }
+      // Redirect hops keep their request ID. Retain only the first and current
+      // directly targeted chains, so a fallback cannot erase the first result.
+      if (message.method === "Network.requestWillBeSent" && !event?.redirectResponse && event?.request?.url === active.url
+        && typeof event.requestId === "string" && event.requestId !== active.first?.id && event.requestId !== active.current?.id) {
+        active.current = { id: event.requestId, type: requestType(event.type), phase: "headers_pending", status: null };
+        active.first ??= { ...active.current };
+        active.requests = Math.min(exceptionLimit, active.requests + 1);
+      }
+      const matching = [active.first, active.current].filter(request => request !== undefined && request.id === event?.requestId);
+      if (message.method === "Network.requestWillBeSent" && event?.redirectResponse && matching.length) {
+        active.redirects = Math.min(exceptionLimit, active.redirects + 1);
+        // CDP supplies a redirect response here, without responseReceived.
+        if (active.first?.id === event.requestId && active.first.status === null && statusCode(event.redirectResponse.status)) active.first.status = event.redirectResponse.status;
+        for (const request of matching) request.phase = "headers_pending";
+        if (active.current?.id === event.requestId) active.current.status = null;
+      }
+      for (const request of matching) {
         if (message.method === "Network.responseReceived") {
-          active.phase = "body_pending"; active.status = statusCode(event.response?.status) ? event.response.status : null;
-        } else if (message.method === "Network.loadingFinished") active.phase = "complete";
-        else if (message.method === "Network.loadingFailed") active.phase = "failed";
+          request.phase = "body_pending";
+          // first_status is the first observed HTTP status, including redirects;
+          // status remains the current chain's final response status.
+          if (request === active.current || request.status === null) request.status = statusCode(event.response?.status) ? event.response.status : null;
+        } else if (message.method === "Network.loadingFinished") request.phase = "complete";
+        else if (message.method === "Network.loadingFailed") request.phase = "failed";
       }
     },
     diagnostic() {
       if (!active || !locales.includes(active.locale)) return undefined;
       const elapsed = now() - active.started;
-      return { locale: active.locale, phase: active.phase, status: active.status,
+      return { locale: active.locale, phase: active.current?.phase ?? "not_started", status: active.current?.status ?? null,
         elapsed_ms: Number.isFinite(elapsed) ? Math.min(elapsedLimit, Math.max(0, Math.floor(elapsed))) : elapsedLimit,
-        exception_count: active.exceptions };
+        exception_count: active.exceptions, request_count: active.requests, request_type: active.current?.type ?? null,
+        first_phase: active.first?.phase ?? "not_started", first_status: active.first?.status ?? null,
+        redirect_count: active.redirects, navigation_error_count: active.navigationErrors };
     },
   };
 }
@@ -51,13 +76,21 @@ export function withUiNavigationDiagnostic(error, diagnostic) {
 
 export function uiNavigationFailureDiagnostic(text) {
   if (typeof text !== "string") return undefined;
-  const raw = /^RUNMESH_E2E_UI_NAVIGATION_DIAGNOSTIC=(\{[^\r\n]{1,256}\})\r?$/mu.exec(text)?.[1];
+  const raw = /^RUNMESH_E2E_UI_NAVIGATION_DIAGNOSTIC=(\{[^\r\n]{1,512}\})\r?$/mu.exec(text)?.[1];
   try {
     const value = JSON.parse(raw);
     if (!value || typeof value !== "object" || Array.isArray(value) || !locales.includes(value.locale)
       || !phases.includes(value.phase) || !(value.status === null || statusCode(value.status))
       || !count(value.elapsed_ms, elapsedLimit) || !count(value.exception_count, exceptionLimit)) return undefined;
-    return { locale: value.locale, phase: value.phase, status: value.status,
+    const diagnostic = { locale: value.locale, phase: value.phase, status: value.status,
       elapsed_ms: value.elapsed_ms, exception_count: value.exception_count };
+    // Preserve earlier artifacts while requiring complete, validated new fields.
+    const extended = ["request_count", "request_type", "first_phase", "first_status", "redirect_count", "navigation_error_count"];
+    if (extended.every(key => value[key] === undefined)) return diagnostic;
+    if (!count(value.request_count, exceptionLimit) || !(value.request_type === null || requestTypes.includes(value.request_type))
+      || !phases.includes(value.first_phase) || !(value.first_status === null || statusCode(value.first_status))
+      || !count(value.redirect_count, exceptionLimit) || !count(value.navigation_error_count, exceptionLimit)) return undefined;
+    return { ...diagnostic, request_count: value.request_count, request_type: value.request_type,
+      first_phase: value.first_phase, first_status: value.first_status, redirect_count: value.redirect_count, navigation_error_count: value.navigation_error_count };
   } catch { return undefined; }
 }

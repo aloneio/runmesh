@@ -322,9 +322,10 @@ test("CI04 navigation failure diagnostics distinguish headers, body and complete
   event("Network.requestWillBeSent", { requestId: "other", request: { url } }, "other-tab");
   event("Network.requestWillBeSent", { requestId: "asset", request: { url: url + "-asset" } });
   assert.equal(observed.diagnostic().phase, "not_started");
-  event("Network.requestWillBeSent", { requestId: "document", request: { url } });
+  event("Network.requestWillBeSent", { requestId: "document", type: "Document", request: { url } });
   now = 300;
-  assert.deepEqual(observed.diagnostic(), { locale: "en", phase: "headers_pending", status: null, elapsed_ms: 200, exception_count: 0 });
+  assert.deepEqual(observed.diagnostic(), { locale: "en", phase: "headers_pending", status: null, elapsed_ms: 200, exception_count: 0,
+    request_count: 1, request_type: "document", first_phase: "headers_pending", first_status: null, redirect_count: 0, navigation_error_count: 0 });
   event("Network.responseReceived", { requestId: "asset", response: { status: 404 } });
   assert.equal(observed.diagnostic().status, null);
   event("Network.responseReceived", { requestId: "document", response: { status: 200, headers: { Cookie: "private" } } });
@@ -332,7 +333,8 @@ test("CI04 navigation failure diagnostics distinguish headers, body and complete
   event("Network.loadingFinished", { requestId: "document" });
   event("Runtime.exceptionThrown", { exceptionDetails: { text: "private exception" } });
   const complete = observed.diagnostic();
-  assert.deepEqual(complete, { locale: "en", phase: "complete", status: 200, elapsed_ms: 200, exception_count: 1 });
+  assert.deepEqual(complete, { locale: "en", phase: "complete", status: 200, elapsed_ms: 200, exception_count: 1,
+    request_count: 1, request_type: "document", first_phase: "complete", first_status: 200, redirect_count: 0, navigation_error_count: 0 });
   assert.doesNotMatch(JSON.stringify(complete), /secret|private|Cookie|requestId|127\.0\.0\.1/);
 });
 
@@ -347,16 +349,65 @@ test("CI04 navigation diagnostics reset between locales and follow the latest ma
   now = 50;
   observed.begin(url, "zh-CN", "tab");
   event("Network.loadingFinished", { requestId: "old" });
-  assert.deepEqual(observed.diagnostic(), { locale: "zh-CN", phase: "not_started", status: null, elapsed_ms: 0, exception_count: 0 });
-  event("Network.requestWillBeSent", { requestId: "fetch", request: { url } });
+  assert.deepEqual(observed.diagnostic(), { locale: "zh-CN", phase: "not_started", status: null, elapsed_ms: 0, exception_count: 0,
+    request_count: 0, request_type: null, first_phase: "not_started", first_status: null, redirect_count: 0, navigation_error_count: 0 });
+  event("Network.requestWillBeSent", { requestId: "fetch", type: "Fetch", request: { url } });
   event("Network.responseReceived", { requestId: "fetch", response: { status: 200 } });
-  event("Network.requestWillBeSent", { requestId: "reload", request: { url } });
+  event("Runtime.consoleAPICalled", { type: "error", args: [{ type: "string", value: "unrelated private error" }] });
+  event("Runtime.consoleAPICalled", { type: "error", args: [{ type: "string", value: "Runmesh navigation failed" }, { description: "private cause" }] });
+  event("Network.requestWillBeSent", { requestId: "reload", type: "Document", request: { url } });
   event("Network.loadingFinished", { requestId: "fetch" });
   assert.equal(observed.diagnostic().phase, "headers_pending");
   event("Network.loadingFailed", { requestId: "reload", errorText: "private failure" });
   now = 900000;
   for (let i = 0; i < 1005; i++) event("Runtime.exceptionThrown", {});
-  assert.deepEqual(observed.diagnostic(), { locale: "zh-CN", phase: "failed", status: null, elapsed_ms: 600000, exception_count: 1000 });
+  const diagnostic = observed.diagnostic();
+  assert.deepEqual(diagnostic, { locale: "zh-CN", phase: "failed", status: null, elapsed_ms: 600000, exception_count: 1000,
+    request_count: 2, request_type: "document", first_phase: "complete", first_status: 200, redirect_count: 0, navigation_error_count: 1 });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /private|cause|requestId|127\.0\.0\.1/);
+});
+
+test("CI04 navigation diagnostics keep the first failed fetch while bounding replacement requests and caught errors", () => {
+  const observed = createUiNavigationDiagnostic();
+  const url = "http://127.0.0.1:1234/admin/clients";
+  const event = (method, params) => observed.observe({ method, params, sessionId: "tab" });
+  observed.begin(url, "en", "tab");
+  event("Network.requestWillBeSent", { requestId: "first", type: "Fetch", request: { url } });
+  event("Network.loadingFailed", { requestId: "first", canceled: true, errorText: "private" });
+  for (let i = 0; i < 1005; i++) {
+    event("Network.requestWillBeSent", { requestId: String(i), type: "private", request: { url } });
+    event("Runtime.consoleAPICalled", { type: "error", args: [{ type: "string", value: "Runmesh navigation failed" }, { value: "private" }] });
+  }
+  const diagnostic = observed.diagnostic();
+  assert.equal(diagnostic.request_count, 1000); assert.equal(diagnostic.navigation_error_count, 1000);
+  assert.equal(diagnostic.request_type, "other"); assert.equal(diagnostic.first_phase, "failed"); assert.equal(diagnostic.first_status, null);
+  assert.equal(diagnostic.phase, "headers_pending"); assert.equal(diagnostic.exception_count, 0);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /private|canceled|requestId|127\.0\.0\.1/);
+});
+
+test("CI04 navigation diagnostics count redirect hops without inventing another request", () => {
+  const observed = createUiNavigationDiagnostic({ now: () => 5000 });
+  const url = "http://127.0.0.1:1234/admin/clients";
+  const event = (method, params) => observed.observe({ method, params, sessionId: "tab" });
+  observed.begin(url, "en", "tab");
+  event("Network.requestWillBeSent", { requestId: "fetch", type: "Fetch", request: { url } });
+  event("Network.requestWillBeSent", { requestId: "fetch", type: "Fetch", request: { url: "http://127.0.0.1:1234/" }, redirectResponse: { status: 303, headers: { Cookie: "private" } } });
+  event("Network.requestWillBeSent", { requestId: "fetch", type: "Fetch", request: { url }, redirectResponse: { status: 302 } });
+  assert.equal(observed.diagnostic().request_count, 1); assert.equal(observed.diagnostic().redirect_count, 2);
+  event("Network.responseReceived", { requestId: "fetch", response: { status: 200 } });
+  event("Network.loadingFinished", { requestId: "fetch" });
+  assert.equal(observed.diagnostic().status, 200); assert.equal(observed.diagnostic().first_status, 303);
+  event("Network.requestWillBeSent", { requestId: "fallback", type: "Document", request: { url } });
+  const diagnostic = observed.diagnostic();
+  assert.deepEqual(diagnostic, { locale: "en", phase: "headers_pending", status: null, elapsed_ms: 0, exception_count: 0,
+    request_count: 2, request_type: "document", first_phase: "complete", first_status: 303, redirect_count: 2, navigation_error_count: 0 });
+  const failure = withUiNavigationDiagnostic(new Error("Browser navigation readiness timed out after 5000 ms\nRUNMESH_E2E_UI_NAVIGATION_STATE=navigation_busy (stage: clients_navigation)"), diagnostic);
+  const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [failure.message] }] }] });
+  assert.equal(summary.required_browser_status, "failed"); assert.equal(summary.failures[0].kind, "browser_navigation_timeout");
+  assert.deepEqual(summary.failures[0].navigation, diagnostic);
+  assert.doesNotMatch(JSON.stringify(summary), /private|Cookie|127\.0\.0\.1/);
+  for (let i = 0; i < 1005; i++) event("Network.requestWillBeSent", { requestId: "fallback", type: "Document", request: { url }, redirectResponse: { status: 302 } });
+  assert.equal(observed.diagnostic().redirect_count, 1000); assert.equal(observed.diagnostic().request_count, 2);
 });
 
 test("CI04 navigation diagnostic parser projects fixed fields and rejects malformed observations", () => {
@@ -367,6 +418,12 @@ test("CI04 navigation diagnostic parser projects fixed fields and rejects malfor
     assert.equal(uiNavigationFailureDiagnostic(uiNavigationDiagnosticMarker({ ...valid, ...changed })), undefined);
   }
   assert.equal(uiNavigationFailureDiagnostic("RUNMESH_E2E_UI_NAVIGATION_DIAGNOSTIC={broken}"), undefined);
+  const extended = { ...valid, request_count: 2, request_type: "document", first_phase: "complete", first_status: 200, redirect_count: 0, navigation_error_count: 1 };
+  assert.deepEqual(uiNavigationFailureDiagnostic(uiNavigationDiagnosticMarker({ ...extended, url: "private" })), extended);
+  for (const changed of [{ request_count: 1001 }, { request_count: -1 }, { request_count: 0.5 }, { request_type: "private" },
+    { first_phase: "private" }, { first_status: 600 }, { first_status: "200" }, { redirect_count: 1001 }, { redirect_count: -1 }, { navigation_error_count: 1001 }, { first_phase: undefined }]) {
+    assert.equal(uiNavigationFailureDiagnostic(uiNavigationDiagnosticMarker({ ...extended, ...changed })), undefined);
+  }
 });
 
 test("CI04 timed-out navigation retains its network phase through browser failure evidence", async () => {
@@ -374,7 +431,7 @@ test("CI04 timed-out navigation retains its network phase through browser failur
   const expected = { url: "http://127.0.0.1:1234/admin/clients", locale: "en" };
   const observed = createUiNavigationDiagnostic({ now: h.clock.now });
   observed.begin(expected.url, expected.locale, "tab");
-  observed.observe({ method: "Network.requestWillBeSent", sessionId: "tab", params: { requestId: "private-id", request: { url: expected.url } } });
+  observed.observe({ method: "Network.requestWillBeSent", sessionId: "tab", params: { requestId: "private-id", type: "Fetch", request: { url: expected.url } } });
   h.state.loading = true;
   let failed;
   try { await waitForUiNavigation(h.tab, expected, { ...h.clock, stage: "clients_navigation" }); }
@@ -386,7 +443,8 @@ test("CI04 timed-out navigation retains its network phase through browser failur
   const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [message] }] }] });
   assert.equal(summary.required_browser_status, "failed");
   assert.equal(summary.failures[0].navigation_state, "navigation_busy");
-  assert.deepEqual(summary.failures[0].navigation, { locale: "en", phase: "headers_pending", status: null, elapsed_ms: 5000, exception_count: 0 });
+  assert.deepEqual(summary.failures[0].navigation, { locale: "en", phase: "headers_pending", status: null, elapsed_ms: 5000, exception_count: 0,
+    request_count: 1, request_type: "fetch", first_phase: "headers_pending", first_status: null, redirect_count: 0, navigation_error_count: 0 });
   assert.doesNotMatch(JSON.stringify(summary), /private-id|127\.0\.0\.1/);
 });
 
