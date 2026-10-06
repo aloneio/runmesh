@@ -12,9 +12,9 @@ async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "ar08-package-wrapper-"));
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   await mkdir(join(directory, "scripts"));
-  for (const file of ["run-package-e2e.mjs", "test-evidence.mjs", "evidence-io.mjs"]) await writeFile(join(directory, "scripts", file), await readFile(join(root, "scripts", file)));
+  for (const file of ["run-package-e2e.mjs", "test-evidence.mjs", "evidence-io.mjs", "ci-report.mjs", "ci-supplement.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"]) await writeFile(join(directory, "scripts", file), await readFile(join(root, "scripts", file)));
   await writeFile(join(directory, "package.json"), '{"name":"synthetic-test","version":"1.0.0","private":true}\n');
-  await writeFile(join(directory, ".gitignore"), '.verification/\n');
+  await writeFile(join(directory, ".gitignore"), '.verification/\nci-results/\n');
   await writeFile(join(directory, "source.txt"), "original\n");
   await writeFile(join(directory, "npm-cli.js"), `
     const fs = require('node:fs'), path = require('node:path');
@@ -139,11 +139,15 @@ test("AR08 failed package tests retain bounded locations and classes without cop
   const f = await fixture(t), result = f.invoke("test_failure"), report = await f.report();
   assert.equal(result.status, 1);
   assert.deepEqual(report.diagnostics, { step: "test_process", kind: "process_exit", exit_code: 4,
-    test_report: { state: "parsed", failed_files: 1, failed_tests: 1, truncated: false,
+    test_report: { report_available: true, failed_files: 1, failed_tests: 1, skipped_tests: 0, truncated: false,
       failures: [{ file_index: 1, file: "test/e2e/mcp-runner.e2e.test.ts", scope: "test", test_index: 1, kind: "assertion_failed" }] } });
   assert.equal(report.state, "failed");
   assert.ok(result.stderr.includes('"kind":"assertion_failed"'));
   assert.ok(!`${result.stdout}${result.stderr}${JSON.stringify(report)}`.includes("private"));
+  const archived = JSON.parse(await readFile(join(f.directory, "ci-results/package-e2e.json"), "utf8"));
+  assert.equal(archived.state, "failed");
+  assert.deepEqual(archived.diagnostics, report.diagnostics);
+  assert.match(archived.source.commit, /^[a-f0-9]{40}$/u);
 });
 test("AR08 suite setup failures survive raw report cleanup as a fixed error class", async t => {
   const f = await fixture(t), result = f.invoke("suite_failure"), report = await f.report();

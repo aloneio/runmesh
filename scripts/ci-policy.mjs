@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { parseDocument } from "yaml";
-import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, UPLOAD_ACTION, GITLAB_EVENTS } from "./ci-contract.mjs";
+import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, githubReportUpload, gitlabReportArtifacts, GITLAB_EVENTS } from "./ci-contract.mjs";
 
 export function parseCi(source) {
   assert.ok(typeof source === "string" && Buffer.byteLength(source) <= 1048576, "CI YAML byte budget");
@@ -30,6 +30,17 @@ function requiredStep(steps, command, condition) {
   assert.equal(step.if, condition, `critical step condition changed: ${command}`);
   assert.ok(step["continue-on-error"] === undefined && step["working-directory"] === undefined, `nonblocking/relocated critical step: ${command}`);
 }
+function reportUpload(job, name) {
+  const uploads = job.steps.filter(step => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(uploads.length, name === "runner-lts" ? 0 : 1, `${name} must have exactly its reviewed report uploads`);
+  if (name === "runner-lts") return;
+  const expected = githubReportUpload(name), upload = uploads[0];
+  eq(upload.uses, expected.uses, `${name} report upload action changed`);
+  eq(upload.if, expected.if, `${name} must preserve reports after failed tests`);
+  eq(upload.with, expected.with, `${name} report upload must retain the exact safe scope and identity`);
+  assert.ok(job.steps.indexOf(upload) > job.steps.findLastIndex(step => step.run !== undefined), `${name} must upload reports after producing them`);
+  for (const key of Object.keys(upload)) assert.ok(["name", "if", "uses", "with"].includes(key), `${name} report upload cannot add execution overrides`);
+}
 
 /** Restricted, reviewed YAML grammar, not an interpreter for arbitrary shell
  * or a defense against an administrator rewriting the checker itself. */
@@ -47,6 +58,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   eq(order, CHECK_IDS.map(checkCommand), "mandatory checks reordered, removed, or duplicated");
   for (const name of AGGREGATE_JOBS) {
     hardJob(gh.jobs?.[name], name);
+    reportUpload(gh.jobs[name], name);
     assert.equal(gh.jobs[name].defaults, undefined, "critical jobs must not override the reviewed shell or working directory");
     for (const step of gh.jobs[name].steps ?? []) {
       if (step.uses?.startsWith("actions/checkout@")) assert.equal(step.with?.["persist-credentials"], false, "checkout must not retain credentials");
@@ -77,22 +89,14 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   eq(aggregate.steps[0].env, env, "aggregate must consume actual dependency results");
   assert.equal(aggregate.steps[0].run, Object.keys(env).map(key => `test "$${key}" = success`).join(" && "), "aggregate cannot mask failed dependencies");
   requiredStep(aggregate.steps, aggregate.steps[0].run);
-  const upload = verify.steps.find(s => s.uses === UPLOAD_ACTION);
-  assert.ok(upload, "safe result artifact upload missing");
-  eq(upload.with?.path, "ci-results/*.json\nci-results/*.xml\n", "artifact scope must remain a report-only whitelist");
-  assert.equal(upload.with?.["if-no-files-found"], "error");
-  assert.ok(upload.with?.["include-hidden-files"] !== true && upload.with?.overwrite !== true);
-
   hardJob(gl.verify, "GitLab verify"); hardJob(gl.browser, "GitLab browser");
   rules(gl.workflow?.rules, "GitLab workflow"); rules(gl.verify.rules, "GitLab verify"); rules(gl.browser.rules, "GitLab browser");
   for (const name of ["verify", "browser"]) {
     assert.ok(gl[name].extends === undefined && gl[name].when === undefined, "unreviewed inherited/manual " + name);
+    eq(gl[name].artifacts, gitlabReportArtifacts(), `GitLab ${name} must preserve only the reviewed reports after failure`);
   }
   eq(gl.verify.script, ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], "GitLab must execute all checks without shell masking");
   assert.equal(gl.verify.timeout, "30m");
-  eq(gl.verify.artifacts?.paths, ["ci-results/*.json", "ci-results/*.xml"], "GitLab artifact whitelist changed");
-  assert.equal(gl.verify.artifacts?.when, "always");
-  assert.equal(gl.verify.artifacts?.reports?.junit, "ci-results/*.xml");
   eq(gl.browser.script, BROWSER_COMMANDS, "GitLab browser preparation and tests must execute in order without shell masking");
   // Do not accept a shell comment, `|| true`, background process, or test-name
   // filter as equivalent to the complete aggregate command.

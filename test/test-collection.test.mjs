@@ -12,19 +12,27 @@ test("collection validates exact ownership, rejecting missing/duplicate/archived
   }
 });
 test("collection checks root and owning workspace with the same absolute config", () => {
-  const groups = ["protocol", "runner", "worker", "domain", "contracts", "transport"].map(id => ({ id, files: [id + "/x.test.ts"] }));
+  const groups = ["protocol", "runner", "worker", "domain", "contracts", "transport", "browser"].map(id => ({ id, files: [id + "/x.test.ts"] }));
   const calls = [];
   const invoke = (_node, args, options) => {
     const config = args.at(-1).split(sep).join("/");
     const key = config.includes("/runner/") ? "runner" : config.includes("/worker/") ? "worker" : config.includes("/protocol/") ? "protocol"
-      : config.includes("domain") ? "domain" : config.includes("contracts") ? "contracts" : "transport";
+      : config.includes("domain") ? "domain" : config.includes("contracts") ? "contracts" : config.includes("browser") ? "browser" : "transport";
     calls.push({ key, cwd: options.cwd, config });
     return { status: 0, stdout: JSON.stringify([{ file: join(root, key + "/x.test.ts") }]) };
   };
   const report = checkTestCollection(root, { groups }, invoke);
-  assert.equal(report.test_execution, false); assert.equal(calls.length, 9);
+  assert.equal(report.test_execution, false); assert.equal(calls.length, 10);
   assert.equal(report.lanes.worker.working_directories, 2);
   const runner = calls.filter(c => c.key === "runner");
   assert.equal(runner[0].config, runner[1].config); assert.notEqual(runner[0].cwd, runner[1].cwd);
   assert.throws(() => checkTestCollection(root, { groups }, () => ({ status: 1, stdout: "[]" })));
+});
+
+test("browser and transport collections retain separate complete ownership", () => {
+  const browser = "test/browser/admin-ui.browser.test.ts", transport = "test/e2e/mcp-runner.e2e.test.ts";
+  assert.equal(validateCollectedFiles(root, [browser], [{ file: join(root, browser) }]), 1);
+  assert.throws(() => validateCollectedFiles(root, [browser], [{ file: join(root, transport) }]));
+  assert.throws(() => validateCollectedFiles(root, [transport], [{ file: join(root, browser) }]));
+  assert.throws(() => validateCollectedFiles(root, [transport], [{ file: join(root, transport) }, { file: join(root, browser) }]));
 });

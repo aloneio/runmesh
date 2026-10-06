@@ -7,7 +7,7 @@ import { ROOT } from "./ci-report.mjs";
 /** Explicit projected summaries only. A new attempt replaces old success
  * before any external process; never recursively copy a report directory. */
 export async function writeSupplement(name, value, root = ROOT) {
-  assert.ok(["package-e2e", "browser-tests", "crossforge-evidence"].includes(name));
+  assert.ok(["package-e2e", "browser-tests", "transport-tests", "crossforge-evidence"].includes(name));
   const directory = join(root, "ci-results");
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const folder = await lstat(directory); assert.ok(folder.isDirectory() && !folder.isSymbolicLink());

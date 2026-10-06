@@ -197,13 +197,15 @@ export async function checkUiWithChromium(origin,cookie,output){
    assert.equal(navigation.errorText,undefined);assert.ok(navigation.loaderId);
    await waitForUiNavigation(tab,{url,locale,frameId:navigation.frameId,loaderId:navigation.loaderId},{stage});
    stage="dashboard_initial";
-   const first=await evaluate(`(()=>{const panel=[...document.querySelectorAll('.panel')].find(p=>/^(Your AI connections|你的 AI 连接|Recent jobs|最近任务)$/.test(p.querySelector('h2')?.textContent||''));if(!panel)throw Error('Missing dashboard activity panel');window.__uiPanel=panel;window.__uiMutations=0;new MutationObserver(m=>window.__uiMutations+=m.length).observe(panel,{childList:true,subtree:true,characterData:true,attributes:true});const r=panel.getBoundingClientRect();return {lang:document.documentElement.lang,heading:panel.querySelector('h2').textContent,text:panel.textContent,top:r.top,height:r.height,opacity:getComputedStyle(panel).opacity}})()`);
+   const first=await evaluate(`(()=>{const panel=[...document.querySelectorAll('.panel')].find(p=>/^(Recent jobs|最近任务)$/.test(p.querySelector('h2')?.textContent||''));if(!panel)throw Error('Missing dashboard activity panel');window.__uiPanel=panel;window.__uiMutations=0;new MutationObserver(m=>window.__uiMutations+=m.length).observe(panel,{childList:true,subtree:true,characterData:true,attributes:true});const r=panel.getBoundingClientRect();return {lang:document.documentElement.lang,heading:panel.querySelector('h2').textContent,text:panel.textContent,top:r.top,height:r.height,opacity:getComputedStyle(panel).opacity,jobRows:panel.querySelectorAll('.data-table tbody tr').length,jobLinks:panel.querySelectorAll('a[href*="/jobs/"]').length,runnerLinks:document.querySelectorAll('.panel a.card-row[href^="/admin/runners/"]').length}})()`);
+   assert.ok(first.jobRows>0&&first.jobLinks>0,"Dashboard must contain persisted Job rows and detail links");
+   assert.ok(first.runnerLinks>0,"Dashboard must contain a registered Runner");
    const requestsBefore=requests.length;await sleep(1000);stage="dashboard_idle";
    const second=await evaluate(`(()=>{const p=window.__uiPanel,r=p.getBoundingClientRect();return {lang:document.documentElement.lang,text:p.textContent,top:r.top,height:r.height,opacity:getComputedStyle(p).opacity,mutations:window.__uiMutations,overflow:document.documentElement.scrollWidth>innerWidth+1}})()`);
    assert.equal(first.lang,locale);assert.equal(first.text,second.text);assert.equal(first.top,second.top);assert.equal(first.height,second.height);assert.equal(second.opacity,"1");assert.equal(second.mutations,0);assert.equal(second.overflow,false);
    assert.equal(requests.slice(requestsBefore).filter(url=>new URL(url).pathname.startsWith("/admin")).length,0);
    if(output){await mkdir(output,{recursive:true});const image=await tab("Page.captureScreenshot",{format:"png"});await writeFile(join(output,`dashboard-${locale}.png`),Buffer.from(image.data,"base64"));}
-   reports.push({locale,idle_dom_mutations:second.mutations,idle_admin_requests:0,stable_panel_geometry:true});
+   reports.push({locale,idle_dom_mutations:second.mutations,idle_admin_requests:0,stable_panel_geometry:true,populated_job_rows:first.jobRows,populated_runners:first.runnerLinks});
    // Exercise mounted SPA navigation and an explicit refresh in the selected locale.
    stage="clients_navigation";
    navigationDiagnostic.begin(`${origin}/admin/clients`,locale,sessionId);

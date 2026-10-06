@@ -16,7 +16,7 @@
 | 构建与发行工具 | `npm run test:release-tools` | 构建、安装器、发行、架构和验证工具的行为 |
 | 源码传输链路 | `npm run test:e2e` | 真实本地 MCP → Worker → 源码 Runner |
 | 安装包传输链路 | `npm run test:package:e2e` | 新打包并独立安装的 Runner 通过相同本地链路场景 |
-| 浏览器操作 | 先运行 `npm run browser:install`，再运行 `npm run test:browser` | 浏览器连接本地 Worker 时的页面行为 |
+| 浏览器操作 | 先运行 `npm run browser:install`，再运行 `npm run test:browser` | Chromium 连接本地 Worker 的导航，以及 MCP、Skill 和 OAuth 页面操作 |
 | 已登记安全回归 | Linux 上从干净工作区运行 `npm run test:security` | 当前候选提交的安全回归结果和发行准入证据 |
 
 `npm run test:unit` 包含领域、契约、工作区和部分界面测试，`npm test` 另加源码 E2E。完整发行 CI 还会运行安装包、浏览器、平台、工具和安全检查。Worker 与浏览器测试命令使用本地测试环境，已部署实例按[升级指南](upgrading.zh-CN.md)验收。
@@ -25,7 +25,24 @@
 
 新增测试文件时，在 `test/verification-plan.json` 中指定唯一归属，并运行 `npm run check:verification` 检查遗漏、重复和 Node 测试的执行入口。
 
+传输测试使用 `test/e2e/`，浏览器测试使用 `test/browser/`。两类检查分别启动自己的临时 Worker；浏览器还运行独立的产品操作场景。测试收集检查会核对各自目录与清单，新增用例按所属模块加入对应入口。
+
 领域规则通过公开 API 验证，适配器集成放在对应测试套件中。[源码依赖检查](architecture-gates.md)定义允许的导入关系，其中包括确定性的 `node:crypto`。
+
+## 读取 CI 结果
+
+GitHub 在 `dev`、`main` 推送和拉取请求时自动验证。GitLab 在合并请求、`main` 推送、手动运行和计划任务时执行完整验证；需要检查开发分支时，在“新流水线”中选择 `dev`。这套安排将日常开发验证放在 GitHub，并在双端验收时保留 GitLab 的独立结果。
+
+| 作业 | 主要检查 |
+| --- | --- |
+| `verify` | 协议、领域、Worker、Runner、文档、架构，以及源码和安装包传输链路 |
+| `browser` | 真实 Chromium 导航、界面布局、MCP 连接、OAuth 和 Skill 操作 |
+| `Runner native checks` | Windows、Linux、macOS 的原生行为；Windows 另运行完整传输链路 |
+| `Runner LTS` | 已登记 Node LTS 版本上的 Runner 行为 |
+
+GitHub 的 `verify-all` 汇总全部必需作业。GitLab 验收同时检查 `verify` 和 `browser`，Worker 部署构建另列结果。
+
+从作业产物中的 `ci-results/` 读取 JSON 摘要和 JUnit 报告。传输结果包含源码身份、平台、测试计数，以及失败时的测试位置和错误分类；浏览器使用相同的诊断规则。GitHub 的综合、浏览器和 Windows 传输作业，以及 GitLab 的综合和浏览器作业，均在运行结束时保留报告 14 天。排查日志分页故障时，可结合报告中的字段状态、字节数和源码位置定位失败环节。
 
 ## 验证实际安装包
 

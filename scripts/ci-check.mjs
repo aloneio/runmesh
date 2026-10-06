@@ -14,7 +14,7 @@ assert.ok(process.argv.length === 3 && Object.hasOwn(CI_CHECKS, id), "Use one de
 const source = sourceObservation(), started = Date.now();
 if (id === "toolchain") {
   for (const name of CHECK_IDS) await writeGateReport(gateEvidence(name, "not_run", 0, null, source));
-  for (const name of ["package-e2e", "browser-tests", "crossforge-evidence"]) await writeSupplement(name, { schema_version: 1, state: "not_run", source });
+  for (const name of ["package-e2e", "browser-tests", "transport-tests", "crossforge-evidence"]) await writeSupplement(name, { schema_version: 1, state: "not_run", source });
 }
 await writeGateReport(gateEvidence(id, "running", 0, null, source));
 if (id === "installed_transport") await writeSupplement("package-e2e", { schema_version: 1, state: "not_run", source });

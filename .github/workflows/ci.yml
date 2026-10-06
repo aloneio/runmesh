@@ -105,6 +105,19 @@ jobs:
       - name: Verify Windows MCP transport and Runner recovery
         if: matrix.os == 'windows-latest'
         run: npm run test:e2e
+      - name: Preserve sanitized gate evidence
+        if: always() && matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-native-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ci-results/*.json
+            ci-results/*.xml
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: false
+          overwrite: false
+          archive: true
   runner-lts:
     name: Runner LTS (${{ matrix.node }})
     strategy:

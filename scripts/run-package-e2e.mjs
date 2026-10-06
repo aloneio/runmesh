@@ -6,7 +6,10 @@ import { lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join, isAbsolute, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { summarizeVitest, packageEvidence } from "./test-evidence.mjs";
+import { summarizeVitest, packageEvidence, testFailureEvidence, testErrorDiagnostic } from "./test-evidence.mjs";
+import { sourceObservation } from "./ci-report.mjs";
+import { writeSupplement } from "./ci-supplement.mjs";
+import { mcpWorkerFailureEvidence } from "./mcp-diagnostics.mjs";
 import { readBoundedEvidenceFile, readEvidenceJson } from "./evidence-io.mjs";
 
 const exec = promisify(execFile);
@@ -14,6 +17,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const reportDir = join(root, ".verification");
 const reportPath = join(reportDir, "package-e2e.json");
 const started = Date.now();
+let source = sourceObservation();
 let temp, rawReport, testResult, phase = "preflight", step = "preflight", reportReady = false;
 async function command(file, args, timeout = 120000, env = process.env) {
   return exec(file, args, { cwd: root, env, timeout, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
@@ -29,68 +33,12 @@ async function writeReport(value) {
   const path = join(reportDir, `${randomUUID()}.tmp`);
   try { await writeFile(path, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 }); await rename(path, reportPath); }
   finally { await rm(path, { force: true }); }
-}
-function failureKind(error) {
-  if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "output_limit_exceeded";
-  if (error?.killed === true) return "process_terminated";
-  if (Number.isSafeInteger(error?.code)) return "process_exit";
-  if (error?.code === "ERR_ASSERTION") return "validation_failed";
-  if (error?.code === "ENOENT") return "file_or_command_missing";
-  if (["EACCES", "EPERM"].includes(error?.code)) return "permission_denied";
-  if (["ENOSPC", "EMFILE", "ENFILE", "ENOMEM"].includes(error?.code)) return "resource_exhausted";
-  if (error instanceof SyntaxError || error?.code === "ERR_ENCODING_INVALID_ENCODED_DATA"
-    || error?.message === "invalid_or_changed_evidence_file") return "invalid_evidence";
-  return "operation_failed";
-}
-function testFailureKind(messages) {
-  // Match bounded input, then emit only fixed labels. Test titles, assertion
-  // values and stack traces can contain credentials even in a JSON reporter.
-  const text = (Array.isArray(messages) ? messages : [messages]).slice(0, 8)
-    .filter(value => typeof value === "string").map(value => value.slice(0, 16384)).join("\n");
-  if (/hook timed out|hook timeout/iu.test(text)) return "hook_timeout";
-  if (/test timed out|test timeout/iu.test(text)) return "test_timeout";
-  if (/ECONNREFUSED/u.test(text)) return "connection_refused";
-  if (/fetch failed/iu.test(text)) return "fetch_failed";
-  if (/timed? ?out|ETIMEDOUT/iu.test(text)) return "timeout";
-  if (/AssertionError|assertion failed/iu.test(text)) return "assertion_failed";
-  if (/EACCES|EPERM/u.test(text)) return "permission_denied";
-  return "unclassified";
-}
-function failedTestObservations(result) {
-  if (!Array.isArray(result?.testResults)) return { state: "invalid" };
-  const failures = [];
-  let failedFiles = 0, failedTests = 0, observed = 0, truncated = result.testResults.length > 256;
-  for (const [fileIndex, file] of result.testResults.slice(0, 256).entries()) {
-    if (!file || typeof file !== "object") { truncated = true; continue; }
-    const fileFailed = file.status === "failed";
-    if (fileFailed) failedFiles++;
-    const location = {
-      file_index: fileIndex + 1,
-      // Never print reporter paths, including apparently relative ones.
-      file: typeof file.name === "string" && file.name.replaceAll("\\", "/").split("/").at(-1) === "mcp-runner.e2e.test.ts"
-        ? "test/e2e/mcp-runner.e2e.test.ts" : "unrecognized_test_file",
-    };
-    let fileHasFailedTests = false;
-    const assertions = Array.isArray(file.assertionResults) ? file.assertionResults : [];
-    for (const [testIndex, item] of assertions.entries()) {
-      if (++observed > 10000) { truncated = true; break; }
-      if (item?.status !== "failed") continue;
-      failedTests++; fileHasFailedTests = true;
-      if (failures.length < 16) failures.push({ ...location, scope: "test", test_index: testIndex + 1, kind: testFailureKind(item.failureMessages) });
-      else truncated = true;
-    }
-    if (fileFailed && !fileHasFailedTests) {
-      if (failures.length < 16) failures.push({ ...location, scope: "suite", kind: testFailureKind(file.message) });
-      else truncated = true;
-    }
-    if (observed > 10000) break;
-  }
-  // These observations explain a failed attempt; they never satisfy the
-  // success counters or integrity gates in summarizeVitest/packageEvidence.
-  return { state: "parsed", failed_files: failedFiles, failed_tests: failedTests, failures, truncated };
+  await writeSupplement("package-e2e", { ...value, source });
 }
 async function failureDiagnostics(error) {
-  const diagnostics = { step, kind: failureKind(error) };
+  const diagnostics = { step, ...testErrorDiagnostic(error) };
+  const workerEvents = mcpWorkerFailureEvidence(error?.stderr);
+  if (workerEvents.length > 0) diagnostics.worker_events = workerEvents;
   if (Number.isSafeInteger(error?.code) && error.code >= 0 && error.code <= 0xffffffff) diagnostics.exit_code = error.code;
   if (["SIGTERM", "SIGKILL", "SIGINT", "SIGABRT", "SIGSEGV"].includes(error?.signal)) diagnostics.signal = error.signal;
   if (rawReport) {
@@ -102,7 +50,7 @@ async function failureDiagnostics(error) {
     }
     diagnostics.test_report ??= testResult === undefined
       ? { state: error?.code === "ENOENT" ? "missing" : "invalid" }
-      : failedTestObservations(testResult);
+      : testFailureEvidence(testResult);
   }
   return diagnostics;
 }
@@ -112,7 +60,7 @@ try {
   const directory = await lstat(reportDir); assert.ok(directory.isDirectory() && !directory.isSymbolicLink());
   reportReady = true;
   await writeReport({ schema_version: 1, evidence: "local_packaged_runner_e2e", state: "not_run", phase });
-  const source = await sourceIdentity();
+  source = await sourceIdentity();
   const npm = process.env.npm_execpath;
   assert.ok(npm && isAbsolute(npm) && basename(npm) === "npm-cli.js", "Run through the installed npm CLI");
   temp = await mkdtemp(join(tmpdir(), "runmesh-ar08-package-"));

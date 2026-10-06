@@ -7,13 +7,12 @@ import { join, resolve, parse } from "node:path";
 import { probeSessionConflict } from "../helpers/session-conflict-probe.js";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
 import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git/trust.js";
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
 import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
-import { waitForWorker } from "../../scripts/worker-fixture.mjs";
+import { spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../../scripts/worker-fixture.mjs";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -35,7 +34,6 @@ const runnerId = "e2e-runner";
 // platform-specific shell shims on Windows and can leave a detached wrapper
 // alive after the actual child exits, making the fixture hang during cleanup.
 const projectDirectory = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const wranglerCli = resolve(projectDirectory, "node_modules", "wrangler", "bin", "wrangler.js");
 // npm hoists workspace dependencies to the repository root on the hosted CI
 // runner, while pnpm keeps them under the owning workspace. Resolve both
 // layouts so the fixture exercises the same source CLI locally and in CI.
@@ -47,7 +45,6 @@ const packageEntry = process.env.RUNMESH_E2E_RUNNER_ENTRY;
 if (packageEntry !== undefined && (!existsSync(packageEntry) || !packageEntry.endsWith("runmesh.cjs"))) throw new Error("Invalid packaged Runner entrypoint");
 const runnerInvocation = packageEntry === undefined ? [tsxCli, "apps/runner/src/runmesh-entry.ts"] : [resolve(packageEntry)];
 const childSpawnOptions = process.platform === "win32" ? { windowsHide: true } : {};
-const trustedTaskkill = process.platform === "win32" ? resolveTrustedWindowsTool("taskkill", trustedWindowsRoot()) : undefined;
 const adminToken = "e2e-admin-token-0123456789abcdef";
 const adminPassword = "e2e-administrator-password";
 const workerEnv = {
@@ -139,9 +136,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await writeFile(join(workspace, "note.txt"), "hello from a real local runner\n");
     await writeFile(join(workspace, "utf8.txt"), "Hello你好😀éWorld", "utf8");
 
-    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc", "--port", "0", "--inspector-port", "0", "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
-      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe", "ipc"], detached: true, ...childSpawnOptions,
-    });
+    worker = spawnWorkerFixture({ cwd: projectDirectory, persistTo: workerPersist, vars: workerEnv });
     workerLog = collectOutput(worker, true);
     worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
     worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
@@ -631,12 +626,6 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       ], cleanupErrors, { timeoutMs: 8000, sharedBudget: true, fixture: "queue" });
     }
   });
-
-  it.skipIf(process.env.RUNMESH_BROWSER_CHECK !== "1" || process.platform !== "linux")("renders stable single-locale dashboard and navigation in Chromium", async () => {
-    const {checkUiWithChromium}=await import("../../scripts/ui-browser-check.mjs");
-    const {adminJar}=await adminCredentials();
-    await checkUiWithChromium(workerUrl,cookieHeader(adminJar),process.env.RUNMESH_BROWSER_OUTPUT);
-  },45000);
 
   it("GA-007 busy Runner returns a retryable busy error, not invalid parameters", async ({ onTestFinished }) => {
     const cleanupErrors: unknown[] = [];
@@ -1185,10 +1174,7 @@ describe.sequential("real local SQLite Runner sessions", () => {
     // This fixture needs SQLite history, independent of the main D1 suite.
     // Keep process startup outside the unchanged transport assertion budget.
     root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-sqlite-"));
-    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc",
-      "--port", "0", "--inspector-port", "0", "--persist-to", root, "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
-      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe", "ipc"], detached: true, ...childSpawnOptions,
-    });
+    worker = spawnWorkerFixture({ cwd: projectDirectory, persistTo: root, vars: { ...workerEnv, RUNMESH_JOB_HISTORY_BACKEND: "sqlite" } });
     const logs = collectOutput(worker);
     origin = await waitForWorker(worker, WORKER_READINESS_TIMEOUT_MS, logs);
     const registration = await fetch(`${origin}/admin/runners`, { method: "POST", signal: AbortSignal.timeout(5_000),
@@ -1247,7 +1233,6 @@ function cookieFrom(response: Response, name: string): string {
 }
 function cookieJar(entries: readonly (readonly [string, string])[]): CookieJar { return new Map(entries); }
 function cookieHeader(cookies: CookieJar): string { return [...cookies].map(([name, value]) => `${name}=${value}`).join("; "); }
-function workerVars(): string[] { return Object.entries(workerEnv).flatMap(([name, value]) => ["--var", `${name}:${value}`]); }
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeout: number, detail: (() => string) | undefined = undefined): Promise<void> {
   const end = Date.now() + timeout;
   while (Date.now() < end) { if (await predicate()) return; await delay(100); }
@@ -1280,21 +1265,5 @@ function diagnosticErrorCode(error: unknown): string {
 }
 function delay(ms: number): Promise<void> { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 async function stop(child: ChildProcess | undefined): Promise<void> {
-  if (child === undefined || child.exitCode !== null || child.killed) return;
-  if (child.pid !== undefined && process.platform === "win32") {
-    // npx.cmd launches a cmd.exe/Node process tree on Windows. Killing only
-    // the shell wrapper leaves Wrangler/Runner descendants alive and keeps
-    // the temp persistence directory locked, causing EBUSY in afterAll.
-    try {
-      const { spawnSync } = await import("node:child_process");
-      if (trustedTaskkill === undefined) throw new Error("trusted Windows taskkill path is unavailable");
-      spawnSync(trustedTaskkill, ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-    } catch { child.kill("SIGTERM"); }
-  } else {
-    try { if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
-  }
-  await Promise.race([new Promise<void>((resolveExit) => child.once("exit", () => resolveExit())), delay(5_000)]);
-  if (child.exitCode === null && !child.killed) {
-    try { if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
-  }
+  await stopFixtureProcess(child);
 }
