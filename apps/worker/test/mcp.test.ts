@@ -708,9 +708,9 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(runnerTableMarkup).not.toContain("data-execution-mode-form");
     expect(runnerTableMarkup).toContain('name="expected_execution_mode" value="dedicated_user"');
     const runnerTableHeader = /<table class="data-table runner-table">[\s\S]*?<thead>([\s\S]*?)<\/thead>/i.exec(runnersHtml)?.[1] ?? "";
-    expect(runnerTableHeader).toContain("<th>Display name</th>");
-    expect(runnerTableHeader).toContain("<th>Last seen</th>");
-    expect(runnerTableHeader).toContain("<th>Actions</th>");
+    expect(runnerTableHeader).toMatch(/<th\b[^>]*scope="col"[^>]*>Display name<\/th>/u);
+    expect(runnerTableHeader).toMatch(/<th\b[^>]*scope="col"[^>]*>Last seen<\/th>/u);
+    expect(runnerTableHeader).toMatch(/<th\b[^>]*scope="col"[^>]*>Actions<\/th>/u);
     expect(runnerTableHeader).not.toContain("Workspaces");
     expect(runnerTableHeader).not.toContain("Active jobs");
     expect(runnersHtml).toContain('class="row-actions-more"');
@@ -764,7 +764,15 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const scopesDetail = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { headers: { cookie: cookies(adminJar) } });
     expect(scopesDetail.status).toBe(200);
     const scopesDetailHtml = await scopesDetail.text();
-    expect(scopesDetailHtml).toContain("<!doctype html>"); expect(scopesDetailHtml).toContain('class="app-header"'); expect(scopesDetailHtml).toContain('class="active" aria-current="page" href="/admin/clients"'); expect(scopesDetailHtml).toContain("Base scopes"); expect(scopesDetailHtml).toContain("Permission levels:"); expect(scopesDetailHtml).not.toContain('data-theme-toggle'); expect(scopesDetailHtml).not.toContain('runmesh-theme'); expect(scopesDetailHtml).toContain('name="csrf_token"');
+    expect(scopesDetailHtml).toContain("<!doctype html>"); expect(scopesDetailHtml).toContain('class="app-header"'); expect(scopesDetailHtml).toContain('class="active" aria-current="page" href="/admin/clients"'); expect(scopesDetailHtml).toContain("Base scopes"); expect(scopesDetailHtml).not.toContain('data-theme-toggle'); expect(scopesDetailHtml).not.toContain('runmesh-theme'); expect(scopesDetailHtml).toContain('name="csrf_token"');
+    for (const [scope, description] of [
+      ["coding:read", "Inspect workspaces and read files."],
+      ["coding:write", "Apply approved edits."],
+      ["coding:exec", "Use Host shell and control Jobs."],
+    ]) {
+      expect(scopesDetailHtml).toContain('name="scopes" value="' + scope + '"');
+      expect(scopesDetailHtml).toContain(description);
+    }
     expect(scopesDetailHtml).toMatch(headerLogoSvgTag);
     expect(scopesDetailHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
     const detailScopeFormClass = /<form\b[^>]*class=["']([^"']*\bscope-editor-form\b[^"']*)["'][^>]*>/i.exec(scopesDetailHtml)?.[1] ?? "";
@@ -778,11 +786,11 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)/);
     expect(normalizedStyles).toMatch(/\.scope-editor-form\s*\{[^}]*grid-template-columns\s*:\s*1fr/);
     expect(normalizedStyles).toMatch(/\.enrollment-dialog\s+pre\s*\{[^}]*white-space\s*:\s*pre-wrap/);
-    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*1000px\)\s*and\s*\(min-width\s*:\s*801px\)/);
-    expect(normalizedStyles).toMatch(/\.header-actions\s*\{[^}]*overflow-x\s*:\s*auto/);
-    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*800px\)[\s\S]*?\.header-actions\s*\{[^}]*flex-wrap\s*:\s*wrap[^}]*overflow\s*:\s*visible/);
-    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.header-left\s*\{[^}]*flex-wrap\s*:\s*wrap/);
-    expect(normalizedStyles).toMatch(/\.header-left\s+\.control-nav\s*\{[^}]*width\s*:\s*100%[^}]*overflow-x\s*:\s*visible[^}]*flex-wrap\s*:\s*wrap/);
+    expect(normalizedStyles).toMatch(/\.ops-body\s*\{[^}]*padding-left\s*:\s*var\(--rail-width\)/);
+    expect(normalizedStyles).toMatch(/\.nav-rail\s*\{[^}]*position\s*:\s*fixed[^}]*overflow-y\s*:\s*auto/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*900px\)[\s\S]*?\.ops-body\s*\{[^}]*padding-left\s*:\s*0/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*900px\)[\s\S]*?\.nav-rail\s*\{[^}]*position\s*:\s*static[^}]*overflow\s*:\s*visible/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*900px\)[\s\S]*?\.control-nav\s*\{[^}]*flex-direction\s*:\s*row[^}]*flex-wrap\s*:\s*wrap/);
     expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.card-row-sub\s*\{[^}]*flex-wrap\s*:\s*wrap/);
     expect(normalizedStyles).toMatch(/\.client-runner-meta\s*\{[^}]*overflow-wrap\s*:\s*anywhere/);
     expect(normalizedStyles).not.toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-direction\s*:\s*column/);
