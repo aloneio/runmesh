@@ -35,6 +35,7 @@ import { start } from "./cli/supervisor.js";
 import { storeFor } from "./cli/input.js";
 import { uninstall } from "./cli/lifecycle.js";
 import { workspaceOptions } from "./profile.js";
+import { runMaintenanceAgent } from "./updates/agent.js";
 
 export async function runCli(argv: readonly string[], dependencies: CliDependencies = {}): Promise<void> {
   assertSupportedNodeVersion();
@@ -53,6 +54,10 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     // bare `return start(...)` escapes this try/catch and makes embedded
     // callers (including service wrappers) lose the actionable error detail.
     if (parsed.command === "start") { await start(parsed, store, error, dependencies); return; }
+    if (parsed.command === "maintenance-agent") {
+      await (dependencies.startMaintenanceAgent ?? runMaintenanceAgent)({ profilePath: requiredString(parsed, "profilePath"), installRoot: requiredString(parsed, "installRoot"), mode: parsed.values.user === true ? "user" : "system", ...(dependencies.servicePlatform === undefined ? {} : { platform: dependencies.servicePlatform }), ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
+      return;
+    }
     if (parsed.command === "enroll") {
       const server = requiredString(parsed, "server"); const code = await enrollmentCode(parsed, dependencies.readStdin);
       previousProfile = await store.load();

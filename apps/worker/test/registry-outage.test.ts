@@ -14,8 +14,9 @@ it.each(["heartbeat-update", "heartbeat-read", "session", "auth", "nonce"])("ret
     expect(instance.registerRunner(runner, verifier, now, undefined, "dedicated_user")).toBe(true);
     const fence = instance.getRunnerExecutionState(runner)!;
     state.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ? WHERE runner_id = ?", session, now, runner);
-    const identity = { epoch: fence.runner.connection_epoch, credential_version: fence.runner.credential_version, lifecycle_id: fence.lifecycle_id, session_id: session, now_ms: boundary === "heartbeat-update" ? now + 1 : now, require_online: true };
-    const action = boundary.startsWith("heartbeat") ? "heartbeat" : boundary === "session" ? "session" : "auth";
+    const identity = { epoch: fence.runner.connection_epoch, credential_version: fence.runner.credential_version, lifecycle_id: fence.lifecycle_id, session_id: session, now_ms: boundary === "heartbeat-update" ? now + 1 : now, require_online: true, state: "offline" };
+    // Authentication only reads current authority; disconnect is a mutation and still consumes a nonce.
+    const action = boundary.startsWith("heartbeat") ? "heartbeat" : boundary === "session" ? "session" : boundary === "nonce" ? "disconnect" : "auth";
     const path = `/runners/${runner}/${action}`;
     const body = JSON.stringify(action === "auth" ? { token } : identity);
     const request = async () => new Request(`https://registry.internal${path}`, { method: "POST", headers: await internalHeaders(secret, "POST", path, body), body });
@@ -28,6 +29,12 @@ it.each(["heartbeat-update", "heartbeat-read", "session", "auth", "nonce"])("ret
       return original(sql, ...args);
     });
     try {
+      if (boundary === "nonce") {
+        const authPath = `/runners/${runner}/auth`, authBody = JSON.stringify({ token });
+        const auth = await instance.fetch(new Request(`https://registry.internal${authPath}`, { method: "POST", headers: await internalHeaders(secret, "POST", authPath, authBody), body: authBody }));
+        expect(auth.status).toBe(200);
+        expect(fault.mock.calls.some(([sql]) => sql.startsWith("INSERT INTO internal_request_nonces"))).toBe(false);
+      }
       const response = await instance.fetch(await request());
       expect(response.status).toBe(503); expect(response.headers.get("retry-after")).toBe("30");
       const text = await response.text(); expect(text).toContain("control_plane_unavailable"); expect(text).not.toContain("PRIVATE_STORAGE_SENTINEL");

@@ -24,7 +24,7 @@ type RunnerDetailData = { state: "missing" } | { state: "unavailable" } | {
 export async function loadRunnerDetailData(env: WorkerEnv, runnerId: string, view: HistoryView): Promise<RunnerDetailData> {
   const path = "/runners/" + encodeURIComponent(runnerId);
   try {
-    const [runnerResponse, workspaces, policyVersions, enrollmentBody, settingsBody, jobs, mcpCalls] = await Promise.all([
+    const [runnerResponse, workspaces, policyVersions, enrollmentBody, settingsBody, jobs, mcpCalls, updateBody] = await Promise.all([
       registryGet(env, path),
       registryGet(env, "/auth" + path + "/managed-workspaces").then(response => registryArray(response, "workspaces")),
       registryGet(env, path + "/policy-versions").then(response => registryArray(response, "versions")),
@@ -33,6 +33,7 @@ export async function loadRunnerDetailData(env: WorkerEnv, runnerId: string, vie
       view.scope === "live" ? loadLiveJobs(runnerQueryPorts(env), runnerId, view.workspace!, view.limit)
         : view.scope === "jobs" || view.scope === "all" ? registryGet(env, path + "/jobs?limit=" + view.limit).then(response => registryArray(response, "jobs")) : undefined,
       view.scope === "audit" || view.scope === "all" ? registryGet(env, path + "/mcp-calls?limit=" + view.limit).then(response => registryArray(response, "calls")) : undefined,
+      registryGet(env, "/auth" + path + "/update").then(registryRecord),
     ]);
     const missing = runnerResponse.status === 404;
     const runner = await registryRecord(runnerResponse);
@@ -42,6 +43,6 @@ export async function loadRunnerDetailData(env: WorkerEnv, runnerId: string, vie
     const enrollment = record(enrollmentBody.enrollment);
     if (enrollmentBody.enrollment !== null && enrollment === undefined) return { state: "unavailable" };
     // The renderer derives validation diagnostics from workspaces if policy history is unavailable.
-    return { state: "loaded", runner: runnerDetail(runner), workspaces, policyVersions: policyVersions ?? [], enrollment, jobs, mcpCalls, settings: parseJobHistorySettings(settingsBody) };
+    return { state: "loaded", runner: { ...runnerDetail(runner), update_operation: updateBody?.operation ?? null, update_request_id: crypto.randomUUID() }, workspaces, policyVersions: policyVersions ?? [], enrollment, jobs, mcpCalls, settings: parseJobHistorySettings(settingsBody) };
   } catch { return { state: "unavailable" }; }
 }

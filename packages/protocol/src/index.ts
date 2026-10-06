@@ -432,3 +432,9 @@ export { ContextPruneOptionsSchema, ContextStorageReportSchema, ContextPruneRepo
 export { BoundBytePageMetadataSchema, BoundFileCursorSchema, BoundLogCursorSchema, isBoundCursor } from "./cursors.js";
 export { HISTORY_DAYS, HISTORY_INTERVALS, parseJobHistorySettings } from "./job-history.js";
 export type { JobHistorySettings } from "./job-history.js";
+export { exactRunnerRelease, FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, MAX_RELEASE_ASSET_BYTES, FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS } from "./release-trust.js";
+export { releaseManifestProblem, validReleaseTimestamp } from "./release-manifest.js";
+export type { ReleaseValidationTarget } from "./release-manifest.js";
+export { verifyRunnerReleaseSignature, RUNNER_RELEASE_TRUST } from "./release-signature.js";
+export type { ReleaseTrust } from "./release-signature.js";
+export * from "./runner-update.js";

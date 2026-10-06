@@ -17,7 +17,7 @@ Plan these updates separately:
 | Component | Update action |
 | --- | --- |
 | Worker | Deploy the reviewed control-plane code |
-| Runner | Install the verified package on each host using its applicable service-update procedure |
+| Runner | Choose a release in the control panel; see [Change a Runner version](runner-versions.md) |
 | MCP client | Refresh cached tool definitions after the Worker update |
 
 Capabilities depend on the complete combination. For example, Context `storage` and `prune` are available from Runner 0.1.4. If an action returns `runner_upgrade_required`, install a compatible Runner and reconnect it so the Worker can read its current capabilities.
@@ -34,7 +34,7 @@ Pause new submissions and finish or cancel queued/running Jobs before restarting
 
 1. **Rehearse the target combination.** Verify the signed release and exercise the Worker, Runner, service account and intended MCP client in a test environment.
 2. **Deploy the Worker.** Use the existing production `main` deployment path, preserving resource bindings and secret values. Replacing `RUNNER_TOKEN_PEPPER` invalidates enrolled Runner credentials.
-3. **Update each Runner.** Verify its archive against the trusted source keyring. Follow the user-service steps or standard managed system-service procedure below, keeping profile/state and the previous verified package available for recovery.
+3. **Update each Runner.** Use [remote version management](runner-versions.md) for a managed installation with a version manager. For its first package update or a custom deployment, follow the applicable procedure below, keeping profile/state and the previous verified package available for recovery.
 4. **Refresh the client catalog.** Reload the Runmesh connection and tool definitions in each MCP client.
 5. **Complete acceptance checks**, then resume ordinary workloads.
 

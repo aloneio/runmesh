@@ -395,8 +395,8 @@
           "distributable": true
         }
       ],
-      "sha256": "3afab9d73c58fd93a0d3d69a8fb08d048d7863edf8f303c97c7f4f483331570d",
-      "bytes": 14238,
+      "sha256": "28c90562dbf06051deeb22e8fbbd6313aa0a0b5cf3136d18b7ec69c394fc116a",
+      "bytes": 14469,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
@@ -739,5 +739,15 @@
     ],
     "reviewed_change": "Validate the fields consumed from successful profile, OAuth and Skill mutation receipts before continuing. Incomplete receipts use the existing refresh-required recovery without replaying writes. Independently rebuilding the source-base browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes; substituting only that bundle restores every prior output.",
     "non_script_markup_unchanged": true
+  },
+  "runner_remote_update_review": {
+    "reviewed_change": "Queue immutable signed version operations, accept exact development versions, display localized host-manager progress and preserve operation identity in the version form. Only runner-detail markup changes.",
+    "previous": [
+      {
+        "name": "runner-detail",
+        "previous_bytes": 14238,
+        "previous_sha256": "3afab9d73c58fd93a0d3d69a8fb08d048d7863edf8f303c97c7f4f483331570d"
+      }
+    ]
   }
 }

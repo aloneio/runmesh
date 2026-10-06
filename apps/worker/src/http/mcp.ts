@@ -172,6 +172,7 @@ export function requiresInternalControl(pathname: string): boolean {
     || pathname === "/login"
     || pathname === "/runner/enroll"
     || pathname === "/runner/connect"
+    || /^\/runner\/[^/]+\/update(?:\/|$)/.test(pathname)
     || pathname === "/admin"
     || pathname.startsWith("/admin/")
     || isMcpPath(pathname);

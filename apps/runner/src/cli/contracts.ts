@@ -8,6 +8,8 @@ import type { ServicePlatform } from "../service.js";
 import type { ServicePrivilegeState } from "../service.js";
 import type { ServiceProvisioner } from "../service.js";
 import { validateRunnerConfig } from "../config.js";
+import type { MaintenanceManagerInstaller } from "../updates/manager-install.js";
+import type { MaintenanceAgentOptions } from "../updates/agent.js";
 
 export interface CliDependencies {
   /** Injected cleanup executor; tests must never purge a host installation. */
@@ -19,6 +21,9 @@ export interface CliDependencies {
   readonly startRunner?: (config: Awaited<ReturnType<typeof validateRunnerConfig>>) => Promise<void>;
   /** Injectable host adapter; production uses the platform service manager. */
   readonly serviceManager?: ServiceManagerAdapter;
+  /** Independent manager installation is injectable alongside native services. */
+  readonly maintenanceManager?: MaintenanceManagerInstaller;
+  readonly startMaintenanceAgent?: (options: MaintenanceAgentOptions) => Promise<void>;
   /** Injectable service-account and Runmesh-owned directory/ACL setup. */
   readonly serviceProvisioner?: ServiceProvisioner;
   /** Injectable manifest I/O keeps service tests off the host filesystem. */
