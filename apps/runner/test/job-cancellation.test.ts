@@ -1,4 +1,5 @@
 import { ChildProcess } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { mkdtemp, realpath, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,6 +10,40 @@ import { nativeJobProcesses } from "../src/jobs/process.js";
 import { nativeJobFiles } from "../src/jobs/storage.js";
 
 type Observation = { alive: boolean; fingerprintMatches: boolean | null };
+
+it.each(["undelivered", "thrown"])("does not publish a stale running status when %s cancellation races a completed rollback", async failure => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "runmesh-cancel-rollback-")));
+  const child = new ChildProcess(); child.pid = 424242;
+  const events: JobEvent[] = [];
+  let cancelling = false, completed!: () => void;
+  const completion = new Promise<void>(resolve => { completed = resolve; });
+  const manager = new JobManager({ stateDir: join(root, "state"),
+    policy: new PathPolicy([{ workspaceId: "w", rootPath: root, readonly: false, shell: false }]),
+    onEvent(event) { events.push(event); if (event.type === "completed") completed(); },
+  }, {
+    processes: { ...nativeJobProcesses, spawn: (() => child) as typeof nativeJobProcesses.spawn,
+      fingerprintSync: () => "100", inspectProcess: async () => ({ alive: true, fingerprintMatches: true }),
+      terminateProcess: async () => { if (failure === "thrown") throw new Error("synthetic termination failure"); return false; },
+    },
+    persistence: { async write(record, enqueue) {
+      await enqueue();
+      if (record.status === "cancelling") cancelling = true;
+      if (record.status === "running" && cancelling) {
+        // The rollback has reached disk but its caller has not resumed. A
+        // child exit can commit and publish completion during that window.
+        child.exitCode = 0; child.emit("close", 0, null);
+        await completion;
+      }
+    } },
+  });
+  try {
+    await manager.initialize();
+    const job = await manager.start({ workspace_id: "w", command: [process.execPath, "-e", ""] });
+    await expect(manager.cancel(job.job_id)).resolves.toMatchObject({ status: "succeeded", exit_code: 0 });
+    expect(events.map(event => `${event.type}:${event.job.status}`)).toEqual(["started:running", "status:cancelling", "completed:succeeded"]);
+    expect(JSON.parse(await readFile(join(root, "state", "jobs", job.job_id, "meta.json"), "utf8"))).toMatchObject({ status: "succeeded", exit_code: 0 });
+  } finally { await manager.flushPersistence(); await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+});
 
 it.each(["lookup", "cancel", "list", "deduplicated-launch", "revoked-deduplicated-launch"])("retries a failed terminal write on %s without losing the witnessed process exit", async trigger => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "runmesh-terminal-write-")));
@@ -59,6 +94,7 @@ async function fixture(recovered: boolean) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "runmesh-cancel-observation-")));
   const state = join(root, "state");
   const child = new ChildProcess(); child.pid = 424242;
+  child.stdout = new PassThrough();
   let observation: Observation = { alive: true, fingerprintMatches: true };
   let inspect = async (): Promise<Observation> => observation;
   let onStatus = (_event: JobEvent): void => undefined;
@@ -72,7 +108,7 @@ async function fixture(recovered: boolean) {
     terminateProcess: vi.fn(async () => terminate()),
   };
   const options = {
-    stateDir: state, maxConcurrentJobs: 1, maxQueuedJobs: 0,
+    stateDir: state, maxConcurrentJobs: 1, maxQueuedJobs: 0, maxLogBytesPerJob: 1,
     policy: new PathPolicy([{ workspaceId: "w", rootPath: root, readonly: false, shell: false }]),
   };
   const observe = (event: JobEvent): void => { events.push(event); onStatus(event); };
@@ -88,6 +124,7 @@ async function fixture(recovered: boolean) {
     setInspector(value: () => Promise<Observation>) { inspect = value; },
     onCancelling(action: () => void) { onStatus = event => { if (event.type === "status" && event.job.status === "cancelling") action(); }; },
     setTerminator(value: () => Promise<boolean>) { terminate = value; },
+    truncateOutput() { child.stdout?.emit("data", Buffer.from("xx")); },
     persisted: async () => JSON.parse(await readFile(join(state, "jobs", job.job_id, "meta.json"), "utf8")),
     async finishByCancellation() {
       onStatus = () => undefined;
@@ -109,6 +146,55 @@ async function fixture(recovered: boolean) {
       await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
     },
   };
+}
+
+for (const failure of ["undelivered", "thrown"] as const) {
+  it.each([0, 1_000])(`keeps ${failure} cancellation rollback and completion ordered with a clock rollback of %i ms`, async rollbackMs => {
+    const f = await fixture(false);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(f.job.updated_at_ms - rollbackMs);
+    try {
+      f.setTerminator(async () => { if (failure === "thrown") throw new Error("synthetic termination failure"); return false; });
+      await expect(f.manager.cancel(f.job.job_id)).rejects.toThrow(failure === "thrown" ? "synthetic termination failure" : "process termination was not delivered");
+      const cancelling = f.events.find(event => event.job.status === "cancelling")!.job;
+      const running = f.manager.get(f.job.job_id);
+      expect(cancelling.updated_at_ms).toBeGreaterThan(f.job.updated_at_ms);
+      expect(running.updated_at_ms).toBeGreaterThan(cancelling.updated_at_ms);
+      expect(running.status).toBe("running");
+      await f.finishByCancellation();
+      const completed = f.manager.get(f.job.job_id);
+      expect(completed.updated_at_ms).toBeGreaterThan(running.updated_at_ms);
+      expect(completed.completed_at_ms).toBe(f.job.updated_at_ms - rollbackMs);
+      expect((await f.persisted()).updated_at_ms).toBe(completed.updated_at_ms);
+    } finally { await f.cleanup(); clock.mockRestore(); }
+  });
+}
+
+for (const phase of ["before-publication", "before-rollback"] as const) {
+  it.each([0, 1_000])(`preserves concurrent metadata and ordering after a ${phase} probe with a clock rollback of %i ms`, async rollbackMs => {
+    const f = await fixture(false);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(f.job.updated_at_ms - rollbackMs);
+    let release!: () => void, reached!: () => void, inspections = 0;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const paused = new Promise<void>(resolve => { reached = resolve; });
+    const pauseAt = phase === "before-publication" ? 1 : 3;
+    f.setInspector(async () => { if (++inspections === pauseAt) { reached(); await gate; } return { alive: true, fingerprintMatches: true }; });
+    const pending = f.manager.cancel(f.job.job_id).catch(error => error as Error);
+    try {
+      await paused;
+      f.truncateOutput();
+      await f.manager.flushPersistence();
+      expect(f.manager.get(f.job.job_id).output_truncated).toBe(true);
+      await expect(f.manager.cancel(f.job.job_id)).rejects.toThrow("process termination was not delivered");
+      const concurrent = f.manager.get(f.job.job_id);
+      release();
+      expect(await pending).toBeInstanceOf(Error);
+      expect(f.manager.get(f.job.job_id)).toMatchObject({ status: "running", output_truncated: true });
+      expect(f.manager.get(f.job.job_id).updated_at_ms).toBeGreaterThanOrEqual(concurrent.updated_at_ms);
+      const lifecycle = f.events.filter(event => event.type !== "output");
+      expect(lifecycle.every((event, index) => index === 0 || event.job.updated_at_ms > lifecycle[index - 1]!.job.updated_at_ms)).toBe(true);
+      await f.finishByCancellation();
+    } finally { release(); await pending; await f.cleanup(); clock.mockRestore(); }
+  });
 }
 
 for (const phase of ["before-signal", "after-undelivered-signal"] as const) {

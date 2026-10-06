@@ -1,5 +1,5 @@
 import type { JobRecord, LocalJobStatus } from "./records.js";
-import { isActive, sameJobProcessIdentity } from "./records.js";
+import { isActive, sameJobProcessIdentity, nextJobUpdate } from "./records.js";
 
 /** Scoped operations on one Job; JobManager remains the only state owner. */
 export interface CompletionPorts {
@@ -46,7 +46,7 @@ export async function finishJobCompletion(ports: CompletionPorts, code: number |
   let completed: JobRecord = {
     ...current,
     status,
-    updated_at_ms: ports.now(),
+    updated_at_ms: nextJobUpdate(current, ports.now()),
     completed_at_ms: ports.now(),
     exit_code: status === "cancelled" ? null : code,
     signal,
@@ -115,7 +115,7 @@ export async function finishJobCompletion(ports: CompletionPorts, code: number |
       completed = {
         ...afterPersist,
         status: mergedStatus,
-        updated_at_ms: ports.now(),
+        updated_at_ms: nextJobUpdate(afterPersist, ports.now()),
         completed_at_ms: ports.now(),
         exit_code: mergedStatus === "cancelled" ? null : code,
         signal,

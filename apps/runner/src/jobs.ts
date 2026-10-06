@@ -14,7 +14,7 @@ import type { open } from "node:fs/promises";
 import type { PathPolicy } from "./path-policy.js";
 import type { JobRecord, RecoveryLiveness, JobEvent } from "./jobs/records.js";
 export type { JobRecord, RecoveryLiveness, LocalJobStatus, JobEvent } from "./jobs/records.js";
-import { isActive, occupiesProcessSlot, sameJobProcessIdentity, safeJobId, normalizeJobRecord, isJobStatus } from "./jobs/records.js";
+import { isActive, occupiesProcessSlot, sameJobProcessIdentity, safeJobId, normalizeJobRecord, isJobStatus, nextJobUpdate } from "./jobs/records.js";
 import { parseInvocation, paramsObject, bounded, positiveInteger, boundedPositiveInteger, relativeWorkspacePath, safeOptionalIdentifier, safeOptionalRequestId, launchRequestFingerprint } from "./jobs/values.js";
 import { terminalRecoveredJob } from "./jobs/recovery.js";
 import { nativeJobFiles } from "./jobs/storage.js";
@@ -229,11 +229,11 @@ export class JobManager {
         const knownPidReuse = inspection.alive && inspection.fingerprintMatches === false;
         if (job.status === "cancelling") {
           restored = inspection.alive && !knownPidReuse
-            ? { ...job, recovery_liveness, recovery_note: "process observed after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: Date.now(), completed_at_ms: null, exit_code: null, signal: null }
+            ? { ...job, recovery_liveness, recovery_note: "process observed after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: nextJobUpdate(job), completed_at_ms: null, exit_code: null, signal: null }
             : terminalRecoveredJob(job, job.cancellation_delivered_at_ms !== null ? "cancelled" : "interrupted", recovery_liveness);
         } else {
           restored = inspection.alive && !knownPidReuse
-            ? { ...job, status: "unknown", recovery_liveness, recovery_note: "process observed after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: Date.now(), completed_at_ms: null, exit_code: null, signal: null }
+            ? { ...job, status: "unknown", recovery_liveness, recovery_note: "process observed after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: nextJobUpdate(job), completed_at_ms: null, exit_code: null, signal: null }
             // An unavailable PID or a fingerprint mismatch is interruption evidence,
             // but is intentionally not a guessed completion timestamp/outcome.
             : terminalRecoveredJob(job, "interrupted", recovery_liveness);
@@ -456,7 +456,7 @@ export class JobManager {
       // synchronous turn as spawn. A child can exit before the next await;
       // finish must then observe an active job rather than the queued record.
       running = {
-        ...job, status: "running", pid: child.pid ?? null, process_start_fingerprint: processFingerprint, started_at_ms: Date.now(), updated_at_ms: Date.now(),
+        ...job, status: "running", pid: child.pid ?? null, process_start_fingerprint: processFingerprint, started_at_ms: Date.now(), updated_at_ms: nextJobUpdate(job),
         // A fresh dequeue check may restrict capture, never retroactively
         // enable a Job that was admitted without cloud recording.
         ...(params.record_history === false ? { record_history: false } : {}),
@@ -561,7 +561,12 @@ export class JobManager {
       throw new Error(before.message);
     }
     if (expectedChild === undefined) throw new Error("job process identity could not be verified; cancellation was not sent");
-    const cancelling = job.status === "cancelling" ? job : { ...job, status: "cancelling" as const, updated_at_ms: Date.now() };
+    // The probe yielded while another cancellation or output update could
+    // advance this record. Preserve that state and its ordering timestamp.
+    if (!sameJobProcessIdentity(this.get(job.job_id), job) || this.processes.get(job.job_id) !== expectedChild) return this.getReconciled(job.job_id);
+    job = this.get(job.job_id);
+    if (!isActive(job)) return this.waitForTerminalResult(job.job_id, "job is no longer active; cancellation was not sent");
+    const cancelling = job.status === "cancelling" ? job : { ...job, status: "cancelling" as const, updated_at_ms: nextJobUpdate(job) };
     if (job.status !== "cancelling") {
       this.jobs.set(job.job_id, cancelling);
       await this.persist(cancelling);
@@ -604,7 +609,7 @@ export class JobManager {
         // still converge through its close handler; if it is demonstrably
         // alive, fail promptly instead of waiting forever for a child that
         // the platform refused to terminate.
-        const undelivered = this.jobs.get(cancelling.job_id);
+        let undelivered = this.jobs.get(cancelling.job_id);
         if (undelivered === undefined) return job;
         if (!isActive(undelivered)) return this.waitForTerminalResult(cancelling.job_id, "job is no longer active; cancellation was not sent");
         const verification = await this.checkLocalTerminationTarget(undelivered, expectedChild);
@@ -614,11 +619,14 @@ export class JobManager {
           if (verification.kind === "unverified") throw new Error(verification.message);
           return this.markUnsafeLocalCancellation(undelivered, verification.message);
         }
+        if (!sameJobProcessIdentity(this.get(undelivered.job_id), undelivered) || this.processes.get(undelivered.job_id) !== expectedChild) return this.getReconciled(undelivered.job_id);
+        undelivered = this.get(undelivered.job_id);
+        if (!isActive(undelivered)) return this.waitForTerminalResult(undelivered.job_id, "job is no longer active; cancellation was not sent");
         if (undelivered.status === "cancelling" && undelivered.cancellation_delivered_at_ms === null) {
-          const running = { ...undelivered, status: "running" as const, updated_at_ms: Date.now() };
+          const running = { ...undelivered, status: "running" as const, updated_at_ms: nextJobUpdate(undelivered) };
           this.jobs.set(running.job_id, running);
           await this.persist(running);
-          this.onEvent({ type: "status", job: running });
+          if (this.jobs.get(running.job_id) === running) this.onEvent({ type: "status", job: running });
         }
         throw new Error("process termination was not delivered; job remains running");
       }
@@ -628,7 +636,7 @@ export class JobManager {
       // with the stale `cancelling` snapshot.
       if (deliveredCurrent !== undefined && deliveredCurrent.status === "cancelling") {
         this.terminationDelivered.add(cancelling.job_id);
-        const deliveredRecord = { ...deliveredCurrent, cancellation_delivered_at_ms: Date.now(), updated_at_ms: Date.now() };
+        const deliveredRecord = { ...deliveredCurrent, cancellation_delivered_at_ms: Date.now(), updated_at_ms: nextJobUpdate(deliveredCurrent) };
         this.jobs.set(deliveredRecord.job_id, deliveredRecord);
         await this.persist(deliveredRecord);
       }
@@ -641,11 +649,15 @@ export class JobManager {
       const current = this.jobs.get(job.job_id);
       if (current?.status === "interrupted" && current.recovery_liveness?.fingerprint_matches === false) return current;
       if (current?.status === "cancelling" && current.cancellation_delivered_at_ms === null && this.processes.get(job.job_id) === expectedChild && expectedChild?.exitCode === null && expectedChild.signalCode === null) {
-        const running = { ...current, status: "running" as const, updated_at_ms: Date.now() };
+        const running = { ...current, status: "running" as const, updated_at_ms: nextJobUpdate(current) };
         this.jobs.set(job.job_id, running);
         await this.persist(running);
-        this.onEvent({ type: "status", job: running });
+        if (this.jobs.get(running.job_id) === running) this.onEvent({ type: "status", job: running });
       }
+      // A normal exit may become durable while the failed cancellation rolls
+      // back. Return that outcome instead of reporting a still-running job.
+      const afterRollback = this.jobs.get(job.job_id);
+      if (afterRollback !== undefined && !isActive(afterRollback)) return afterRollback;
       throw error;
     } finally {
       // A concurrent cancel may have installed a newer attempt after this
@@ -814,7 +826,7 @@ export class JobManager {
   private async markOutputTruncated(jobId: string): Promise<void> {
     const current = this.jobs.get(jobId);
     if (current === undefined || !isActive(current) || current.output_truncated || this.detachedCompletions.has(jobId)) return;
-    const updated = { ...current, output_truncated: true };
+    const updated = { ...current, output_truncated: true, updated_at_ms: nextJobUpdate(current) };
     this.jobs.set(jobId, updated);
     await this.persist(updated);
   }
@@ -941,7 +953,7 @@ export class JobManager {
     // A concurrent identity probe may temporarily return this recovered job
     // to unknown. The shared, confirmed termination decision still applies.
     const now = Date.now();
-    this.jobs.set(jobId, { ...current, status: "cancelling", cancellation_delivered_at_ms: now, updated_at_ms: now });
+    this.jobs.set(jobId, { ...current, status: "cancelling", cancellation_delivered_at_ms: now, updated_at_ms: nextJobUpdate(current, now) });
     this.terminationDelivered.add(jobId);
   }
 
@@ -1002,7 +1014,7 @@ export class JobManager {
     if (beforePublish.status === "cancelling" && beforePublish.cancellation_delivered_at_ms !== null) {
       await this.persistRecoveredDelivery(beforePublish); return this.get(job.job_id);
     }
-    const recovered = { ...beforePublish, status: "cancelling" as const, recovery_liveness: beforePublish.recovery_liveness ?? { checked_at_ms: Date.now(), alive: true, fingerprint_matches: inspection.fingerprintMatches }, recovery_note: "cancellation requested after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: Date.now() };
+    const recovered = { ...beforePublish, status: "cancelling" as const, recovery_liveness: beforePublish.recovery_liveness ?? { checked_at_ms: Date.now(), alive: true, fingerprint_matches: inspection.fingerprintMatches }, recovery_note: "cancellation requested after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: nextJobUpdate(beforePublish) };
     this.jobs.set(recovered.job_id, recovered);
     await this.persist(recovered);
     if (this.detachedCompletions.has(job.job_id)) {
@@ -1029,7 +1041,7 @@ export class JobManager {
         // cancellation. Preserve recovery evidence and the concurrency slot.
         const unverified: JobRecord = { ...beforeTerminal,
           status: beforeTerminal.cancellation_delivered_at_ms === null ? "unknown" : "cancelling",
-          updated_at_ms: Date.now(),
+          updated_at_ms: nextJobUpdate(beforeTerminal),
           recovery_liveness: { checked_at_ms: Date.now(), alive: true, fingerprint_matches: null },
           recovery_note: "Process identity could not be verified; cancellation was not sent and the process remains retained.",
         };
@@ -1128,7 +1140,7 @@ export class JobManager {
     // decision while the unstarted job remains behind the durability barrier.
     if (pending === undefined || (status === "cancelled" && pending.record.status !== "cancelled")) {
       const now = Date.now();
-      const record = { ...job, status, updated_at_ms: now, completed_at_ms: now, recovery_note: recoveryNote };
+      const record = { ...job, status, updated_at_ms: nextJobUpdate(pending?.record ?? job, now), completed_at_ms: now, recovery_note: recoveryNote };
       if (pending === undefined) this.detachedCompletions.set(job.job_id, { record, notifiedFailure: false });
       else pending.record = record;
       this.queue.remove(job.job_id);

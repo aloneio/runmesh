@@ -1,10 +1,11 @@
 import type { JobRecord, RecoveryLiveness } from "./records.js";
+import { nextJobUpdate } from "./records.js";
 
 export function terminalRecoveredJob(job: JobRecord, status: "cancelled" | "interrupted", recovery_liveness: RecoveryLiveness): JobRecord {
   return {
     ...job,
     status,
-    updated_at_ms: Date.now(),
+    updated_at_ms: nextJobUpdate(job),
     completed_at_ms: Date.now(),
     exit_code: null,
     signal: null,

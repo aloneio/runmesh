@@ -46,6 +46,19 @@ function completion() {
   };
 }
 describe("completion coordination through scoped ports", () => {
+  it.each([100, 50])("orders completion and merged metadata after prior updates when the clock is %i", async now => {
+    const h = completion();
+    h.state.current = jobRecord({ updated_at_ms: 100 });
+    h.ports.now = () => now;
+    h.ports.persist = async record => {
+      h.state.persisted.push(record);
+      if (h.state.persisted.length === 1) h.state.current = jobRecord({ updated_at_ms: 102, output_truncated: true });
+    };
+    await h.finish();
+    expect(h.state.persisted.map(record => record.updated_at_ms)).toEqual([101, 103]);
+    expect(h.state.current).toMatchObject({ status: "succeeded", updated_at_ms: 103, completed_at_ms: now, output_truncated: true });
+  });
+
   it("publishes completion only after metadata is durable", async () => {
     const h = completion();
     h.ports.persist = async record => {

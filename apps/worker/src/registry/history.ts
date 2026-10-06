@@ -91,6 +91,7 @@ export class RegistryHistory {
         const current = this.ports.runnerRow(runnerId);
         if (!this.ports.runnerMatchesTransportFence(current, epoch, credentialVersion, requireOnline, lifecycleId, sessionId)) return false;
         if (this.ports.featureHealthDisabled("job_recording", nowMs)) return true;
+        if (this.jobHistorySettings(runnerId, lifecycleId).mode === "off") return true;
         this.upsertJob(runnerId, { ...event.job, runner_id: runnerId }, nowMs);
         this.pruneTerminalJobs(runnerId);
         return true;
@@ -248,19 +249,23 @@ export class RegistryHistory {
     const existing = this.getJob(runnerId, String(job.job_id));
     if (existing === undefined && typeof job.created_by_client_id === "string") {
       const client = this.ports.getMcpClient(job.created_by_client_id);
-      if (client?.record_jobs === false || (client?.record_jobs_since_ms !== undefined &&
+      if (client === undefined || client.record_jobs === false || (client.record_jobs_since_ms !== undefined &&
         (!safeNonnegativeInteger(job.created_at_ms) || job.created_at_ms < client.record_jobs_since_ms))) return;
     }
     const jobJson = JSON.stringify(job);
     // Lifecycle events can overtake a previously captured full snapshot. Keep
-    // timestamps and lifecycle rank monotonic, including equal-ms events, and
-    // never replace a committed terminal outcome with a stale active status.
+    // timestamps and lifecycle rank monotonic, including equal-ms events.
+    // A strictly newer cancellation rollback or recovered cancellation may
+    // reverse active-state rank; committed terminal outcomes stay immutable.
     this.storage.sql.exec(`INSERT INTO jobs (runner_id, job_id, job_json, updated_at_ms) VALUES (?, ?, ?, ?)
       ON CONFLICT(runner_id, job_id) DO UPDATE SET job_json = excluded.job_json, updated_at_ms = excluded.updated_at_ms
       WHERE excluded.job_json <> jobs.job_json
         AND excluded.updated_at_ms >= jobs.updated_at_ms
-        AND (CASE json_extract(excluded.job_json, '$.status') WHEN 'queued' THEN 0 WHEN 'running' THEN 1 WHEN 'cancelling' THEN 2 ELSE 3 END)
+        AND ((CASE json_extract(excluded.job_json, '$.status') WHEN 'queued' THEN 0 WHEN 'running' THEN 1 WHEN 'cancelling' THEN 2 ELSE 3 END)
           >= (CASE json_extract(jobs.job_json, '$.status') WHEN 'queued' THEN 0 WHEN 'running' THEN 1 WHEN 'cancelling' THEN 2 ELSE 3 END)
+          OR (excluded.updated_at_ms > jobs.updated_at_ms
+            AND ((json_extract(jobs.job_json, '$.status') = 'cancelling' AND json_extract(excluded.job_json, '$.status') = 'running')
+              OR (json_extract(jobs.job_json, '$.status') = 'unknown' AND json_extract(excluded.job_json, '$.status') = 'cancelling'))))
         AND (json_extract(jobs.job_json, '$.status') NOT IN ('succeeded', 'failed', 'cancelled', 'interrupted')
           OR json_extract(excluded.job_json, '$.status') = json_extract(jobs.job_json, '$.status'))`, runnerId, job.job_id, jobJson, updated);
   }

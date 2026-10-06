@@ -14,7 +14,7 @@ const profile: ConnectionProfile = { schema_version: 1, profile_id: "docs", conn
   owner: { kind: "instance_admin" }, enabled: true, revision: 2, authentication: "oauth", credential: null };
 const token = "synthetic-upstream-secret";
 const policy = (protocol: RemoteProtocol) => [{ endpoint, protocol }];
-function upstream() {
+function upstream(bearer = token) {
   const invoked = vi.fn(async ({ value }: { value: number }) => ({ content: [{ type: "text" as const, text: String(value + 1) }], structuredContent: { value: value + 1 } }));
   const handler = createMcpHandler(() => {
     const server = new McpServer({ name: "fixture", version: "1" });
@@ -26,7 +26,7 @@ function upstream() {
   const http = async (url: string | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)); requests.push({ method: body.method, headers: new Headers(init?.headers), body });
     expect(String(url)).toBe(endpoint); expect(init?.redirect).toBe("manual"); expect(init?.credentials).toBe("omit");
-    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${bearer}`);
     return handler.fetch(new Request(url, init));
   };
   return { invoked, requests, http };
@@ -47,6 +47,28 @@ it.each(["2025-11-25", "2026-07-28"] as const)("W05 official SDK exchanges real 
       expect(request.headers.get("mcp-method")).toBe(request.method);
     }
   } finally { await session.close(); }
+});
+
+it.each(["synthetic-upstream-secret", 'synthetic"upstream-secret', "synthetic\\upstream-secret"])("W05 direct bearer reflection is withheld for opaque token %s", async bearer => {
+  for (const wire of ["json", "sse"] as const) {
+    const remote = upstream(bearer), dispatched = vi.fn();
+    const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token: bearer }),
+      fetch: async (input, init) => {
+        const request = JSON.parse(String(init?.body)), response = await remote.http(input, init);
+        if (request.method !== "tools/call") return response;
+        const reply = await (await guardedRemoteResponse(response, request.id, new AbortController().signal, () => undefined)).json() as { result: { content: { text: string }[] } };
+        reply.result.content[0]!.text = "Reflected header: " + bearer;
+        return wire === "json" ? Response.json(reply)
+          : new Response("data: " + JSON.stringify(reply) + "\n\n", { headers: { "content-type": "text/event-stream" } });
+      } });
+    const session = await connector.open(profile, new AbortController().signal, dispatched, async () => undefined);
+    try {
+      const tools = await session.listTools();
+      await expect(session.callTool(tools[0]!, { value: 1 }, async () => undefined)).rejects.toMatchObject({ code: "result_invalid" });
+      expect(remote.invoked).toHaveBeenCalledOnce(); expect(dispatched).toHaveBeenCalledOnce();
+      expect(remote.requests.filter(request => request.method === "tools/call")).toHaveLength(1);
+    } finally { await session.close(); }
+  }
 });
 
 it("W05 partial SSE frames preserve Unicode and stop at the final response before EOF", async () => {

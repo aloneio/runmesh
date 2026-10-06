@@ -946,6 +946,9 @@ describe("Worker runner transport", () => {
     const epoch = record?.connection_epoch;
     const credentialVersion = record?.credential_version;
     const identity = await runInDurableObject(registry, (instance) => runnerTransportIdentity(instance, runnerId));
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.createMcpClient({ client_id: "client-1", label: "Event owner", secret_verifier: "a".repeat(64), secret_prefix: "test", scopes: ["coding:read"] }, 1)).toBeDefined();
+    });
     const recorded = await runInDurableObject(registry, (instance) => instance.recordJobEvent(runnerId, epoch as number, credentialVersion as number, {
       type: "job.status", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "job-event-1",
       job: { job_id: "job-event-1", workspace_id: "workspace-1", status: "running", created_at_ms: 1, updated_at_ms: 2, created_by_client_id: "client-1", runner_id: runnerId },

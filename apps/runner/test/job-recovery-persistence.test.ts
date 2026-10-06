@@ -1,7 +1,7 @@
 import { mkdtemp, realpath, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { JobManager, type JobRecord, type JobEvent } from "../src/jobs.js";
 import { PathPolicy } from "../src/path-policy.js";
 import { nativeJobFiles } from "../src/jobs/storage.js";
@@ -67,6 +67,23 @@ async function fixture() {
     },
   };
 }
+
+it.each([0, 1_000])("keeps recovered cancellation, delivery and exit ordered with a clock rollback of %i ms", async rollbackMs => {
+  const f = await fixture();
+  const unknown = f.manager.get(f.job.job_id);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(unknown.updated_at_ms - rollbackMs);
+  try {
+    expect(unknown.updated_at_ms).toBeGreaterThan(f.job.updated_at_ms);
+    const delivered = await f.manager.cancel(f.job.job_id);
+    expect(delivered).toMatchObject({ status: "cancelling", cancellation_delivered_at_ms: unknown.updated_at_ms - rollbackMs });
+    expect(f.state.writes.every((record, index, records) => record.updated_at_ms > (records[index - 1]?.updated_at_ms ?? unknown.updated_at_ms))).toBe(true);
+    f.state.inspect = async () => dead;
+    const completed = await f.manager.getReconciled(f.job.job_id);
+    expect(completed).toMatchObject({ status: "cancelled", completed_at_ms: unknown.updated_at_ms - rollbackMs });
+    expect(completed.updated_at_ms).toBeGreaterThan(delivered.updated_at_ms);
+    expect((await f.persisted()).updated_at_ms).toBe(completed.updated_at_ms);
+  } finally { await f.close(); clock.mockRestore(); }
+});
 
 for (const scenario of ["observed-exit", "exit-before-signal"] as const) {
   it.each(["cancel", "get", "list", "sync"])(`retries ${scenario} terminal persistence through %s`, async trigger => {

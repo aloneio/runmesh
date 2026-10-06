@@ -44,6 +44,9 @@ export interface JobRecord {
 
 export type JobEvent = { readonly type: "started" | "output" | "status" | "completed"; readonly job: JobRecord; readonly stream?: "stdout" | "stderr"; readonly data?: string };
 
+/** Metadata ordering must survive same-millisecond updates and wall-clock rollback. */
+export function nextJobUpdate(job: JobRecord, now = Date.now()): number { return Math.max(now, job.updated_at_ms + 1); }
+
 export function isJobStatus(value: unknown): value is LocalJobStatus { return typeof value === "string" && ["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(value); }
 
 export function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }

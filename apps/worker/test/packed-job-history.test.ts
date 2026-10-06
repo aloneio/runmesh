@@ -9,6 +9,30 @@ const settings={...DEFAULT_JOB_HISTORY,mode:"immediate" as const};
 const make=(id:string,t=Date.now(),status="succeeded") => ({job_id:id,runner_id:"r",workspace_id:"w",status,created_at_ms:t,updated_at_ms:t}) as any;
 const recordAll = (jobs: readonly { job_id: string }[]) => new Set(jobs.map(job => job.job_id));
 
+it.each([
+  ["cancelling", "running"],
+  ["unknown", "cancelling"],
+] as const)("accepts only newer %s to %s recovery observations", async (before, after) => {
+  const store = new PackedJobHistory(db, `recovery-order-${crypto.randomUUID()}`), now = Date.now();
+  const merge = (status: string, updatedAt: number) => store.merge("r", "life", [
+    { ...make("recovery-job", now - 1, status), updated_at_ms: updatedAt },
+  ], () => settings, recordAll, now + 10);
+  await merge(before, now);
+  for (const updatedAt of [now - 1, now]) {
+    expect(await merge(after, updatedAt)).toMatchObject({ recorded: false });
+    expect(await store.get("r", "life", "recovery-job", settings)).toMatchObject({ status: before, updated_at_ms: now });
+  }
+  expect(await merge(after, now + 1)).toMatchObject({ recorded: true });
+  expect(await store.get("r", "life", "recovery-job", settings)).toMatchObject({ status: after, updated_at_ms: now + 1 });
+  for (const [status, updatedAt] of [[before, now], ["queued", now + 2]] as const) {
+    expect(await merge(status, updatedAt)).toMatchObject({ recorded: false });
+    expect(await store.get("r", "life", "recovery-job", settings)).toMatchObject({ status: after, updated_at_ms: now + 1 });
+  }
+  await merge("cancelled", now + 3);
+  expect(await merge(after, now + 4)).toMatchObject({ recorded: false });
+  expect(await store.get("r", "life", "recovery-job", settings)).toMatchObject({ status: "cancelled", updated_at_ms: now + 3 });
+});
+
 function pausedWrite(namespace: string, matches: (sql: string) => boolean) {
   let armed = false, paused = false, release!: () => void, reached!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });

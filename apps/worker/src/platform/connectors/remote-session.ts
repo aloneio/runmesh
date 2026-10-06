@@ -1,4 +1,5 @@
 import { RemoteFault, type RemoteEgressRule } from "../../contracts/remote.js";
+import { reflectsRemoteSecret } from "./remote-response.js";
 
 /** A legacy session belongs to exactly one operation/credential. No persistence,
  * session recovery, heartbeat or server-driven replacement is supported. */
@@ -10,7 +11,7 @@ export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
   let id: string | undefined, closed = false;
   return {
     headers(headers: Headers) { if (id !== undefined) headers.set("mcp-session-id", id); },
-    reflected(text: string) { return id !== undefined && id.length >= 12 && text.includes(id); },
+    reflected(text: string) { return reflectsRemoteSecret(text, id); },
     response(response: Response, method: string): Response {
       const next = response.headers.get("mcp-session-id");
       if (next === null && !(method === "initialize" && rule.session === "ephemeral")) return response;
