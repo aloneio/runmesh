@@ -28,6 +28,8 @@ it("cross-site OAuth callback localizes without reflecting authorization paramet
   expect(response.status).toBe(200);
   const page = await response.text();
   expect(page).toContain('lang="zh-CN"'); expect(page).toContain("正在连接 MCP");
-  expect(page).toContain('aria-label="主导航"'); expect(page).toContain('>仪表盘</a>');
+  const navigation = /<nav\b[^>]*aria-label="主导航"[^>]*>([\s\S]*?)<\/nav>/u.exec(page)?.[1] ?? "";
+  const dashboardLink = /<a\b[^>]*href="\/admin"[^>]*>([\s\S]*?)<\/a>/u.exec(navigation)?.[1];
+  expect(dashboardLink?.replace(/<[^>]*>/gu, "").trim()).toBe("仪表盘");
   expect(page).not.toContain("private-fixture-code"); expect(page).not.toContain("private-fixture-state");
 });

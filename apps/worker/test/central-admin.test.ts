@@ -23,9 +23,17 @@ it("direct public connections and Skill installation are available without deplo
   expect(response.status).toBe(200);
   const markup = await response.text();
   expect(markup).toContain('<h1>MCP 和 Skill</h1>');
-  expect(markup).toContain('data-central-tab="services" aria-pressed="true">MCP</button>');
-  expect(markup).toContain('data-central-tab="skills" aria-pressed="false">Skill</button>');
-  expect(markup).toContain('<h2>已连接的 MCP</h2>');
+  for (const [tab, label, pressed, panelId] of [
+    ["services", "MCP", "true", "central-mcp-panel"],
+    ["skills", "Skill", "false", "central-skill-panel"],
+  ] as const) {
+    const button = new RegExp('<button\\b[^>]*data-central-tab="' + tab + '"[^>]*>' + label + '</button>', 'u').exec(markup)?.[0] ?? "";
+    expect(button).toContain('type="button"');
+    expect(button).toContain('aria-pressed="' + pressed + '"');
+    expect(button).toContain('aria-controls="' + panelId + '"');
+    expect(markup).toMatch(new RegExp('<section\\b[^>]*data-central-panel="' + tab + '"[^>]*id="' + panelId + '"[^>]*>', 'u'));
+  }
+  expect(markup).toMatch(/<h2\b[^>]*id="connected-mcp-title"[^>]*>已连接的 MCP<\/h2>/u);
   expect(markup).not.toContain('class="central-start"');
   expect(markup).not.toContain('<p class="muted">所有已连接的 AI 客户端');
   expect(markup).toContain('MCP 地址');
