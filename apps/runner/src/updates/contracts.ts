@@ -47,10 +47,19 @@ export interface UpdateJournal {
   readonly phase: LocalUpdatePhase;
   readonly error_code?: UpdateErrorCode;
 }
+/** Durable intent must precede cloud ownership, even if native inspection fails. */
+export interface UpdatePreparation {
+  readonly schema_version: 1;
+  readonly operation: CloudUpdateOperation;
+  readonly manager_id: string;
+  readonly recovery_identity?: string;
+  readonly phase: "preparing";
+}
+export type UpdateJournalRecord = UpdateJournal | UpdatePreparation;
 export interface UpdateJournalPort {
-  load(): Promise<UpdateJournal | undefined>;
-  save(journal: UpdateJournal): Promise<void>;
-  complete(journal: UpdateJournal): Promise<void>;
+  load(): Promise<UpdateJournalRecord | undefined>;
+  save(journal: UpdateJournalRecord): Promise<void>;
+  complete(journal: UpdateJournalRecord): Promise<void>;
 }
 export interface LocalJobDrainObservation { readonly idle: boolean; readonly active: number; }
 export interface UpdateCoordinatorOptions {

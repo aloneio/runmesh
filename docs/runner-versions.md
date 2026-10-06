@@ -24,6 +24,8 @@ Allow running tasks to finish before switching. If a task needs attention, resol
 
 New managed installations include the version manager. It runs separately from the selected Runner package, so choosing an older Runner leaves remote version management available.
 
+Service commands such as `restart`, `install` and `uninstall` also use this independent manager after a version change. See [removing a Runner](runner-uninstall.md) for service removal and complete cleanup.
+
 For an installation created before this feature, first update its package using the [existing installation guide](upgrading.md), then run the updated executable's `install` command with the existing profile. Use an administrator session for a system service, or the owning account with `--user` for a user service. This adds the version manager while retaining enrollment and the Runner's service identity.
 
 The standard managed layout uses a `current` link and a `versions` directory. For a custom deployment layout, use the same package deployment process that created the service.

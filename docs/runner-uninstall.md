@@ -10,7 +10,7 @@ When its release channel is available, the enrollment page offers a hosted maint
 
 Check [release status](release-readiness.md) and your Worker's release channel before using its hosted maintenance command. For offline package preparation, obtain an independently verified maintenance release. A verified portable CLI with complete purge support can run `uninstall --purge --yes` on POSIX. Check its release notes, because older versions accept the same flags while removing fewer files.
 
-On Windows, prefer the hosted maintenance command: it runs outside the installation being removed.
+Managed installations with remote version management keep service commands available after choosing an older Runner. The usual `runmesh uninstall --purge --yes` command uses the independent maintenance CLI and removes both the Runner and its version manager. On Windows it runs cleanup from a protected temporary copy so the installed runtime can be deleted. Older installations without a version manager should use the hosted maintenance command.
 
 ## Run complete removal
 
@@ -27,7 +27,7 @@ sudo sh "$maintenance" --purge --yes
 
 On Windows, copy the PowerShell removal command from the administrator page. The hosted endpoint is `/runner/uninstall.ps1`, also using `--purge --yes`.
 
-For a local CLI, `--user` selects the current user's service layout. Omitting `--purge` selects ordinary service removal.
+For a local CLI, `--user` selects the current user's service layout. Omitting `--purge` removes both service registrations while retaining packages, enrollment and the maintenance CLI for a later `install`.
 
 ## What is removed
 
@@ -35,9 +35,11 @@ For a local CLI, `--user` selects the current user's service layout. Omitting `-
 | --- | --- |
 | Linux | `/opt/runmesh` versions and staging, `/etc/runmesh`, `/var/lib/runmesh`, `/var/log/runmesh`, supported `runmesh-runner` config/state/log paths, and Runmesh runtime directories under `/run` or `/var/run` |
 | macOS | Managed LaunchDaemon/LaunchAgent and Runmesh application-support layout |
-| Windows | Managed RunmeshRunner task, Program Files installation and ProgramData layout |
+| Windows | Managed RunmeshRunner and RunmeshManager tasks, Program Files installation and ProgramData layout |
 
 On Linux, cleanup handles the exact `runmesh-runner.service` unit in the standard systemd locations, its drop-ins and exact-name links under `.wants`/`.requires`. It stops and disables the unit before cleanup, reloads systemd afterward and clears the failed state. Managed command symlinks pointing into the installation are removed.
+
+The independent `runmesh-manager.service` on Linux and `io.alone.runmesh.manager` service on macOS are stopped and unregistered before Runner cleanup. An unfinished version change retains its journal and must be recovered before removal.
 
 Project workspaces, other services and installations, system accounts/groups and the shared system journal remain. Keep project data outside Runmesh runtime directories. If a cached policy identifies a workspace inside a purge directory, move that workspace before continuing. Use the appropriate package manager for custom or npm-managed layouts.
 

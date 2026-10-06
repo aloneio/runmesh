@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import { renderService, serviceLayout, serviceProfilePath, type ServiceCommandExecutor } from "../src/service.js";
-import { createNativeServiceMaintenance, hasStandardMaintenanceLaunch, type NativeServiceMaintenanceOptions } from "../src/updates/native-service.js";
+import { createNativeServiceMaintenance, hasStandardEffectiveMaintenanceLaunch, hasStandardMaintenanceLaunch, type NativeServiceMaintenanceOptions } from "../src/updates/native-service.js";
+
+const linuxArguments = ["/opt/runmesh/current/bin/runmesh", "start", "--profile", "/etc/runmesh/profile.json", "--state-dir", "/var/lib/runmesh"];
+const effectiveProperties = "--property=User,Group,FragmentPath,DropInPaths,NeedDaemonReload,RootDirectory,RootImage,BindPaths,BindReadOnlyPaths,TemporaryFileSystem,DynamicUser,MountImages,ExtensionImages,ExtensionDirectories";
+const linuxMetadata = (overrides: Record<string, string> = {}) => Object.entries({ User: "runmesh", Group: "runmesh", FragmentPath: "/etc/systemd/system/runmesh-runner.service", DropInPaths: "", NeedDaemonReload: "no", RootDirectory: "", RootImage: "", BindPaths: "", BindReadOnlyPaths: "", TemporaryFileSystem: "", DynamicUser: "no", MountImages: "", ExtensionImages: "", ExtensionDirectories: "", ...overrides }).map(([name, value]) => `${name}=${value}`).join("\n");
+const linuxExecStart = (args: readonly string[] = linuxArguments, path = args[0]) => JSON.stringify({ type: "a(sasbttttuii)", data: [[path, args, false, 0, 0, 0, 0, 0, 0, 0]] });
 
 function options(platform: "linux" | "darwin" | "win32", executor: ServiceCommandExecutor): NativeServiceMaintenanceOptions {
   const layout = serviceLayout({ platform, mode: "system" });
@@ -14,6 +19,8 @@ it.each(["enabled", "enabled-runtime", "disabled"])("stops a Linux Runner and re
   const calls: string[][] = [];
   const port = createNativeServiceMaintenance(options("linux", { execute: async (file, args) => {
     calls.push([file, ...args]);
+    if (args.includes(effectiveProperties)) return { exitCode: 0, stdout: linuxMetadata() };
+    if (file === "busctl") return { exitCode: 0, stdout: linuxExecStart() };
     if (args.includes("show")) return { exitCode: 0, stdout: `LoadState=loaded\nActiveState=${active ? "active" : "inactive"}\nMainPID=${active ? 42 : 0}\nUnitFileState=${enablement}\n` };
     if (args.includes("disable")) enablement = "disabled";
     if (args.includes("stop")) active = false;
@@ -37,10 +44,75 @@ it.each(["enabled", "enabled-runtime", "disabled"])("stops a Linux Runner and re
 
 it("does not permit a Linux switch while the old MainPID remains alive", async () => {
   let time = 0;
-  const port = createNativeServiceMaintenance({ ...options("linux", { execute: async (_file, args) => args.includes("show")
-    ? { exitCode: 0, stdout: "LoadState=loaded\nActiveState=inactive\nMainPID=99\nUnitFileState=disabled\n" } : { exitCode: 0 } }),
+  const port = createNativeServiceMaintenance({ ...options("linux", { execute: async (file, args) => {
+    if (args.includes(effectiveProperties)) return { exitCode: 0, stdout: linuxMetadata() };
+    if (file === "busctl") return { exitCode: 0, stdout: linuxExecStart() };
+    return args.includes("show") ? { exitCode: 0, stdout: "LoadState=loaded\nActiveState=inactive\nMainPID=99\nUnitFileState=disabled\n" } : { exitCode: 0 };
+  } }),
     now: () => time, delay: async ms => { time += ms; } });
   await expect(port.stop()).rejects.toThrow("did not stop");
+});
+
+const effectiveMismatches: { name: string; args?: string[]; metadata?: Record<string, string>; path?: string }[] = [
+  { name: "state-directory override", args: [...linuxArguments.slice(0, -1), "/srv/runmesh-state"] },
+  { name: "profile override", args: [linuxArguments[0]!, "start", "--profile", "/srv/profile.json", "--state-dir", "/var/lib/runmesh"] },
+  { name: "executable override", path: "/srv/custom/runmesh" },
+  { name: "effective user override", metadata: { User: "root" } },
+  { name: "effective group override", metadata: { Group: "root" } },
+  { name: "different unit fragment", metadata: { FragmentPath: "/run/systemd/system/runmesh-runner.service" } },
+  { name: "definition awaiting reload", metadata: { NeedDaemonReload: "yes" } },
+  { name: "ambiguous joined argv", args: [...linuxArguments.slice(0, -2), "--state-dir /var/lib/runmesh"] },
+  ...["RootDirectory", "RootImage", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem", "MountImages", "ExtensionImages", "ExtensionDirectories"].map(property => ({ name: `${property} filesystem override`, metadata: { [property]: "/srv/custom-root" } })),
+  { name: "dynamic service account", metadata: { DynamicUser: "yes" } },
+];
+it.each(effectiveMismatches)("rejects a $name before stopping the managed Runner", async mismatch => {
+  const calls: string[][] = [];
+  const port = createNativeServiceMaintenance(options("linux", { execute: async (file, args) => {
+    calls.push([file, ...args]);
+    if (args.includes(effectiveProperties)) return { exitCode: 0, stdout: linuxMetadata({ DropInPaths: "/etc/systemd/system/runmesh-runner.service.d/override.conf", ...mismatch.metadata }) };
+    if (file === "busctl") return { exitCode: 0, stdout: linuxExecStart(mismatch.args, mismatch.path) };
+    throw new Error("unexpected native service command");
+  } }));
+  await expect(port.stop()).rejects.toThrow("effective service definition");
+  expect(calls.some(call => call.includes("disable") || call.includes("stop") || call.includes("start"))).toBe(false);
+});
+
+it("accepts resource-only drop-ins when their effective launch and identity still match", async () => {
+  const base = options("linux", { execute: async (file, args) => args.includes(effectiveProperties)
+    ? { exitCode: 0, stdout: linuxMetadata({ DropInPaths: "/etc/systemd/system/runmesh-runner.service.d/resources.conf" }) }
+    : { exitCode: file === "busctl" ? 0 : 1, stdout: linuxExecStart() } });
+  await expect(hasStandardEffectiveMaintenanceLaunch(renderService({ platform: "linux" }).content, base)).resolves.toBe(true);
+});
+
+it("preserves spaced Linux user paths through the exact native argument array", async () => {
+  const home = "/home/Runner One";
+  const layout = serviceLayout({ platform: "linux", mode: "user", home });
+  const profilePath = serviceProfilePath(layout);
+  const manifest = renderService({ platform: "linux", mode: "user", home });
+  const args = [layout.executablePath, "start", "--user", "--profile", profilePath, "--state-dir", layout.stateRoot];
+  const calls: string[][] = [];
+  await expect(hasStandardEffectiveMaintenanceLaunch(manifest.content, { platform: "linux", mode: "user", home, uid: 1000,
+    installRoot: layout.installRoot, profilePath, executor: { execute: async (file, invocation) => {
+      calls.push([file, ...invocation]);
+      return invocation.includes(effectiveProperties) ? { exitCode: 0, stdout: linuxMetadata({ User: "", Group: "", FragmentPath: layout.manifestPath }) }
+        : { exitCode: file === "busctl" ? 0 : 1, stdout: linuxExecStart(args) };
+    } } })).resolves.toBe(true);
+  expect(calls.find(call => call[0] === "busctl")).toContain("--address=unix:path=/run/user/1000/bus");
+});
+
+it("rejects a definition that changes between effective metadata and argument reads", async () => {
+  let reads = 0;
+  const base = options("linux", { execute: async (file, args) => {
+    if (args.includes(effectiveProperties)) return { exitCode: 0, stdout: linuxMetadata(++reads === 1 ? {} : { User: "root" }) };
+    return { exitCode: file === "busctl" ? 0 : 1, stdout: linuxExecStart() };
+  } });
+  await expect(hasStandardEffectiveMaintenanceLaunch(renderService({ platform: "linux" }).content, base)).resolves.toBe(false);
+});
+
+it("fails closed when exact native argument inspection is unavailable", async () => {
+  const base = options("linux", { execute: async (_file, args) => args.includes(effectiveProperties)
+    ? { exitCode: 0, stdout: linuxMetadata() } : { exitCode: 127 } });
+  await expect(hasStandardEffectiveMaintenanceLaunch(renderService({ platform: "linux" }).content, base)).resolves.toBe(false);
 });
 
 it("unloads a macOS KeepAlive job and proves its old PID exited before switching", async () => {

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { inspectLocalJobs } from "../src/updates/job-drain.js";
 import { ManagedInstallationPointer } from "../src/updates/installation.js";
 import { FileUpdateJournal, loadManagerId } from "../src/updates/journal.js";
-import type { UpdateJournal } from "../src/updates/contracts.js";
+import type { UpdateJournal, UpdatePreparation } from "../src/updates/contracts.js";
 
 const roots: string[] = [];
 async function temporary(): Promise<string> { const root = await mkdtemp(join(tmpdir(), "runmesh-update-")); roots.push(root); return root; }
@@ -123,5 +123,16 @@ describe("managed version pointer and durable journal", () => {
   it("blocks corrupt transaction state instead of discarding recovery evidence", async () => {
     const directory = await temporary(); await writeFile(join(directory, "active-operation.json"), '{"schema_version":1}', { mode: 0o600 });
     await expect(new FileUpdateJournal(directory).load()).rejects.toThrow("local_state_invalid");
+  });
+  it("persists preparation before an installation path or service snapshot is available", async () => {
+    const directory = await temporary(); const journal = new FileUpdateJournal(directory);
+    const preparation: UpdatePreparation = { schema_version: 1, manager_id: "manager_1", phase: "preparing",
+      operation: { operation_id: "upgrade_1", lifecycle_id: "lifecycle_1", target_version: "0.1.6", target_channel: "stable", manifest_sha256: "a".repeat(64), artifact_sha256: "b".repeat(64), original_version: null, manager_id: null, state: "queued", error_code: null, created_at_ms: 1, updated_at_ms: 1 } };
+    await journal.save(preparation);
+    expect(await new FileUpdateJournal(directory).load()).toEqual(preparation);
+    await journal.complete(preparation); expect(await journal.load()).toBeUndefined();
+    await expect(journal.save({ ...preparation, operation: { ...preparation.operation, manager_id: "other-manager" } })).rejects.toThrow("local_state_invalid");
+    await expect(journal.save({ ...preparation, operation: { ...preparation.operation, state: "installing" } })).rejects.toThrow("local_state_invalid");
+    await expect(journal.save({ ...preparation, previous: { version: "0.1.7", directory: "/untrusted" } } as UpdatePreparation)).rejects.toThrow("local_state_invalid");
   });
 });

@@ -374,7 +374,9 @@ export async function uninstall(parsed: ParsedCommand, store: ProfileStore, outp
     if (platform === "win32" && process.execPath.toLowerCase().startsWith(layout.installRoot.toLowerCase() + "\\")) {
       throw new Error("Run the hosted uninstall command so maintenance can remove the in-use runtime from a temporary location");
     }
-    await maintenanceInstaller(dependencies)?.uninstall(maintenanceOptions(platform, mode, store.filePath));
+    // Keep the stable CLI until purge removes installRoot last. If another
+    // cleanup step fails, the ordinary launcher must still support a retry.
+    await maintenanceInstaller(dependencies)?.uninstall({ ...maintenanceOptions(platform, mode, store.filePath), preservePackage: true });
     const result = await (dependencies.purgeInstallation ?? purgeInstallation)({ platform, mode, ...(parsed.json ? {} : { progress: output }) });
     if (parsed.json) output(JSON.stringify(result));
     else {
@@ -391,7 +393,7 @@ export async function uninstall(parsed: ParsedCommand, store: ProfileStore, outp
   assertSystemInstallationPrivilege(manifest, dependencies);
   const managed = await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
   const lifecycleStatus = managed ? await probeServiceStatus(manager, manifest, "uninstall") : undefined;
-  await maintenanceInstaller(dependencies)?.uninstall(maintenanceOptions(manifest.platform, manifest.mode, store.filePath));
+  await maintenanceInstaller(dependencies)?.uninstall({ ...maintenanceOptions(manifest.platform, manifest.mode, store.filePath), preservePackage: true });
   // If the native probe proves that the registration is already absent, only
   // remove our managed manifest. Calling disable/delete in that state can
   // report a confusing error and, on some platforms, target a newly-created

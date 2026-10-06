@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runnerArchiveFiles } from "./release-archive.js";
+import { renderManagedLauncher } from "./launchers.js";
 
 export interface RunnerReleaseTarget { readonly version: string; readonly channel: "dev" | "stable"; readonly manifest_sha256?: string; readonly artifact_sha256?: string; }
 export interface RunnerReleaseStageContext { readonly installRoot: string; readonly operationId: string; readonly runtimePath: string; readonly fetch?: typeof fetch; }
@@ -105,12 +106,12 @@ export async function stageRunnerRelease(target: RunnerReleaseTarget, context: R
     await copyFile(context.runtimePath, runtime); await chmod(runtime, 0o755);
     if (process.platform === "win32") {
       await writeFile(join(temporary, "runmesh.cjs"), bundleFile.bytes, { flag: "wx" });
-      const wrapper = '@echo off\r\n"%~dp0runtime\\node.exe" "%~dp0runmesh.cjs" %*\r\n';
+      const wrapper = renderManagedLauncher("win32", root);
       await writeFile(join(temporary, "runmesh.cmd"), wrapper, { flag: "wx" });
       await writeFile(join(temporary, "runmesh-runner.cmd"), wrapper, { flag: "wx" });
     } else {
       await mkdir(join(temporary, "bin"), { mode: 0o755 });
-      const wrapper = '#!/bin/sh\nROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$ROOT/../runtime/node" "$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/runmesh.cjs" "$@"\n';
+      const wrapper = renderManagedLauncher(process.platform === "darwin" ? "darwin" : "linux", root);
       await writeFile(join(temporary, "bin", "runmesh"), wrapper, { flag: "wx", mode: 0o755 });
       await writeFile(join(temporary, "bin", "runmesh-runner"), wrapper, { flag: "wx", mode: 0o755 });
     }
