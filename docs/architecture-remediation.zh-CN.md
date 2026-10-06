@@ -73,8 +73,10 @@ systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、�
 
 ## Runner 版本管理器
 
-`updates/contracts.ts` 统一定义更新端口、原生服务快照和适配器错误类型。
-更新协调器依赖这些契约和共享协议，由装配层提供 HTTP、原生服务、存储及发行版适配器。
+`updates/contracts.ts` 统一定义更新端口和适配器错误类型。
+原生服务快照与维护端口定义在自包含的公开契约 `services/contracts.ts`，由更新契约和
+原生适配器共同引用，使发布的服务类型声明与内部协议包保持独立。
+更新协调器依赖更新契约和共享协议，由装配层提供 HTTP、原生服务、存储及发行版适配器。
 发行版准备过程复用同一份目标与验证结果类型，架构回归检查普通导入和类型导入的依赖方向。
 
 `apps/runner/src/maintenance-entry.ts` 与 `maintenance-cli.ts` 构建独立的

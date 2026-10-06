@@ -137,8 +137,9 @@ export function specifierProblem(from, specifier, typeOnly) {
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
   if (source === "apps/worker/src/async-deadline.ts") return "Shared deadline scheduling stays independent of imported implementations";
-  if ((updateCore(source) || source === nativeServiceContracts) && external && specifier !== "@aloneio/runmesh-protocol")
-    return "Update and native-service contracts use shared protocol and local ports, not external adapters";
+  if (source === nativeServiceContracts) return "Published native-service contracts are self-contained, without module imports";
+  if (updateCore(source) && external && specifier !== "@aloneio/runmesh-protocol")
+    return "Update contracts and coordination use shared protocol and local ports, not external adapters";
   if (isMaintenanceSource(source) && external && !builtin && !purePackages.test(specifier))
     return "Maintenance dependencies are host primitives and shared protocol contracts";
   if (source === "apps/runner/src/environment-contracts.ts" && external && !purePackages.test(specifier))
@@ -206,8 +207,8 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
-  if (from === nativeServiceContracts && !to.startsWith("packages/protocol/src/"))
-    return "Native-service contracts depend only on shared protocol, not adapters or intermediary modules";
+  if (from === nativeServiceContracts)
+    return "Published native-service contracts are self-contained, without module imports";
   if (updateCore(from) && !to.startsWith("packages/protocol/src/")
     && to !== (from.endsWith("/contracts.ts") ? runnerRoot + "services/contracts.ts" : runnerRoot + "updates/contracts.ts"))
     return "Update contracts and coordination depend on their ports, not concrete adapters or intermediaries";

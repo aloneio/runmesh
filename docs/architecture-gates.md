@@ -37,8 +37,11 @@ are explicitly distinguished from private JobManager state.
 
 The Runner update coordinator depends on update contracts and the shared protocol.
 Update contracts reuse native-service contract types; concrete HTTP and host adapters
-consume these ports. Fixtures check reverse imports, intermediary modules, platform
-types and ambient I/O while allowing local scheduling in the coordinator.
+consume these ports. Published `services/contracts.ts` remains self-contained so its
+declarations can be consumed independently of internal packages. Fixtures reject all
+of its module imports, including external and relative protocol type imports. Other
+fixtures check reverse imports, intermediary modules, platform types and ambient I/O
+while allowing local scheduling in the coordinator.
 
 The shared async deadline has no module imports or platform I/O. Two reviewed
 feature wrappers supply Connector and remote-capability budgets; this allowance is

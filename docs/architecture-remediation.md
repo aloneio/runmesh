@@ -92,9 +92,12 @@ retention against the same protocol values.
 
 ## Runner version manager
 
-`updates/contracts.ts` owns update ports, native-service snapshots and adapter
-failure types. The update coordinator imports those contracts and the shared
-protocol; composition supplies HTTP, native-service, storage and release adapters.
+`updates/contracts.ts` owns update ports and adapter failure types. Native-service
+snapshots and maintenance ports live in the self-contained public
+`services/contracts.ts`, shared by update contracts and the native adapter. This
+keeps published service declarations independent of the private protocol package.
+The update coordinator imports update contracts and the shared protocol;
+composition supplies HTTP, native-service, storage and release adapters.
 Release staging consumes the same target and verified-release types. Architecture
 fixtures enforce this direction for runtime and type imports.
 

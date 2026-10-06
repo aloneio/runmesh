@@ -1,4 +1,4 @@
-import type { ServiceMode, ServicePlatform } from "../services/contracts.js";
+import type { NativeServiceMaintenancePort, NativeServiceSnapshot } from "../services/contracts.js";
 import { exactRunnerRelease, RunnerUpdateErrorCodeSchema } from "@aloneio/runmesh-protocol";
 import type { RunnerUpdateOperation, RunnerUpdateResponse, RunnerUpdateState, RunnerUpdateErrorCode, RunnerUpdateClaim } from "@aloneio/runmesh-protocol";
 
@@ -13,23 +13,6 @@ export type UpdateOwner = RunnerUpdateClaim;
 /** HTTP outcomes consumed by the coordinator, independent of the fetch adapter. */
 export class MaintenanceHttpError extends Error {
   public constructor(public readonly status: number) { super(`maintenance_http_${status}`); this.name = "MaintenanceHttpError"; }
-}
-/** JSON-only native state, retained in the update journal before stopping a Runner. */
-export interface NativeServiceSnapshot {
-  readonly schema_version: 1;
-  readonly platform: ServicePlatform;
-  readonly mode: ServiceMode;
-  readonly registered: boolean;
-  readonly active: boolean;
-  readonly enabled: boolean;
-  readonly enablement: string;
-  readonly pid?: number;
-}
-export interface NativeServiceMaintenancePort {
-  snapshot(): Promise<NativeServiceSnapshot>;
-  stop(): Promise<void>;
-  start(): Promise<void>;
-  restoreEnabled(snapshot: NativeServiceSnapshot): Promise<void>;
 }
 export interface CloudMaintenancePort {
   poll(): Promise<CloudUpdateObservation>;
