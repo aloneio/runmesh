@@ -35,6 +35,16 @@ not reintroduce private maps/methods or unknown-cast test interfaces outside the
 three documented persist exceptions; public runtime.jobs and the process probe
 are explicitly distinguished from private JobManager state.
 
+The Runner update coordinator depends on update contracts and the shared protocol.
+Update contracts reuse native-service contract types; concrete HTTP and host adapters
+consume these ports. Fixtures check reverse imports, intermediary modules, platform
+types and ambient I/O while allowing local scheduling in the coordinator.
+
+The shared async deadline has no module imports or platform I/O. Two reviewed
+feature wrappers supply Connector and remote-capability budgets; this allowance is
+limited to those edges. Browser page controls and page mounting share the independent
+fragment helper, with a fixture guarding its dependency direction.
+
 ## Scope and limits
 
 The checker reads source without importing it or executing embedded installer text. It conservatively treats bare `require()` as module loading. Parsing is bounded to 5,000 files, 1 MiB per file, 16 MiB total source and 20,000 directory entries; parser or tooling failures produce a failed check.

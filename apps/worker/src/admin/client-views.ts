@@ -4,6 +4,16 @@ import type { AdminData } from "../contracts/admin-views.js";
 import { record, escapeHtml, timeMarkup, displayScopeLabel } from "./format.js";
 import { permissionSelect, scopeCheckboxes } from "./forms.js";
 import { clientCredentialBadge } from "./tables.js";
+import { responsiveTableCells, responsiveTableHead, type ResponsiveColumn } from "./responsive-table.js";
+
+const clientColumns = [
+  { key: "name", label: "text.label" },
+  { key: "scopes", label: "text.scopes" },
+  { key: "activeRunner", label: "text.active.runner" },
+  { key: "lastUsed", label: "text.last.used" },
+  { key: "status", label: "client.credential.status" },
+  { key: "actions", label: "text.actions" },
+] as const satisfies readonly ResponsiveColumn[];
 
 function clientLifecycleActions(clientId: string, revoked: boolean, csrf: string): string {
   const base = '/admin/clients/' + encodeURIComponent(clientId);
@@ -135,7 +145,7 @@ export function clientDetailPage(client: ClientViewModel, runners: readonly Runn
             <th colspan="4">${message("text.additional.restriction", "en")}</th>
           </tr>
         </thead>
-        <tbody>${overrideRows || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>${message("text.no.runners.registered", "en")}</p></div></td></tr>`}</tbody>
+        <tbody>${overrideRows || `<tr><td colspan="${clientColumns.length}" class="empty"><div class="empty-state-box"><p>${message("text.no.runners.registered", "en")}</p></div></td></tr>`}</tbody>
       </table>
     </div>
   </section>`;
@@ -153,14 +163,14 @@ export function activeRunnerSelector(client: ClientViewModel, runners: readonly 
 }
 
 export function clientsPage(data: AdminData, csrf: string, centralEnabled = true): string {
-  const rows = data.clients.map((client) => `<tr class="data-row">
-    <td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}"><span data-no-i18n>${escapeHtml(client.label)}</span></a><span class="sub-id mono" data-no-i18n>${escapeHtml(client.client_id)}</span></div></td>
-    <td><div class="scope-tags">${client.scopes.map((scope) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(scope))}</span>`).join("") || '<span class="scope-pill">MCP &amp; Skill</span>'}</div></td>
-    <td>${activeRunnerSelector(client, data.runners, csrf)}</td>
-    <td class="time-cell">${timeMarkup(client.last_used_at_ms)}</td>
-    <td>${clientCredentialBadge(client.revoked_at_ms !== null, "compact")}</td>
-    <td class="actions">${clientListActions(client, csrf)}</td>
-  </tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>${message("text.no.mcp.clients.yet", "en")}</p></div></td></tr>`;
+  const rows = data.clients.map((client) => `<tr class="data-row">${responsiveTableCells(clientColumns, {
+    name: { html: `<div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}"><span data-no-i18n>${escapeHtml(client.label)}</span></a><span class="sub-id mono" data-no-i18n>${escapeHtml(client.client_id)}</span></div>` },
+    scopes: { html: `<div class="scope-tags">${client.scopes.map((scope) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(scope))}</span>`).join("") || '<span class="scope-pill">MCP &amp; Skill</span>'}</div>` },
+    activeRunner: { html: activeRunnerSelector(client, data.runners, csrf) },
+    lastUsed: { html: timeMarkup(client.last_used_at_ms), className: "time-cell" },
+    status: { html: clientCredentialBadge(client.revoked_at_ms !== null, "compact") },
+    actions: { html: clientListActions(client, csrf), className: "actions" },
+  })}</tr>`).join("") || `<tr><td colspan="${clientColumns.length}" class="empty"><div class="empty-state-box"><p>${message("text.no.mcp.clients.yet", "en")}</p></div></td></tr>`;
   return `<section class="page-heading">
     <div><p class="eyebrow">${message("text.integrations", "en")}</p><h1>${message("nav.clients", "en")}</h1><p class="lede">${message("text.manage.labels.scopes.runner.routing.and.one.time.client.secrets", "en")}</p></div>
     <a class="button" href="#add-client">${message("text.add.mcp.client", "en")}</a>
@@ -169,7 +179,7 @@ export function clientsPage(data: AdminData, csrf: string, centralEnabled = true
     <div class="section-title"><div><h2 id="client-list-title">${message("product.home.connections", "en")}</h2><span class="count-badge" data-no-i18n>${data.clients.length}</span></div></div>
     <div class="table-wrap"><table class="data-table client-table">
       <caption class="sr-only">${message("text.mcp.clients", "en")}</caption>
-      <thead><tr><th scope="col">${message("text.label", "en")}</th><th scope="col">${message("text.scopes", "en")}</th><th scope="col">${message("text.active.runner", "en")}</th><th scope="col">${message("text.last.used", "en")}</th><th scope="col">${message("client.credential.status", "en")}</th><th scope="col">${message("text.actions", "en")}</th></tr></thead>
+      ${responsiveTableHead(clientColumns)}
       <tbody>${rows}</tbody>
     </table></div>
   </section>

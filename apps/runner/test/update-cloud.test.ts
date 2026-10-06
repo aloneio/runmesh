@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createCloudMaintenance, maintenanceEndpoint } from "../src/updates/cloud.js";
+import { MaintenanceHttpError } from "../src/updates/contracts.js";
 import type { RunnerProfile } from "../src/profile.js";
 import { parseProductArgs } from "../src/cli/input.js";
 import { runCli } from "../src/cli.js";
@@ -20,6 +21,12 @@ describe("maintenance HTTPS and CLI", () => {
     const cloud = createCloudMaintenance({ profile: async () => current, fetch: (async (_url, init) => { tokens.push(new Headers(init?.headers).get("authorization")!); return Response.json(idle); }) as typeof fetch });
     await cloud.poll(); current = { ...profile, token: "rotated-existing-token" }; await cloud.poll();
     expect(tokens).toEqual(["Bearer existing-runner-token", "Bearer rotated-existing-token"]);
+  });
+  it.each([401, 403, 409, 429, 503])("exposes HTTP %s through the coordinator's error contract", async status => {
+    const cloud = createCloudMaintenance({ profile: async () => profile, fetch: (async () => new Response("upstream detail", { status })) as typeof fetch });
+    const request = cloud.poll();
+    await expect(request).rejects.toBeInstanceOf(MaintenanceHttpError);
+    await expect(request).rejects.toMatchObject({ status, message: `maintenance_http_${status}` });
   });
   it.each(["ws://remote.test/runner/connect", "wss://user:secret@example.test/runner/connect", "wss://example.test/arbitrary", "wss://example.test/runner/connect?token=secret"])("rejects an invalid maintenance origin %s", server_url => {
     expect(() => maintenanceEndpoint({ ...profile, server_url })).toThrow();

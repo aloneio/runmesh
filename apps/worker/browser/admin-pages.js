@@ -1,3 +1,5 @@
+import { fragmentTarget, offsetFragmentTarget } from "./fragment.js";
+
 function createAdminPages({
   document,
   location,
@@ -95,16 +97,10 @@ function createAdminPages({
       if (item !== container) item.remove();
     });
     function scrollToTarget(target) {
-      var header = document.querySelector(".app-header");
-      target.style.scrollMarginTop = ((header ? header.offsetHeight : 0) + 16) + "px";
+      offsetFragmentTarget(document, target);
       target.scrollIntoView({ block: "start" });
     }
-    var target;
-    if (url.hash) {
-      try {
-        target = document.getElementById(decodeURIComponent(url.hash.slice(1)));
-      } catch {}
-    }
+    var target = fragmentTarget(container, url.hash);
     if (target) {
       if (target.tabIndex < 0 && !target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
       target.focus({ preventScroll: true });

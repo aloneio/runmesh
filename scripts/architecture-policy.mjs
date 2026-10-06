@@ -56,9 +56,9 @@ export function maintenanceGraphProblems(files, edges) {
 const browserRoot = "apps/worker/browser/";
 const browserDependencies = {
   "admin-client.ts": ["central/controller.ts", "runner-actions.ts", "locale.ts", "page-controls.ts", "admin-pages.ts", "admin-navigation.ts"],
-  "page-controls.ts": ["clipboard.ts", "permission-controls.ts"],
+  "page-controls.ts": ["clipboard.ts", "permission-controls.ts", "fragment.ts"],
   "permission-controls.ts": [],
-  "locale.ts": [], "clipboard.ts": [], "admin-pages.ts": [], "admin-navigation.ts": [],
+  "locale.ts": [], "clipboard.ts": [], "admin-pages.ts": ["fragment.ts"], "admin-navigation.ts": [], "fragment.ts": [],
   "runner-actions.ts": [],
   "central/controller.ts": ["central/api.ts", "central/messages.ts", "central/view.ts", "central/services.ts", "central/skills.ts"],
   "central/api.ts": [], "central/messages.ts": [], "central/view.ts": [],
@@ -71,6 +71,8 @@ const requestUseCase = path => /^apps\/worker\/src\/application\/(?:auth-source|
 const registryCoordinator = path => /^apps\/worker\/src\/registry\/(?:history-routes|history-ports|transport-routes)\.ts$/u.test(canonicalSource(path));
 const registryPlatformTypes = new Set(["DurableObjectState", "DurableObjectStorage", "DurableObjectNamespace", "DurableObjectStub", "SqlStorage", "D1Database", "D1PreparedStatement", "ExecutionContext", "Fetcher"]);
 const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSource", "WebTransport", "Worker", "SharedWorker", "caches", "globalThis", "window", "self", "process", "Deno", "Bun"]);
+const updateCore = path => /^apps\/runner\/src\/updates\/(?:contracts|coordinator)\.ts$/u.test(path);
+const nativeServiceContracts = runnerRoot + "services/contracts.ts";
 
 /** Conservative source guard: stateful workflows receive API and view ports. */
 export function boundaryNodeProblem(from, node) {
@@ -82,6 +84,11 @@ export function boundaryNodeProblem(from, node) {
   if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
     return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if ((updateCore(source) || source === nativeServiceContracts || source === "apps/worker/src/async-deadline.ts")
+    && (networkGlobals.has(node.name) || registryPlatformTypes.has(node.name) || ["Request", "Response", "crypto", "eval", "Function"].includes(node.name)))
+    return "Update coordination and deadline scheduling receive I/O through ports, not platform globals";
+  if (source === nativeServiceContracts && ["Date", "performance", "setTimeout", "setInterval", "queueMicrotask"].includes(node.name))
+    return "Native-service contracts declare shared values and ports, not time or scheduling";
   if (source === "apps/worker/src/registry/release-cache.ts"
     && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
     return "Registry release cache admission uses supplied values, not platform state or scheduling";
@@ -129,6 +136,9 @@ export function specifierProblem(from, specifier, typeOnly) {
   if (centralProblem) return centralProblem;
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
+  if (source === "apps/worker/src/async-deadline.ts") return "Shared deadline scheduling stays independent of imported implementations";
+  if ((updateCore(source) || source === nativeServiceContracts) && external && specifier !== "@aloneio/runmesh-protocol")
+    return "Update and native-service contracts use shared protocol and local ports, not external adapters";
   if (isMaintenanceSource(source) && external && !builtin && !purePackages.test(specifier))
     return "Maintenance dependencies are host primitives and shared protocol contracts";
   if (source === "apps/runner/src/environment-contracts.ts" && external && !purePackages.test(specifier))
@@ -161,7 +171,7 @@ const workerRootRoles = {
   "auth-settings.ts": "application",
   "capabilities-do.ts": "central_owner",
 };
-const foundations = new Set(["bounded-json.ts", "public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-release-validation.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
+const foundations = new Set(["async-deadline.ts", "bounded-json.ts", "public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-release-validation.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
 export function workerRole(path) {
   if (path.startsWith("apps/worker/browser/")) return "browser";
   if (!path.startsWith("apps/worker/src/")) return layer(path);
@@ -196,6 +206,13 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  if (from === nativeServiceContracts && !to.startsWith("packages/protocol/src/"))
+    return "Native-service contracts depend only on shared protocol, not adapters or intermediary modules";
+  if (updateCore(from) && !to.startsWith("packages/protocol/src/")
+    && to !== (from.endsWith("/contracts.ts") ? runnerRoot + "services/contracts.ts" : runnerRoot + "updates/contracts.ts"))
+    return "Update contracts and coordination depend on their ports, not concrete adapters or intermediaries";
+  if (from === "apps/worker/src/async-deadline.ts")
+    return "Shared deadline scheduling stays independent of imported implementations";
   if (isMaintenanceSource(from)) {
     const reason = maintenanceRuntimeInputProblem(to);
     if (reason) return reason;

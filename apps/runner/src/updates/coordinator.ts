@@ -1,6 +1,5 @@
 import { isTerminalRunnerUpdate } from "@aloneio/runmesh-protocol";
-import { UpdateFailure } from "./contracts.js";
-import { MaintenanceHttpError } from "./cloud.js";
+import { MaintenanceHttpError, UpdateFailure } from "./contracts.js";
 import type { CloudUpdateObservation, LocalUpdatePhase, UpdateCoordinatorOptions, UpdateErrorCode, UpdateJournal, UpdateJournalRecord, UpdateOwner, UpdatePreparation } from "./contracts.js";
 
 const terminal = (phase: LocalUpdatePhase): phase is "succeeded" | "rolled_back" | "failed" => ["succeeded", "rolled_back", "failed"].includes(phase);

@@ -21,6 +21,8 @@ const storageDependencies = new Set([...storageContracts, "apps/worker/src/contr
 const sharedProvider = path => path === "apps/worker/src/mcp/providers/schema-publication.ts";
 
 export function centralDependencyProblem(from, to) {
+  if (["apps/worker/src/application/connectors/deadline.ts", "apps/worker/src/application/capabilities/remote-deadline.ts"].includes(from)
+    && to === "apps/worker/src/async-deadline.ts") return undefined;
   if (sharedProvider(from) && !to.startsWith("apps/worker/src/contracts/"))
     return "Shared schema publication must not import feature, request or platform implementations";
   if (provider(from) && sharedProvider(to)) return undefined;
