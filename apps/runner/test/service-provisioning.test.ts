@@ -6,6 +6,13 @@ import { join } from "node:path";
 import { createServiceManager, createServiceProvisioner, renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
 import { resolveTrustedWindowsTool, trustedWindowsEnvironment, trustedWindowsRoot } from "../src/windows-tools.js";
 
+// Hosted Windows has taken 8.1s to reach the synthetic probe, before the
+// unchanged service script's 5s stop observation. That cannot fit the old
+// 12s total. This fixture-only budget includes setup and host teardown; the
+// real host executor has no corresponding overall deadline.
+const WINDOWS_TASK_PROBE_TIMEOUT_MS = 30_000;
+const WINDOWS_TASK_PROBE_TEST_MARGIN_MS = 5_000;
+
 function runSyntheticTaskProbe(script: string, state: "stopped" | "absent" | "running" | "queued" | "denied" | "unknown") {
   const task = state === "absent" ? "throw [System.IO.FileNotFoundException]::new()"
     : state === "denied" ? "throw [System.UnauthorizedAccessException]::new('synthetic access denied')"
@@ -38,7 +45,7 @@ function New-Object { param([string]$ComObject) if ($ComObject -ne 'Schedule.Ser
   // this synthetic script literal, and close stdin.
   const started = performance.now();
   const result = spawnSync(resolveTrustedWindowsTool("powershell.exe", systemRoot), ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(source, "utf16le").toString("base64")], {
-    encoding: "utf8", timeout: 12_000, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8", timeout: WINDOWS_TASK_PROBE_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
     cwd: join(systemRoot, "System32"), env: trustedWindowsEnvironment(systemRoot),
   });
   const stdout = result.stdout ?? "", stderr = result.stderr ?? "";
@@ -72,7 +79,7 @@ describe("native service package ownership", () => {
     expect(result.status, result.diagnostic).toBe(1);
     expect(result.stderr.trim()).toBe("synthetic probe failure");
     expectSyntheticProbeCompleted(result);
-  });
+  }, WINDOWS_TASK_PROBE_TIMEOUT_MS + WINDOWS_TASK_PROBE_TEST_MARGIN_MS);
 
   it("preserves a macOS registration when its native state probe is denied", async () => {
     const manifest = renderService({ platform: "darwin", mode: "system" });
@@ -114,7 +121,7 @@ describe("native service package ownership", () => {
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe(state);
     }
-  });
+  }, WINDOWS_TASK_PROBE_TIMEOUT_MS + WINDOWS_TASK_PROBE_TEST_MARGIN_MS);
 
   it.skipIf(process.platform !== "win32").each(["absent", "denied", "unknown"] as const)("classifies a synthetic Windows %s exception through public status", async state => {
     const calls: string[][] = [];
@@ -140,7 +147,7 @@ describe("native service package ownership", () => {
       observations.forEach(expectSyntheticProbeCompleted);
       expect(calls.some(call => call.includes("/Delete"))).toBe(false);
     }
-  });
+  }, 2 * WINDOWS_TASK_PROBE_TIMEOUT_MS + WINDOWS_TASK_PROBE_TEST_MARGIN_MS);
 
   it("keeps a timed-out Windows task query distinct from confirmed absence", async () => {
     const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
