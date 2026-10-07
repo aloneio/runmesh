@@ -1,4 +1,5 @@
-import type { AdminDecision, ConnectionProfile } from "./connectors.js";
+import type { AdminDecision } from "./admin-session.js";
+import type { ConnectionProfile } from "./connectors.js";
 import { SECRET_STORAGE_LIMITS, type EncryptedSecret, type SecretStorage } from "./secret-storage.js";
 
 export const MANAGED_OAUTH_DISCOVERY_BYTES = 32_768;

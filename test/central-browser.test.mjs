@@ -57,6 +57,34 @@ test("central request contracts keep recovery scopes and read-only POST receipts
   assert.deepEqual(encoded.lifecycle, { id: 'research/notes', operation: 'versions', readOnly: true, state: 'listed' });
 });
 
+test("request contracts identify workflow receipts and correction guidance at the same route boundary", () => {
+  const cases = [
+    ['profiles', undefined, null, false, false, false, false],
+    ['profiles/service', undefined, null, false, false, false, false],
+    ['profiles/cloud%2Fdocs', { action: 'connect' }, { id: 'cloud/docs' }, false, false, true, false],
+    ['profiles/cloud%252Fdocs', { action: 'enable' }, { id: 'cloud%2Fdocs' }, false, false, false, false],
+    ['profiles/service', { action: 'disable' }, { id: 'service' }, false, false, false, false],
+    ['profiles-extra/service', { action: 'connect' }, null, false, false, false, false],
+    ['connections/begin', undefined, null, false, false, false, false],
+    ['connections/begin', { profile_id: 'service' }, null, true, false, false, false],
+    ['connections/begin-extra', { profile_id: 'service' }, null, false, false, false, false],
+    ['connections/revoke', { profile_id: 'service' }, null, false, false, false, false],
+    ['discovery/service', { expected_revision: 1 }, null, false, false, false, false],
+    ['skill-installations', { files: [] }, null, false, true, false, true],
+    ['skill-installations-extra', { files: [] }, null, false, false, false, false],
+    ['skills/research', { action: 'preview' }, null, false, false, false, true],
+    ['skills/research', { action: 'activate' }, null, false, false, false, false],
+    ['skills-extra/research', { action: 'preview' }, null, false, false, false, false],
+    ['skill-source/install', {}, null, false, false, false, false],
+  ];
+  for (const [path, body, profileWrite, authorizationStart, skillInstallation, serviceInput, skillInput] of cases) {
+    const request = centralRequestContract(path, body);
+    assert.deepEqual({ profileWrite: request.profileWrite, authorizationStart: request.authorizationStart,
+      skillInstallation: request.skillInstallation, serviceInput: request.serviceInput, skillInput: request.skillInput },
+    { profileWrite, authorizationStart, skillInstallation, serviceInput, skillInput }, path);
+  }
+});
+
 test("Remote recovery serializes one MCP while independent foreground workflows remain usable", async () => {
   const controls = ['mcp:a', 'mcp:b', 'skills', 'library', null].map(scope => ({ disabled: false, isConnected: true,
     getAttribute: () => scope }));
@@ -126,6 +154,7 @@ for (const [name, path, body, receipt] of [
   ["invalid profile revision", "profiles/service", { action: "enable", expected_revision: 1 }, { ...writtenProfile, profile: { ...writtenProfile.profile, revision: "2" } }],
   ["ambiguous enabled state", "profiles/service", { action: "disable", expected_revision: 1 }, { ...writtenProfile, profile: { ...writtenProfile.profile, enabled: "false" } }],
   ["unknown authentication", "profiles/service", { action: "connect" }, { ...writtenProfile, profile: { ...writtenProfile.profile, authentication: "unsupported" } }],
+  ["retired bearer authentication", "profiles/service", { action: "connect" }, { ...writtenProfile, profile: { ...writtenProfile.profile, authentication: "bearer" } }],
   ["missing OAuth URL", "connections/begin", { profile_id: "service", expected_revision: 1 }, { state: "started" }],
   ["empty OAuth URL", "connections/begin", { profile_id: "service", expected_revision: 1 }, { state: "started", authorization_url: "" }],
   ["malformed OAuth URL", "connections/begin", { profile_id: "service", expected_revision: 1 }, { state: "started", authorization_url: "https://[" }],
@@ -209,6 +238,22 @@ test("complete profile, OAuth and Skill receipts remain unchanged and admit the 
   for (const [path, body, receipt] of cases) assert.deepEqual(await api.request(path, body), receipt);
   assert.equal(api.requests.length, cases.length);
   assert.equal(api.refreshRequired(), false);
+});
+
+test("profile reads and encoded profile mutations keep their separate receipt requirements", async t => {
+  const cases = [
+    ['profiles/service', undefined, { state: 'found' }],
+    ['profiles/cloud%2Fdocs', { action: 'enable', expected_revision: 1 },
+      { ...writtenProfile, profile: { ...writtenProfile.profile, profile_id: 'cloud/docs' } }],
+    ['profiles/cloud%252Fdocs', { action: 'disable', expected_revision: 1 },
+      { ...writtenProfile, profile: { ...writtenProfile.profile, profile_id: 'cloud%2Fdocs', enabled: false } }],
+  ];
+  let index = 0;
+  const api = client(t, () => Response.json(cases[index++][2]));
+  for (const [path, body, receipt] of cases) assert.deepEqual(await api.request(path, body), receipt);
+  assert.equal(api.refreshRequired(), false);
+  assert.deepEqual(api.requests.map(([url, options]) => [url, options.method]),
+    cases.map(([path, body]) => ['/admin/central/' + path, body === undefined ? 'GET' : 'POST']));
 });
 
 for (const locale of ["en", "zh-CN"]) test("OAuth deployment configuration failures give specific " + locale + " guidance", async t => {

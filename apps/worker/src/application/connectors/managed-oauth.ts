@@ -6,6 +6,7 @@ import type { ManagedConnectionResult } from '../../contracts/managed-connection
 import type { ManagedOAuthPorts, ManagedOAuthRecord, ManagedOAuthTokens } from '../../contracts/managed-oauth.js';
 import { publicMcpEndpoint } from '../../contracts/remote-values.js';
 import { OAuthFault, type CredentialLease } from '../../contracts/oauth.js';
+import { isAdminSessionDigest } from '../../contracts/admin-session.js';
 
 const fault = (code: ConstructorParameters<typeof OAuthFault>[0]): never => { throw new OAuthFault(code); };
 const context = (record: ManagedOAuthRecord, kind: string) => `connection:${record.profile_id}:${record.state_hash}:${kind}`;
@@ -28,7 +29,7 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     return value;
   };
   const admin = async (hash: string, signal: AbortSignal) => {
-    if (!/^[a-f0-9]{64}$/u.test(hash)) return fault("denied");
+    if (!isAdminSessionDigest(hash)) return fault("denied");
     const decision = await ports.admin(hash, signal); signal.throwIfAborted();
     if (decision !== "allowed") return fault(decision === "denied" ? "denied" : "unavailable");
   };

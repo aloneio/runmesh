@@ -6,6 +6,11 @@ const headFor = (head, id) => head?.skill_id === id && count(head.revision) && h
   && digest(head.staged_digest) && (head.active_digest === null || digest(head.active_digest)) && typeof head.enabled === 'boolean';
 const capacityValid = value => value && ['skill_bytes', 'skill_versions', 'library_bytes', 'library_skills', 'max_versions', 'max_library_bytes', 'max_skills'].every(key => count(value[key]));
 
+/** Local installation returns the published identity before the workflow reloads its head. */
+export function validSkillInstallationReceipt(value) {
+  return ['skill_id', 'name', 'digest'].every(key => typeof value[key] === 'string' && value[key].length > 0);
+}
+
 /** Lifecycle receipts are checked at the browser boundary, before creating controls. */
 export function validSkillLifecycleReceipt(request, body, value) {
   const { id, operation } = request;

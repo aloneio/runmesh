@@ -3,7 +3,7 @@ import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { RunnerUpdateOperationSchema } from "@aloneio/runmesh-protocol";
-import { isExactUpdateVersion, UPDATE_ERRORS, UPDATE_IDENTIFIER, UpdateFailure } from "./contracts.js";
+import { isExactUpdateVersion, isLocalUpdatePhase, UPDATE_ERRORS, UPDATE_IDENTIFIER, UpdateFailure } from "./contracts.js";
 import type { UpdateJournalRecord, UpdateJournalPort, UpdatePreparation } from "./contracts.js";
 import { readMetadataJson } from "./metadata-file.js";
 
@@ -57,10 +57,9 @@ function parseJournal(value: unknown): UpdateJournalRecord {
   const release = (candidate: unknown): boolean => object(candidate) && typeof candidate.version === "string" && isExactUpdateVersion(candidate.version)
     && typeof candidate.directory === "string" && candidate.directory.length <= 4096 && !/[\0\r\n]/u.test(candidate.directory);
   if (!release(value.previous) || (value.next !== undefined && !release(value.next))) throw new UpdateFailure("local_state_invalid");
-  const phases = ["claimed", "staged", "draining", "stopping", "switching", "starting", "checking", "rolling_back", "succeeded", "rolled_back", "failed", "recovery_required"];
-  if (!phases.includes(String(value.phase)) || (value.error_code !== undefined && !UPDATE_ERRORS.includes(value.error_code as typeof UPDATE_ERRORS[number]))) throw new UpdateFailure("local_state_invalid");
+  if (!isLocalUpdatePhase(value.phase) || (value.error_code !== undefined && !UPDATE_ERRORS.includes(value.error_code as typeof UPDATE_ERRORS[number]))) throw new UpdateFailure("local_state_invalid");
   const service = value.service;
-  if (!object(service) || service.schema_version !== 1 || !["linux", "darwin", "win32"].includes(String(service.platform)) || !["user", "system"].includes(String(service.mode))
+  if (!object(service) || service.schema_version !== 1 || typeof service.platform !== "string" || !["linux", "darwin", "win32"].includes(service.platform) || typeof service.mode !== "string" || !["user", "system"].includes(service.mode)
     || typeof service.registered !== "boolean" || typeof service.active !== "boolean" || typeof service.enabled !== "boolean" || typeof service.enablement !== "string" || service.enablement.length > 128
     || (service.pid !== undefined && (!Number.isSafeInteger(service.pid) || Number(service.pid) < 0))) throw new UpdateFailure("local_state_invalid");
   return value as unknown as UpdateJournalRecord;

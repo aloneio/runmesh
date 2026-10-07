@@ -26,6 +26,11 @@ export function centralRequestContract(path, body, missing = false) {
   const collection = body === undefined && ['profiles', 'skills'].includes(route) ? route : null;
   const sourceAction = path === 'skill-source/preview' ? 'preview' : path === 'skill-source/install' ? 'install' : null;
   const inspection = path === 'connection-check', registry = path === 'registry-preview';
+  const profileWrite = body && path.startsWith('profiles/') ? { id: decodeURIComponent(path.slice('profiles/'.length)) } : null;
+  const authorizationStart = !!body && path === 'connections/begin';
+  const skillInstallation = path === 'skill-installations';
+  const serviceInput = profileWrite !== null && body?.action === 'connect';
+  const skillInput = skillInstallation || path.startsWith('skills/') && body?.action === 'preview';
   const mutation = body !== undefined && body.action !== 'preview' && !lifecycle?.readOnly
     && sourceAction !== 'preview' && !inspection && !registry;
   let states = ['written'];
@@ -33,11 +38,12 @@ export function centralRequestContract(path, body, missing = false) {
   else if (inspection) states = ['inspected', 'authorization_required'];
   else if (sourceAction === 'preview' || registry || body?.action === 'preview') states = ['previewed'];
   else if (body === undefined) states = [collection ? 'listed' : 'found'];
-  else if (path === 'skill-installations') states = ['installed'];
+  else if (skillInstallation) states = ['installed'];
   else if (path === 'connections/begin') states = ['started'];
   else if (path === 'connections/revoke') states = ['revoked'];
   const optionalCatalog = missing && body === undefined && path.startsWith('catalogs/');
   if (optionalCatalog) states.push('empty');
   if (body && path.startsWith('discovery/')) states.push('authorization_required');
-  return { path, body, scope: centralRequestScope(path, body), mutation, states, collection, lifecycle, sourceAction, inspection, registry, optionalCatalog };
+  return { path, body, scope: centralRequestScope(path, body), mutation, states, collection, lifecycle, sourceAction, inspection, registry,
+    profileWrite, authorizationStart, skillInstallation, serviceInput, skillInput, optionalCatalog };
 }

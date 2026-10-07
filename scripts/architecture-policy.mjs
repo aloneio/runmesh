@@ -78,10 +78,13 @@ const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSo
 const updateCore = path => /^apps\/runner\/src\/updates\/(?:contracts|coordinator)\.ts$/u.test(path);
 const nativeServiceContracts = runnerRoot + "services/contracts.ts";
 const runnerBackoff = runnerRoot + "backoff.ts";
+const adminSessionContract = "apps/worker/src/contracts/admin-session.ts";
 
 /** Conservative source guard: stateful workflows receive API and view ports. */
 export function boundaryNodeProblem(from, node) {
   const source = canonicalSource(from);
+  if (source === adminSessionContract && (node.type === "AwaitExpression" || node.async === true))
+    return "Administrator session decisions synchronously project supplied receipts";
   if (source === runnerBackoff && (node.type === "AwaitExpression" || node.async === true))
     return "Shared Runner backoff calculates delays synchronously";
   if (source === "apps/worker/src/registry/release-cache.ts" && (node.type === "AwaitExpression" || node.async === true))
@@ -93,6 +96,9 @@ export function boundaryNodeProblem(from, node) {
   if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
     return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if (source === adminSessionContract
+    && (networkGlobals.has(node.name) || registryPlatformTypes.has(node.name) || ["WorkerEnv", "Request", "Response", "AbortController", "Date", "performance", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Administrator session decisions receive parsed receipts, not transport, storage or scheduling";
   if (source === runnerBackoff
     && (networkGlobals.has(node.name) || registryPlatformTypes.has(node.name) || ["Request", "Response", "localStorage", "sessionStorage", "indexedDB", "crypto", "performance", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
     return "Shared Runner backoff calculates delays without I/O, storage or scheduling";
@@ -150,6 +156,8 @@ const cloudRoles = new Set(["entry", "platform", "transport_owner", "registry_fa
 const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain", "registry_route"]);
 export function specifierProblem(from, specifier, typeOnly) {
   const source = canonicalSource(from);
+  if (source === adminSessionContract && (!typeOnly || specifier !== "./control-plane-receipts.js"))
+    return "Administrator session decisions reference only the shared receipt type";
   if (source === "apps/worker/src/domain/runner-admission.ts" && specifier !== "./runner-handshake.js")
     return "Runner admission rules share pure identity validation, not imported adapters";
   const centralProblem = centralSpecifierProblem(source, specifier);
@@ -229,6 +237,8 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  if (from === adminSessionContract && to !== "apps/worker/src/contracts/control-plane-receipts.ts")
+    return "Administrator session decisions stay independent of feature contracts and implementations";
   if (from === "apps/worker/src/domain/runner-admission.ts" && to !== "apps/worker/src/domain/runner-handshake.ts")
     return "Runner admission rules share pure identity validation, not imported adapters";
   if (from === nativeServiceContracts)

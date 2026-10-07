@@ -1,6 +1,6 @@
 import type { CapturedIdentity, IdentityDecision } from "./identity.js";
 import type { CapabilityTarget } from "./capabilities.js";
-import type { AdminDecision } from "./connectors.js";
+import type { AdminDecision } from "./admin-session.js";
 import type { SkillFileManifest } from "./skill-manifest.js";
 
 export const SKILL_LIMITS = Object.freeze({ files: 256, file_bytes: 1_048_576, bundle_bytes: 8_388_608, request_bytes: 12_582_912,

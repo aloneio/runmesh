@@ -1,9 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
-import type { FileHandle } from "node:fs/promises";
 import { isBoundCursor } from "@aloneio/runmesh-protocol";
 import { RpcRuntimeError } from "./errors.js";
-import { readPageBytes } from "./page-read.js";
+import { readPageBytes, type PositionedByteReader } from "./page-read.js";
 
 const TTL_MS = 5 * 60 * 1000;
 export const MAX_FILE_SNAPSHOT_BYTES = 1024 * 1024;
@@ -67,7 +66,7 @@ export function fileObservation(info: Stats): string {
 type FileSnapshot = { readonly data: Buffer; readonly hash: string; readonly observation: string };
 export const fileSnapshots = new CursorCache<FileSnapshot>(16, 8 * 1024 * 1024);
 let captures = 0;
-export async function captureFile(handle: FileHandle, info: Stats): Promise<FileSnapshot> {
+export async function captureFile(handle: PositionedByteReader, info: Stats): Promise<FileSnapshot> {
   if (!Number.isSafeInteger(info.size) || info.size < 0 || info.size > MAX_FILE_SNAPSHOT_BYTES) throw new RpcRuntimeError("snapshot_too_large", "File snapshots are limited to 1 MiB; use explicitly live pages for larger files");
   if (captures >= MAX_CAPTURE_CONCURRENCY) throw new RpcRuntimeError("busy", "Too many concurrent file snapshot captures");
   captures += 1;
@@ -87,20 +86,20 @@ type LogObservation = { readonly identity: string; readonly size: number; readon
 export const logGenerations = new CursorCache<LogObservation>(256, 256 * 1024);
 const ANCHOR_BYTES = 256;
 function logIdentity(info: Stats): string { return JSON.stringify([info.dev, info.ino, info.birthtimeMs, info.mode, info.uid, info.gid]); }
-async function logAnchors(handle: FileHandle, size: number): Promise<{ prefix: string; boundary: string }> {
+async function logAnchors(handle: PositionedByteReader, size: number): Promise<{ prefix: string; boundary: string }> {
   const length = Math.min(size, ANCHOR_BYTES);
   const first = await readPageBytes(handle, 0, length, "log_changed");
   const last = size <= ANCHOR_BYTES ? first : await readPageBytes(handle, size - length, length, "log_changed");
   const digest = (data: Buffer) => createHash("sha256").update(data).digest("hex");
   return { prefix: digest(first), boundary: digest(last) };
 }
-export async function observeLog(handle: FileHandle, info: Stats): Promise<LogObservation> {
+export async function observeLog(handle: PositionedByteReader, info: Stats): Promise<LogObservation> {
   return { identity: logIdentity(info), size: info.size, mtime: info.mtimeMs, ctime: info.ctimeMs, ...await logAnchors(handle, info.size) };
 }
 /** Detect identity replacement, observed truncation and changed boundary
  * anchors while allowing append. This is not a hash of all historical output
  * and cannot attest to arbitrary same-inode interior edits by a host writer. */
-export async function verifyLogGeneration(handle: FileHandle, info: Stats, previous: LogObservation): Promise<void> {
+export async function verifyLogGeneration(handle: PositionedByteReader, info: Stats, previous: LogObservation): Promise<void> {
   if (logIdentity(info) !== previous.identity || info.size < previous.size || (info.size === previous.size && (info.mtimeMs !== previous.mtime || info.ctimeMs !== previous.ctime))) throw changedLog();
   const anchors = await logAnchors(handle, previous.size);
   if (anchors.prefix !== previous.prefix || anchors.boundary !== previous.boundary) throw changedLog();

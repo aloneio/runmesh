@@ -1,4 +1,4 @@
-import type { AdminDecision } from "./connectors.js";
+import type { AdminDecision } from "./admin-session.js";
 import type { RemoteConnector, RemoteCode } from "./remote.js";
 import type { RemoteServerInfo } from "./remote-server.js";
 export type ConnectorInspection = { readonly state: "inspected"; readonly endpoint: string; readonly server: RemoteServerInfo;

@@ -112,6 +112,13 @@ async function installation() {
   return { root, previous, next, release, pointer: new ManagedInstallationPointer(root) };
 }
 
+function checkingJournal(managerId: string): UpdateJournal {
+  return { schema_version: 1, manager_id: managerId, phase: "checking",
+    operation: { operation_id: "upgrade_1", lifecycle_id: "lifecycle_1", target_version: "0.1.6", target_channel: "stable", manifest_sha256: "a".repeat(64), artifact_sha256: "b".repeat(64), original_version: "0.1.7", manager_id: managerId, state: "checking", error_code: null, created_at_ms: 1, updated_at_ms: 2 },
+    previous: { version: "0.1.7", directory: "/managed/versions/old" }, next: { version: "0.1.6", directory: "/managed/versions/new" },
+    service: { schema_version: 1, platform: "linux", mode: "system", registered: true, active: false, enabled: false, enablement: "disabled", pid: 0 } };
+}
+
 describe("managed version pointer and durable journal", () => {
   it("rejects an installation reached through an aliased ancestor while accepting its canonical root", async () => {
     const test = await installation(); const container = await temporary(); const alias = join(container, "temp-alias");
@@ -173,13 +180,27 @@ describe("managed version pointer and durable journal", () => {
     const directory = await temporary(); const managerId = await loadManagerId(directory);
     expect(await loadManagerId(directory)).toBe(managerId);
     const journal = new FileUpdateJournal(directory);
-    const state: UpdateJournal = { schema_version: 1, manager_id: managerId, phase: "checking",
-      operation: { operation_id: "upgrade_1", lifecycle_id: "lifecycle_1", target_version: "0.1.6", target_channel: "stable", manifest_sha256: "a".repeat(64), artifact_sha256: "b".repeat(64), original_version: "0.1.7", manager_id: managerId, state: "checking", error_code: null, created_at_ms: 1, updated_at_ms: 2 },
-      previous: { version: "0.1.7", directory: "/managed/versions/old" }, next: { version: "0.1.6", directory: "/managed/versions/new" },
-      service: { schema_version: 1, platform: "linux", mode: "system", registered: true, active: false, enabled: false, enablement: "disabled", pid: 0 } };
+    const state = checkingJournal(managerId);
     await journal.save(state); expect(await journal.load()).toEqual(state);
     await journal.save({ ...state, phase: "succeeded" }); await journal.complete({ ...state, phase: "succeeded" });
     expect(await journal.load()).toBeUndefined(); expect(JSON.parse(await readFile(join(directory, "last-operation.json"), "utf8")).phase).toBe("succeeded");
+  });
+  it.each(["checking", "failed", "recovery_required"])("rejects a non-string %s phase without replacing recovery evidence", async phase => {
+    const directory = await temporary();
+    const path = join(directory, "active-operation.json");
+    const content = JSON.stringify({ ...checkingJournal("manager_1"), phase: [phase] });
+    await writeFile(path, content, { mode: 0o600 });
+    await expect(new FileUpdateJournal(directory).load()).rejects.toThrow("local_state_invalid");
+    expect(await readFile(path, "utf8")).toBe(content);
+  });
+  it.each(["platform", "mode"] as const)("rejects a non-string service %s when restoring the journal", async field => {
+    const directory = await temporary();
+    const state = checkingJournal("manager_1");
+    const path = join(directory, "active-operation.json");
+    const content = JSON.stringify({ ...state, service: { ...state.service, [field]: [state.service[field]] } });
+    await writeFile(path, content, { mode: 0o600 });
+    await expect(new FileUpdateJournal(directory).load()).rejects.toThrow("local_state_invalid");
+    expect(await readFile(path, "utf8")).toBe(content);
   });
   it("blocks corrupt transaction state instead of discarding recovery evidence", async () => {
     const directory = await temporary(); await writeFile(join(directory, "active-operation.json"), '{"schema_version":1}', { mode: 0o600 });

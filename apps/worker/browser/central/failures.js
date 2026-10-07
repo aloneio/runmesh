@@ -1,12 +1,10 @@
 /** Classify failure receipts into guidance and recovery metadata; the API owns refresh admission. */
-export function classifyCentralFailure({ path, body, sourceAction, inspection, registry }, status, value) {
+export function classifyCentralFailure({ serviceInput, skillInput, skillInstallation, sourceAction, inspection, registry }, status, value) {
   const code = value.error && value.error.code;
   const notStarted = value.error?.operation_state === 'not_started';
-  const serviceInput = path.startsWith('profiles/') && body?.action === 'connect';
-  const skillInput = path === 'skill-installations' || path.startsWith('skills/') && body?.action === 'preview';
   const confirmedInput = status === 400 && notStarted
     && (serviceInput && ['central_invalid_request', 'central_invalid'].includes(code)
-      || path === 'skill-installations' && ['central_invalid_request', 'skill_invalid_package', 'skill_invalid'].includes(code));
+      || skillInstallation && ['central_invalid_request', 'skill_invalid_package', 'skill_invalid'].includes(code));
   const failure = messageKey => ({ messageKey, confirmedNotStarted: confirmedInput });
 
   // Guidance describes a verified failure category; mutation admission remains separate.
@@ -18,9 +16,9 @@ export function classifyCentralFailure({ path, body, sourceAction, inspection, r
   // Only an explicit, recognized not-started receipt leaves a write ready for correction.
   if (status === 413 && skillInput && code === 'central_request_too_large' && notStarted)
     return { messageKey: 'skillUploadTooLarge', confirmedNotStarted: true };
-  if (status === 429 && (path === 'skill-installations' || sourceAction === 'install') && code === 'skill_capacity' && notStarted)
+  if (status === 429 && (skillInstallation || sourceAction === 'install') && code === 'skill_capacity' && notStarted)
     return { messageKey: 'skillLibraryLimitReached', confirmedNotStarted: true, details: { skillCapacity: true } };
-  if (status === 409 && path === 'skill-installations' && value.state === 'conflict')
+  if (status === 409 && skillInstallation && value.state === 'conflict')
     return { message: 'skill_exists', confirmedNotStarted: false, details: { skillId: value.skill_id, revision: value.current_revision } };
   if (code === 'skill_lifecycle_expired') return failure('skillCleanupExpired');
   if (code === 'skill_lifecycle_protected') return failure('skillCleanupProtected');

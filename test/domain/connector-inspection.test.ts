@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createConnectorInspection } from "../../apps/worker/src/application/connectors/inspection.js";
 import type { ConnectorInspectionPorts } from "../../apps/worker/src/contracts/connector-inspection.js";
-import type { AdminDecision } from "../../apps/worker/src/contracts/connectors.js";
+import type { AdminDecision } from "../../apps/worker/src/contracts/admin-session.js";
 import { MCP_REGISTRY_LIMITS } from "../../apps/worker/src/contracts/mcp-registry.js";
 import { RemoteFault, type RemoteResult, type RemoteSession } from "../../apps/worker/src/contracts/remote.js";
 import type { RemoteServerInfo } from "../../apps/worker/src/contracts/remote-server.js";

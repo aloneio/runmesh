@@ -1,6 +1,7 @@
 import { JSON_LIMITS } from "./json.js";
 import type { CapturedIdentity, IdentityDecision } from "./identity.js";
-import type { AdminDecision, ConnectionProfile } from "./connectors.js";
+import type { AdminDecision } from "./admin-session.js";
+import type { ConnectionProfile } from "./connectors.js";
 
 /** Import and retained-history budgets. Unreferenced snapshots are reclaimed
  * oldest-first at capacity; current observed/approved snapshots remain intact. */

@@ -1,7 +1,7 @@
 import { centralRequestContract } from './request-contract.js';
-import { validSkillLifecycleReceipt } from './skill-lifecycle-receipts.js';
+import { validSkillLifecycleReceipt, validSkillInstallationReceipt } from './skill-lifecycle-receipts.js';
 import { validSkillSourceReceipt } from './skill-source-receipts.js';
-import { validServiceInspection, validRegistryPreview } from './service-receipts.js';
+import { validServiceInspection, validRegistryPreview, validProfileWriteReceipt, validAuthorizationStartReceipt } from './service-receipts.js';
 import { classifyCentralFailure } from './failures.js';
 
 /** Network and receipt handling. The controller owns write admission. */
@@ -19,7 +19,7 @@ export function createCentralApi({
   async function api(path, body, missing) {
     assertCurrent();
     const request = centralRequestContract(path, body, missing);
-    const { lifecycle, sourceAction, inspection, registry, mutation, scope } = request;
+    const { lifecycle, sourceAction, inspection, registry, profileWrite, authorizationStart, skillInstallation, mutation, scope } = request;
     if (mutation && refreshRequired(scope)) throw new Error(t('refreshTheLibraryBeforeMakingAnotherChange'));
     var confirmedRejection = false,
       ctl = new AbortController(),
@@ -67,19 +67,9 @@ export function createCentralApi({
       if (registry && !validRegistryPreview(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       // A successful state alone cannot supply the identity/revision needed by
       // the next workflow step. An incomplete write still requires reconciliation.
-      if (body && path.startsWith('profiles/') && (value.profile?.profile_id !== decodeURIComponent(path.slice('profiles/'.length))
-        || !Number.isSafeInteger(value.profile?.revision) || value.profile.revision < 1
-        || typeof value.profile.enabled !== 'boolean' || !['none', 'oauth'].includes(value.profile.authentication))) {
-        throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
-      }
-      if (body && path === 'connections/begin') {
-        if (typeof value.authorization_url !== 'string' || !value.authorization_url.trim()) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
-        try { new URL(value.authorization_url, 'https://runmesh.invalid'); }
-        catch { throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange')); }
-      }
-      if (body && path === 'skill-installations' && ['skill_id', 'name', 'digest'].some(key => typeof value[key] !== 'string' || !value[key])) {
-        throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
-      }
+      if (profileWrite && !validProfileWriteReceipt(profileWrite, value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      if (authorizationStart && !validAuthorizationStartReceipt(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      if (body && skillInstallation && !validSkillInstallationReceipt(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       return value;
     } catch (error) {
       if (mutation && !confirmedRejection) requireRefresh(scope);

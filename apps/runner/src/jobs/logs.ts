@@ -2,7 +2,7 @@ import { boundPageRequest, bindBytePage, logGenerations, observeLog, verifyLogGe
 import { RpcRuntimeError } from "../errors.js";
 import { PathPolicyError } from "../path-policy.js";
 import { PROTOCOL_CURRENT_VERSION, bytePageMetadata } from "@aloneio/runmesh-protocol";
-import { readPageBytes } from "../page-read.js";
+import { readPageBytes, type PositionedByteReader } from "../page-read.js";
 import { utf8BackwardBoundary, utf8ForwardBoundary, utf8SafePrefixLength } from "../utf8-pagination.js";
 import { isErrno, bounded, paramsObject } from "./values.js";
 import type { open } from "node:fs/promises";
@@ -26,7 +26,7 @@ export function wireResponseBytes(result: Record<string, unknown>): number {
   return Buffer.byteLength(JSON.stringify({ type: "rpc.response", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "x".repeat(128), result }), "utf8");
 }
 
-export async function utf8AlignedStart(handle: Awaited<ReturnType<typeof open>>, requested: number, size: number, preferBackward: boolean): Promise<number> {
+export async function utf8AlignedStart(handle: PositionedByteReader, requested: number, size: number, preferBackward: boolean): Promise<number> {
   if (requested === 0 || requested >= size) return requested;
   const begin = Math.max(0, requested - 3);
   const data = await readPageBytes(handle, begin, Math.min(7, size - begin), "log_changed");

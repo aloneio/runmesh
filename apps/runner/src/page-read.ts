@@ -1,11 +1,15 @@
-import type { FileHandle } from "node:fs/promises";
 import { RpcRuntimeError } from "./errors.js";
+
+/** Positioned byte access; resource ownership stays with the caller. */
+export interface PositionedByteReader {
+  read(buffer: Buffer, offset: number, length: number, position: number): Promise<{ readonly bytesRead: number }>;
+}
 
 /** Read only this page, tolerating OS short reads without an unbounded loop.
  * The caller freezes the requested length from fstat and checks the object
  * again before returning. This is not an atomic filesystem snapshot.
  */
-export async function readPageBytes(handle: FileHandle, position: number, length: number, changedCode: "file_changed" | "log_changed"): Promise<Buffer> {
+export async function readPageBytes(handle: PositionedByteReader, position: number, length: number, changedCode: "file_changed" | "log_changed"): Promise<Buffer> {
   if (!Number.isSafeInteger(position) || position < 0 || !Number.isSafeInteger(length) || length < 0 || length > 256 * 1024 + 3) throw new RpcRuntimeError("invalid_params", "Invalid page read bounds");
   const buffer = Buffer.alloc(length);
   let used = 0;

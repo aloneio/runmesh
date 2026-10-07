@@ -6,7 +6,8 @@ import { createManagedOAuth } from './application/connectors/managed-oauth.js';
 import { ManagedOAuthState } from "./platform/connectors/managed-store.js";
 import type { ManagedConnections } from "./contracts/managed-connections.js";
 import { OAuthFault } from "./contracts/oauth.js";
-import type { AdminDecision, CentralAdministration, ProfileResult } from "./contracts/connectors.js";
+import type { CentralAdministration, ProfileResult } from "./contracts/connectors.js";
+import { isAdminSessionDigest, projectAdminSessionReceipt, type AdminDecision } from "./contracts/admin-session.js";
 import type { CentralToolVisibility } from "./contracts/capabilities.js";
 import { isCapabilityIdentifier } from "./contracts/capabilities.js";
 import type { CentralManagement } from "./contracts/central-management.js";
@@ -129,7 +130,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   }
   public async skillSource(hash: string, action: "preview" | "install", input: unknown): ReturnType<CentralSkillSource["skillSource"]> {
     if (!["preview", "install"].includes(action)) return { state: "invalid" };
-    if (typeof hash !== "string" || !/^[a-f0-9]{64}$/u.test(hash)) return { state: "denied" };
+    if (!isAdminSessionDigest(hash)) return { state: "denied" };
     if (this.#skillSources.has(hash) || this.#skillSources.size >= SKILL_SOURCE_LIMITS.active) return { state: "busy" };
     this.#skillSources.add(hash);
     try {
@@ -168,15 +169,11 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   }
 
   async #authorize(sessionHash: string, signal: AbortSignal): Promise<AdminDecision> {
-    if (typeof sessionHash !== "string" || !/^[a-f0-9]{64}$/u.test(sessionHash)) return "denied";
+    if (!isAdminSessionDigest(sessionHash)) return "denied";
     if (signal.aborted) return "unavailable";
     const response = await boundedJsonResponse(local => registryRequest(this.env, "/auth/sessions/verify", "POST",
       JSON.stringify({ session_hash: sessionHash }), AbortSignal.any([signal, local])));
-    if (signal.aborted || response === undefined) return "unavailable";
-    if ([401, 403, 404].includes(response.status)) return "denied";
-    if (response.status !== 200 || typeof response.value !== "object" || response.value === null || Array.isArray(response.value)) return "unavailable";
-    const csrf = (response.value as Record<string, unknown>).csrf_hash;
-    return typeof csrf === "string" && /^[a-f0-9]{64}$/u.test(csrf) ? "allowed" : "unavailable";
+    return signal.aborted ? "unavailable" : projectAdminSessionReceipt(response).state;
   }
 
   public async getProfile(sessionHash: string, profileId: string): ReturnType<CentralAdministration["getProfile"]> {
@@ -314,7 +311,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   }
 
   public async discoverRemote(sessionHash: string, profileId: string, expectedRevision: number): Promise<CatalogMutation | RemoteFailure> {
-    if (typeof sessionHash !== "string" || !/^[a-f0-9]{64}$/u.test(sessionHash)) return { state: "denied" };
+    if (!isAdminSessionDigest(sessionHash)) return { state: "denied" };
     const key = "admin:" + sessionHash;
     if (this.#remoteClients.has(key) || this.#remoteClients.size >= REMOTE_LIMITS.active) return { state: "failed", code: "busy", operation_state: "not_started" };
     this.#remoteClients.add(key);

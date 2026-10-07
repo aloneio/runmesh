@@ -1,4 +1,4 @@
-import type { AdminDecision } from "./connectors.js";
+import type { AdminDecision } from "./admin-session.js";
 import type { SkillBundle, SkillHead } from "./skills.js";
 
 export const SKILL_LIFECYCLE_LIMITS = Object.freeze({ preview_ms: 300_000, request_bytes: 8_192,
