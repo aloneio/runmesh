@@ -61,12 +61,12 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
   const abort = new AbortController();
   const signal = options.signal === undefined ? abort.signal : AbortSignal.any([abort.signal, options.signal]);
   const stop = () => abort.abort(); process.once("SIGINT", stop); process.once("SIGTERM", stop);
-  const directory = join(layout.managerRoot, "state"); await assertManagerDirectory(directory, true);
-  const journal = new FileUpdateJournal(directory);
-  const cloud = createCloudMaintenance({ profile, signal, ...(options.fetch === undefined ? {} : { fetch: options.fetch }) });
-  let lastError: string | undefined;
-  let rejectedCredential: string | undefined, failures = 0;
   try {
+    const directory = join(layout.managerRoot, "state"); await assertManagerDirectory(directory, true);
+    const journal = new FileUpdateJournal(directory);
+    const cloud = createCloudMaintenance({ profile, signal, ...(options.fetch === undefined ? {} : { fetch: options.fetch }) });
+    let lastError: string | undefined;
+    let rejectedCredential: string | undefined, failures = 0;
     while (!signal.aborted) {
       let lease: Awaited<ReturnType<typeof acquireInstallationLock>>;
       let delayMs = 30_000 + Math.floor(Math.random() * 30_001);

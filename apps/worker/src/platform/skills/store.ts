@@ -58,7 +58,7 @@ export class SkillState implements SkillRepository {
         insertSkillContent(this.storage.sql, bundle, bytes, install);
         recordSkillVersionCreated(this.storage.sql, bundle.skill_id, bundle.digest, Date.now());
       }
-      if (install && previous) this.storage.sql.exec("UPDATE skill_bundles_v2 SET approved=1 WHERE skill_id=? AND digest=?", bundle.skill_id, bundle.digest);
+      if (install && previous) this.storage.sql.exec("UPDATE skill_bundles_v2 SET approved=1 WHERE skill_id=? AND digest=? AND approved<>1", bundle.skill_id, bundle.digest);
       const head: SkillHead = { skill_id: bundle.skill_id, revision: revision + 1, staged_digest: bundle.digest, active_digest: install ? bundle.digest : current?.active_digest ?? null, enabled: install || (current?.enabled ?? false) };
       this.storage.sql.exec("INSERT INTO skill_heads_v1 VALUES (?,?,?,?,?) ON CONFLICT(skill_id) DO UPDATE SET revision=excluded.revision,staged_digest=excluded.staged_digest,active_digest=excluded.active_digest,enabled=excluded.enabled", head.skill_id, head.revision, head.staged_digest, head.active_digest, head.enabled ? 1 : 0);
       return { state: "written", head };
@@ -73,7 +73,7 @@ export class SkillState implements SkillRepository {
       if (!current) return { state: "missing" };
       if (current.revision !== revision) return { state: "conflict", current_revision: current.revision };
       if (digest !== null && !this.bundle(id, digest)) return { state: "missing" };
-      if (digest !== null) this.storage.sql.exec("UPDATE skill_bundles_v2 SET approved=1 WHERE skill_id=? AND digest=?", id, digest);
+      if (digest !== null) this.storage.sql.exec("UPDATE skill_bundles_v2 SET approved=1 WHERE skill_id=? AND digest=? AND approved<>1", id, digest);
       const head = { ...current, revision: revision + 1, active_digest: digest ?? current.active_digest, enabled: digest !== null };
       this.storage.sql.exec("UPDATE skill_heads_v1 SET revision=?,active_digest=?,enabled=? WHERE skill_id=?", head.revision, head.active_digest, head.enabled ? 1 : 0, id);
       return { state: "written", head };

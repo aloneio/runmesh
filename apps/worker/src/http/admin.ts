@@ -263,10 +263,9 @@ async function persistClientCredential(env: WorkerEnv, path: string, clientId: s
     && Array.isArray(receipt.native_scopes) && receipt.native_scopes.length === 0) {
     // Identity receipts omit credential metadata. Confirm the committed record
     // separately; never retry creation after an uncertain write.
-    const readback = await boundedJsonResponse(signal => registryRequest(env, "/auth/clients", "GET", "", signal));
-    const clients = record(readback?.value)?.clients;
-    const client = Array.isArray(clients) ? clients.map(record).find(item => item?.client_id === clientId) : undefined;
-    if (readback?.status === 200 && client?.secret_prefix === prefix && client.secret_version === 1
+    const readback = await boundedJsonResponse(signal => registryRequest(env, `/auth/clients/${encodeURIComponent(clientId)}`, "GET", "", signal));
+    const client = record(readback?.value);
+    if (readback?.status === 200 && client?.client_id === clientId && client.secret_prefix === prefix && client.secret_version === 1
       && client.revoked_at_ms === null && Array.isArray(client.scopes) && client.scopes.length === 0) return undefined;
   }
   return adminClientError(response?.status === 404 ? 404 : response?.status === 409 ? 409 : 503, "MCP credential could not be confirmed. Refresh the client state before trying again.");

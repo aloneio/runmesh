@@ -549,6 +549,52 @@ test("initial and dynamic controls share an idempotent clipboard handler", async
   await new Promise(setImmediate); assert.deepEqual(h.copied, ["initial", "dynamic"]);
   assert.equal(initial.textContent, "Copied"); assert.equal(dynamic.textContent, "Copied");
 });
+for (const lang of ["en", "zh-CN"]) for (const latestSucceeded of [true, false])
+test(`copy feedback preserves the latest ${latestSucceeded ? "success" : "failure"} after an older request settles in ${lang}`, async () => {
+  const pending = [];
+  const document = { documentElement: { lang } };
+  const navigator = { clipboard: { writeText: text => new Promise((resolve, reject) => pending.push({ text, resolve, reject })) } };
+  const controls = createPageControls({ document, navigator, window: {}, location: {}, locale: createLocale({ document }) });
+  const button = element(); button.textContent = "Copy MCP URL"; button.setAttribute("data-copy", "one-time-connection-url");
+  const root = { querySelectorAll: selector => selector === "[data-copy],[data-copy-source]" ? [button] : [], querySelector: () => null };
+  controls.bindPageControls(root); controls.bindPageControls(root);
+  button.dispatch("click"); button.dispatch("click");
+  assert.deepEqual(pending.map(item => item.text), ["one-time-connection-url", "one-time-connection-url"]);
+  const copied = lang === "zh-CN" ? "已复制" : "Copied", retry = lang === "zh-CN" ? "重试复制" : "Retry copy";
+  const failure = lang === "zh-CN" ? "复制失败，请手动复制或重试" : "Copy failed. Copy manually or retry.";
+  function assertLatest() {
+    assert.equal(button.textContent, latestSucceeded ? copied : retry);
+    assert.equal(button.getAttribute("title"), latestSucceeded ? null : failure);
+    assert.equal(button.classList.contains("copied"), latestSucceeded);
+  }
+  if (latestSucceeded) pending[1].resolve(); else pending[1].reject(new Error("private clipboard error"));
+  await new Promise(setImmediate); assertLatest();
+  if (latestSucceeded) pending[0].reject(new Error("older private clipboard error")); else pending[0].resolve();
+  await new Promise(setImmediate); assertLatest();
+  assert.equal(button.events.get("click").length, 1);
+});
+test("copy requests keep separate feedback owners across dynamically mounted pages", async () => {
+  const pending = [];
+  const document = { documentElement: { lang: "en" } };
+  const navigator = { clipboard: { writeText: text => new Promise((resolve, reject) => pending.push({ text, resolve, reject })) } };
+  const controls = createPageControls({ document, navigator, window: {}, location: {}, locale: createLocale({ document }) });
+  const buttons = ["first-url", "second-url"].map(value => {
+    const button = element(); button.textContent = "Copy MCP URL"; button.setAttribute("data-copy", value);
+    controls.bindPageControls({ querySelectorAll: selector => selector === "[data-copy],[data-copy-source]" ? [button] : [], querySelector: () => null });
+    button.dispatch("click");
+    return button;
+  });
+  pending[0].resolve(); await new Promise(setImmediate);
+  assert.equal(buttons[0].textContent, "Copied", "Each control owns its own request order");
+  assert.equal(buttons[1].textContent, "Copy MCP URL");
+  buttons[0].dispatch("click"); buttons[0].isConnected = false;
+  pending[1].resolve(); await new Promise(setImmediate);
+  pending[2].reject(new Error("departed page clipboard failure")); await new Promise(setImmediate);
+  assert.equal(buttons[1].textContent, "Copied", "The departed control cannot change a newly mounted button");
+  assert.equal(buttons[1].getAttribute("title"), null);
+  assert.equal(buttons[1].classList.contains("copied"), true);
+  assert.deepEqual(pending.map(item => item.text), ["first-url", "second-url", "first-url"]);
+});
 for (const lang of ["en", "zh-CN"]) for (const failure of ["clipboard rejection", "legacy false", "legacy exception"])
 test(`copy controls report ${failure} in ${lang} and recover on retry`, async () => {
   let failed = true, selected;

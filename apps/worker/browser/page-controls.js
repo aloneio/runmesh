@@ -89,17 +89,21 @@ function createPageControls({
       if (!claim(button, "copy")) return;
       button.setAttribute("aria-live", "polite");
       button.setAttribute("aria-atomic", "true");
+      let generation = 0;
       button.addEventListener("click", function () {
+        const current = ++generation;
         var result = copyText(copyValue(button), {
           document,
           navigator
         });
         var mark = function () {
+          if (current !== generation) return;
           button.textContent = document.documentElement.lang === "zh-CN" ? "已复制" : "Copied";
           button.removeAttribute("title");
           button.classList.add("copied");
         };
         result.then(mark, function () {
+          if (current !== generation) return;
           var isZh = document.documentElement.lang === "zh-CN";
           button.textContent = isZh ? "重试复制" : "Retry copy";
           button.setAttribute("title", isZh ? "复制失败，请手动复制或重试" : "Copy failed. Copy manually or retry.");

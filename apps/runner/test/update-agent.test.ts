@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunnerMaintenanceIdentity } from "../src/maintenance-contract.js";
 
-const testState = vi.hoisted(() => ({ profile: undefined as RunnerMaintenanceIdentity | undefined }));
+const testState = vi.hoisted(() => ({ profile: undefined as RunnerMaintenanceIdentity | undefined, failStateDirectory: false }));
 vi.mock("node:fs/promises", () => ({ lstat: async () => ({ isFile: () => true, isSymbolicLink: () => false, mode: 0o600, uid: process.getuid?.() }), realpath: async (path: string) => path }));
 vi.mock("../src/profile.js", () => ({ ProfileStore: class { async loadMaintenanceIdentity() { return testState.profile; } } }));
-vi.mock("../src/updates/journal.js", () => ({ assertManagerDirectory: async () => {}, FileUpdateJournal: class { async load() { return undefined; } }, loadManagerId: async () => "manager" }));
+vi.mock("../src/updates/journal.js", () => ({ assertManagerDirectory: async (_path: string, create = false) => { if (create && testState.failStateDirectory) throw new Error("manager state directory fixture"); }, FileUpdateJournal: class { async load() { return undefined; } }, loadManagerId: async () => "manager" }));
 vi.mock("../src/updates/manager-install.js", () => ({ maintenanceManagerLayout: () => ({ platform: process.platform, mode: "user", managerRoot: "/manager", runtimePath: process.execPath, bundlePath: process.argv[1], layout: { installRoot: "/install", stateRoot: "/state" } }) }));
 
 import { runMaintenanceAgent } from "../src/updates/agent.js";
@@ -13,7 +13,7 @@ const identity: RunnerMaintenanceIdentity = { runner_id: "runner", server_url: "
 const idle = { operation: null, cloud_drained: true, cloud_uncertain: false, observed_version: null, observed_new_session: false };
 
 describe("maintenance request scheduling", () => {
-  beforeEach(() => { vi.useFakeTimers(); vi.spyOn(Math, "random").mockReturnValue(0); testState.profile = identity; });
+  beforeEach(() => { vi.useFakeTimers(); vi.spyOn(Math, "random").mockReturnValue(0); testState.profile = identity; testState.failStateDirectory = false; });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   function start(respond: (calls: number) => Response) {
@@ -23,6 +23,21 @@ describe("maintenance request scheduling", () => {
       onError: code => errors.push(code), fetch: (async (_url, init) => { calls++; tokens.push(new Headers(init?.headers).get("authorization")!); return respond(calls); }) as typeof fetch });
     return { errors, tokens, calls: () => calls, async stop() { controller.abort(); await running; } };
   }
+
+  it("releases signal handlers if preparation of the manager state directory fails", async () => {
+    const signals = ["SIGINT", "SIGTERM"] as const, before = signals.map(signal => process.listeners(signal));
+    testState.failStateDirectory = true;
+    const fetch = vi.fn();
+    try {
+      await expect(runMaintenanceAgent({ profilePath: "/profile", installRoot: "/install", fetch })).rejects.toThrow("manager state directory fixture");
+      expect(signals.map(signal => process.listeners(signal))).toEqual(before);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      for (const [index, signal] of signals.entries()) {
+        for (const listener of process.listeners(signal)) if (!before[index]!.includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+  });
 
   it.each([429, 503])("honors Retry-After for HTTP %s and returns to idle cadence after recovery", async status => {
     const agent = start(calls => calls === 1 ? new Response("private-response", { status, headers: { "retry-after": "120" } })

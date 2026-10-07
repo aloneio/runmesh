@@ -36,10 +36,14 @@ async function atomicJson(directory: string, name: string, value: unknown): Prom
   await readManagerJson(path);
   const temporary = join(directory, `.${name}.${randomUUID()}.tmp`);
   const handle = await open(temporary, "wx", 0o600);
-  try { await handle.writeFile(JSON.stringify(value) + "\n"); await handle.sync(); }
-  finally { await handle.close(); }
-  try { await rename(temporary, path); await syncDirectory(directory); }
-  catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
+  // Exclusive creation establishes ownership before cleanup is installed.
+  // Every later failure must release this attempt's partial snapshot.
+  try {
+    try { await handle.writeFile(JSON.stringify(value) + "\n"); await handle.sync(); }
+    finally { await handle.close(); }
+    await rename(temporary, path);
+  } catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
+  await syncDirectory(directory);
 }
 
 function parseJournal(value: unknown): UpdateJournalRecord {

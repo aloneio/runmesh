@@ -66,7 +66,7 @@ try {
     evidencePhase = "package_evidence_validate";
     const safe = packageEvidence({ tests: input.tests, source: input.source, artifact: input.artifact, ...input.runtime, node: input.runtime.node, elapsedMs: input.elapsed_ms });
     evidencePhase = "package_evidence_source";
-    assert.equal(safe.source.commit, source.commit, "package evidence belongs to a different source");
+    assert.deepEqual(safe.source, source, "package evidence belongs to a different source observation");
     // Validate/project rather than copy an arbitrary hidden directory.
     evidencePhase = "package_evidence_publish";
     await writeSupplement("package-e2e", safe);
