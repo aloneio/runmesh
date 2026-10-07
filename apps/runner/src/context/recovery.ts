@@ -4,6 +4,10 @@ import { INDEX_SCHEMA_VERSION, MAX_CONTEXTS, MAX_REBUILD_FILES, MAX_REBUILD_BYTE
 import { nativeContextFiles } from "./files.js";
 import type { ContextRecoveryPort, ContextFilePort } from "./ports.js";
 
+// Checkpoint creation reserves ctx-<randomUUID()> names for record directories.
+// A substituted file at that name is history evidence, not an unrelated file.
+const GENERATED_CONTEXT_ID = /^ctx-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
 /** Explicit index recovery; it never upgrades or repairs immutable records. */
 export function rebuildContext(input: unknown, assertAuthorized: () => void, ports: ContextRecoveryPort, files: ContextFilePort = nativeContextFiles): Promise<Record<string, unknown>> {
     const workspaceId = workspaceIdFrom(input);
@@ -24,14 +28,19 @@ export function rebuildContext(input: unknown, assertAuthorized: () => void, por
       };
       for await (const item of entries) {
         consumeEntry();
-        if (!item.isDirectory() || !SAFE_ID.test(item.name) || item.name === "." || item.name === "..") continue;
+        if ((!item.isDirectory() && !item.isSymbolicLink() && !GENERATED_CONTEXT_ID.test(item.name)) || !SAFE_ID.test(item.name) || item.name === "." || item.name === "..") continue;
         const contextDir = join(workspaceDir, item.name);
+        // A linked or replaced context may hide saved history. Let the existing
+        // directory boundary reject it instead of publishing an incomplete index.
         await files.assertPrivateDirectory(contextDir, "context record directory");
         const revisions = await files.opendir(contextDir);
         let latest: ContextRecord | undefined;
         for await (const revisionFile of revisions) {
           consumeEntry();
-          if (!revisionFile.isFile() || !/^\d+\.json$/u.test(revisionFile.name)) continue;
+          // Relevant revision names must pass the bounded file reader even
+          // when their entry type changed; skipping one can select an older
+          // revision as current. Unrelated names remain outside this scan.
+          if (!/^\d+\.json$/u.test(revisionFile.name)) continue;
           scannedFiles += 1;
           if (scannedFiles > MAX_REBUILD_FILES) throw new RpcRuntimeError("context_rebuild_budget", "context rebuild file budget was exhausted");
           const path = join(contextDir, revisionFile.name);

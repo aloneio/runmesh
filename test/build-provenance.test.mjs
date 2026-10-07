@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { captureBuildProvenance, writeBuildProvenance, sourceDirectoryIdentity, sameDirectoryIdentity } from "../scripts/build-provenance.mjs";
+import { captureBuildProvenance, writeBuildProvenance } from "../scripts/build-provenance.mjs";
+import { sourceDirectoryIdentity, sameDirectoryIdentity } from "../scripts/source-git.mjs";
 
 const gitEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
 function git(root, ...args) {
