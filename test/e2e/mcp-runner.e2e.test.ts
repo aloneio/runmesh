@@ -1,5 +1,5 @@
 import { BUILD_PROVENANCE } from "../../apps/worker/src/generated-provenance.js";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, aroundEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,8 +11,13 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
 import { spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../../scripts/worker-fixture.mjs";
+import { createTestHttpScope } from "../../scripts/test-http-scope.mjs";
+
+const testHttp = createTestHttpScope();
+const fetch = testHttp.fetch;
+aroundEach((runTest, context) => testHttp.run(context.signal, runTest));
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -24,6 +29,7 @@ type McpClient = { readonly endpoint: string };
 type CleanupJob = { readonly id: string | undefined; readonly client: McpClient | undefined; readonly workspaceId?: string };
 type CookieJar = Map<string, string>;
 type FormFields = Record<string, string | readonly string[]>;
+type FixtureProgress = (phase: string, boundary: string) => void;
 
 let workerUrl = "";
 // Both fixtures launch Wrangler and build the Worker before serving requests.
@@ -770,57 +776,65 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(rejected.structuredContent?.error).toMatchObject({code:"insufficient_scope"});
   });
 
-  it("trusted no-record Jobs stay out of source snapshots after log reads, retries and re-enabling", async () => {
-    const { adminJar, csrf } = await adminCredentials();
-    const client = await createMcpClient("No-record source E2E", ["coding:read", "coding:write", "coding:exec"], adminJar, csrf);
-    expect((await mcpTool("runner_select", { runner_id: runnerId }, client)).isError).not.toBe(true);
-    const launch = (request: string) => mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('private-local-log')"), request_id: request, wait_ms: 4000 }, client);
+  it("trusted no-record Jobs stay out of source snapshots after log reads, retries and re-enabling", async ({ onTestFailed }) => {
+    const progress = fixtureProgress("job_recording", onTestFailed);
+    const { adminJar, csrf } = await adminCredentials(progress.mark);
+    const client = await createMcpClient("No-record source E2E", ["coding:read", "coding:write", "coding:exec"], adminJar, csrf, progress.mark);
+    expect((await progress.run("runner_select", () => mcpTool("runner_select", { runner_id: runnerId }, client))).isError).not.toBe(true);
+    const launch = (request: string) => progress.run("shell", () => mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('private-local-log')"), request_id: request, wait_ms: 4000 }, client));
     const original = await launch("recording-owner"); expect(original.isError).not.toBe(true);
     const owner = original.structuredContent?.created_by_client_id;
     expect(typeof owner).toBe("string");
     const setRecording = async (enabled: boolean) => {
-      expect((await submitForm(`/admin/clients/${owner}/recording`, { csrf_token: csrf, record_jobs: String(enabled) }, adminJar)).status).toBe(303);
+      expect((await progress.run("recording_update", () => submitForm(`/admin/clients/${owner}/recording`, { csrf_token: csrf, record_jobs: String(enabled) }, adminJar), "headers")).status).toBe(303);
     };
-    const readRecord = async (jobId: string) => JSON.parse(await readFile(join(runnerState, "jobs", jobId, "meta.json"), "utf8"));
+    const readRecord = (jobId: string) => progress.run("job_metadata", async () => JSON.parse(await readFile(join(runnerState, "jobs", jobId, "meta.json"), "utf8")), "filesystem");
     expect((await readRecord(original.structuredContent?.job_id as string)).record_history).toBe(true);
     await setRecording(false);
     const hidden = await launch("private-retry"); expect(hidden.isError).not.toBe(true);
     const hiddenId = hidden.structuredContent?.job_id as string;
     expect((await readRecord(hiddenId)).record_history).toBe(false);
-    const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: hiddenId, stream: "stdout" }, client);
+    const logs = await progress.run("job_logs", () => mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: hiddenId, stream: "stdout" }, client));
     expect(logs.structuredContent?.data).toContain("private-local-log");
     await setRecording(true);
     const retried = await launch("private-retry"); expect(retried.structuredContent?.job_id).toBe(hiddenId);
     expect((await readRecord(hiddenId)).record_history).toBe(false);
     const recorded = await launch("recording-resumed"); expect(recorded.isError).not.toBe(true);
     expect((await readRecord(recorded.structuredContent?.job_id as string)).record_history).toBe(true);
-    await waitFor(async () => {
+    await progress.run("job_list", () => waitFor(async () => {
       const history = await mcpTool("job", { action: "list", limit: 100 }, client);
       const ids = (history.structuredContent?.jobs as Array<{job_id:string}>).map(job => job.job_id);
       expect(ids).not.toContain(hiddenId);
       return ids.includes(recorded.structuredContent?.job_id as string);
-    }, 10000);
+    }, 10000), "poll");
   });
 
-  it("queries a batched Job live without waiting for the next cloud snapshot", async () => {
-    const { adminJar, csrf } = await adminCredentials();
-    const save = async (mode: string) => submitForm(`/admin/runners/${runnerId}/history-settings`, {
+  it("queries a batched Job live without waiting for the next cloud snapshot", async ({ onTestFailed, onTestFinished }) => {
+    const progress = fixtureProgress("job_history", onTestFailed);
+    const cleanupErrors: unknown[] = [];
+    onTestFinished(() => { if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "History fixture cleanup failed"); });
+    const { adminJar, csrf } = await adminCredentials(progress.mark);
+    const save = (mode: string) => progress.run(mode === "immediate" ? "history_restore" : "history_settings", () => submitForm(`/admin/runners/${runnerId}/history-settings`, {
       csrf_token: csrf, mode, interval_seconds: "300", retention_days: "7", local_retention_days: "0",
-    }, adminJar);
+    }, adminJar), "headers");
     expect((await save("batched")).status).toBe(303);
     try {
-      const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('batched-live-log\\n')"), background: true });
+      const started = await progress.run("shell", () => mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('batched-live-log\\n')"), background: true }));
       const jobId = started.structuredContent?.job_id;
       expect(typeof jobId).toBe("string");
-      await waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: "workspace-1", job_id: jobId })).structuredContent?.status === "succeeded", 10000);
-      const listed = await mcpTool("job", { action: "list", workspace_id: "workspace-1", limit: 10 });
+      await progress.run("job_poll", () => waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: "workspace-1", job_id: jobId })).structuredContent?.status === "succeeded", 10000), "poll");
+      const listed = await progress.run("job_list", () => mcpTool("job", { action: "list", workspace_id: "workspace-1", limit: 10 }));
       expect(listed.structuredContent?.source).toBe("runner_live");
       expect((listed.structuredContent?.jobs as Array<{job_id?:string}>).some((job) => job.job_id === jobId)).toBe(true);
-      const saved = await mcpTool("job", { action: "list", limit: 100 });
+      const saved = await progress.run("job_list", () => mcpTool("job", { action: "list", limit: 100 }));
       expect((saved.structuredContent?.jobs as Array<{job_id?:string}>).some((job) => job.job_id === jobId)).toBe(false);
-      const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 1024 });
+      const logs = await progress.run("job_logs", () => mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 1024 }));
       expect(logs.structuredContent?.data).toContain("batched-live-log");
-    } finally { expect((await save("immediate")).status).toBe(303); }
+    } catch (error) { progress.captureFailure(); throw error; }
+    finally {
+      try { expect((await save("immediate")).status).toBe(303); }
+      catch (error) { cleanupErrors.push(error); }
+    }
   });
 
   it("lists shared MCPs and Skills without selecting a Runner", async () => {
@@ -1024,10 +1038,15 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     return { clientA, clientB };
   }
 
-  async function createMcpClient(label: string, scopes: readonly string[], adminJar: CookieJar, csrf: string): Promise<McpClient> {
+  async function createMcpClient(label: string, scopes: readonly string[], adminJar: CookieJar, csrf: string, progress?: FixtureProgress): Promise<McpClient> {
+    progress?.("client_create", "headers");
     const response = await submitForm("/admin/clients", { csrf_token: csrf, label, scopes }, adminJar);
+    progress?.("client_create", "validation");
     expect(response.status).toBe(200);
-    const endpoint = oneTimeMcpUrl(await response.text());
+    progress?.("client_create", "body");
+    const html = await response.text();
+    progress?.("client_create", "validation");
+    const endpoint = oneTimeMcpUrl(html);
     return { endpoint };
   }
 
@@ -1113,13 +1132,32 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     return readMcp(response);
   }
 
-  async function adminCredentials(): Promise<{ readonly adminJar: CookieJar; readonly csrf: string }> {
+  function fixtureProgress(fixture: "job_recording" | "job_history", onTestFailed: (handler: () => void) => void) {
+    let phase = "admin_login_page", boundary = "headers", enteredAt = performance.now();
+    const mark: FixtureProgress = (nextPhase, nextBoundary) => { phase = nextPhase; boundary = nextBoundary; enteredAt = performance.now(); };
+    const observe = () => ({ phase, boundary, elapsed_ms: Math.min(900000, Math.max(0, Math.floor(performance.now() - enteredAt))) });
+    let failed: ReturnType<typeof observe> | undefined;
+    const captureFailure = () => { failed ??= observe(); };
+    onTestFailed(() => {
+      const snapshot = mcpFixtureProgressDiagnostic({ fixture, ...(failed ?? observe()) });
+      if (snapshot !== undefined) process.stderr.write(snapshot);
+    });
+    return { mark, captureFailure, async run<T>(step: string, action: () => Promise<T>, waiting = "request"): Promise<T> {
+      mark(step, waiting);
+      try { const value = await action(); mark(step, "validation"); return value; }
+      catch (error) { captureFailure(); throw error; }
+    } };
+  }
+
+  async function adminCredentials(progress?: FixtureProgress): Promise<{ readonly adminJar: CookieJar; readonly csrf: string }> {
     let loginPage: Response;
+    progress?.("admin_login_page", "headers");
     try {
       loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
     } catch (error) {
       throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "fetch", code: diagnosticErrorCode(error) })}`);
     }
+    progress?.("admin_login_page", "validation");
     const mediaType = loginPage.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "absent";
     const contentType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mediaType) && mediaType.length <= 128 ? mediaType : "absent-or-invalid";
     const responseMetadata = { status: loginPage.status, contentType };
@@ -1128,11 +1166,13 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "headers", ...responseMetadata })}`);
     }
     let loginHtml: string;
+    progress?.("admin_login_page", "body");
     try {
       loginHtml = await loginPage.text();
     } catch (error) {
       throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "body", ...responseMetadata, code: diagnosticErrorCode(error) })}`);
     }
+    progress?.("admin_login_page", "validation");
     let loginCsrf: string;
     try {
       loginCsrf = formToken(loginHtml);
@@ -1140,7 +1180,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "csrf", ...responseMetadata, bodyCharacters: loginHtml.length, hasForm: /<form\b/i.test(loginHtml) })}`);
     }
     const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
+    progress?.("admin_login", "headers");
     const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-runmesh_login_csrf", loginCookie]]));
+    progress?.("admin_login", "validation");
     expect(login.status).toBe(303);
     const csrf = cookieFrom(login, "__Host-runmesh_admin_csrf");
     return { adminJar: cookieJar([["__Host-runmesh_admin_session", cookieFrom(login, "__Host-runmesh_admin_session")], ["__Host-runmesh_admin_csrf", csrf]]), csrf };

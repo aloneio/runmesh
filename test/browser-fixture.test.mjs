@@ -3,9 +3,121 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../scripts/browser-worker-fixture.mjs";
 import { runFixtureCommand, spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../scripts/worker-fixture.mjs";
+import { createTestHttpScope } from "../scripts/test-http-scope.mjs";
+
+async function localHttpFixture(t, handle) {
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url);
+    handle(request, response);
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  });
+  return { origin: `http://127.0.0.1:${server.address().port}`, requests };
+}
+
+test("Test HTTP scope keeps fixture setup requests outside a test usable", { timeout: 8_000 }, async t => {
+  const scope = createTestHttpScope();
+  const http = await localHttpFixture(t, (_, response) => response.end("fixture-ready"));
+  await scope.run(new AbortController().signal, async () => {
+    assert.equal(await (await scope.fetch(http.origin + "/test")).text(), "fixture-ready");
+  });
+  assert.equal(await (await scope.fetch(http.origin + "/setup")).text(), "fixture-ready");
+  assert.deepEqual(http.requests, ["/test", "/setup"]);
+});
+
+for (const source of ["init", "request"]) test(`Test HTTP scope retains the caller's ${source} cancellation`, { timeout: 8_000 }, async t => {
+  const scope = createTestHttpScope(), received = Promise.withResolvers();
+  const caller = new AbortController();
+  const http = await localHttpFixture(t, (request, response) => {
+    if (request.url === "/held") received.resolve();
+    else response.end("still-live");
+  });
+  await scope.run(new AbortController().signal, async () => {
+    const pending = source === "request"
+      ? scope.fetch(new Request(http.origin + "/held", { signal: caller.signal }))
+      : scope.fetch(http.origin + "/held", { signal: caller.signal });
+    const rejected = assert.rejects(pending, { name: "AbortError" });
+    await received.promise;
+    caller.abort();
+    await rejected;
+    assert.equal(await (await scope.fetch(http.origin + "/after-caller-abort")).text(), "still-live");
+  });
+  assert.deepEqual(http.requests, ["/held", "/after-caller-abort"]);
+});
+
+test("Test HTTP scope cancels an unfinished response body when its test aborts", { timeout: 8_000 }, async t => {
+  const scope = createTestHttpScope(), testLifetime = new AbortController();
+  const http = await localHttpFixture(t, (_, response) => {
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.write("partial-response");
+  });
+  await scope.run(testLifetime.signal, async () => {
+    const response = await scope.fetch(http.origin + "/stream");
+    assert.equal(response.status, 200);
+    const rejected = assert.rejects(response.text(), { name: "AbortError" });
+    testLifetime.abort();
+    await rejected;
+    await assert.rejects(async () => scope.fetch(http.origin + "/late"), { name: "AbortError" });
+  });
+  assert.deepEqual(http.requests, ["/stream"]);
+});
+
+for (const outcome of ["success", "failure"]) test(`Test HTTP scope stops inherited continuations after ${outcome}`, { timeout: 8_000 }, async t => {
+  const scope = createTestHttpScope(), release = Promise.withResolvers();
+  const failure = new Error("original-test-failure");
+  const http = await localHttpFixture(t, (_, response) => response.end("ready"));
+  let continuation;
+  const completed = scope.run(new AbortController().signal, async () => {
+    continuation = (async () => {
+      await release.promise;
+      return scope.fetch(http.origin + "/late-mutation", { method: "POST", body: "fixture-value" });
+    })();
+    assert.equal(await (await scope.fetch(http.origin + "/initial")).text(), "ready");
+    if (outcome === "failure") throw failure;
+    return "original-result";
+  });
+  if (outcome === "failure") await assert.rejects(completed, error => error === failure);
+  else assert.equal(await completed, "original-result");
+  const rejected = assert.rejects(continuation, { name: "AbortError" });
+  // Run the old continuation while a new test is active. Async ownership must
+  // remain with its closed scope, rather than borrow the newer test's signal.
+  await scope.run(new AbortController().signal, async () => {
+    release.resolve();
+    await rejected;
+    assert.equal(await (await scope.fetch(http.origin + "/next-test")).text(), "ready");
+  });
+  assert.deepEqual(http.requests, ["/initial", "/next-test"]);
+});
+
+test("Test HTTP scope aborting one parallel test leaves the other request alive", { timeout: 8_000 }, async t => {
+  const scope = createTestHttpScope(), firstLifetime = new AbortController();
+  const firstReceived = Promise.withResolvers(), secondReceived = Promise.withResolvers();
+  const http = await localHttpFixture(t, (request, response) => {
+    if (request.url === "/first") firstReceived.resolve();
+    else secondReceived.resolve(response);
+  });
+  const first = scope.run(firstLifetime.signal, async () => (await scope.fetch(http.origin + "/first")).text());
+  const rejected = assert.rejects(first, { name: "AbortError" });
+  const second = scope.run(new AbortController().signal, async () => (await scope.fetch(http.origin + "/second")).text());
+  await firstReceived.promise;
+  const secondResponse = await secondReceived.promise;
+  firstLifetime.abort();
+  await rejected;
+  secondResponse.end("second-completed");
+  assert.equal(await second, "second-completed");
+  assert.deepEqual([...http.requests].sort(), ["/first", "/second"]);
+});
 
 function authenticationResponses() {
   const csrf = "x".repeat(43), form = `<input name="csrf_token" value="${csrf}">`;
