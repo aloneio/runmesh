@@ -697,6 +697,43 @@ test("fixed runtime messages survive fragmented Worker logs without copying text
   assert.doesNotMatch(emitted.join(""), /private|Network connection|ReadableStream/u);
 });
 
+test("pinned Wrangler proxy connection failures preserve only method and attempt count", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  const prefix = "Error inside ProxyWorker (the affected request failed; the dev server continues): ";
+  const endpoint = "http://127.0.0.1:43210/private-url-secret/mcp?private-query=private-token";
+  forward("\u001b[31m\u2718 [ERROR]\u001b[0m " + prefix + `POST ${endpoint} (failed after 1 attempt): Network connec`);
+  forward("tion lost.\r\n  at private-stack\n");
+  forward("[ERROR] " + prefix + `GET ${endpoint} (failed after 3 attempts): Network connection lost.\n`);
+  const expected = [{ event: "proxy_upstream_connection_lost", method: "POST", attempts: 1 },
+    { event: "proxy_upstream_connection_lost", method: "GET", attempts: 3 }];
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), expected);
+  assert.doesNotMatch(emitted.join(""), /private|127\.0\.0\.1|43210|https?:|Network connection|Error inside/u);
+});
+
+test("proxy connection diagnostics reject forged formats and cap their own evidence without copying secrets", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  const prefix = "Error inside ProxyWorker (the affected request failed; the dev server continues): ";
+  const detail = "POST http://127.0.0.1:43210/private-secret/mcp (failed after 1 attempt): Network connection lost.";
+  for (const line of ["private " + prefix + detail, "[PRIVATE] " + prefix + detail, prefix + detail + " private-suffix",
+    prefix + detail.replace("POST", "PRIVATE"), prefix + detail.replace("http://", "file://"),
+    prefix + detail.replace("127.0.0.1:43210", "[invalid-host]"),
+    prefix + detail.replace("1 attempt", "2 attempts"), prefix + detail.replace("1 attempt", "999999999999999999999 attempts"),
+    prefix + detail.replace("1 attempt", "1 attempts"), prefix + detail.replace("Network connection lost.", "private-error"),
+    prefix + detail.replace("private-secret", "private-secret".repeat(100))]) forward(line + "\n");
+  assert.deepEqual(emitted, []);
+  for (let index = 0; index < 20; index++) forward(prefix + detail + "\n");
+  forward("Error: Network connection lost.\n");
+  const valid = { event: "proxy_upstream_connection_lost", method: "POST", attempts: 1 };
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("").repeat(3)), [
+    ...Array.from({ length: 8 }, () => valid), ...Array.from({ length: 3 }, () => ({ event: "runtime_log", signature: "network_connection_lost" })),
+  ]);
+  const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, url: "private-url", message: "private-text" })), [valid]);
+  for (const patch of [{ method: "PRIVATE" }, { attempts: "1" }, { attempts: 0 }, { attempts: 2 }, { method: "GET", attempts: 4 }, { attempts: 1.5 }])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, ...patch })), []);
+  assert.doesNotMatch(emitted.join(""), /private|127\.0\.0\.1|43210|https?:/u);
+});
+
 test("launcher snapshots report only lifecycle classification and bounded exit state", () => {
   const expected = { event: "launcher_snapshot", reason: "test_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false };
   const line = mcpLauncherDiagnostic({ ...expected, pid: 123, log: "private-token", filename: "private-file" });
@@ -758,6 +795,7 @@ test("a failed child preserves runtime, primary, cleanup and launcher classes th
     import { createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpLauncherDiagnostic } from ${JSON.stringify(helper)};
     const forward = createMcpWorkerDiagnosticForwarder(line => process.stderr.write(line));
     forward("[ERROR] Error: Network connection lost.\\nprivate worker stack\\n");
+    forward("[ERROR] Error inside ProxyWorker (the affected request failed; the dev server continues): POST http://127.0.0.1:43210/private-token/mcp (failed after 1 attempt): Network connection lost.\\n");
     process.stderr.write(mcpFixtureFailureDiagnostic("busy", "primary", {name:"AssertionError", message:"private-token"}));
     process.stderr.write(mcpFixtureFailureDiagnostic("busy", "cancel", new Error("private cleanup")));
     process.stderr.write(mcpLauncherDiagnostic({reason:"test_failed",exit_code:null,signal:null,teardown_started:false,exited_before_teardown:false}));
@@ -765,8 +803,9 @@ test("a failed child preserves runtime, primary, cleanup and launcher classes th
   `], { encoding: "utf8", timeout: 10000 });
   assert.equal(child.status, 1);
   const summary = { error: browserErrorDiagnostic({ code: child.status }), worker_events: mcpWorkerFailureEvidence(child.stderr) };
-  assert.deepEqual(summary.worker_events.map(event => event.event), ["runtime_log", "fixture_failure", "fixture_failure", "launcher_snapshot"]);
-  assert.doesNotMatch(JSON.stringify(summary), /private/u);
+  assert.deepEqual(summary.worker_events.map(event => event.event), ["runtime_log", "proxy_upstream_connection_lost", "fixture_failure", "fixture_failure", "launcher_snapshot"]);
+  assert.deepEqual(summary.worker_events[1], { event: "proxy_upstream_connection_lost", method: "POST", attempts: 1 });
+  assert.doesNotMatch(JSON.stringify(summary), /private|127\.0\.0\.1|43210|https?:/u);
 });
 
 test("direct browser failures use optional error stacks and retain only allowlisted source coordinates", () => {
