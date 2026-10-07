@@ -2,8 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { CatalogPage, SharedProfiles } from "../../contracts/catalog.js";
 import { CATALOG_LIMITS } from "../../contracts/catalog.js";
-import { catalogDigest, catalogJson, catalogObject } from "../../contracts/catalog-json.js";
-import { catalogPublicName, parseRemoteTool } from "../../contracts/catalog-values.js";
+import { catalogJson } from "../../contracts/catalog-json.js";
+import { parseCatalogTool } from "../../contracts/catalog-values.js";
 import { REMOTE_CODES, REMOTE_LIMITS, remoteFailureMetadata, type RemoteCode, type RemoteOutcome } from "../../contracts/remote.js";
 import { parseRemoteResult } from "../../contracts/remote-values.js";
 import { publishSchema } from "./schema-publication.js";
@@ -60,10 +60,9 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { 
       || (raw.next_cursor !== null && (typeof raw.next_cursor !== "string" || raw.next_cursor.length > CATALOG_LIMITS.cursor_bytes))) return remoteFailure("dependency_unavailable", "not_started");
     const tools = [];
     for (const entry of raw.tools) {
-      const tool = catalogObject(entry), definition = parseRemoteTool(tool?.definition);
-      if (tool === undefined || definition === undefined || typeof tool.tool_id !== "string" || !/^mcp\.[a-f0-9]{64}$/u.test(tool.tool_id)
-        || !catalogDigest(tool.version) || tool.public_name !== catalogPublicName(query.profile_id, definition.name, tool.tool_id.slice(4))) return remoteFailure("dependency_unavailable", "not_started");
-      tools.push({ tool_id: tool.tool_id, public_name: tool.public_name, version: tool.version, definition });
+      const tool = parseCatalogTool(query.profile_id, entry);
+      if (tool === undefined) return remoteFailure("dependency_unavailable", "not_started");
+      tools.push(tool);
     }
     return { content: [{ type: "text" as const, text: JSON.stringify({ tools, next_cursor: raw.next_cursor }) }] };
   });

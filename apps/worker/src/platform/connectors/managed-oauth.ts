@@ -15,10 +15,18 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
     if (!catalogObject(value.authorizationServerMetadata) || !validDiscovery(discovery, origin)) return fault('provider_unsupported');
     return discovery;
   }
-  function clientDocument(value: unknown): StoredOAuthClientInformation {
+  function credentialIssuer(value: unknown, discovery: OAuthDiscoveryState): string {
+    const issuer = discovery.authorizationServerMetadata?.issuer;
+    if (typeof issuer !== 'string') return fault('provider_unsupported');
+    if (value !== undefined && value !== issuer) return fault('reauthorization_required');
+    // Unstamped records retain the authorization server captured with their
+    // client and verifier; never bind old credentials through new discovery.
+    return issuer;
+  }
+  function clientDocument(value: unknown, discovery: OAuthDiscoveryState): StoredOAuthClientInformation {
     const client = catalogObject(value);
     if (!client || typeof client.client_id !== 'string' || !client.client_id) return fault('invalid_callback');
-    return client as unknown as StoredOAuthClientInformation;
+    return { ...client, issuer: credentialIssuer(client.issuer, discovery) } as StoredOAuthClientInformation;
   }
   function provider(base: string, state?: string, saved?: { discovery: OAuthDiscoveryState; client: StoredOAuthClientInformation; verifier: string }) {
     let discovery = saved?.discovery, client = saved?.client;
@@ -62,7 +70,7 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
     },
     async complete(input) {
       if (typeof input.verifier !== 'string' || !input.verifier) return fault('invalid_callback');
-      const discovery = discoveryDocument(input.discovery, input.origin), client = clientDocument(input.client);
+      const discovery = discoveryDocument(input.discovery, input.origin), client = clientDocument(input.client, discovery);
       const p = provider(input.origin, undefined, { discovery, client, verifier: input.verifier });
       const result = await auth(p.value, { serverUrl: input.endpoint, authorizationCode: input.code,
         ...(input.issuer === undefined ? {} : { iss: input.issuer }),
@@ -72,12 +80,14 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
       return p.tokens()!;
     },
     async refresh(input) {
-      const discovery = discoveryDocument(input.discovery, input.origin), client = clientDocument(input.client);
-      return refreshAuthorization(discovery.authorizationServerUrl, { metadata: discovery.authorizationServerMetadata!,
+      const discovery = discoveryDocument(input.discovery, input.origin), client = clientDocument(input.client, discovery);
+      const issuer = credentialIssuer(input.issuer, discovery);
+      const tokens = await refreshAuthorization(discovery.authorizationServerUrl, { metadata: discovery.authorizationServerMetadata!,
         clientInformation: client, refreshToken: input.refresh_token,
-        resource: new URL(discovery.resourceMetadata?.resource ?? input.endpoint),
+        resource: discovery.resourceMetadata?.resource ?? input.endpoint,
         fetchFn: managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
           discovery: () => discovery, phase: 'refresh', beforeTokenRequest: input.beforeTokenRequest, ...(send ? { send } : {}) }) });
+      return { ...tokens, issuer };
     },
   };
 }

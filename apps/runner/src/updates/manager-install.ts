@@ -3,8 +3,10 @@ import { constants } from "node:fs";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { ServiceCommandExecutor, ServiceMode, ServicePlatform } from "../service.js";
-import { hashContent, hostServiceCommandExecutor, isManagedService } from "../service.js";
-import { escapeSystemdArgument, escapeXml, windowsArguments } from "../services/escaping.js";
+import { hostServiceCommandExecutor, isManagedService } from "../service.js";
+import { escapeSystemdArgument, escapeXml } from "../services/escaping.js";
+import { ownedManifest, parseOwnedManifest } from "../services/manifest-ownership.js";
+import { refreshNativeServiceBody, renderWindowsDaemonTask, sameWindowsTaskDefinition } from "../services/native-template.js";
 import { nativeProbeReliable } from "../services/probes.js";
 import { hasStandardEffectiveMaintenanceLaunch, hasStandardMaintenanceLaunch, maintenanceLayout } from "./native-service.js";
 import { renderManagedLauncher, renderWindowsMaintenanceUninstall } from "./launchers.js";
@@ -76,7 +78,6 @@ const hostFilesystem: MaintenanceManagerFilesystem = {
 const LINUX_MANAGER = "runmesh-manager.service";
 const MAC_MANAGER = "io.alone.runmesh.manager";
 const WINDOWS_MANAGER = "RunmeshManager";
-const MARKER = "runmesh-maintenance-managed";
 const psQuote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 function sourceHelp(runtime: string, bundle: string, cwd: string): Promise<string> {
@@ -111,19 +112,15 @@ export function renderMaintenanceManager(options: MaintenanceManagerOptions): { 
     // runs as root. The Runner's dedicated account and unit remain unchanged.
     body = `[Unit]\nDescription=Runmesh maintenance manager\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=${invocation.map(escapeSystemdArgument).join(" ")}\nRestart=on-failure\nRestartSec=30s\n\n[Install]\nWantedBy=${mode === "system" ? "multi-user.target" : "default.target"}\n`;
   } else if (platform === "darwin") {
-    body = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${MAC_MANAGER}</string><key>ProgramArguments</key><array>${invocation.map(value => `<string>${escapeXml(value)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>\n`;
+    body = `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${MAC_MANAGER}</string><key>ProgramArguments</key><array>${invocation.map(value => `<string>${escapeXml(value)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>\n`;
   } else {
-    const principal = mode === "system" ? "<UserId>SYSTEM</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel>" : "<LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel>";
-    const trigger = mode === "system" ? "<BootTrigger><Enabled>true</Enabled></BootTrigger>" : "<LogonTrigger><Enabled>true</Enabled></LogonTrigger>";
-    body = `<?xml version="1.0" encoding="UTF-8"?>\n<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>Runmesh maintenance manager</Description></RegistrationInfo><Triggers>${trigger}</Triggers><Principals><Principal id="Author">${principal}</Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions Context="Author"><Exec><Command>${escapeXml(runtimePath)}</Command><Arguments>${escapeXml(windowsArguments(invocation.slice(1)))}</Arguments></Exec></Actions></Task>\n`;
+    body = renderWindowsDaemonTask({ description: "Runmesh maintenance manager", mode, invocation, systemAccount: "SYSTEM" });
   }
-  const marker = `${MARKER}:${hashContent(body)}`;
-  return { path: manifestPath, content: (platform === "linux" ? `# ${marker}\n` : `<!-- ${marker} -->\n`) + body };
+  return { path: manifestPath, content: ownedManifest(body, platform, "maintenance").content };
 }
 
 function managedManager(content: string): boolean {
-  const marker = /^(?:#\s*|<!--\s*)runmesh-maintenance-managed:([0-9a-f]{8})\s*(?:-->)?\r?\n/u.exec(content);
-  return marker !== null && marker[1] === hashContent(content.slice(marker[0].length));
+  return parseOwnedManifest(content, "maintenance") !== undefined;
 }
 
 function managerHost(options: MaintenanceManagerOptions) {
@@ -300,7 +297,17 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
   let created = false;
   let serviceAttempted = false;
   let rollbackLaunchers: (() => Promise<void>) | undefined;
-  const manifest = renderMaintenanceManager(options);
+  const rendered = renderMaintenanceManager(options);
+  let manifest = rendered;
+  if (previousManifest !== undefined) {
+    const previous = parseOwnedManifest(previousManifest, "maintenance")!;
+    const body = refreshNativeServiceBody(previous.body, platform);
+    const expected = parseOwnedManifest(rendered.content, "maintenance")!.body;
+    if (body !== expected && !(platform === "win32" && sameWindowsTaskDefinition(body, expected))) throw new Error("maintenance manager definition differs from this installation");
+    manifest = { path: manifestPath, content: body === previous.body ? previousManifest : ownedManifest(body, platform, "maintenance", previous.newline).content };
+  }
+  const wasRegistered = platform === "win32" && previousManifest !== undefined ? await host.registered() : false;
+  let manifestWriteAttempted = false, nativeDefinitionAttempted = false;
   const temporary = `${managerRoot}.staging.${randomUUID()}`;
   const temporaryManifest = `${manifestPath}.${randomUUID()}.tmp`;
   try {
@@ -345,12 +352,13 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
       await filesystem.rename(temporary, managerRoot);
       created = true;
     }
-    // Do not rewrite a native definition with custom settings on reinstallation.
-    if (previousManifest === undefined) {
+    // Refresh only the known generated fields; retain explicit operator settings
+    // and the already installed independent manager program.
+    if (previousManifest !== manifest.content) {
+      if (await filesystem.read(manifestPath) !== previousManifest) throw new Error("maintenance manager definition changed during installation");
+      manifestWriteAttempted = true;
       await filesystem.write(temporaryManifest, manifest.content);
       await filesystem.rename(temporaryManifest, manifestPath);
-    } else if (previousManifest !== manifest.content) {
-      throw new Error("maintenance manager definition differs from this installation");
     }
     if (platform === "win32") {
       const helper = path.join(managerRoot, "uninstall.ps1");
@@ -369,12 +377,28 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
       if (!await host.registered()) await host.execute("launchctl", ["bootstrap", host.domain, manifestPath]);
       await host.execute("launchctl", ["kickstart", host.target]);
     } else {
-      if (!await host.registered()) await host.execute("schtasks", ["/Create", "/TN", WINDOWS_MANAGER, "/XML", manifestPath]);
+      const registered = await host.registered();
+      if (manifestWriteAttempted || !registered) {
+        nativeDefinitionAttempted = true;
+        await host.execute("schtasks", ["/Create", "/TN", WINDOWS_MANAGER, "/XML", manifestPath, ...(registered ? ["/F"] : [])]);
+      }
       await host.execute("schtasks", ["/Change", "/TN", WINDOWS_MANAGER, "/ENABLE"]);
       await host.execute("schtasks", ["/Run", "/TN", WINDOWS_MANAGER]);
     }
     return { enabled: true };
   } catch (cause) {
+    // Restore the exact prior bytes only while this attempt still owns them.
+    // Updating an existing task does not replace or stop its running manager.
+    if (previousManifest !== undefined && manifestWriteAttempted) {
+      try {
+        if (await filesystem.read(manifestPath) === manifest.content) {
+          await filesystem.remove(temporaryManifest);
+          await filesystem.write(temporaryManifest, previousManifest);
+          await filesystem.rename(temporaryManifest, manifestPath);
+          if (nativeDefinitionAttempted && wasRegistered) await host.execute("schtasks", ["/Create", "/TN", WINDOWS_MANAGER, "/XML", manifestPath, "/F"]);
+        }
+      } catch { /* Preserve the independent package and the original failure. */ }
+    }
     // Only a new manager belongs to this attempt. Preserve an existing one and
     // leave its independent package available for recovery after any failure.
     let launchersRestored = true;

@@ -16,8 +16,10 @@
 | Workspace | 依赖 | 锁定版本 | 声明许可证 |
 | --- | --- | ---: | --- |
 | root / Runner | [`ws`](https://www.npmjs.com/package/ws) | 8.21.3 | MIT |
-| Worker | [`@modelcontextprotocol/server`](https://www.npmjs.com/package/@modelcontextprotocol/server) | 2.0.0 | MIT |
+| Worker | [`@modelcontextprotocol/client`](https://www.npmjs.com/package/@modelcontextprotocol/client) | 2.2.0 | MIT |
+| Worker | [`@modelcontextprotocol/server`](https://www.npmjs.com/package/@modelcontextprotocol/server) | 2.2.0 | MIT |
 | Worker | [`agents`](https://www.npmjs.com/package/agents) | 0.21.0 | MIT |
+| Worker | [`yaml`](https://www.npmjs.com/package/yaml) | 2.9.1 | ISC |
 | Worker / Protocol | [`zod`](https://www.npmjs.com/package/zod) | 4.4.3 | MIT |
 
 lockfile 还记录了传递依赖和开发依赖的许可证。它是本版本的可复现依赖清单，但不能替代

@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "6b02841a25d653aaf990bde47438f5489d8a0a583ca09de5c5e2508fb11719e7",
+      "sha256": "bc20af74d168d64614e96787729ea5d4f8729ebae3f67e9b5d9a72e005a3c30d",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "342f85d98133a7e41c303701e270a3fa23e0d67bb117aa60fc28c38eb6c33f1b",
+      "sha256": "a384d883a9a70ee88257ac3b353e172538b02973169fba66b550074682c9279e",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -83,15 +83,82 @@
     "non_script_markup_unchanged": true
   },
   "oauth_handoff_review": {
-    "source_base": "750a09d2e286c787b3f5e5878df549ec037bcdb4",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
+    "reviewed_change": "OAuth handoff is owned by the latest foreground authorization intent. Runner machine values receive data-no-i18n annotations; labels and layout retain their prior content. Every previous fixture is independently reproduced from the frozen R2 source archive.",
+    "prior_manifest": ".audit/r2-fixes-final-source-20261007.json",
+    "changes": [
+      {
+        "name": "login",
+        "previous": {
+          "bytes": 178837,
+          "sha256": "d2b16dbb9baaabe60f0302648b3ea6471e5745d07a66fb6d3e650ccdc98513b7"
+        },
+        "next": {
+          "bytes": 179730,
+          "sha256": "e5fc59a84d30b2dd49237352979dc0badc520b58c30f97c73493a70cdfbe39a3"
+        },
+        "script_only": true
+      },
+      {
+        "name": "setup",
+        "previous": {
+          "bytes": 179425,
+          "sha256": "1c51024eb2b08d7094314f2121a1bff938a78d249b2f6eb0370108c842954538"
+        },
+        "next": {
+          "bytes": 180318,
+          "sha256": "4347ec8136c0fb813706015499ea9bddb4d0a787ab7d9d3a69afce3199c35e66"
+        },
+        "script_only": true
+      },
+      {
+        "name": "secret",
+        "previous": {
+          "bytes": 181787,
+          "sha256": "f1e2285821a686db8305201d1b2e2960fdcf195f88c86d3cc974aa37c05e5c7f"
+        },
+        "next": {
+          "bytes": 182680,
+          "sha256": "f2e46ab0b08f2a59dbbb36ed6c0e9ababa9c7e3d6227ecf6b906a6dbfb31ce47"
+        },
+        "script_only": true
+      },
+      {
+        "name": "runner-detail",
+        "previous": {
+          "bytes": 14727,
+          "sha256": "c5f62420ef4d8d42437700bec9427b4b82315515d7e4fa3d7dce8b7e68956b40"
+        },
+        "next": {
+          "bytes": 14896,
+          "sha256": "9cc1345006b38095e9c9d014334d9e6ffbdb2cb111a7362f988e1b0e4949dea4"
+        },
+        "script_only": false
+      },
+      {
+        "name": "admin-document",
+        "previous": {
+          "bytes": 182136,
+          "sha256": "eda04e1107e7d83c65affaca2ddba645a8e14c541c0a498152947e06438ca28e"
+        },
+        "next": {
+          "bytes": 183029,
+          "sha256": "20046c702d17de0a052e2419477b5915991996d69020742ae02a713fb6a09f7d"
+        },
+        "script_only": true
+      }
     ],
-    "reviewed_change": "User-triggered MCP discovery starts OAuth automatically when authorization is required. Reconnect preserves sign-in progress through internal refresh; callback recovery never starts a new authorization. Replacing only the browser bundle reproduces every prior render hash and byte count. No screenshots.",
-    "non_script_markup_unchanged": true
+    "scriptChanges": [
+      {
+        "nonce": null,
+        "previous_sha256": "b7b81932b55e63de76b9787272863291a39da97bf5b888da3bb8b65f1045e2c6",
+        "sha256": "c6abdc0271999f48636f216d9636d0a4ebde87c8e196b23fd175378a2ea4e976"
+      },
+      {
+        "nonce": "test-nonce",
+        "previous_sha256": "17bb71802b057065fd4b0a0457591de4e4a0c95012ac435c4e005cb05e1235b1",
+        "sha256": "370064df3f0f08f531cb4b5fe7af366ca4314a9de32e04eb375fe3e64fbda90f"
+      }
+    ]
   },
   "navigation_superseded_review": {
     "source_base": "4238be3840a6da34b7c74acfa59401fe3e5d7a4e",
@@ -236,6 +303,131 @@
       {
         "nonce": "test-nonce",
         "sha256": "02a17ffacc521fb288f184dd879b73ec81b42ee78fab1c89db62d18b950e4c5c",
+        "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
+        "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
+        "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
+        "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
+      }
+    ]
+  },
+  "implementation_plan_review": {
+    "source_base": "97561adf8faeaebd1d68d14bfd09a853da37dade",
+    "reviewed_change": "Reviewed modular Skill lifecycle controls for version history, comparison, rollback, retention and cleanup; pinned GitHub source preview and installation; MCP connection inspection; and Registry server.json preview that fills the connection form. Frontend receipt validation, state invalidation and source deadlines remain in their dedicated modules. Independently rebuilt the starting browser source and verified every renderer against its previous hash and byte count by replacing only the owned inline script; all non-script markup remains unchanged.",
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "6b02841a25d653aaf990bde47438f5489d8a0a583ca09de5c5e2508fb11719e7",
+        "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
+        "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
+        "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
+        "pre_controller_split_sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "342f85d98133a7e41c303701e270a3fa23e0d67bb117aa60fc28c38eb6c33f1b",
+        "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
+        "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
+        "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
+        "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
+      }
+    ]
+  },
+  "module_review": {
+    "source_baseline": "79780c1b99ef7b519c89bf14c3af00f070d4b9b7e2562b906964d06cbdbd95b5",
+    "reviewed_change": "Disable connection inspection for paused MCP profiles; describe unpinning independently of cleanup eligibility; preserve the selected Skill version for file viewing and re-enabling, with an explicit latest-upload entry. Rebuilt the prior browser bundle from the verified Linux source copy and restored all prior renderer hashes by replacing only the inline bundle.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "2b4af7a58cf1ebd3a4cdebd8ff5cfb9611e733382c4915b9ed8c9318610de6da",
+        "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
+        "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
+        "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
+        "pre_controller_split_sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "32760af5d0888b5e5d62a13f394ecae9f668708b0bd69f2fafd292264521a876",
+        "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
+        "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
+        "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
+        "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
+      }
+    ]
+  },
+  "decoupling_review": {
+    "source_baseline": "d02df6adc8899e8ebf1251c16eade42df925142105e7ed504f348f869db72c8a",
+    "reviewed_change": "Extract Central error classification into a pure module while preserving message keys, error metadata, refresh admission and branch order. Rebuilt the previously verified browser source archive and restored every prior renderer hash and byte count by replacing only the inline bundle.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "658c70598eb1ed882184996f430650463ad2968dbd67ffd73678362f99dd0848",
+        "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
+        "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
+        "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
+        "pre_controller_split_sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "f184889075588f889611ab950fffa314e13e2a90947ae7ded207ebb04edf5295",
+        "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
+        "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
+        "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
+        "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
+      }
+    ]
+  },
+  "decoupling_followup_review": {
+    "source_baseline": "e3ac58ebf278464bc5e787fd7ec21affb3fac6fa7c66b5559e6a8ee9c14a7d1a",
+    "reviewed_change": "Move feature panel cleanup to its owning workflow; view invalidation only broadcasts. Preserve markup, labels and request behavior. Rebuilt the prior verified browser source and restored every renderer hash and byte count by replacing only the inline bundle.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "f9a2434d06271e1ec6199ad0bac689b3e4c24ad4d291307e95ed9980cfeee647",
+        "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
+        "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
+        "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
+        "pre_controller_split_sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "b131add57a04292ccdd2729e089eb7b0cca575039afcf8babd331c7da04c7286",
+        "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
+        "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
+        "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
+        "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
+      }
+    ]
+  },
+  "scoped_recovery_review": {
+    "source_base": "97561adf8faeaebd1d68d14bfd09a853da37dade",
+    "reviewed_change": "Scope central operations and uncertain-write reconciliation by MCP connection and Skill workflow; background recovery preserves independent operations. Native log selectors gain localized labels, outside these render cases. User input and foreground actions retain panel ownership. Real-browser regressions cover resource isolation, stale responses, uncertain receipts, and OAuth callback completion.",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "non_script_markup_unchanged": true
+  },
+  "request_contract_review": {
+    "source_baseline": "74d4ca566f2cc1ab18be170859dc1360800cdf7bd33d615b29b1649e66a0ea88",
+    "reviewed_change": "Centralize request recovery scopes, read/write classification and successful receipt states in a pure browser contract. Workflows no longer import DOM operation admission for scope values; controller API callbacks receive only resource scopes. Binding ownership uses a module WeakSet. Independently rebuilding the accepted source archive and substituting only its browser bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "c6abdc0271999f48636f216d9636d0a4ebde87c8e196b23fd175378a2ea4e976",
+        "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
+        "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
+        "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
+        "pre_controller_split_sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "370064df3f0f08f531cb4b5fe7af366ca4314a9de32e04eb375fe3e64fbda90f",
         "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
         "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
         "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",

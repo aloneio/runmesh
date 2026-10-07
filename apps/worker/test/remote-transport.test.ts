@@ -6,7 +6,10 @@ import { createHttpRemoteConnector } from "../src/platform/connectors/remote-cli
 import { guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
 import { BoundedRemoteValidator } from "../src/platform/connectors/remote-validation.js";
 import { parseRemoteTool } from "../src/contracts/catalog-values.js";
-import { RemoteFault, type RemoteProtocol } from "../src/contracts/remote.js";
+import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
+import { buildCatalogSnapshot } from "../src/domain/capabilities/catalog.js";
+import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
+import { RemoteFault, type RemoteConnector, type RemoteProtocol } from "../src/contracts/remote.js";
 import type { ConnectionProfile } from "../src/contracts/connectors.js";
 
 const endpoint = "https://remote.example.com/mcp";
@@ -47,6 +50,28 @@ it.each(["2025-11-25", "2026-07-28"] as const)("W05 official SDK exchanges real 
       expect(request.headers.get("mcp-method")).toBe(request.method);
     }
   } finally { await session.close(); }
+});
+
+it.each(["2025-11-25", "2026-07-28"] as const)("RM10 inspection accepts resource-only servers in %s while ordinary tool connections require tools", async protocol => {
+  const methods: string[] = [];
+  const handler = createMcpHandler(() => {
+    const server = new McpServer({ name: "resource-fixture", version: "1" });
+    server.registerResource("docs", "fixture://docs", { mimeType: "text/plain" }, async uri => ({ contents: [{ uri: uri.href, text: "Reference" }] }));
+    return server;
+  }, { route: "/mcp", legacy: "stateless" });
+  const http = async (url: string | URL, init?: RequestInit) => {
+    methods.push(JSON.parse(String(init?.body)).method);
+    return handler.fetch(new Request(url, init));
+  };
+  const ports = { rules: () => policy(protocol), credential: async () => ({ kind: "bearer" as const, token }), fetch: http };
+  const dispatched = vi.fn(), authorize = vi.fn(async () => undefined);
+  const session = await createHttpRemoteConnector({ ...ports, inspection: true }).open(profile, new AbortController().signal, dispatched, authorize);
+  try {
+    expect(session.describe?.()).toMatchObject({ protocol_version: protocol, capabilities: { tools: false, resources: true } });
+  } finally { await session.close(); }
+  await expect(createHttpRemoteConnector(ports).open(profile, new AbortController().signal, dispatched, authorize)).rejects.toMatchObject({ code: "upstream_protocol_error" });
+  expect(methods).not.toContain("tools/list"); expect(methods).not.toContain("tools/call");
+  expect(dispatched).not.toHaveBeenCalled();
 });
 
 it.each(["synthetic-upstream-secret", 'synthetic"upstream-secret', "synthetic\\upstream-secret"])("W05 direct bearer reflection is withheld for opaque token %s", async bearer => {
@@ -187,6 +212,89 @@ it("W05 JSON schema validation is non-coercing, bounded and supports approved lo
   expect(validator.validate(schema, { value: 2, extra: true })).toBe(false);
   expect(validator.validate({ type: "string", pattern: "(a+)+$" }, "a")).toBe(false);
   expect(validator.validate({ type: "object", $ref: "https://unvisited.example.com/schema" }, {})).toBe(false);
+});
+
+it.each(["toString", "constructor", "__proto__", "hasOwnProperty"])("W05 schema object keywords only consider own JSON properties: %s", key => {
+  const validator = new BoundedRemoteValidator(), own = { [key]: 1 };
+  const schema = { type: "object", properties: { [key]: { type: "integer" } }, additionalProperties: false };
+  expect(validator.validate(schema, {})).toBe(true);
+  expect(validator.validate({ ...schema, required: [key] }, {})).toBe(false);
+  expect(validator.validate({ ...schema, required: [key] }, own)).toBe(true);
+  expect(validator.validate({ ...schema, required: [key] }, { [key]: "1" })).toBe(false);
+  expect(validator.validate({ type: "object", dependentRequired: { [key]: ["value"] } }, {})).toBe(true);
+  expect(validator.validate({ type: "object", dependentRequired: { [key]: ["value"] } }, own)).toBe(false);
+  expect(validator.validate({ type: "object", dependentRequired: { value: [key] } }, { value: 1 })).toBe(false);
+  expect(validator.validate({ type: "object", dependentRequired: { value: [key] } }, { value: 1, ...own })).toBe(true);
+  const dependent = { type: "object", dependentSchemas: { [key]: { required: ["value"] } } };
+  expect(validator.validate(dependent, {})).toBe(true);
+  expect(validator.validate(dependent, own)).toBe(false);
+  expect(validator.validate(dependent, { ...own, value: 1 })).toBe(true);
+});
+
+it.each([
+  { minimum: undefined, value: [], valid: false },
+  { minimum: undefined, value: ["none"], valid: false },
+  { minimum: undefined, value: [1, "none"], valid: true },
+  { minimum: undefined, value: [1, 2], valid: true },
+  { minimum: undefined, value: [1, 2, 3], valid: false },
+  { minimum: 0, value: [], valid: true },
+  { minimum: 0, value: ["none"], valid: true },
+  { minimum: 2, value: [1, "none"], valid: false },
+  { minimum: 2, value: [1, 2, "none"], valid: true },
+])("W05 contains applies its default minimum through escaped references: %j", ({ minimum, value, valid }) => {
+  const definition = { type: "array", contains: { type: "integer" }, maxContains: 2, ...(minimum === undefined ? {} : { minContains: minimum }) };
+  const schema = { type: "object", properties: { values: { $ref: "#/$defs/items~1~0" } }, $defs: { "items/~": definition } };
+  expect(parseRemoteTool({ name: "contains", inputSchema: schema })).toBeDefined();
+  expect(new BoundedRemoteValidator().validate(schema, { values: value })).toBe(valid);
+  expect(Object.hasOwn(definition, "minContains")).toBe(minimum !== undefined);
+});
+
+it("W05 schema preparation preserves literal data and caller-owned objects", () => {
+  const literal = { contains: true, maxContains: 2 }, schema = { type: "object", const: literal, default: literal, examples: [literal] };
+  const before = JSON.stringify(schema), value = { contains: true, maxContains: 2 };
+  expect(new BoundedRemoteValidator().validate(schema, value)).toBe(true);
+  expect(new BoundedRemoteValidator().validate({ type: "array", uniqueItems: true }, [value, { ...value }])).toBe(false);
+  expect(JSON.stringify(schema)).toBe(before); expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+});
+
+it("W05 required and contains retain their meaning inside combinators and boolean schemas", () => {
+  const validator = new BoundedRemoteValidator(), array = { type: "array", contains: { type: "integer" }, maxContains: 2 };
+  expect(validator.validate({ type: "object", not: { required: ["toString"] } }, {})).toBe(true);
+  expect(validator.validate({ type: "object", not: { required: ["toString"] } }, { toString: 1 })).toBe(false);
+  expect(validator.validate({ type: "object", properties: { value: { anyOf: [array, { type: "string" }] } } }, { value: [] })).toBe(false);
+  expect(validator.validate({ type: "object", properties: { value: { anyOf: [array, { type: "string" }] } } }, { value: "text" })).toBe(true);
+  expect(validator.validate({ type: "object", properties: { value: { not: array } } }, { value: [] })).toBe(true);
+  expect(validator.validate({ type: "array", contains: true, maxContains: 0 }, [])).toBe(false);
+  expect(validator.validate({ type: "array", contains: false, minContains: 0, maxContains: 0 }, [1])).toBe(true);
+});
+
+it.each([
+  { name: "required", schema: { type: "object", required: ["toString"] }, invalid: {}, valid: { toString: "owned" } },
+  { name: "contains", schema: { type: "object", required: ["values"], properties: { values: { type: "array", contains: { type: "integer" }, maxContains: 2 } } },
+    invalid: { values: ["none"] }, valid: { values: [1] } },
+])("W05 admitted $name constraints guard both dispatch and returned structured content", async ({ schema, invalid, valid }) => {
+  const validator = new BoundedRemoteValidator(), definition = parseRemoteTool({ name: "probe", inputSchema: schema, outputSchema: schema })!;
+  const snapshot = (await buildCatalogSnapshot(profile, [definition], catalogSha256, () => false))!;
+  const head = { schema_version: 1 as const, profile_id: profile.profile_id, revision: 1,
+    observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: [definition.name] };
+  const principal = { client_id: "validation-test", secret_version: 1 };
+  let output: unknown = invalid;
+  const dispatched = vi.fn(), open = vi.fn<RemoteConnector["open"]>(async (_profile, _signal, sent) => ({
+    current: () => true, listTools: async () => [definition],
+    callTool: async (_tool, _args, before) => { await before(); dispatched(); sent(); return { content: [], structuredContent: output, isError: false }; },
+    close: async () => undefined,
+  }));
+  const caller = createRemoteCaller({ repository: { readHead: () => head, readSnapshot: () => snapshot }, profile: () => profile,
+    digest: catalogSha256, identity: async () => ({ state: "allowed", identity: { schema_version: 2, ...principal, label: "Validation", native_scopes: [] } }),
+    connector: { validate: (candidate, value) => validator.validate(candidate, value), open } });
+  const tool = snapshot.tools[0]!, call = (args: unknown) => caller(principal,
+    { profile_id: profile.profile_id, tool_id: tool.tool_id, version: tool.version, arguments: args }, new AbortController().signal);
+  expect(await call(invalid)).toMatchObject({ state: "failed", code: "invalid_arguments", operation_state: "not_started" });
+  expect(open).not.toHaveBeenCalled(); expect(dispatched).not.toHaveBeenCalled();
+  expect(await call(valid)).toMatchObject({ state: "failed", code: "result_invalid" }); expect(dispatched).toHaveBeenCalledTimes(1);
+  output = valid;
+  expect(await call(valid)).toMatchObject({ state: "completed", result: { structuredContent: valid } });
+  expect(dispatched).toHaveBeenCalledTimes(2);
 });
 
 it.each(["allOf", "anyOf", "oneOf", "prefixItems"])("W05 published local references traverse %s schema arrays during validation", keyword => {

@@ -77,6 +77,8 @@ it("re-applies an unchanged policy when reconnect interrupts durable activation 
   const running = connection.start();
   try {
     await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    expect(applyPolicy).toHaveBeenCalledExactlyOnceWith([]);
+    applyPolicy.mockClear();
     socket.open(); socket.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: desired })));
     await vi.waitFor(() => expect(activate).toHaveBeenCalledOnce());
     expect(persisted).toEqual(desired);
@@ -108,6 +110,8 @@ it("re-acknowledges an already-active policy after reconnect without activating 
   const running = connection.start();
   try {
     await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    expect(applyPolicy).toHaveBeenCalledExactlyOnceWith([]);
+    applyPolicy.mockClear();
     socket.open(); socket.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: desired })));
     await vi.waitFor(() => expect(socket.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(appliedAck));
     socket.close();
@@ -116,7 +120,7 @@ it("re-acknowledges an already-active policy after reconnect without activating 
     replacement.open(); replacement.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: desired })));
     await vi.waitFor(() => expect(replacement.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(appliedAck));
     await vi.waitFor(() => expect(replacement.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(expect.objectContaining({ type: "runner.sync" })));
-    expect(activate).toHaveBeenCalledExactlyOnceWith(desired);
+    expect(activate).toHaveBeenCalledExactlyOnceWith(desired, expect.objectContaining({ runnerId: "runner", server: "ws://127.0.0.1:1", token: "synthetic" }));
     expect(applyPolicy).toHaveBeenCalledExactlyOnceWith([]);
   } finally { connection.stop(); await running; }
 });
@@ -133,13 +137,13 @@ it.each(["admission", "recovery"])("invalidates a failed restart restoration bef
   try {
     await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
     socket.open(); socket.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: policy })));
-    await vi.waitFor(() => expect(applyPolicy).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(applyPolicy).toHaveBeenCalledTimes(2));
     connection.stop(); await original;
     vi.spyOn(policyStore, "load").mockResolvedValueOnce(policy);
     vi.spyOn(policyCandidate, "candidateWorkspaces").mockRejectedValueOnce(new Error("workspace temporarily unavailable"));
     restarted = connection.start();
     await vi.waitFor(() => expect(createSocket).toHaveBeenCalledTimes(2));
-    expect(applyPolicy).toHaveBeenCalledTimes(2); expect(applyPolicy).toHaveBeenLastCalledWith([]);
+    expect(applyPolicy).toHaveBeenCalledTimes(3); expect(applyPolicy).toHaveBeenLastCalledWith([]);
     const replacement = sockets[1]!;
     replacement.open(); replacement.emit("message", Buffer.from(encodeWireFrame(welcome)));
     if (check === "admission") {
@@ -150,9 +154,33 @@ it.each(["admission", "recovery"])("invalidates a failed restart restoration bef
     } else {
       replacement.emit("message", Buffer.from(encodeWireFrame({ type: "runner.policy_update", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "restore-policy", runner_id: "runner", policy })));
       await vi.waitFor(() => expect(replacement.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(expect.objectContaining({ type: "runner.policy_ack", status: "applied", applied_revision: policy.revision })));
-      expect(applyPolicy).toHaveBeenCalledTimes(3);
+      expect(applyPolicy).toHaveBeenCalledTimes(4);
       expect(applyPolicy).toHaveBeenLastCalledWith([expect.objectContaining({ workspaceId: "recovered" })]);
     }
+  } finally { connection.stop(); await original; await restarted; }
+});
+
+it("clears live authorization and the revision floor when a restart has no eligible cached policy", async () => {
+  const applyPolicy = vi.fn();
+  const { connection, socket, sockets, createSocket } = setup({ applyPolicy });
+  const fields = { schema_version: 1 as const, runner_id: "runner", revision: 99,
+    runner_permissions: { read: true, edit: false, shell: false, job_control: false }, workspaces: [] };
+  const originalPolicy = { ...fields, checksum: runnerPolicyChecksum(fields) };
+  const freshFields = { ...fields, revision: 1 };
+  const freshPolicy = { ...freshFields, checksum: runnerPolicyChecksum(freshFields) };
+  const original = connection.start();
+  let restarted: Promise<void> | undefined;
+  try {
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    socket.open(); socket.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: originalPolicy })));
+    await vi.waitFor(() => expect(socket.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(expect.objectContaining({ type: "runner.policy_ack", applied_revision: 99 })));
+    connection.stop(); await original;
+    applyPolicy.mockClear(); restarted = connection.start();
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledTimes(2));
+    expect(applyPolicy).toHaveBeenCalledExactlyOnceWith([]);
+    const replacement = sockets[1]!;
+    replacement.open(); replacement.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: freshPolicy })));
+    await vi.waitFor(() => expect(replacement.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(expect.objectContaining({ type: "runner.policy_ack", status: "applied", applied_revision: 1 })));
   } finally { connection.stop(); await original; await restarted; }
 });
 

@@ -2,7 +2,8 @@ import { JSON_LIMITS } from "./json.js";
 import type { CapturedIdentity, IdentityDecision } from "./identity.js";
 import type { AdminDecision, ConnectionProfile } from "./connectors.js";
 
-/** Safety ceilings for imported descriptions, not capacity or latency promises. */
+/** Import and retained-history budgets. Unreferenced snapshots are reclaimed
+ * oldest-first at capacity; current observed/approved snapshots remain intact. */
 export const CATALOG_LIMITS = Object.freeze({ tools: 128, tool_bytes: 32_768, snapshot_bytes: 524_288,
   request_bytes: 524_288, depth: JSON_LIMITS.depth, nodes: JSON_LIMITS.nodes, page_tools: 20, profiles: 200,
   versions_per_profile: 32, snapshots: 512, storage_bytes: 16_777_216, cursor_bytes: 2_048, cursor_ttl_ms: 300_000 });
@@ -53,11 +54,15 @@ export interface CatalogRepository {
   approve(profileId: string, digest: string, toolNames: readonly string[], expectedRevision: number): CatalogMutation;
   disable(profileId: string, expectedRevision: number): CatalogMutation;
 }
-export interface CatalogAdminPorts {
-  readonly repository: CatalogRepository;
+/** Stored catalog reads cannot publish or disable a connection's tools. */
+export interface CatalogSnapshotPorts {
+  readonly repository: Pick<CatalogRepository, "readHead" | "readSnapshot">;
   readonly profile: (profileId: string) => ConnectionProfile | undefined;
-  readonly authorize: (signal: AbortSignal) => Promise<AdminDecision>;
   readonly digest: (canonical: string) => Promise<string>;
+}
+export interface CatalogAdminPorts extends CatalogSnapshotPorts {
+  readonly repository: CatalogRepository;
+  readonly authorize: (signal: AbortSignal) => Promise<AdminDecision>;
 }
 export interface CatalogDelta { readonly name: string; readonly state: "added" | "changed" | "removed" | "unchanged" }
 export type CatalogInspection = { readonly state: "found"; readonly head: CatalogHead; readonly snapshot: CatalogSnapshot;
@@ -80,11 +85,8 @@ export interface CatalogCursorCodec {
 export interface CatalogQuery { readonly profile_id: string; readonly limit?: number; readonly cursor?: string }
 export type CatalogPage = { readonly state: "listed"; readonly tools: readonly CatalogTool[]; readonly next_cursor: string | null }
   | { readonly state: "denied" | "unavailable" | "invalid" | "stale_cursor" };
-export interface CatalogReadPorts {
-  readonly repository: CatalogRepository;
-  readonly profile: (profileId: string) => ConnectionProfile | undefined;
+export interface CatalogReadPorts extends CatalogSnapshotPorts {
   readonly identity: (principal: CapturedIdentity, signal: AbortSignal) => Promise<IdentityDecision>;
-  readonly digest: (canonical: string) => Promise<string>;
   readonly cursor: CatalogCursorCodec;
   readonly now: () => number;
 }

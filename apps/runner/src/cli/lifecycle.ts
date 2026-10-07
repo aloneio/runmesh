@@ -1,6 +1,6 @@
 import { assertManagedServiceManifest } from "../service.js";
 import { assertSystemInstallationPrivilege } from "./service-plan.js";
-import type { CliDependencies } from "./contracts.js";
+import type { ServiceCliDependencies } from "./contracts.js";
 import { createServiceManager } from "../service.js";
 import { createServiceProvisioner } from "../service.js";
 import { currentServicePlatform } from "../service.js";
@@ -31,7 +31,7 @@ import type { ServiceProvisioner } from "../service.js";
 import { hostMaintenanceManager } from "../updates/manager-install.js";
 import type { MaintenanceManagerInstaller, MaintenanceManagerOptions } from "../updates/manager-install.js";
 
-function maintenanceInstaller(dependencies: CliDependencies): MaintenanceManagerInstaller | undefined {
+function maintenanceInstaller(dependencies: ServiceCliDependencies): MaintenanceManagerInstaller | undefined {
   // An injected native service adapter owns the whole test/operator boundary;
   // never escape it to register a second real service on the executing host.
   return dependencies.maintenanceManager ?? (dependencies.serviceManager === undefined && dependencies.serviceFilesystem === undefined && dependencies.purgeInstallation === undefined ? hostMaintenanceManager : undefined);
@@ -42,7 +42,7 @@ function maintenanceOptions(platform: MaintenanceManagerOptions["platform"], mod
   return { ...(platform === undefined ? {} : { platform }), mode, profilePath, installRoot: layout.installRoot };
 }
 
-export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
+export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: ServiceCliDependencies): Promise<void> {
   if (parsed.command === "migrate" && parsed.values.user === true) {
     throw new Error("service migration is only available for system Runner services; remove --user");
   }
@@ -361,7 +361,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore,
   report(output, parsed.json, { action: parsed.command, manifest: manifest.path, mode: manifest.mode, commands: serviceCommandNames(parsed.command as "install" | "stop" | "restart", manifest, lifecycleStatus?.registered) });
 }
 
-export async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
+export async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: ServiceCliDependencies): Promise<void> {
   if (parsed.values.purge === true && parsed.values.yes !== true) throw new Error("--purge requires --yes");
   const mode = parsed.values.user === true ? "user" as const : "system" as const;
   const platform = dependencies.servicePlatform ?? currentServicePlatform();

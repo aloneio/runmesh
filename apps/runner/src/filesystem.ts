@@ -187,7 +187,8 @@ export class FilesystemService {
     const snapshot = await this.policy.snapshot(resolved);
     if (snapshot.type !== "directory") throw new Error("path is not a directory");
     addSearchSnapshotPart(budget, relative(workspace.rootPath, resolved.path).split(sep).join("/"), snapshot);
-    await this.searchDirectory(resolved, snapshot, params.query, options, results, budget, 0, []);
+    const inherited = await this.loadAncestorIgnoreRules(resolved, budget);
+    if (inherited !== undefined) await this.searchDirectory(resolved, snapshot, params.query, options, results, budget, 0, inherited);
     const snapshotId = searchSnapshotId(workspace.workspaceId, params.query, options, budget.snapshotXor);
     if (cursor.snapshotId !== null && cursor.snapshotId !== snapshotId) throw new RpcRuntimeError("search_snapshot_changed", "search results changed since the supplied cursor was issued", { expected_snapshot_id: cursor.snapshotId, actual_snapshot_id: snapshotId });
     const page = results.slice(offset, offset + limit);
@@ -278,6 +279,28 @@ export class FilesystemService {
     }
   }
 
+  private async loadAncestorIgnoreRules(
+    resolved: { readonly workspace: WorkspaceConfig; readonly path: string },
+    budget: SearchBudget,
+  ): Promise<readonly IgnoreRule[] | undefined> {
+    const parts = relative(resolved.workspace.rootPath, resolved.path).split(sep).filter(Boolean);
+    let inherited: readonly IgnoreRule[] = [];
+    for (let index = 0; index < parts.length; index += 1) {
+      if (performance.now() >= budget.deadline) { truncateSearch(budget, "time_budget"); return undefined; }
+      if (budget.directories >= MAX_SEARCH_DIRECTORIES) { truncateSearch(budget, "directory_budget"); return undefined; }
+      budget.directories += 1;
+      const directoryRelative = parts.slice(0, index).join("/");
+      const ancestor = await this.policy.resolve(resolved.workspace.workspaceId, directoryRelative || ".", "search");
+      inherited = await this.loadIgnoreRules(ancestor, directoryRelative, inherited, budget);
+      if (budget.truncated) return undefined;
+      const child = parts.slice(0, index + 1).join("/");
+      // Use the same pruning decision as a root traversal, before loading a
+      // child's rules. Selecting that subtree must not revive ignored paths.
+      if (COMMON_HUGE_DIRECTORIES.has(parts[index]!) || isIgnored(child, true, inherited) && !inherited.some(rule => rule.negative)) return undefined;
+    }
+    return inherited;
+  }
+
   private async loadIgnoreRules(
     resolvedDirectory: { readonly workspace: WorkspaceConfig; readonly path: string },
     directoryRelative: string,
@@ -294,10 +317,10 @@ export class FilesystemService {
     } catch { return inherited; }
     if (snapshot.type !== "file" || snapshot.size > 64 * 1024 || budget.files >= MAX_SEARCH_FILES) return inherited;
     budget.files += 1;
-    addSearchSnapshotPart(budget, ignoreRelative, snapshot);
+    addSearchSnapshotPart(budget, ignoreRelative, snapshot, "ignore");
     const loaded = await readUtf8FileSecure(this.policy, resolved, snapshot, budget).catch(() => undefined);
     if (loaded === undefined) return inherited;
-    addSearchContentPart(budget, ignoreRelative, loaded.content);
+    addSearchContentPart(budget, ignoreRelative, loaded.content, "ignore");
     return [...inherited, ...parseIgnoreRules(loaded.content, directoryRelative, 1_024 - inherited.length)];
   }
 }
@@ -480,12 +503,14 @@ function truncateSearch(budget: SearchBudget, reason: SearchTruncatedReason): vo
   budget.truncatedReason ??= reason;
 }
 
-function addSearchSnapshotPart(budget: SearchBudget, path: string, snapshot: PathSnapshot): void {
-  xorDigest(budget.snapshotXor, createHash("sha256").update(`${path}\0${snapshot.type}\0${snapshot.device}\0${snapshot.inode}\0${snapshot.size}\0${snapshot.modifiedAtMs}`).digest());
+function addSearchSnapshotPart(budget: SearchBudget, path: string, snapshot: PathSnapshot, purpose: "entry" | "ignore" = "entry"): void {
+  xorDigest(budget.snapshotXor, createHash("sha256").update(`${purpose}\0${path}\0${snapshot.type}\0${snapshot.device}\0${snapshot.inode}\0${snapshot.size}\0${snapshot.modifiedAtMs}`).digest());
 }
 
-function addSearchContentPart(budget: SearchBudget, path: string, content: string): void {
-  xorDigest(budget.snapshotXor, createHash("sha256").update(path).update("\0content\0").update(content).digest());
+function addSearchContentPart(budget: SearchBudget, path: string, content: string, purpose: "entry" | "ignore" = "entry"): void {
+  // A .gitignore can be read as both rules and a matching file. Separate those
+  // domains so XOR aggregation cannot cancel both observations of its changes.
+  xorDigest(budget.snapshotXor, createHash("sha256").update(purpose).update("\0").update(path).update("\0content\0").update(content).digest());
 }
 
 function xorDigest(target: Buffer, digest: Buffer): void {

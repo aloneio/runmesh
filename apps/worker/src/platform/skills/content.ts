@@ -1,4 +1,5 @@
 import { SKILL_LIMITS, SKILL_STORED_BUNDLE_BYTES, type SkillBundle } from "../../contracts/skills.js";
+import { changeSkillCapacity } from "./capacity.js";
 
 /** Keep each row below SQLite's 2 MB row limit, including JSON escaping.
  * File text is stored directly; only the small metadata row uses JSON. */
@@ -9,6 +10,15 @@ export function insertSkillContent(sql: SqlStorage, bundle: SkillBundle, bytes: 
   files.forEach((file, position) => {
     sql.exec("INSERT INTO skill_files_v2 VALUES (?,?,?,?,?)", bundle.skill_id, bundle.digest, position, file.path, file.text);
   });
+  changeSkillCapacity(sql, bundle.skill_id, bytes, 1);
+}
+
+/** Removal and its capacity projection share the lifecycle transaction. */
+export function deleteSkillContent(sql: SqlStorage, id: string, digest: string): void {
+  const row = sql.exec<{ bytes: number }>("DELETE FROM skill_bundles_v2 WHERE skill_id=? AND digest=? RETURNING bytes", id, digest).toArray()[0];
+  if (!row) throw new Error("skill_record_invalid");
+  sql.exec("DELETE FROM skill_files_v2 WHERE skill_id=? AND digest=?", id, digest);
+  changeSkillCapacity(sql, id, row.bytes, -1);
 }
 
 export function readSkillContent(sql: SqlStorage, id: string, digest: string): SkillBundle | undefined {

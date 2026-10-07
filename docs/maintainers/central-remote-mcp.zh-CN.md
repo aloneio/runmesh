@@ -7,7 +7,7 @@
 
 [English](central-remote-mcp.md)
 
-**Runmesh 0.1.6 已包含这些能力。** 中央 HTTP 发现和调用接入控制台连接及审核目录。
+中央 HTTP 发现和调用接入控制台连接及审核目录。
 开发与生产源码配置均包含独立中央绑定，并启用 Skills、直接目录和治理开关。
 受管连接通过控制端保存目标策略，OAuth 加密密钥从现有部署密钥派生。
 部署与升级步骤见[发行状态](../release-readiness.zh-CN.md)，验收证据见[发布记录](../central-rollout.md)。
@@ -18,15 +18,42 @@ Worker 是统一入口，不需要在每台 Runner 上安装上游 MCP。中央�
 选定或连接任何 Runner，也不隐含机器权限。客户端继续负责推理，随后可以独立调用
 原生 Runner 工具；Runmesh 不把上游文本当成 Shell 命令执行。
 
-remote_profiles 列出有已发布工具的服务，remote_tools 查询对应档案的审核定义，
+remote_profiles 列出有已发布工具的服务，remote_search 按关键词搜索当前发布的工具，
+remote_tools 查询对应档案的审核定义，
 remote_call 接受精确档案、工具 ID、版本和参数。所有有效客户端共享这些发布内容，
 不需要授权行；客户端凭据、服务停用、上游 OAuth 和实时 schema 仍独立检查。原生
 调用不解析中央存储或连接上游。大目录使用有界服务与工具发现，中央故障保留原生工具。
 
+`apps/worker/src/contracts/catalog-values.ts` 中的 `parseCatalogTool()` 为存储快照
+和 MCP provider 统一校验已发布条目。快照校验保留严格的条目字段、名称排序和工具 ID
+唯一性规则；分页与直接工具 provider 从 RPC 数据中投影公开字段，各容器继续执行
+自己的大小与数量预算。可选直接目录无效时，`remote_status` 返回 `unavailable`，
+原生工具继续可用。
+
+目录历史按每个连接 32 个快照、全局 512 个快照和 16 MiB 的预算保留。新快照需要
+空间时，存储层在同一事务中回收最早且未被引用的历史。当前 observed 和 approved
+快照始终保留，仍在历史中的 digest 可以查看及重新暂存。如果保留这些引用后空间
+仍不足，返回 capacity，并保持原有历史和发布状态。
+
+## 搜索已发布工具
+
+`remote_search` 接受 query，以及可选的 profile_id 和 limit。query 最多 256 个
+UTF-8 字节，默认返回 10 项，最多 20 项。关键词匹配工具名称、标题、说明和连接名称。
+名称完全匹配优先，同分结果按档案和工具标识稳定排序。
+
+每项结果包含 profile_id、profile_name、profile_revision、catalog_revision、
+tool_id、version、name，以及最多 512 个字符的说明。使用 profile_id 调用
+remote_tools 获取完整输入 schema，再将工具 ID、版本和参数传给 remote_call。
+
+应用层通过只读端口搜索已校验的发布快照，内存只保留所需数量的最高排名结果；扫描
+预算为 16 MiB 和 25,600 个工具。返回前重新验证客户端身份及发布集合。达到扫描
+上限时返回 capacity，引导客户端使用 profile_id 缩小范围；发布状态变化时返回
+stale_catalog。搜索状态仅在请求内存在，不发起上游调用，也不写入持久索引。
+
 ## 协议支持
 
 控制台连接与已保存端点协商支持的 MCP 版本，用户无需手工指定协议版本。
-官方 MCP Client SDK 固定为 2.0.0，封装在平台适配层。
+官方 MCP Client SDK 固定为 2.2.0，封装在平台适配层。
 Cloudflare JSON Schema 解释器验证已有的受限目录 schema，不动态生成代码；
 参数保留传入的类型、值及字段缺省状态。展开 schema 与输入结构的预计工作量
 超过配置上限时，校验拒绝该输入。
@@ -41,6 +68,27 @@ Cloudflare JSON Schema 解释器验证已有的受限目录 schema，不动态�
 elicitation 或多轮交互；失败调用不自动重放。
 
 ## 连接与发布流程
+
+POST `/admin/central/connection-check` 接受新公网 MCP 地址 `{endpoint}`，或已启用
+连接的 `{profile_id}`，沿用管理员会话和同源 CSRF 检查。已有连接使用当前托管
+凭据。检查执行握手；服务声明 tools 时读取 tools/list，然后关闭会话并复查权限
+及凭据有效性。
+
+响应仅投影端点、协商协议、能力布尔值、工具数量和观测时间，界面区分已检查的工具
+数量与其他服务声明。需要登录时返回 `{state:"authorization_required"}`。检查保留
+原档案及已发布目录，添加连接和刷新工具通过各自操作完成。
+
+POST `/admin/central/registry-preview` 接受 `{entry}`，内容为一份 server.json，
+或含 server 字段的 Registry 包装对象，使用同一管理员/CSRF 边界。请求上限为
+256 KiB，最多包含 16 个远程条目、16 个软件包，以及每远程条目 32 个请求头名称。
+临时预览返回名称、版本、说明、schema 地址、摘要和观测时间，以及投影后的远程与
+软件包条目。
+
+公网 Streamable HTTP 地址在路径完整、无需请求头或变量配置时可填入连接表单。
+含 URL 占位符（包括编码后的花括号）、请求头或变量配置的条目提示先完成提供方
+配置。预览展示请求头名称和软件包标识，省略请求头值、变量值及启动参数。「使用此
+连接」填入普通表单，管理员选择身份验证方式后点击「连接」。每次导入只处理所选
+文件，预览不保存外部目录快照，也不改动已有连接。
 
 在控制台输入公网 HTTPS MCP URL，选择无身份验证或 OAuth。已保存且启用的连接
 就是精确出站准入，不需要环境变量白名单或手工 bearer 配置。OAuth 使用现有部署密钥。
@@ -108,8 +156,9 @@ CENTRAL_GOVERNANCE_ENABLED=1 加入可选元数据回执、所有者内速率限
 
 测试使用官方客户端／服务端 SDK、真实 Fetch Request/Response 对象、本地实际
 DO／SQLite 和 Registry 权限链，以及模拟上游服务。覆盖两种协议、UTF-8 分片 SSE、
-凭据隔离、定义变化、撤权、并发准入、过大／损坏响应和派发后失败。
-这些测试不连接私人账户，也不代替真实公网服务互操作验收。
+凭据隔离、定义变化、撤权、并发准入、过大／损坏响应和派发后失败。新增回归覆盖
+检查过程不调用业务工具或发布目录、HTTP 字段投影、Registry 私密字段过滤及占位符、
+确定性搜索、有界结果数量，以及权限和发布状态变化。真实公网服务验收见发布记录。
 
 实现参考：[官方 TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)、
 [Cloudflare 公网 fetch 配置](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public)、

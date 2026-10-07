@@ -1,9 +1,11 @@
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { buildSync } from "esbuild";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 // Execute only the actual argument parser, never the installer or host-service code.
 const source = readFileSync(new URL("../apps/worker/src/installer.ts", import.meta.url), "utf8");
@@ -13,6 +15,61 @@ function section(startMarker, endMarker) {
   assert.ok(start >= 0 && end > start, "installer parser boundaries must be present");
   return source.slice(start, end);
 }
+
+test("POSIX copied commands download complete scripts, preserve outcomes and clean temporary files", { skip: process.platform === "win32" }, () => {
+  const compiled = buildSync({ entryPoints: [fileURLToPath(new URL("../apps/worker/src/admin/enrollment-view.ts", import.meta.url))], platform: "node", format: "cjs", bundle: true, write: false }).outputFiles[0].text;
+  const loaded = { exports: {} };
+  new Function("module", "exports", compiled)(loaded, loaded.exports);
+  const code = "--" + "a".repeat(41);
+  const page = loaded.exports.enrollmentDocument({ publicBase: "https://worker.example", runnerId: "runner-test", code, csrf: "csrf", reEnroll: false, bootstrap: true, executionMode: "dedicated_user", maxValidityDays: 30 });
+  const commands = [...page.matchAll(/<pre><code>(.*?)<\/code><\/pre>/gs)].map(match => match[1]
+    .replaceAll("&#039;", "'").replaceAll("&quot;", '"').replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&"));
+  for (const operation of ["install", "uninstall"]) for (const context of ["direct", "if", "or-list"]) {
+    const command = commands.find(value => value.includes(`/runner/${operation}.sh`));
+    assert.ok(command);
+    const invocation = context === "if" ? `if ${command}; then exit 0; else exit $?; fi` : context === "or-list" ? `${command} || exit $?` : command;
+    for (const scenario of [
+      { name: "success", download: 0, script: 0, expected: 0, executed: true },
+      ...[22, 28, 60].map(download => ({ name: `download-${download}`, download, script: 0, expected: download, executed: false })),
+      { name: "empty", download: 0, script: 0, empty: true, expected: 1, executed: false },
+      { name: "script-failure", download: 0, script: 17, expected: 17, executed: true },
+      { name: "sudo-failure", download: 0, script: 0, sudo: 1, expected: 1, executed: false },
+      { name: "sudo-missing", download: 0, script: 0, sudo: 127, expected: 127, executed: false },
+      { name: "mktemp-failure", download: 0, script: 0, mktemp: 71, expected: 71, executed: false },
+      { name: "cleanup-failure", download: 22, script: 0, cleanup: 9, expected: 22, executed: false },
+    ]) {
+      const directory = mkdtempSync(join(tmpdir(), "runmesh-copied-command-"));
+      try {
+        const downloadPath = join(directory, "download-path");
+        // Even failed downloads produce an executable prefix; it must never run.
+        const script = scenario.empty ? "" : 'printf "EXECUTED"\nprintf "|%s" "$@"\nexit ' + scenario.script + '\n';
+        const input = `${scenario.mktemp === undefined ? "" : `mktemp() { return ${scenario.mktemp}; }`}
+${scenario.cleanup === undefined ? "" : `rm() { command rm "$@"; return ${scenario.cleanup}; }`}
+curl() {
+  test "$1" = '-q' || return 99
+  output=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in --output) output="$2"; shift;; esac
+    shift
+  done
+  printf '%s' "$AUDIT_SCRIPT" > "$output"
+  printf '%s' "$output" > "$AUDIT_DOWNLOAD_PATH"
+  return "$AUDIT_DOWNLOAD_EXIT"
+}
+sudo() { ${scenario.sudo === undefined ? '"$@"' : `return ${scenario.sudo}`}; }
+${invocation}\n`;
+        const result = spawnSync("/bin/sh", ["-s"], { input, encoding: "utf8", timeout: 5000, env: { ...process.env, TMPDIR: directory, AUDIT_SCRIPT: script, AUDIT_DOWNLOAD_PATH: downloadPath, AUDIT_DOWNLOAD_EXIT: String(scenario.download) } });
+        assert.equal(result.error, undefined);
+        assert.equal(result.status, scenario.expected, `${operation}/${context}/${scenario.name}: ${result.stderr}`);
+        assert.equal(result.stdout, scenario.executed ? "EXECUTED|" + (operation === "install" ? code : "--purge|--yes") : "");
+        if (scenario.mktemp === undefined) {
+          const staged = readFileSync(downloadPath, "utf8");
+          assert.equal(existsSync(staged), false, `${operation}/${context}/${scenario.name}: temporary script remains`);
+        } else assert.equal(existsSync(downloadPath), false);
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    }
+  }
+});
 const posix = section("AUTO_INSTALL_DEPS=1\n", 'INSTALL_PHASE=preflight\n');
 const powershell = section("$EnrollmentCodeArgument = $null\n", "$InstallRoot = Join-Path");
 const codes = ["A".repeat(43), "--" + "a".repeat(41), "_" + "b".repeat(41) + "-"];

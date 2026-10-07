@@ -10,6 +10,7 @@ import { verifyMcpClient } from "../application/mcp-identity.js";
 import { mcpIdentityVerifier } from "../platform/control-plane-receipts.js";
 import type { WorkerEnv } from "../platform/env.js";
 import type { CentralRemote } from "../contracts/remote.js";
+import type { CentralToolSearch } from "../contracts/tool-search.js";
 import type { CentralSkills } from "../contracts/skills.js";
 import type { CentralDirectory, CentralDirectoryReader } from "../contracts/catalog.js";
 import type { CentralToolVisibility, CentralToolVisibilityReader } from "../contracts/capabilities.js";
@@ -76,6 +77,7 @@ async function handleMcpRequest(request: Request, env: WorkerEnv, url: URL, boun
   const nativeCall = calledTool !== undefined && MCP_TOOL_NAMES.some(name => name === calledTool);
   const remote = nativeCall || env.CAPABILITIES === undefined
     ? undefined : await import("../mcp/providers/remote.js");
+  const search = remote === undefined ? undefined : await import("../mcp/providers/remote/search.js");
   const skills = !nativeCall && env.CAPABILITIES !== undefined && env.CENTRAL_SKILLS_ENABLED === "1"
     ? await import("../mcp/providers/skills.js") : undefined;
   const direct = remote !== undefined && env.CENTRAL_DIRECT_TOOLS_ENABLED === "1" ? await import("../mcp/providers/remote/direct.js") : undefined;
@@ -129,6 +131,7 @@ async function handleMcpRequest(request: Request, env: WorkerEnv, url: URL, boun
         // do not touch central state or initialize any upstream connection.
         const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralRemote;
         remote.registerRemoteTools(server, { profiles: () => owner().listRemoteProfiles(principal), list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) });
+        search?.registerRemoteSearchTool(server, { search: query => (owner() as unknown as CentralToolSearch).searchRemoteTools(principal, query) });
         direct?.registerDirectRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) }, directory);
       }
       handlerStage = "sdk_transport";

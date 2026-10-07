@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { catalogJson } from "../../apps/worker/src/contracts/catalog-json.js";
 import { catalogSchemaGraph } from "../../apps/worker/src/contracts/catalog-schema.js";
-import { parseCatalogCommand, parseRemoteTool, parseCatalogSnapshot } from "../../apps/worker/src/contracts/catalog-values.js";
+import { parseCatalogCommand, parseRemoteTool, parseCatalogSnapshot, parseCatalogTool } from "../../apps/worker/src/contracts/catalog-values.js";
 import { catalogChanges, compatibleApprovedTools, verifiedCatalogSnapshot } from "../../apps/worker/src/domain/capabilities/catalog.js";
 import { createCatalogManager } from "../../apps/worker/src/application/capabilities/catalog-admin.js";
 import { catalogDefinition, catalogProfile, catalogSnapshot, fixtureDigest } from "./catalog-fixtures.js";
@@ -24,6 +24,30 @@ it("W04 same-name tools on different profiles have stable collision-resistant na
   expect(changed.tools[0]!.public_name).toBe(a.tools[0]!.public_name);
   expect(changed.tools[0]!.version).not.toBe(a.tools[0]!.version);
   expect(changed.digest).not.toBe(a.digest);
+});
+
+it("published entry projection drops transport metadata while snapshots keep exact fields", async () => {
+  const snapshot = await catalogSnapshot(), entry = snapshot.tools[0]!;
+  const transported = { ...entry, profile_id: snapshot.profile_id, transport_metadata: "not published" };
+  expect(parseCatalogTool(snapshot.profile_id, transported)).toEqual(entry);
+  expect(parseCatalogSnapshot({ ...snapshot, tools: [transported] })).toBeUndefined();
+  expect(parseCatalogSnapshot(snapshot)).toEqual(snapshot);
+});
+
+it("published entries validate profile, identity and definition without coercing values", async () => {
+  const snapshot = await catalogSnapshot(), entry = snapshot.tools[0]!;
+  for (const profile of [123, true, null, [snapshot.profile_id], "another-profile"])
+    expect(parseCatalogTool(profile, entry)).toBeUndefined();
+  for (const change of [{ tool_id: [entry.tool_id] }, { version: [entry.version] }, { public_name: [entry.public_name] },
+    { definition: { ...entry.definition, inputSchema: { type: "string" } } }])
+    expect(parseCatalogTool(snapshot.profile_id, { ...entry, ...change })).toBeUndefined();
+});
+
+it("snapshot containers retain sorted names and unique identities after entry projection", async () => {
+  const snapshot = await catalogSnapshot("docs", [catalogDefinition("a"), catalogDefinition("b")]);
+  expect(parseCatalogSnapshot(snapshot)).toEqual(snapshot);
+  expect(parseCatalogSnapshot({ ...snapshot, tools: [...snapshot.tools].reverse() })).toBeUndefined();
+  expect(parseCatalogSnapshot({ ...snapshot, tools: [snapshot.tools[0], snapshot.tools[0]] })).toBeUndefined();
 });
 
 it("W04 property ordering and upstream list ordering do not change snapshot identity", async () => {

@@ -18,6 +18,8 @@ https://your-host.example/<generated-secret>/mcp
 
 有效客户端共享实例内启用的 MCP 工具和 Skill。在客户端刷新 Runmesh 连接即可加载当前内容。你可以让 AI 查找可用工具或阅读 Skill；目录工具包括 `remote_profiles`、`remote_tools`、`skill_list` 和 `skill_read`。
 
+读取 Skill 时，使用 `skill_list` 返回的摘要。读取 `SKILL.md` 会同时获得完整文件清单，包含路径、UTF-8 字节数和 SHA-256 摘要；按需使用同一摘要读取附件。管理员更新或恢复版本后，重新调用 `skill_list` 获取当前内容。
+
 这些连接和内容读取由 Runmesh 处理。连接同时具有计算机访问权限时，再按下面的步骤选择机器。管理员连接 MCP 和安装 Skill 的方法见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
 
 ## 为计算机访问选择机器与工作区

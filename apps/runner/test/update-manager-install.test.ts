@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { renderService, serviceLayout, serviceProfilePath, type ServiceCommandExecutor, type ServicePlatform } from "../src/service.js";
 import { managerInstall, managerUninstall, maintenanceManagerLayout, renderMaintenanceManager, type MaintenanceManagerFilesystem, type MaintenanceManagerFileStat, type MaintenanceManagerOptions } from "../src/updates/manager-install.js";
+import { ownedManifest, parseOwnedManifest } from "../src/services/manifest-ownership.js";
 
 function fixture(platform: ServicePlatform) {
   const layout = serviceLayout({ platform, mode: "system" });
@@ -195,4 +196,64 @@ it.each(["linux", "darwin", "win32"] as const)("keeps the %s user manager in the
   const rendered = renderMaintenanceManager({ platform, mode: "user", profilePath: serviceProfilePath(layout), installRoot: layout.installRoot, home: platform === "win32" ? "C:\\Users\\fixture" : "/home/fixture" });
   expect(rendered.content).toContain("--user");
   expect(rendered.content).not.toContain("<UserId>SYSTEM</UserId>");
+});
+
+function olderManager(content: string, platform: "darwin" | "win32", custom = false): string {
+  let body = parseOwnedManifest(content, "maintenance")!.body;
+  body = body.replace(/<(ExecutionTimeLimit|DisallowStartIfOnBatteries|StopIfGoingOnBatteries)>[^<]*<\/\1>/gu, "");
+  if (platform === "win32") {
+    body = body.replace("</UserId>", "</UserId><LogonType>ServiceAccount</LogonType>");
+    if (custom) body = body.replace("<Settings>", "<Settings><ExecutionTimeLimit>PT48H</ExecutionTimeLimit><Priority>6</Priority>");
+  }
+  return ownedManifest(`<?xml version="1.0" encoding="UTF-8"?>\n${body}`, platform, "maintenance").content;
+}
+
+it.each(["darwin", "win32"] as const)("repairs the existing %s manager definition without replacing its independent program", async platform => {
+  const test = fixture(platform);
+  await managerInstall(test.options);
+  const current = test.files.get(test.paths.manifestPath)!;
+  test.files.set(test.paths.manifestPath, olderManager(current, platform));
+  test.oldRunner(); test.calls.length = 0;
+  await managerInstall(test.options);
+  expect(test.files.get(test.paths.manifestPath)).toBe(current);
+  expect(test.copies).toHaveLength(2);
+  expect(test.isActive()).toBe(true);
+  if (platform === "win32") expect(test.calls.filter(call => call[1] === "/Create")).toEqual([["schtasks", "/Create", "/TN", "RunmeshManager", "/XML", test.paths.manifestPath, "/F"]]);
+  test.calls.length = 0;
+  await managerInstall(test.options);
+  expect(test.calls.some(call => call.includes("/Create"))).toBe(false);
+});
+
+it("preserves explicit manager settings and rejects a changed manager command", async () => {
+  const test = fixture("win32"); await managerInstall(test.options);
+  test.files.set(test.paths.manifestPath, olderManager(test.files.get(test.paths.manifestPath)!, "win32", true));
+  await managerInstall(test.options);
+  const repaired = test.files.get(test.paths.manifestPath)!;
+  expect(repaired).toContain("<ExecutionTimeLimit>PT48H</ExecutionTimeLimit>");
+  expect(repaired).toContain("<Priority>6</Priority>");
+  expect(repaired).toContain("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
+  const changed = parseOwnedManifest(repaired, "maintenance")!.body.replace("maintenance-agent", "another-command");
+  test.files.set(test.paths.manifestPath, ownedManifest(changed, "win32", "maintenance").content);
+  test.calls.length = 0;
+  await expect(managerInstall(test.options)).rejects.toThrow("definition differs");
+  expect(test.calls.some(call => call.includes("/Create") || call.includes("/Run"))).toBe(false);
+});
+
+it("restores exact manager definition bytes after a failed native migration without removing its program", async () => {
+  const test = fixture("win32"); await managerInstall(test.options);
+  const prior = olderManager(test.files.get(test.paths.manifestPath)!, "win32");
+  test.files.set(test.paths.manifestPath, prior);
+  const calls: string[][] = [];
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    calls.push([name, ...args]);
+    if (name === "schtasks" && args[0] === "/Run") return { exitCode: 1 };
+    return test.options.executor.execute(name, args);
+  } };
+  await expect(managerInstall({ ...test.options, executor })).rejects.toThrow("maintenance manager command failed");
+  expect(test.files.get(test.paths.manifestPath)).toBe(prior);
+  expect(calls.filter(call => call[1] === "/Create")).toHaveLength(2);
+  expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  expect(test.files.get(test.paths.runtimePath)).toBe("runtime bytes");
+  expect(test.copies).toHaveLength(2);
+  expect(test.isActive()).toBe(true);
 });

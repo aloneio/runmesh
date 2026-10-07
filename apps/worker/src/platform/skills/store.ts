@@ -1,6 +1,8 @@
-import { SKILL_LIMITS, SKILL_STORED_BUNDLE_BYTES, type SkillBundle, type SkillHead, type SkillMutation, type SkillRepository, type SkillSummary } from "../../contracts/skills.js";
+import { SKILL_STORED_BUNDLE_BYTES, type SkillBundle, type SkillHead, type SkillMutation, type SkillRepository, type SkillSummary } from "../../contracts/skills.js";
 import { insertSkillContent, readSkillContent } from "./content.js";
 import { initializeSkillSchema } from "./schema.js";
+import { initializeSkillVersionMetadata, recordSkillVersionCreated } from "./version-metadata.js";
+import { readSkillCapacity } from "./capacity.js";
 
 type Storage = Pick<DurableObjectStorage, "sql" | "transactionSync">;
 /** One immutable content authority, isolated from identity/Runner tables. */
@@ -11,6 +13,7 @@ export class SkillState implements SkillRepository {
     if (this.ready) return;
     this.initializeOwner();
     initializeSkillSchema(this.storage);
+    initializeSkillVersionMetadata(this.storage.sql);
     this.ready = true;
   }
   public head(id: string): SkillHead | undefined {
@@ -49,9 +52,11 @@ export class SkillState implements SkillRepository {
       const previous = this.bundle(bundle.skill_id, bundle.digest);
       if (previous && JSON.stringify(previous) !== content) throw new Error("skill_digest_conflict");
       if (!previous) {
-        const totals = this.storage.sql.exec<{ bytes: number; versions: number; skills: number }>("SELECT COALESCE(SUM(bytes),0) AS bytes, SUM(CASE WHEN skill_id=? THEN 1 ELSE 0 END) AS versions, COUNT(DISTINCT skill_id) AS skills FROM skill_bundles_v2", bundle.skill_id).toArray()[0]!;
-        if (totals.bytes + bytes > SKILL_LIMITS.storage_bytes || totals.versions >= SKILL_LIMITS.versions || (!current && totals.skills >= SKILL_LIMITS.skills)) return { state: "capacity" };
+        const capacity = readSkillCapacity(this.storage.sql, bundle.skill_id);
+        if (capacity.library_bytes + bytes > capacity.max_library_bytes || capacity.skill_versions >= capacity.max_versions
+          || (!current && capacity.library_skills >= capacity.max_skills)) return { state: "capacity" };
         insertSkillContent(this.storage.sql, bundle, bytes, install);
+        recordSkillVersionCreated(this.storage.sql, bundle.skill_id, bundle.digest, Date.now());
       }
       if (install && previous) this.storage.sql.exec("UPDATE skill_bundles_v2 SET approved=1 WHERE skill_id=? AND digest=?", bundle.skill_id, bundle.digest);
       const head: SkillHead = { skill_id: bundle.skill_id, revision: revision + 1, staged_digest: bundle.digest, active_digest: install ? bundle.digest : current?.active_digest ?? null, enabled: install || (current?.enabled ?? false) };

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { RunnerUpdateOperationSchema } from "@aloneio/runmesh-protocol";
 import { isExactUpdateVersion, UPDATE_ERRORS, UPDATE_IDENTIFIER, UpdateFailure } from "./contracts.js";
 import type { UpdateJournalRecord, UpdateJournalPort, UpdatePreparation } from "./contracts.js";
+import { readMetadataJson } from "./metadata-file.js";
 
 const absent = (error: unknown): boolean => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -18,22 +19,13 @@ export async function assertManagerDirectory(path: string, create = false): Prom
 export async function readManagerJson(path: string): Promise<unknown | undefined> {
   let info;
   try { info = await lstat(path); } catch (error) { if (absent(error)) return undefined; throw error; }
-  if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > 64 * 1024 || (process.platform !== "win32" && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()))) throw new UpdateFailure("local_state_invalid");
-  const handle = await open(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size !== info.size) throw new UpdateFailure("local_state_invalid");
-    const bytes = Buffer.alloc(info.size + 1); let offset = 0;
-    while (offset < bytes.length) { const read = await handle.read(bytes, offset, bytes.length - offset, null); if (read.bytesRead === 0) break; offset += read.bytesRead; }
-    const after = await handle.stat(); const current = await lstat(path);
-    if (offset !== info.size || after.mtimeMs !== opened.mtimeMs || after.size !== info.size || current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino) throw new UpdateFailure("local_state_invalid");
-    return JSON.parse(bytes.subarray(0, offset).toString("utf8"));
-  } finally { await handle.close(); }
+  if (process.platform !== "win32" && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.())) throw new UpdateFailure("local_state_invalid");
+  return readMetadataJson(path, info, { maxBytes: 64 * 1024, errorCode: "local_state_invalid" });
 }
 
 async function syncDirectory(path: string): Promise<void> {
   if (process.platform === "win32") return;
-  const handle = await open(path, constants.O_RDONLY);
+  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NONBLOCK);
   try { await handle.sync(); } finally { await handle.close(); }
 }
 

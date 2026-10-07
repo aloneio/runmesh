@@ -763,8 +763,16 @@ test("a failed child preserves runtime, primary, cleanup and launcher classes th
 });
 
 test("direct browser failures use optional error stacks and retain only allowlisted source coordinates", () => {
-  const error = { code: "ERR_ASSERTION", message: "private-response", stack: "AssertionError: private-token\n    at check (C:\\private\\scripts\\product-browser-check.mjs:108:10)" };
-  assert.deepEqual(browserErrorDiagnostic(error), { kind: "assertion_failed", location: { file: "scripts/product-browser-check.mjs", line: 108, column: 10 } });
+  for (const file of ["product-browser-check.mjs", "central-management-browser-check.mjs", "central-recovery-browser-check.mjs", "central-oauth-browser-check.mjs"]) {
+    for (const prefix of ["C:\\private\\scripts\\", "/private/scripts/"]) {
+      const error = { code: "ERR_ASSERTION", message: "private-response", stack: `AssertionError: private-token\n    at check (${prefix}${file}:108:10)` };
+      const expected = { kind: "assertion_failed", location: { file: "scripts/" + file, line: 108, column: 10 } };
+      assert.deepEqual(browserErrorDiagnostic(error), expected);
+      const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [error.stack] }] }] });
+      assert.deepEqual(summary.failures, [{ file_index: 1, file: "unrecognized_test_file", scope: "test", test_index: 1, required_browser_check: true, ...expected }]);
+      assert.doesNotMatch(JSON.stringify(summary), /private/u);
+    }
+  }
   assert.deepEqual(browserErrorDiagnostic({ message: "private-cookie", stack: "at /private/scripts/private-token.mjs:123:456" }), { kind: "unclassified" });
   assert.deepEqual(browserErrorDiagnostic({ code: 1, stdout: "private-token", stderr: "private-cookie" }), { kind: "process_exit" });
   assert.deepEqual(browserErrorDiagnostic(undefined), { kind: "unclassified" });

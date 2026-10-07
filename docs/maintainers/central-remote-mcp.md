@@ -8,7 +8,7 @@ All deployment activation remains explicit.
 
 [简体中文](central-remote-mcp.zh-CN.md)
 
-**Included in Runmesh 0.1.6.** Central HTTP discovery and invocation connect
+Central HTTP discovery and invocation connect
 control-panel profiles to the reviewed catalog. Development and production source
 configurations include the independent central binding and enable Skills,
 direct-directory and governance. Managed connections store their endpoint policy
@@ -23,7 +23,8 @@ each Runner. Central operations can run without any Runner registration, selecti
 or machine permission. The client continues to reason and may separately invoke
 the existing Runner tools; Runmesh does not execute upstream text as shell code.
 
-remote_profiles lists services with published tools. remote_tools reads the
+remote_profiles lists services with published tools. remote_search searches their
+current published definitions by keyword. remote_tools reads the
 reviewed definitions for one profile; remote_call accepts the profile, exact
 tool ID/version and arguments. Every valid authenticated client shares these
 publications; no grant rows are needed. Client credentials, disabled services,
@@ -31,11 +32,45 @@ upstream OAuth and exact live schemas are still checked. Native-only calls do
 not resolve central storage, credentials or upstream connections. Discovery failures
 preserve native tools. Large libraries use bounded service/tool discovery.
 
+`parseCatalogTool()` in `apps/worker/src/contracts/catalog-values.ts` shares
+published-entry validation across stored snapshots and MCP providers. Snapshot
+validation retains strict entry fields, name ordering and unique tool IDs.
+Paged and direct providers project the public fields from RPC data; each
+container retains its own size and count budgets. An invalid optional direct
+directory makes `remote_status` report `unavailable`, while native tools remain
+available.
+
+Catalog history retains up to 32 snapshots per connection, within the global
+512-snapshot and 16 MiB budgets. When saving a new snapshot needs space, the
+store reclaims the oldest unreferenced history in the same transaction. Current
+observed and approved snapshots remain available; retained digests can still be
+viewed and staged again. If those references leave insufficient space, the
+capacity result preserves the existing history and publication.
+
+## Published-tool search
+
+`remote_search` accepts `query`, optional `profile_id`, and optional `limit`.
+The query is bounded to 256 UTF-8 bytes; results default to 10, with a maximum
+of 20. Keywords match tool names, titles, descriptions and connection names.
+Exact names rank first, with deterministic profile/tool ordering for ties.
+
+Each result includes `profile_id`, `profile_name`, `profile_revision`,
+`catalog_revision`, `tool_id`, `version`, `name` and a description of at most
+512 characters. Use the profile ID with `remote_tools` for the full input schema,
+then call `remote_call` with the selected tool ID, version and arguments.
+
+The application searches verified published snapshots through read ports. It
+retains only the requested top results in memory, with scan budgets of 16 MiB
+and 25,600 tools. Identity and the publication set are checked again before
+return. A capacity result asks the client to narrow the query with `profile_id`;
+a changed publication returns `stale_catalog`. Search uses request-local state
+and makes no upstream calls or persistent index writes.
+
 ## Protocol support
 
 Control-panel connections negotiate a supported MCP version with the saved endpoint;
 users do not configure protocol versions. The official MCP client SDK is pinned
-to 2.0.0 and isolated in a platform adapter. Its Cloudflare JSON
+to 2.2.0 and isolated in a platform adapter. Its Cloudflare JSON
 Schema interpreter validates the already restricted catalog schema dialect
 without dynamic code generation. Arguments retain their supplied types and
 values, including omitted fields. Validation rejects inputs whose estimated
@@ -53,6 +88,35 @@ resumption, tasks, sampling, elicitation and multi-round interactions are unsupp
 Failed calls are not replayed.
 
 ## Connection and publication flow
+
+POST `/admin/central/connection-check` accepts either `{endpoint}` for a new
+public MCP URL or `{profile_id}` for an enabled saved connection. It uses the
+existing administrator session and same-origin CSRF checks. Saved connections
+use their current managed credentials. The operation performs the handshake
+and reads `tools/list` when the service advertises tools, then closes the session
+and rechecks authorization and credential validity.
+
+The response projects the endpoint, negotiated protocol, capability booleans,
+tool count and observation time. The UI distinguishes a checked tool count from
+other service declarations. A sign-in requirement returns
+`{state:"authorization_required"}`. Checking leaves profiles and published
+catalogs unchanged; connection and tool refresh remain separate actions.
+
+POST `/admin/central/registry-preview` accepts `{entry}` containing one
+`server.json` object or a Registry wrapper with a `server` field. The same
+administrator/CSRF boundary applies. The request is bounded to 256 KiB, with
+at most 16 remotes, 16 packages and 32 header names per remote. The transient
+response includes name, version, description, schema URL, digest and observation
+time, plus projected remote and package entries.
+
+Public Streamable HTTP URLs with complete paths and no header or variable
+configuration become connection-form candidates. URL placeholders, including
+encoded braces, and configured headers or variables mark an entry for provider
+setup. Preview exposes header names and package identifiers while discarding
+header values, variable values and launch arguments. **Use this connection**
+fills the ordinary form; the administrator chooses authentication and selects
+**Connect**. Import processes the selected file once and stores no directory
+snapshot or connection changes.
 
 Enter a public HTTPS MCP URL and select No authentication or OAuth in the control panel.
 The saved enabled connection is exact outbound admission; no environment allowlist or
@@ -143,8 +207,11 @@ Tests cover the official client/server SDKs across real Fetch Request/Response
 objects, an actual local DO/SQLite and Registry authorization chain, and synthetic
 upstream handlers. They include both protocol lanes, fragmented UTF-8 SSE,
 credential isolation, changed schemas, revoked access, concurrent admission,
-oversize/invalid responses and post-dispatch failures. They do not connect to
-private accounts or claim live public-provider interoperability.
+oversize/invalid responses and post-dispatch failures. Additional regressions
+cover inspection without business calls or publication, projected HTTP results,
+Registry secret filtering and placeholders, deterministic search, bounded result
+counts and authorization/publication changes. Live public-provider acceptance is
+recorded in the rollout ledger.
 
 Primary implementation references:
 - [Official TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)

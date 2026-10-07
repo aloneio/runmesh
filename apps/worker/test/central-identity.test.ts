@@ -39,7 +39,7 @@ it("W02 accepts central-only identity at the real HTTP boundary without any Runn
   expect(await verifyMcpClient(mcpIdentityVerifier(env), client.secret_verifier)).toMatchObject({ client_id: client.client_id, scopes: [] });
   const listed = await rpc(client.secret, "tools/list", {});
   expect(listed.error).toBeUndefined();
-  expect(listed.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["remote_call", "remote_profiles", "remote_tools"]);
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["remote_call", "remote_profiles", "remote_search", "remote_tools"]);
   for (const [name, args] of [
     ["read", { workspace_id: "not-configured", path: "README.md" }],
     ["shell", { workspace_id: "not-configured", command: "echo never-dispatched" }],

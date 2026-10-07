@@ -2,6 +2,7 @@ import type { CatalogJson, CatalogMutation, CatalogPage, CatalogReadPorts, Remot
 import type { CapturedIdentity } from "./identity.js";
 import type { ConnectionProfile } from "./connectors.js";
 import type { CentralObservation, CentralReceipt } from "./central-audit.js";
+import type { RemoteServerInfo } from "./remote-server.js";
 
 /** Per-operation safety bounds, not advertised production capacity. */
 export const REMOTE_LIMITS = Object.freeze({ operation_ms: 20_000, request_bytes: 65_536, response_bytes: 1_048_576,
@@ -49,6 +50,7 @@ export type RemoteOutcome = ({ readonly state: "completed"; readonly operation_s
 
 /** No URLs, headers, tokens, sessions, Runner selection or SDK types in the call port. */
 export interface RemoteSession {
+  describe?(): RemoteServerInfo;
   /** Synchronous credential/egress validity of observed data, including after close. */
   current(): boolean;
   listTools(): Promise<readonly RemoteToolDefinition[]>;
@@ -59,7 +61,7 @@ export interface RemoteConnector {
   open(profile: ConnectionProfile, signal: AbortSignal, dispatched: () => void, authorize: () => Promise<void>): Promise<RemoteSession>;
   validate(schema: { [key: string]: CatalogJson }, value: unknown): boolean;
 }
-export type RemoteCallPorts = Omit<CatalogReadPorts, "cursor" | "now"> & { readonly connector: RemoteConnector; readonly observation?: CentralObservation };
+export type RemoteCallPorts = Pick<CatalogReadPorts, "repository" | "profile" | "identity" | "digest"> & { readonly connector: RemoteConnector; readonly observation?: CentralObservation };
 export interface CentralRemote {
   listRemoteProfiles(principal: CapturedIdentity): Promise<SharedProfiles>;
   listCatalog(principal: CapturedIdentity, query: unknown): Promise<CatalogPage>;

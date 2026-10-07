@@ -1,9 +1,11 @@
 import { message } from "../i18n/messages.js";
 import type { AdminNotice, ControlNavSection } from "../contracts/admin-views.js";
+import type { UiTitlePart } from "../contracts/locale.js";
 import { escapeHtml } from "./format.js";
 import { adminStyles } from "../admin-styles.js";
 import { meshMarkSvg, languageSwitch } from "./brand.js";
 import { adminScript } from "./client-script.js";
+import { PRODUCT_VERSION } from "../generated-version.js";
 
 export function controlHeader(active?: ControlNavSection): string {
   const icons: Record<ControlNavSection, string> = {
@@ -20,11 +22,14 @@ export function controlHeader(active?: ControlNavSection): string {
     ["runners", "Runners", "/admin/runners"],
     ["settings", "Settings", "/admin/settings"],
   ] as const).map(([key, label, href]) => `<a class="${active === key ? "active" : ""}"${active === key ? ' aria-current="page"' : ""} href="${href}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${icons[key]}</svg><span>${label}</span></a>`).join("");
-  return `<header class="app-header" data-app-header><div class="header-inner"><div class="header-left"><a class="brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>${message("text.agent.control.plane", "en")}</small></span></a></div><div class="header-actions">${languageSwitch()}</div></div><div class="nav-rail"><nav class="control-nav" aria-label="Main navigation">${nav}</nav></div></header>`;
+  return `<header class="app-header" data-app-header><div class="header-inner"><div class="header-left"><a class="brand" href="https://github.com/aloneio/runmesh" target="_blank" rel="noopener noreferrer" aria-label="Runmesh · GitHub">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>${message("text.agent.control.plane", "en")}</small></span></a><span class="product-version" data-no-i18n>v${escapeHtml(PRODUCT_VERSION)}</span></div><div class="header-actions">${languageSwitch()}</div></div><div class="nav-rail"><nav class="control-nav" aria-label="Main navigation">${nav}</nav></div></header>`;
 }
 
-export function adminDocument(title: string, body: string, active: ControlNavSection, notices: readonly AdminNotice[] = []): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><a class="skip-link" href="#main-content">${message("text.skip.to.main.content", "en")}</a>${controlHeader(active)}<div class="shell"><main class="workspace" id="main-content" tabindex="-1">${renderAdminNotices(notices)}${body}</main></div>${adminScript()}</body></html>`;
+export function adminDocument(title: string | readonly UiTitlePart[], body: string, active: ControlNavSection, notices: readonly AdminNotice[] = []): string {
+  const titleParts = typeof title === "string" ? undefined : [...title, { data: "Runmesh" }, "Agent Control Plane"];
+  const titleText = titleParts?.map(part => typeof part === "string" ? part : part.data).join(" · ") ?? `${title} · Runmesh · Agent Control Plane`;
+  const titleAttributes = titleParts === undefined ? "" : ` data-no-i18n data-i18n-title="${escapeHtml(JSON.stringify(titleParts))}"`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title${titleAttributes}>${escapeHtml(titleText)}</title>${adminStyles()}</head><body class="ops-body"><a class="skip-link" href="#main-content">${message("text.skip.to.main.content", "en")}</a>${controlHeader(active)}<div class="shell"><main class="workspace" id="main-content" tabindex="-1">${renderAdminNotices(notices)}${body}</main></div>${adminScript()}</body></html>`;
 }
 
 export function renderAdminNotices(notices: readonly AdminNotice[]): string {

@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { runMaintenanceCli } from "../src/maintenance-cli.js";
 import { RUNNER_VERSION } from "../src/version.js";
 import type { ProfileStore } from "../src/profile.js";
+import type { CliDependencies } from "../src/cli/contracts.js";
 
 it("exposes the maintenance package identity and only its dedicated command surface", async () => {
   const output: string[] = [];
@@ -16,7 +17,8 @@ it("exposes the maintenance package identity and only its dedicated command surf
 it.each(["start", "enroll", "doctor", "status", "workspace", "env", ""])("rejects the ordinary Runner command %s before dispatch", async command => {
   const startRunner = vi.fn(async () => undefined);
   const startMaintenanceAgent = vi.fn(async () => undefined);
-  await expect(runMaintenanceCli(command ? [command] : [], { startRunner, startMaintenanceAgent })).rejects.toThrow("Runmesh maintenance");
+  const dependencies: CliDependencies = { startRunner, startMaintenanceAgent };
+  await expect(runMaintenanceCli(command ? [command] : [], dependencies)).rejects.toThrow("Runmesh maintenance");
   expect(startRunner).not.toHaveBeenCalled(); expect(startMaintenanceAgent).not.toHaveBeenCalled();
 });
 

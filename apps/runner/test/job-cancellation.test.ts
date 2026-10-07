@@ -13,7 +13,7 @@ type Observation = { alive: boolean; fingerprintMatches: boolean | null };
 
 it.each(["undelivered", "thrown"])("does not publish a stale running status when %s cancellation races a completed rollback", async failure => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "runmesh-cancel-rollback-")));
-  const child = new ChildProcess(); child.pid = 424242;
+  const child = new ChildProcess(); Object.assign(child, { pid: 424242 });
   const events: JobEvent[] = [];
   let cancelling = false, completed!: () => void;
   const completion = new Promise<void>(resolve => { completed = resolve; });
@@ -31,7 +31,7 @@ it.each(["undelivered", "thrown"])("does not publish a stale running status when
       if (record.status === "running" && cancelling) {
         // The rollback has reached disk but its caller has not resumed. A
         // child exit can commit and publish completion during that window.
-        child.exitCode = 0; child.emit("close", 0, null);
+        Object.assign(child, { exitCode: 0 }); child.emit("close", 0, null);
         await completion;
       }
     } },
@@ -66,7 +66,7 @@ it.each(["lookup", "cancel", "list", "deduplicated-launch", "revoked-deduplicate
     await manager.initialize();
     const input = { workspace_id: "w", command: [process.execPath, "-e", ""], request_id: "same-launch" };
     const job = await manager.start(input);
-    child.exitCode = 7; child.emit("close", 7, null);
+    Object.assign(child, { exitCode: 7 }); child.emit("close", 7, null);
     await vi.waitFor(() => expect(writes).toBe(1));
     await new Promise(resolve => setImmediate(resolve));
     expect(manager.get(job.job_id).status).toBe("running");
@@ -93,7 +93,7 @@ it.each(["lookup", "cancel", "list", "deduplicated-launch", "revoked-deduplicate
 async function fixture(recovered: boolean) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "runmesh-cancel-observation-")));
   const state = join(root, "state");
-  const child = new ChildProcess(); child.pid = 424242;
+  const child = new ChildProcess(); Object.assign(child, { pid: 424242 });
   child.stdout = new PassThrough();
   let observation: Observation = { alive: true, fingerprintMatches: true };
   let inspect = async (): Promise<Observation> => observation;
@@ -119,7 +119,7 @@ async function fixture(recovered: boolean) {
   const manager = recovered ? new JobManager({ ...options, onEvent: observe }, { processes }) : original;
   if (recovered) await manager.initialize();
   return {
-    manager, job, input, events, processes,
+    manager, job, input, events, processes, child,
     setObservation(value: Observation) { observation = value; },
     setInspector(value: () => Promise<Observation>) { inspect = value; },
     onCancelling(action: () => void) { onStatus = event => { if (event.type === "status" && event.job.status === "cancelling") action(); }; },
@@ -131,7 +131,7 @@ async function fixture(recovered: boolean) {
       observation = { alive: true, fingerprintMatches: true };
       terminate = async () => {
         observation = { alive: false, fingerprintMatches: null };
-        if (!recovered) { child.signalCode = "SIGTERM"; child.emit("close", null, "SIGTERM"); }
+        if (!recovered) { Object.assign(child, { signalCode: "SIGTERM" }); child.emit("close", null, "SIGTERM"); }
         return true;
       };
       await manager.cancel(job.job_id);
@@ -140,13 +140,145 @@ async function fixture(recovered: boolean) {
     },
     async cleanup() {
       onStatus = () => undefined;
-      if (child.exitCode === null && child.signalCode === null) { child.exitCode = 0; child.emit("close", 0, null); }
+      if (child.exitCode === null && child.signalCode === null) { Object.assign(child, { exitCode: 0 }); child.emit("close", 0, null); }
       await vi.waitFor(() => expect(["running", "cancelling"]).not.toContain(original.get(job.job_id).status));
       await original.flushPersistence(); await manager.flushPersistence();
       await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
     },
   };
 }
+
+it.each([false, true])("bounds cancellation observation and removes waiting listeners when leaderExited=%s", async leaderExited => {
+  const f = await fixture(false);
+  let reached!: () => void;
+  const once = f.child.once.bind(f.child);
+  const listener = vi.spyOn(f.child, "once").mockImplementation((event, callback) => {
+    const result = once(event, callback);
+    if (String(event) === "close") reached();
+    return result;
+  });
+  try {
+    f.setTerminator(async () => { if (leaderExited) Object.assign(f.child, { signalCode: "SIGTERM" }); return true; });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const waiting = new Promise<void>(resolve => { reached = resolve; });
+      const pending = f.manager.cancel(f.job.job_id);
+      await waiting;
+      expect(f.child.listenerCount("close")).toBe(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toMatchObject({ status: "cancelling", cancellation_delivered_at_ms: expect.any(Number) });
+      expect(f.manager.queueStatus().running).toBe(1);
+      expect(f.child.listenerCount("close")).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+    expect(f.processes.terminateProcess).toHaveBeenCalledTimes(leaderExited ? 1 : 2);
+    const waiting = new Promise<void>(resolve => { reached = resolve; });
+    const pending = f.manager.cancel(f.job.job_id);
+    await waiting;
+    Object.assign(f.child, { signalCode: "SIGTERM" }); f.child.emit("close", null, "SIGTERM");
+    await expect(pending).resolves.toMatchObject({ status: "cancelled" });
+    expect(f.manager.queueStatus().running).toBe(0);
+    expect(f.child.listenerCount("close")).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    listener.mockRestore(); vi.useRealTimers();
+    if (["running", "cancelling"].includes(f.manager.get(f.job.job_id).status)) { Object.assign(f.child, { signalCode: "SIGTERM" }); f.child.emit("close", null, "SIGTERM"); }
+    await f.cleanup();
+  }
+});
+
+it.runIf(process.platform === "linux").each(["before-publication", "before-signal"])("joins a concurrent cancellation when the original child exits during an inconclusive %s identity probe", async phase => {
+  const f = await fixture(false);
+  let reached!: () => void, release!: () => void, delivered!: () => void;
+  const paused = new Promise<void>(resolve => { reached = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const signalled = new Promise<void>(resolve => { delivered = resolve; });
+  const pending: Promise<ReturnType<JobManager["get"]> | Error>[] = [];
+  let inspections = 0;
+  const pauseAt = phase === "before-publication" ? 1 : 2;
+  f.setInspector(async () => {
+    if (++inspections === pauseAt) {
+      reached(); await gate;
+      // Native inspection can observe kill(pid, 0) success before yielding to
+      // /proc, then find no starttime after another caller terminates/reaps it.
+      return { alive: true, fingerprintMatches: null };
+    }
+    return { alive: true, fingerprintMatches: true };
+  });
+  f.setTerminator(async () => {
+    // Keep inherited output pipes open: exit is witnessed, close is pending.
+    Object.assign(f.child, { signalCode: "SIGTERM" }); delivered(); return true;
+  });
+  try {
+    pending.push(f.manager.cancel(f.job.job_id).catch(error => error as Error));
+    await paused;
+    pending.push(f.manager.cancel(f.job.job_id).catch(error => error as Error));
+    await signalled;
+    await vi.waitFor(() => expect(f.child.listenerCount("close")).toBe(2));
+    release();
+    // Both callers must observe the same child completion, not reject an
+    // already witnessed exit as missing identity or send a second signal.
+    await vi.waitFor(() => expect(f.child.listenerCount("close")).toBe(3));
+    expect(f.processes.terminateProcess).toHaveBeenCalledTimes(1);
+    f.child.emit("close", null, "SIGTERM");
+    expect(await Promise.all(pending)).toEqual([expect.objectContaining({ status: "cancelled" }), expect.objectContaining({ status: "cancelled" })]);
+    expect(f.manager.queueStatus().running).toBe(0);
+    expect(await f.persisted()).toMatchObject({ status: "cancelled", cancellation_delivered_at_ms: expect.any(Number) });
+    expect(f.events.filter(event => event.type === "completed")).toHaveLength(1);
+  } finally {
+    release();
+    f.child.emit("close", null, "SIGTERM");
+    await Promise.all(pending);
+    await f.cleanup();
+  }
+});
+
+it.runIf(process.platform === "linux").each([
+  { resistantLeader: false, queuedFollowUp: false }, { resistantLeader: true, queuedFollowUp: false },
+  { resistantLeader: false, queuedFollowUp: true }, { resistantLeader: true, queuedFollowUp: true },
+])("cancels a real TERM-resistant descendant holding output pipes, resistant leader=$resistantLeader, queued follow-up=$queuedFollowUp", async ({ resistantLeader, queuedFollowUp }) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "runmesh-cancel-descendant-"))), pidPath = join(root, "descendant.pid");
+  const authorize = vi.fn(async () => true);
+  const manager = new JobManager({ stateDir: join(root, "state"), maxConcurrentJobs: 1, maxQueuedJobs: 1,
+    ...(queuedFollowUp ? { authorizeQueuedJob: authorize } : {}),
+    policy: new PathPolicy([{ workspaceId: "w", rootPath: root, readonly: false, shell: false }]) });
+  const descendantScript = "process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)";
+  const parentScript = `${resistantLeader ? "process.on('SIGTERM',()=>{});" : ""}require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendantScript)},process.argv[1]],{stdio:'inherit'});setInterval(()=>{},1000)`;
+  let job: Awaited<ReturnType<JobManager["start"]>> | undefined, descendant: number | undefined, fingerprint: string | null = null;
+  try {
+    await manager.initialize();
+    job = await manager.start({ workspace_id: "w", command: [process.execPath, "-e", parentScript, pidPath] });
+    await vi.waitFor(async () => { descendant = Number(await readFile(pidPath, "utf8")); expect(descendant).toBeGreaterThan(0); }, { timeout: 5_000 });
+    fingerprint = nativeJobProcesses.fingerprintSync(descendant!);
+    const queued = queuedFollowUp ? await manager.start({ workspace_id: "w", command: [process.execPath, "-e", ""] }) : undefined;
+    if (queued !== undefined) {
+      expect(queued.status).toBe("queued");
+      expect(manager.queueStatus()).toMatchObject({ running: 1, waiting: 1 });
+    }
+    const cancelled = await Promise.all([manager.cancel(job.job_id), manager.cancel(job.job_id)]);
+    expect(cancelled.every(value => value.status === "cancelled")).toBe(true);
+    // A terminal cancellation must release admission before returning. This
+    // branch has no queue authorizer, so immediate admission exposes a leaked
+    // slot instead of silently queueing and waiting for it to clear later.
+    if (queued === undefined) expect(manager.queueStatus()).toMatchObject({ running: 0, waiting: 0 });
+    const next = queued ?? await manager.start({ workspace_id: "w", command: [process.execPath, "-e", ""] });
+    if (queued === undefined) expect(next.status).not.toBe("queued");
+    expect(await nativeJobProcesses.inspectProcess(descendant!, fingerprint)).toMatchObject({ alive: false });
+    await vi.waitFor(() => expect(manager.get(next.job_id).status).toBe("succeeded"), { timeout: 5_000 });
+    expect(authorize).toHaveBeenCalledTimes(queuedFollowUp ? 1 : 0);
+    expect(manager.queueStatus().running).toBe(0);
+    await expect(manager.cancel(job.job_id)).resolves.toMatchObject({ status: "cancelled" });
+    await manager.flushPersistence();
+    expect(JSON.parse(await readFile(join(root, "state", "jobs", job.job_id, "meta.json"), "utf8"))).toMatchObject({ status: "cancelled", cancellation_delivered_at_ms: expect.any(Number) });
+  } finally {
+    if (descendant !== undefined && (await nativeJobProcesses.inspectProcess(descendant, fingerprint)).fingerprintMatches === true) {
+      try { process.kill(descendant, "SIGKILL"); } catch { /* fixture already exited */ }
+    }
+    for (const current of manager.list()) await manager.cancel(current.job_id).catch(() => undefined);
+    await manager.flushPersistence();
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
 
 for (const failure of ["undelivered", "thrown"] as const) {
   it.each([0, 1_000])(`keeps ${failure} cancellation rollback and completion ordered with a clock rollback of %i ms`, async rollbackMs => {

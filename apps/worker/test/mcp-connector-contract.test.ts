@@ -49,7 +49,7 @@ function withoutDialect(schema: unknown): unknown {
 it("emits the unchanged native source catalog alongside shared discovery through authenticated HTTP", async () => {
   const actual = await emittedTools();
   const expected = catalogContract().tools;
-  expect(actual.map(tool => tool.name).sort()).toEqual([...expected.map(tool => tool.name), "remote_profiles", "remote_tools", "remote_call"].sort());
+  expect(actual.map(tool => tool.name).sort()).toEqual([...expected.map(tool => tool.name), "remote_profiles", "remote_search", "remote_tools", "remote_call"].sort());
   for (const tool of expected) {
     const emitted = actual.find(candidate => candidate.name === tool.name)!;
     expect(emitted.description, tool.name).toBe(tool.description);

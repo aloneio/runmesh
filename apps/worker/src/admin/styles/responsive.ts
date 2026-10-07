@@ -64,6 +64,7 @@ export const responsiveStyles = `/* Responsive Breakpoints & Accessibility */
   .enrollment-dialog pre code{white-space:inherit;overflow-wrap:inherit;word-break:inherit}
 }
 @media(max-width:540px){
+  .header-left{flex-direction:column;align-items:flex-start;gap:0;padding:4px 0}
   .card-row{align-items:flex-start;gap:8px;min-width:0}
   .card-row-main{min-width:0;max-width:100%}
   .card-row-sub{display:flex;flex-wrap:wrap;min-width:0;max-width:100%;row-gap:3px}

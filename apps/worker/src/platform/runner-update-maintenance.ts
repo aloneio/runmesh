@@ -30,36 +30,57 @@ export class RunnerUpdateMaintenance {
   /** An authenticated replacement installation never inherits the previous lifecycle's gate. */
   public blocksLifecycle(lifecycleId: string): boolean { return this.owner === undefined || this.owner?.lifecycle_id === lifecycleId; }
   public async load(): Promise<void> {
-    if (this.owner !== undefined) return;
-    this.loading ??= Promise.all([this.ports.storage.get<Owner>(MAINTENANCE_KEY), this.ports.storage.get<Record<string, Uncertain>>(UNCERTAIN_KEY)]).then(([owner, uncertainties]) => {
-      this.owner = owner ?? null; this.uncertainties = uncertainties ?? {}; this.persisted = true; this.uncertainPersisted = true;
-    }).catch(error => {
-      // A transient read must remain fail-closed for this request, without poisoning every later request in the isolate.
-      this.loading = undefined;
-      throw error;
-    });
-    await this.loading;
+    if (this.owner === undefined) {
+      this.loading ??= Promise.all([this.ports.storage.get<Owner>(MAINTENANCE_KEY), this.ports.storage.get<Record<string, Uncertain>>(UNCERTAIN_KEY)]).then(([owner, uncertainties]) => {
+        let restored = uncertainties ?? {};
+        let unchanged = true;
+        // Disconnect events can arrive before these reads complete or while a
+        // previous read failed. Merge their evidence instead of replacing it.
+        for (const pending of Object.values(this.uncertainties)) {
+          if (owner?.lifecycle_id === pending.lifecycle_id && (owner.proven_epoch ?? -1) >= pending.epoch) continue;
+          const stored = restored[pending.lifecycle_id];
+          if (stored === undefined || stored.epoch < pending.epoch) { restored = { ...restored, [pending.lifecycle_id]: pending }; unchanged = false; }
+        }
+        this.owner = owner ?? null; this.uncertainties = restored; this.persisted = true; this.uncertainPersisted = unchanged;
+      }).catch(error => {
+        // A transient read must remain fail-closed for this request, without poisoning every later request in the isolate.
+        this.loading = undefined;
+        throw error;
+      });
+      await this.loading;
+    }
+    if (this.uncertainPersisted) return;
+    // Recovery must survive eviction without waiting for a second close event.
+    // Reuse the write queue, rechecking dirty state when our turn is reached.
+    const work = this.writes.then(() => this.persistUncertainties());
+    this.writes = work.catch(() => undefined); await work;
+  }
+  private async persistUncertainties(): Promise<void> {
+    if (this.uncertainPersisted) return;
+    const snapshot = this.uncertainties;
+    if (Object.keys(snapshot).length === 0) await this.ports.storage.delete(UNCERTAIN_KEY);
+    else await this.ports.storage.put(UNCERTAIN_KEY, snapshot);
+    this.uncertainPersisted = this.uncertainties === snapshot;
   }
   private matches(owner: Owner): boolean { return this.owner?.operation_id === owner.operation_id && this.owner.lifecycle_id === owner.lifecycle_id; }
   private observation(owner: Owner) {
     const matches = this.matches(owner);
     const uncertain = matches && this.uncertainties[owner.lifecycle_id] !== undefined;
-    return { cloud_uncertain: uncertain, cloud_drained: matches && this.persisted && !uncertain && this.ports.pendingReplies() === 0
+    return { cloud_uncertain: uncertain, cloud_drained: matches && this.persisted && this.uncertainPersisted && !uncertain && this.ports.pendingReplies() === 0
       && this.ports.connections().every(connection => connection.lifecycle_id !== owner.lifecycle_id || connection.pending === 0 || !connection.open && (this.owner?.proven_epoch ?? -1) >= connection.epoch) };
   }
   public async disconnected(connection: MaintenanceConnection): Promise<void> {
     if (connection.pending === 0) return;
-    await this.load();
-    const work = this.writes.then(async () => {
-      // A delayed close callback from the process already proved stopped must not resurrect uncertainty.
-      if (this.owner?.lifecycle_id === connection.lifecycle_id && (this.owner.proven_epoch ?? -1) >= connection.epoch) return;
-      const current = this.uncertainties[connection.lifecycle_id];
-      if (current !== undefined && current.epoch >= connection.epoch && this.uncertainPersisted) return;
-      if (current === undefined || current.epoch < connection.epoch) this.uncertainties[connection.lifecycle_id] = { lifecycle_id: connection.lifecycle_id, epoch: connection.epoch, session_id: connection.session_id };
+    // A delayed close callback from the process already proved stopped must not resurrect uncertainty.
+    if (this.owner?.lifecycle_id === connection.lifecycle_id && (this.owner.proven_epoch ?? -1) >= connection.epoch) return;
+    // Transport cleanup may remove the socket and its waiters after a storage
+    // error. Retain its unresolved work before any read or write can fail.
+    const current = this.uncertainties[connection.lifecycle_id];
+    if (current === undefined || current.epoch < connection.epoch) {
+      this.uncertainties = { ...this.uncertainties, [connection.lifecycle_id]: { lifecycle_id: connection.lifecycle_id, epoch: connection.epoch, session_id: connection.session_id } };
       this.uncertainPersisted = false;
-      await this.ports.storage.put(UNCERTAIN_KEY, this.uncertainties); this.uncertainPersisted = true;
-    });
-    this.writes = work.catch(() => undefined); await work;
+    }
+    await this.load();
   }
 
   /** The caller verifies the internal HMAC before reaching this handler. */
@@ -100,13 +121,13 @@ export class RunnerUpdateMaintenance {
           await this.ports.storage.put(MAINTENANCE_KEY, this.owner); this.persisted = true;
         }
         if (uncertain !== undefined) {
+          if (this.uncertainties[owner.lifecycle_id] !== uncertain) { response = new Response("Runner drain evidence changed", { status: 409 }); return; }
           const remaining = { ...this.uncertainties }; delete remaining[owner.lifecycle_id];
-          if (Object.keys(remaining).length === 0) await this.ports.storage.delete(UNCERTAIN_KEY);
-          else await this.ports.storage.put(UNCERTAIN_KEY, remaining);
-          this.uncertainties = remaining; this.uncertainPersisted = true;
+          this.uncertainties = remaining; this.uncertainPersisted = false;
+          await this.persistUncertainties();
         }
         // A new hello can race storage I/O. Never authorize a switch across that new session.
-        if (this.ports.pendingReplies() !== 0 || hasNewOrOpenConnection()) { response = new Response("Runner drain evidence changed", { status: 409 }); return; }
+        if (this.ports.pendingReplies() !== 0 || hasNewOrOpenConnection() || (this.uncertainties[owner.lifecycle_id]?.epoch ?? -1) > epoch) { response = new Response("Runner drain evidence changed", { status: 409 }); return; }
       }
       response = Response.json(this.observation(owner));
     });

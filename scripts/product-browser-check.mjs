@@ -11,6 +11,8 @@ import { checkAdminNavigation } from './navigation-browser-check.mjs';
 import { checkNavigationHandoffs } from './navigation-handoff-browser-check.mjs';
 import { checkAdminLayout } from './layout-browser-check.mjs';
 import { checkSkillUploads } from './skill-upload-browser-check.mjs';
+import { checkCentralManagement } from './central-management-browser-check.mjs';
+import { checkCentralRecovery } from './central-recovery-browser-check.mjs';
 
 async function checkClientPermissions(browser, origin, errors) {
  for(const locale of ['en','zh-CN']) {
@@ -128,8 +130,10 @@ export async function checkGuidedProduct(executable) {
  let browser;
  try{
   browser=await chromium.launch({headless:true,...(executable?{executablePath:executable}:{})});
+  await checkCentralRecovery(browser);
   await checkClientPermissions(browser,origin,exceptions);
   await checkSkillFileErrors(browser,origin,requests,library);
+  await checkCentralManagement(browser,origin);
   await checkSkillUploads(browser,origin,requests,library);
   const context=await browser.newContext({viewport:{width:1365,height:1000}});
   const page=await context.newPage();page.on('pageerror',e=>exceptions.push(e.message));
@@ -147,7 +151,7 @@ export async function checkGuidedProduct(executable) {
   await page.locator('[data-product-status]').filter({hasText:'List refreshed.'}).waitFor();
   await page.goto(origin+'/admin/central?setup=missing');
   const status=page.locator('[data-product-status]');await status.filter({hasText:'List refreshed.'}).waitFor();
-  assert.equal(await page.locator('[data-service-create] button').isEnabled(),true);
+  assert.equal(await page.locator('[data-service-create] button[type=submit]').isEnabled(),true);
   assert.equal(await page.locator('[data-central-tab=skills]').isEnabled(),true);
   assert.equal(await page.locator('[data-service-create] [name=endpoint]').getAttribute('type'),'url');
   await page.goto(origin+'/admin/central');await status.filter({hasText:'List refreshed.'}).waitFor();
@@ -158,12 +162,12 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.getByText('All connected AI clients share enabled MCPs and Skills. Pause an item to stop sharing it.',{exact:true}).count(),0);
   assert.equal(await page.locator('.central-advanced,[data-central-admin]').count(),0);
   const form=page.locator('[data-service-create]');
-  await form.locator('[name=endpoint]').fill('http://docs.example.com/mcp');await form.locator('button').click();
+  await form.locator('[name=endpoint]').fill('http://docs.example.com/mcp');await form.locator('[type=submit]').click();
   await status.filter({hasText:'Check the MCP name and enter a public HTTPS MCP URL.'}).waitFor();
   assert.equal(profiles.length,0);assert.equal((await status.textContent()).includes('SKILL.md'),false);
   assert.equal(await form.locator('[name=endpoint]').inputValue(),'http://docs.example.com/mcp');
   // Correcting a confirmed rejected input needs no unrelated library refresh.
-  await form.locator('[name=name]').fill('团队文档');await form.locator('[name=endpoint]').fill('https://docs.example.com/mcp');await form.locator('button').click();
+  await form.locator('[name=name]').fill('团队文档');await form.locator('[name=endpoint]').fill('https://docs.example.com/mcp');await form.locator('[type=submit]').click();
   await status.filter({hasText:'Connected.'}).waitFor();
   assert.deepEqual(await form.locator('[name=authentication] option').evaluateAll(nodes=>nodes.map(n=>n.value)),['none','oauth']);assert.equal(await form.locator('[name=token]').count(),0);
   assert.equal(profiles[0].display_name,'团队文档');
@@ -191,7 +195,7 @@ export async function checkGuidedProduct(executable) {
    assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,before+1);
    assert.equal(requests.filter(r=>r.path===catalogPath&&r.method==='GET').length,reads+2,'Recovery reads the catalog once before discovery and once after publication');
   }
-  controls.discovery.reject=true;await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
+  controls.discovery.reject=true;await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('[type=submit]').click();
   await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();
   assert.equal(catalogs.has(profiles.at(-1).profile_id),false);assert.equal(await review.isHidden(),true);
   // Reconnect refreshes state itself; failed reconciliation must still block the handoff.
@@ -251,7 +255,7 @@ export async function checkGuidedProduct(executable) {
   await form.locator('[name=name]').fill('Later public MCP');
   await form.locator('[name=endpoint]').fill('https://later.example.com/mcp');
   await form.locator('[name=authentication]').selectOption('none');
-  await form.locator('button').click();await status.filter({hasText:'Connected.'}).waitFor();
+  await form.locator('[type=submit]').click();await status.filter({hasText:'Connected.'}).waitFor();
   const reconnectStart=requests.length;
   let returnedProfile;
   await Promise.all([
@@ -337,13 +341,16 @@ export async function checkGuidedProduct(executable) {
   installedSkill.head={...installedSkill.head,revision:3,staged_digest:stagedDigest};
   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   const skillCard=page.locator('[data-skill-list] .central-card');
-  assert.equal(await skillCard.getByText('Update available.',{exact:true}).isVisible(),true);
+  assert.equal(await skillCard.getByText('Latest upload differs from the selected version.',{exact:true}).isVisible(),true);
   await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files loaded.'}).waitFor();
+  assert.equal(await skillReview.locator('pre').textContent(),folderText);assert.equal(await skillReview.getByRole('button',{name:'Update Skill',exact:true}).count(),0);
+  await skillCard.getByRole('button',{name:'View latest upload',exact:true}).click();await status.filter({hasText:'Skill files loaded.'}).waitFor();
   assert.equal(await skillReview.locator('pre').textContent(),stagedText);assert.equal(installedSkill.head.active_digest,digest);assert.equal(skillWrites(),beforeReview);
   assert.equal(await skillReview.getByRole('button',{name:'Update Skill',exact:true}).count(),1,'An enabled Skill with a staged update needs an explicit publication action');
   await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(installedSkill.head.active_digest,stagedDigest);assert.equal(installedSkill.head.revision,4);assert.equal(skillWrites(),beforeReview+1);
-  assert.equal(await skillCard.getByText('Update available.',{exact:true}).count(),0);
+  assert.equal(await skillCard.getByText('Latest upload differs from the selected version.',{exact:true}).count(),0);
+  assert.equal(await skillCard.getByRole('button',{name:'View latest upload',exact:true}).count(),0);
   await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files loaded.'}).waitFor();
   assert.equal(await skillReview.getByRole('button',{name:'Update Skill',exact:true}).count(),0);assert.equal(await skillReview.getByRole('button',{name:'Enable Skill',exact:true}).count(),0);
   await skillCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();
@@ -458,7 +465,10 @@ export async function checkGuidedProduct(executable) {
    }finally{releaseOAuth();releaseDestination();controls.oauth.delayed=undefined;if(pendingDestination)await page.unroute(origin+'/admin');}
    await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
    await page.locator('[data-central-product][aria-busy="false"]').waitFor();
-   assert.equal(await page.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
+   // Background recovery releases each MCP separately after the list is ready.
+   const reconnect=page.locator('[data-service-list] [data-operation-scope="mcp:'+oauthId+'"]').getByRole('button',{name:'Reconnect',exact:true});
+   await reconnect.and(page.locator(':enabled')).waitFor();
+   assert.equal(await reconnect.isEnabled(),true);
   }
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
   assert.equal(await page.getByText('Enabled · tool review required before sharing',{exact:true}).count(),0);
@@ -508,7 +518,7 @@ export async function checkGuidedProduct(executable) {
    assert.equal((await status.textContent()).includes('research installed.'),false,'Do not report an active installation after '+state);
    assert.equal(await status.getAttribute('data-error'),'true');
   }
-  // Recreated controls must reflect the operation lock until recovery finishes.
+  // Recreated controls preserve their connection lock while other workflows remain usable.
   catalogs.delete(publicId);
   profiles.find(p=>p.profile_id===oauthId).enabled=false;
   let releaseDiscovery;controls.discovery.delayed=new Promise(resolve=>{releaseDiscovery=resolve;});
@@ -516,11 +526,13 @@ export async function checkGuidedProduct(executable) {
   try{
    await page.reload();await pendingDiscovery;
    assert.equal(await publicCard.getByRole('button',{name:'View tools',exact:true}).isDisabled(),true,'Newly rendered service controls must stay disabled while recovery runs');
-   assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isDisabled(),true);
-   assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'true');
+   assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isEnabled(),true);
+   assert.equal(await page.locator('[data-central-tab=skills]').isEnabled(),true);
+   assert.equal(await page.locator('[data-product-refresh]').isEnabled(),true);
+   assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'false');
   }finally{releaseDiscovery();controls.discovery.delayed=undefined;}
   await status.filter({hasText:'Connected.'}).waitFor();
-  // Connected describes one service; later catalog reads still own the operation lock.
+  // Connected describes one service; wait until that connection releases its controls.
   await page.locator('[data-central-product][aria-busy="false"]').waitFor();
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
@@ -528,7 +540,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'false');
   // A valid long hostname must still connect with the optional name left blank.
   const longEndpoint='https://docs-'+ 'a'.repeat(55) +'.example.com/mcp';
-  await form.locator('[name=name]').fill('');await form.locator('[name=endpoint]').fill(longEndpoint);await form.locator('button').click();
+  await form.locator('[name=name]').fill('');await form.locator('[name=endpoint]').fill(longEndpoint);await form.locator('[type=submit]').click();
   await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('Connected.')||text.includes('Check the service name');});
   assert.equal(profiles.at(-1).endpoint,longEndpoint,'An automatic display name must not reject a valid service URL');
   assert.equal(profiles.at(-1).display_name.length<=64,true);
@@ -547,7 +559,7 @@ export async function checkGuidedProduct(executable) {
   const failedOAuthStart=requests.length;
   await form.locator('[name=name]').fill('Failed sign-in service');
   await form.locator('[name=endpoint]').fill('https://unavailable.provider.com/mcp');
-  await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
+  await form.locator('[name=authentication]').selectOption('oauth');await form.locator('[type=submit]').click();
   await status.filter({hasText:'Check the MCP URL and its OAuth client registration settings, then reconnect.'}).waitFor();
   const savedOAuth=profiles.at(-1);
   const savedOAuthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByText(savedOAuth.endpoint,{exact:true})});

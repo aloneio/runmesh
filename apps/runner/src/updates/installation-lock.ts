@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync } from "node:fs";
-import { link, lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import { constants, lstatSync } from "node:fs";
+import { link, lstat, mkdir, open, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { trustedWindowsEnvironment, resolveTrustedWindowsTool, trustedWindowsRoot } from "../windows-tools.js";
 
@@ -14,7 +14,8 @@ const generationPattern = new RegExp(`^${uuidPattern}$`, "u");
 const missing = (error: unknown) => code(error) === "ENOENT";
 async function syncDirectory(path: string): Promise<void> {
   if (process.platform === "win32") return;
-  const handle = await open(path, "r"); try { await handle.sync(); } finally { await handle.close(); }
+  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NONBLOCK);
+  try { await handle.sync(); } finally { await handle.close(); }
 }
 async function removeGeneration(directory: string, marker: string): Promise<void> {
   await unlink(join(directory, marker)); await unlink(join(directory, "lease.json")); await rmdir(directory);
@@ -25,9 +26,22 @@ async function removeGeneration(directory: string, marker: string): Promise<void
 async function recoverFileLease(path: string): Promise<void> {
   const info = await lstat(path).catch(error => missing(error) ? undefined : Promise.reject(error));
   if (info === undefined || info.isDirectory()) return; // A hosted installer owns a directory lock.
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 4096) throw new Error("Runner installation lock is invalid.");
-  const raw = await readFile(path, "utf8").catch(error => missing(error) ? undefined : Promise.reject(error));
-  if (raw === undefined) return;
+  if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > 4096) throw new Error("Runner installation lock is invalid.");
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(error => missing(error) ? undefined : Promise.reject(error));
+  if (handle === undefined) return;
+  let raw: string;
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size !== info.size) throw new Error("Runner installation lock is invalid.");
+    const bytes = Buffer.alloc(info.size + 1); let offset = 0;
+    while (offset < bytes.length) { const read = await handle.read(bytes, offset, bytes.length - offset, null); if (read.bytesRead === 0) break; offset += read.bytesRead; }
+    const after = await handle.stat();
+    const current = await lstat(path).catch(error => missing(error) ? undefined : Promise.reject(error));
+    if (current === undefined) return;
+    if (offset !== info.size || after.size !== info.size || after.mtimeMs !== opened.mtimeMs || current.isSymbolicLink()
+      || current.dev !== info.dev || current.ino !== info.ino) throw new Error("Runner installation lock is invalid.");
+    raw = bytes.subarray(0, offset).toString("utf8");
+  } finally { await handle.close(); }
   const value = JSON.parse(raw) as { schema_version?: unknown; generation?: unknown };
   if (value.schema_version !== 1 || typeof value.generation !== "string" || !generationPattern.test(value.generation)) throw new Error("Runner installation lock is invalid.");
   const directory = `${path}.manager-${value.generation}`;

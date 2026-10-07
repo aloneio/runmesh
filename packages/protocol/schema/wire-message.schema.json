@@ -755,7 +755,7 @@
         "sent_at_ms": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 8640000000000000
         },
         "active_job_ids": {
           "maxItems": 10000,
@@ -876,7 +876,7 @@
                 "expires_at_ms": {
                   "type": "integer",
                   "minimum": 0,
-                  "maximum": 9007199254740991
+                  "maximum": 8640000000000000
                 },
                 "nonce": {
                   "type": "string",
@@ -958,7 +958,7 @@
         "sent_at_ms": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 8640000000000000
         },
         "workspaces": {
           "maxItems": 10000,
@@ -1038,12 +1038,12 @@
               "created_at_ms": {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 9007199254740991
+                "maximum": 8640000000000000
               },
               "updated_at_ms": {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 9007199254740991
+                "maximum": 8640000000000000
               },
               "display_name": {
                 "type": "string",
@@ -1194,12 +1194,12 @@
                 "created_at_ms": {
                   "type": "integer",
                   "minimum": 0,
-                  "maximum": 9007199254740991
+                  "maximum": 8640000000000000
                 },
                 "updated_at_ms": {
                   "type": "integer",
                   "minimum": 0,
-                  "maximum": 9007199254740991
+                  "maximum": 8640000000000000
                 },
                 "display_name": {
                   "type": "string",
@@ -1357,12 +1357,12 @@
                 "created_at_ms": {
                   "type": "integer",
                   "minimum": 0,
-                  "maximum": 9007199254740991
+                  "maximum": 8640000000000000
                 },
                 "updated_at_ms": {
                   "type": "integer",
                   "minimum": 0,
-                  "maximum": 9007199254740991
+                  "maximum": 8640000000000000
                 },
                 "display_name": {
                   "type": "string",
@@ -1614,12 +1614,12 @@
             "created_at_ms": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 9007199254740991
+              "maximum": 8640000000000000
             },
             "updated_at_ms": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 9007199254740991
+              "maximum": 8640000000000000
             },
             "display_name": {
               "type": "string",
@@ -1697,7 +1697,7 @@
         "started_at_ms": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 8640000000000000
         }
       },
       "required": [
@@ -1840,12 +1840,12 @@
             "created_at_ms": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 9007199254740991
+              "maximum": 8640000000000000
             },
             "updated_at_ms": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 9007199254740991
+              "maximum": 8640000000000000
             },
             "display_name": {
               "type": "string",
@@ -1947,12 +1947,12 @@
             "created_at_ms": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 9007199254740991
+              "maximum": 8640000000000000
             },
             "updated_at_ms": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 9007199254740991
+              "maximum": 8640000000000000
             },
             "display_name": {
               "type": "string",
@@ -1990,7 +1990,7 @@
         "completed_at_ms": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 8640000000000000
         },
         "outcome": {
           "type": "string",

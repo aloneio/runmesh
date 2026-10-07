@@ -16,6 +16,7 @@ function fixture(central = true, scopes: string[] = ["coding:read"], clientId = 
     toolVisibility: async () => ({ state: "visible", skill: true, remote: true }),
     listSkills: async (principal: { client_id: string }) => { principals.push(principal.client_id); return { state: "listed", skills: [], next_after: null }; },
     listRemoteProfiles: async () => ({ state: "listed", profiles: [] }),
+    searchRemoteTools: async () => ({ state: "listed", tools: [] }),
     listCatalog: async () => ({ state: "listed", tools: [], next_cursor: null }),
   };
   const config = { INTERNAL_CONTROL_SECRET: "synthetic-registration-test-secret-0123456789",
@@ -114,9 +115,9 @@ it.each(["{", "null", "42", "[]", '{"jsonrpc":"invalid","id":1,"method":"tools/c
   expect(f.principals).toEqual([]);
 });
 
-it.each(["skill_list", "remote_profiles", "remote_tools"])("shared call %s avoids unrelated native schema registration", async name => {
+it.each(["skill_list", "remote_profiles", "remote_search", "remote_tools"])("shared call %s avoids unrelated native schema registration", async name => {
   const f = fixture(), register = vi.spyOn(McpServer.prototype, "registerTool");
-  const result = await f.rpc("tools/call", { name, arguments: name === "remote_tools" ? { profile_id: "docs" } : {} });
+  const result = await f.rpc("tools/call", { name, arguments: name === "remote_tools" ? { profile_id: "docs" } : name === "remote_search" ? { query: "docs" } : {} });
   expect(result.result.isError).not.toBe(true);
   expect(result.result.content[0].type).toBe("text");
   const names = register.mock.calls.map(call => call[0]);
@@ -163,9 +164,9 @@ it("tool discovery after a selective call still publishes the complete native ca
   await f.rpc("tools/call", { name: "skill_list", arguments: {} });
   await f.rpc("tools/call", { name: "read", arguments: {} });
   const listed = await f.rpc("tools/list");
-  expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining([...MCP_TOOL_NAMES, "skill_list", "skill_read", "remote_profiles", "remote_tools", "remote_call"]));
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([...MCP_TOOL_NAMES, "skill_list", "skill_read", "remote_profiles", "remote_search", "remote_tools", "remote_call"].sort());
   const sharedOnly = await fixture(true, []).rpc("tools/list");
-  expect(sharedOnly.result.tools).toHaveLength(5);
+  expect(sharedOnly.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["remote_call", "remote_profiles", "remote_search", "remote_tools", "skill_list", "skill_read"]);
 });
 
 it("concurrent selective requests keep separate principals", async () => {

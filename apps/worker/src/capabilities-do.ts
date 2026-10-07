@@ -34,8 +34,23 @@ import { createHttpRemoteConnector } from "./platform/connectors/remote-client.j
 import { REMOTE_LIMITS, RemoteFault, type CentralRemote, type RemoteOutcome, type RemoteFailure } from "./contracts/remote.js";
 import { connectionPolicy } from "./platform/connectors/connection-policy.js";
 import { SkillState } from "./platform/skills/store.js";
-import { createSkillService } from "./application/skills/service.js";
+import { createSkillAdministration } from "./application/skills/admin.js";
+import { createSkillReader } from "./application/skills/reader.js";
 import type { CentralSkills } from "./contracts/skills.js";
+import { SKILL_SOURCE_LIMITS, type CentralSkillSource } from "./contracts/skill-source.js";
+import { createGithubSkillSource } from "./platform/skills/github-source.js";
+import { createSkillSourceService } from "./application/skills/source.js";
+import { skillSourceDeadline } from "./application/skills/source-deadline.js";
+import type { CentralSkillLifecycle } from "./contracts/skill-lifecycle.js";
+import { SkillLifecycleState } from "./platform/skills/lifecycle-store.js";
+import { createSkillLifecycle } from "./application/skills/lifecycle.js";
+import type { CentralToolSearch } from "./contracts/tool-search.js";
+import { createToolSearcher } from "./application/capabilities/search.js";
+import type { CentralConnectorInspection } from "./contracts/connector-inspection.js";
+import { createConnectorInspection } from "./application/connectors/inspection.js";
+import { remoteDeadline } from "./application/capabilities/remote-deadline.js";
+import { publicMcpEndpoint } from "./contracts/remote-values.js";
+import { catalogObject } from "./contracts/catalog-json.js";
 import { CentralGovernance } from "./platform/capabilities/central-audit.js";
 import type { CentralAuditRow } from "./contracts/central-audit.js";
 
@@ -47,10 +62,12 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   readonly #namespace: string;
   readonly #catalog: CatalogState;
   readonly #skills: SkillState;
+  readonly #skillLifecycle: SkillLifecycleState;
   readonly #governance: CentralGovernance;
   readonly #managedState: ManagedOAuthState;
   #managedService: ReturnType<typeof createManagedOAuth> | undefined;
   readonly #remoteClients = new Set<string>();
+  readonly #skillSources = new Set<string>();
   public constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
     this.#namespace = ctx.id.toString();
@@ -59,6 +76,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     this.#catalog = new CatalogState(ctx.storage, () => this.#schema.initialize());
     this.#managedState = new ManagedOAuthState(ctx.storage, () => this.#schema.initialize());
     this.#skills = new SkillState(ctx.storage, () => this.#schema.initialize());
+    this.#skillLifecycle = new SkillLifecycleState(ctx.storage, () => this.#schema.initialize(), this.#skills);
     this.#governance = new CentralGovernance(ctx.storage, () => this.#schema.initialize());
   }
 
@@ -80,38 +98,65 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     } catch { return { state: "unavailable" }; }
   }
 
-  #skillService() {
-    return createSkillService({ repository: this.#skills, digest: catalogSha256,
+  #skillAdmin() {
+    return createSkillAdministration({ repository: this.#skills, digest: catalogSha256,
+      admin: (hash, signal) => this.#authorize(hash, signal) });
+  }
+  #skillReader() {
+    return createSkillReader({ repository: this.#skills, digest: catalogSha256,
       remoteDependency: (target, signal) => {
         const profile = this.#profiles.read(target.connection_profile_id)?.profile;
         if (profile && connectionPolicy(profile) === undefined) return Promise.resolve("disabled");
         return createDependencyReader({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile, digest: catalogSha256 })(target, signal);
       },
-      identity: (principal, signal) => this.#identity(principal, signal), admin: (hash, signal) => this.#authorize(hash, signal) });
+      identity: (principal, signal) => this.#identity(principal, signal) });
   }
   public async installSkill(hash: string, input: unknown): ReturnType<CentralSkills["installSkill"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unknown" } as const),
-      signal => this.#skillService().install(hash, input, signal));
+      signal => this.#skillAdmin().install(hash, input, signal));
+  }
+  public async skillLifecycle(hash: string, id: string, action: Parameters<CentralSkillLifecycle["skillLifecycle"]>[2], input: unknown): ReturnType<CentralSkillLifecycle["skillLifecycle"]> {
+    const run = createSkillLifecycle({ repository: this.#skillLifecycle,
+      admin: (hash, signal) => this.#authorize(hash, signal), digest: catalogSha256, now: Date.now });
+    return withinDeadline(new AbortController().signal, () => ({ state: ["retention", "cleanup"].includes(action) ? "unknown" : "unavailable" } as const),
+      signal => run(hash, id, action, input, signal));
+  }
+  public async searchRemoteTools(principal: CapturedIdentity, query: unknown): ReturnType<CentralToolSearch["searchRemoteTools"]> {
+    const search = createToolSearcher({ repository: this.#catalog, profiles: after => this.#profiles.list(after),
+      identity: (value, signal) => this.#identity(value, signal), digest: catalogSha256 });
+    return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
+      (signal, expired) => search(principal, query, signal, expired));
+  }
+  public async skillSource(hash: string, action: "preview" | "install", input: unknown): ReturnType<CentralSkillSource["skillSource"]> {
+    if (!["preview", "install"].includes(action)) return { state: "invalid" };
+    if (typeof hash !== "string" || !/^[a-f0-9]{64}$/u.test(hash)) return { state: "denied" };
+    if (this.#skillSources.has(hash) || this.#skillSources.size >= SKILL_SOURCE_LIMITS.active) return { state: "busy" };
+    this.#skillSources.add(hash);
+    try {
+      return await skillSourceDeadline(new AbortController().signal, () => ({ state: action === "install" ? "unknown" : "unavailable" } as const),
+        signal => createSkillSourceService({ source: createGithubSkillSource(), repository: this.#skills,
+          admin: (hash, signal) => this.#authorize(hash, signal), digest: catalogSha256 })(hash, action, input, signal));
+    } finally { this.#skillSources.delete(hash); }
   }
   public async mutateSkill(hash: string, input: unknown): ReturnType<CentralSkills["mutateSkill"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unknown" } as const),
-      signal => this.#skillService().mutate(hash, input, signal));
+      signal => this.#skillAdmin().mutate(hash, input, signal));
   }
   public async listSkillLibrary(hash: string, after?: string): ReturnType<CentralSkills["listSkillLibrary"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
-      signal => this.#skillService().library(hash, after, signal));
+      signal => this.#skillAdmin().library(hash, after, signal));
   }
   public async inspectSkill(hash: string, id: string, digest?: string): ReturnType<CentralSkills["inspectSkill"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
-      signal => this.#skillService().inspect(hash, id, digest, signal));
+      signal => this.#skillAdmin().inspect(hash, id, digest, signal));
   }
   public async listSkills(principal: CapturedIdentity, query: unknown): ReturnType<CentralSkills["listSkills"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
-      signal => this.#skillService().list(principal, query, signal));
+      signal => this.#skillReader().list(principal, query, signal));
   }
   public async readSkill(principal: CapturedIdentity, input: unknown): ReturnType<CentralSkills["readSkill"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
-      signal => this.#skillService().read(principal, input, signal));
+      signal => this.#skillReader().read(principal, input, signal));
   }
   public async listProfiles(hash: string, after?: string): ReturnType<CentralManagement["listProfiles"]> {
     try {
@@ -211,8 +256,9 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     return this.#managedOAuth().run(hash, action, input, requestOrigin);
   }
 
-  #remoteConnector() {
+  #remoteConnector(inspection = false) {
     return createHttpRemoteConnector({
+      inspection,
       rules: profile => { const current = this.#profiles.read(profile.profile_id)?.profile; return current?.revision === profile.revision && current.enabled ? connectionPolicy(current) : undefined; },
       ...(this.env.RUNMESH_PUBLIC_ORIGIN === undefined ? {} : { selfOrigin: this.env.RUNMESH_PUBLIC_ORIGIN }),
       credential: async (profile, signal, authorize) => {
@@ -227,6 +273,28 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
           throw new RemoteFault("dependency_unavailable");
         }
       } });
+  }
+
+  public async inspectConnection(hash: string, input: unknown, origin: string): ReturnType<CentralConnectorInspection["inspectConnection"]> {
+    const value = catalogObject(input);
+    if (!value || Object.keys(value).some(key => !["endpoint", "profile_id"].includes(key))) return { state: "invalid" };
+    const id = value.profile_id;
+    const saved = isCapabilityIdentifier(id) ? this.#profiles.read(id)?.profile : undefined;
+    if (id !== undefined && (!saved || value.endpoint !== undefined)) return { state: "invalid" };
+    const endpoint = saved?.endpoint ?? publicMcpEndpoint(value.endpoint);
+    if (!endpoint || [origin, this.env.RUNMESH_PUBLIC_ORIGIN].includes(new URL(endpoint).origin)) return { state: "invalid" };
+    if (saved && !saved.enabled) return { state: "invalid" };
+    const profile = saved ?? { schema_version: 1 as const, profile_id: "connection-check", connector_id: "connection-check", endpoint,
+      owner: { kind: "instance_admin" as const }, revision: 1, enabled: true, credential: null, authentication: "none" as const };
+    const key = "admin:" + hash;
+    if (this.#remoteClients.has(key) || this.#remoteClients.size >= REMOTE_LIMITS.active) return { state: "unavailable", code: "busy" };
+    this.#remoteClients.add(key);
+    try {
+      const connector = saved ? this.#remoteConnector(true) : createHttpRemoteConnector({ inspection: true,
+        rules: connectionPolicy, credential: async () => null, selfOrigin: origin });
+      return await remoteDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
+        signal => createConnectorInspection({ connector, authorize: signal => this.#authorize(hash, signal), now: Date.now })(profile, signal));
+    } finally { this.#remoteClients.delete(key); }
   }
 
   /** In-memory admission bounds active work on this owner; no persistent queues,

@@ -28,6 +28,8 @@ Open **MCP & Skill**. In **MCP**, enter the provider's URL, choose **No authenti
 
 In **Skill**, select a Skill folder or `SKILL.md` and its supporting text files, then select **Install Skill**. Enabled MCP tools and Skills are shared with all active AI clients in the instance.
 
+You can also preview and install a Skill from a public GitHub repository by entering its full commit SHA and folder path. Open **Version history** on an installed Skill to compare versions, restore one, keep it for later or preview cleanup. The same panel shows version counts and stored content size. See [Skill installation and version management](central-skills.md) for the steps.
+
 Create a client from **Connect an AI client** or **AI connections**. Choose **MCP and Skills** for the shared collection, or **MCP, Skills and computer access** to add machine access. Copy the URL shown when it is created into the AI client's MCP settings. For everyday connection, update and pause actions, see the [MCP and Skill guide](central-administration.md).
 
 ## Enroll a machine
@@ -60,7 +62,7 @@ For a client using computers, open **AI connections**, choose **MCP, Skills and 
 | Rotate a Runner credential | Invalidates the old credential and closes its old connection; use the recovery enrollment procedure on the host |
 | Rotate or revoke an MCP client | Replaces or withdraws that client's access |
 | Emergency lock or revoke a Runner | Blocks new protected work; inspect already-running host processes separately |
-| Delete a Runner | Removes the control-plane record, workspace/policy settings and client selections; handle host removal and retained audit/history separately |
+| Delete a Runner | Removes the control-plane record, workspace/policy settings and client selections; old lifecycle history is reclaimed after confirmation and its retention window; uninstall the host separately |
 | Change the administrator password | Invalidates existing administrator sessions |
 
 To retire the host installation, use the enrollment page's maintenance uninstaller when its release channel is available. It handles old or partial installations, deletes local Job history and preserves project workspaces. With hosted distribution unavailable, the page provides a local CLI command; check its version's purge support in [complete uninstall](runner-uninstall.md). Perform removal from a local console or SSH session, then delete the control-plane record.

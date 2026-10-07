@@ -8,9 +8,9 @@ import { RunnerUpdateOperationSchema } from "@aloneio/runmesh-protocol";
 import { historyControls, historySettingsForm } from "../history-ui.js";
 import { JOBS_EXPLANATION, jobSnapshotNote } from "./job-views.js";
 import { validityStatus } from "../validity.js";
-import { record, escapeHtml, timeMarkup, shortChecksum, statusClass } from "./format.js";
+import { record, escapeHtml, dataText, timeMarkup, shortChecksum, statusClass } from "./format.js";
 import { statusBadge, historyJobTable, mcpCallTable } from "./tables.js";
-import { managedWorkspaceForm, permissionForm } from "./forms.js";
+import { IDENTIFIER_INPUT_PATTERN, managedWorkspaceForm, permissionForm } from "./forms.js";
 import { isFullHostPath } from "./host-path-label.js";
 import { executionModeFormFields, windowFields } from "./runner-fields.js";
 export interface RunnerDetailPresentation {
@@ -44,12 +44,12 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
   const metadata = record(runner.metadata);
   const publicInfo = record(runner.public_info);
   const tools = record(environment?.tools);
-  const toolRows = tools === undefined ? `<p class="muted empty-desc">${message("text.environment.details.unavailable.while.offline", "en")}</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); const isAvail = item?.available === true; return `<div class="tool-item"><div class="tool-name-row"><strong class="tool-name">${escapeHtml(name)}</strong>${isAvail ? `<span class="badge online"><span class="status-dot online"></span>${message("text.available", "en")}</span>` : `<span class="badge offline"><span class="status-dot offline"></span>${message("text.unavailable", "en")}</span>`}</div>${isAvail && typeof item?.version === "string" ? `<span class="tool-version mono">${escapeHtml(item.version)}</span>` : ""}</div>`; }).join("")}</div>`;
+  const toolRows = tools === undefined ? `<p class="muted empty-desc">${message("text.environment.details.unavailable.while.offline", "en")}</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); const isAvail = item?.available === true; return `<div class="tool-item"><div class="tool-name-row"><strong class="tool-name" data-no-i18n>${escapeHtml(name)}</strong>${isAvail ? `<span class="badge online"><span class="status-dot online"></span>${message("text.available", "en")}</span>` : `<span class="badge offline"><span class="status-dot offline"></span>${message("text.unavailable", "en")}</span>`}</div>${isAvail && typeof item?.version === "string" ? `<span class="tool-version mono" data-no-i18n>${escapeHtml(item.version)}</span>` : ""}</div>`; }).join("")}</div>`;
   const policyStatus = runner.policy_status === "applied" || runner.policy_status === "invalid" ? runner.policy_status : "pending";
   const workspaceRows = workspaces.map((workspace) => managedWorkspaceForm(runnerId, record(workspace), csrf)).join("") || `<li class="muted empty-item">${message("text.no.managed.workspaces.configured", "en")}</li>`;
   const updateChannel = runner.update_channel === "pinned" ? "pinned" : "stable";
-  const currentVersion = typeof runner.current_runner_version === "string" ? runner.current_runner_version : typeof publicInfo?.runner_version === "string" ? publicInfo.runner_version : "Unknown";
-  const latestVersion = typeof runner.latest_runner_version === "string" ? runner.latest_runner_version : release.distributable ? release.latest_version : "Not configured";
+  const currentVersion = typeof runner.current_runner_version === "string" ? runner.current_runner_version : typeof publicInfo?.runner_version === "string" ? publicInfo.runner_version : undefined;
+  const latestVersion = typeof runner.latest_runner_version === "string" ? runner.latest_runner_version : release.distributable ? release.latest_version : undefined;
   const distributionNotice = release.distributable ? "" : `<p class="muted font-12">${message("text.hosted.distribution.is.not.configured.portable.artifact.manual.version.management.only", "en")}</p>`;
   const desiredVersion = typeof runner.desired_runner_version === "string" ? runner.desired_runner_version : "";
   const updateParsed = RunnerUpdateOperationSchema.safeParse(runner.update_operation);
@@ -69,7 +69,7 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
     : publicInfo?.privilege_state === "privileged" || publicInfo?.privilege_state === "restricted" || publicInfo?.privilege_state === "mismatch" || publicInfo?.privilege_state === "unknown" ? publicInfo.privilege_state : "unknown";
   const serviceIdentity = typeof metadata?.service_identity === "string" && metadata.service_identity.length > 0
     ? metadata.service_identity
-    : typeof publicInfo?.service_identity === "string" && publicInfo.service_identity.length > 0 ? publicInfo.service_identity : "Unknown";
+    : typeof publicInfo?.service_identity === "string" && publicInfo.service_identity.length > 0 ? publicInfo.service_identity : undefined;
   const reportedRevision = typeof runner.runner_reported_policy_revision === "number" ? String(runner.runner_reported_policy_revision) : "—";
   const desiredChecksum = shortChecksum(runner.desired_policy_checksum);
   const activeChecksum = shortChecksum(runner.active_policy_checksum);
@@ -113,7 +113,7 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
     const reason = typeof item.reason === "string" ? ` · ${item.reason}` : "";
     const stage = typeof item.validation_stage === "string" ? ` · ${item.validation_stage}` : "";
     const remediation = typeof item.remediation_code === "string" ? ` · ${item.remediation_code}` : "";
-    return `<li><span class="mono">${escapeHtml(id)}</span><span class="validation-tag status-pill ${statusClass(status)}">${escapeHtml(status)}</span><span class="muted font-12">${escapeHtml(`${reason}${stage}${remediation}`)}</span></li>`;
+    return `<li><span class="mono" data-no-i18n>${escapeHtml(id)}</span><span class="validation-tag status-pill ${statusClass(status)}">${escapeHtml(status)}</span><span class="muted font-12">${escapeHtml(`${reason}${stage}${remediation}`)}</span></li>`;
   }).join("") || `<li class="muted empty-item">${message("text.no.validation.result.has.been.reported.yet", "en")}</li>`;
   const warningRows = warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("");
   return `<section class="detail-header">
@@ -132,13 +132,13 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
   <div class="metrics" aria-label="Runner summary">
     <div class="metric">
       <span class="metric-label">${message("text.runner.version", "en")}</span>
-      <strong class="metric-value mono font-16">${escapeHtml(currentVersion)}</strong>
+      <strong class="metric-value mono font-16">${dataText(currentVersion)}</strong>
       <span class="metric-meta">${message("text.current", "en")}</span>
     </div>
     <div class="metric">
       <span class="metric-label">${message("text.platform", "en")}</span>
-      <strong class="metric-value mono font-16">${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</strong>
-      <span class="metric-meta">${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</span>
+      <strong class="metric-value mono font-16">${dataText(publicInfo?.platform)}</strong>
+      <span class="metric-meta">${dataText(publicInfo?.architecture)}</span>
     </div>
     <div class="metric">
       <span class="metric-label">${message("text.workspaces", "en")}</span>
@@ -161,11 +161,11 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
       <div class="runner-version-summary">
         <div class="version-stat">
           <span class="form-stat-label">${message("text.current", "en")}</span>
-          <strong class="mono">${escapeHtml(currentVersion)}</strong>
+          <strong class="mono">${dataText(currentVersion)}</strong>
         </div>
         <div class="version-stat">
           <span class="form-stat-label">${message("text.latest", "en")}</span>
-          <strong class="mono">${escapeHtml(latestVersion)}</strong>
+          <strong class="mono">${dataText(latestVersion, "Not configured")}</strong>
         </div>
       </div>
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid version-policy-form">
@@ -218,7 +218,7 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
         <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack emergency-lock-form">
           <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
           <label>Type the Runner ID to confirm emergency lock
-            <input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required placeholder="${escapeHtml(runnerId)}">
+            <input name="confirmation" pattern="${IDENTIFIER_INPUT_PATTERN}" required data-no-i18n placeholder="${escapeHtml(runnerId)}">
           </label>
           <button class="button danger">${message("text.emergency.lock.all.permissions", "en")}</button>
         </form>
@@ -269,21 +269,21 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
       </div>
       <dl class="details">
         <dt>${message("text.platform", "en")}</dt>
-        <dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd>
+        <dd>${dataText(publicInfo?.platform)}</dd>
         <dt>${message("text.architecture", "en")}</dt>
-        <dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd>
+        <dd>${dataText(publicInfo?.architecture)}</dd>
         <dt>${message("text.hostname", "en")}</dt>
-        <dd class="mono">${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd>
+        <dd class="mono">${dataText(publicInfo?.hostname)}</dd>
         <dt>${message("text.runner.version", "en")}</dt>
-        <dd class="mono">${escapeHtml(currentVersion)}</dd>
+        <dd class="mono">${dataText(currentVersion)}</dd>
         <dt>${message("text.runner.reported.execution.mode", "en")}</dt>
         <dd class="mono">${escapeHtml(reportedExecutionMode)}</dd>
         <dt>${message("text.service.identity", "en")}</dt>
-        <dd class="mono">${escapeHtml(serviceIdentity)}</dd>
+        <dd class="mono">${dataText(serviceIdentity)}</dd>
         <dt>${message("text.runner.reported.privilege.state", "en")}</dt>
         <dd class="mono">${escapeHtml(privilegeState)}</dd>
         <dt>${message("text.stable.latest.version", "en")}</dt>
-        <dd class="mono">${escapeHtml(latestVersion)}</dd>
+        <dd class="mono">${dataText(latestVersion, "Not configured")}</dd>
         <dt>${message("text.protocol.compatibility", "en")}</dt>
         <dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd>
       </dl>

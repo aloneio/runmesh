@@ -20,6 +20,7 @@ import { terminalRecoveredJob } from "./jobs/recovery.js";
 import { nativeJobFiles } from "./jobs/storage.js";
 import { nativeJobProcesses, type ProcessTerminator } from "./jobs/process.js";
 import { JobLogReader } from "./jobs/logs.js";
+import { MAX_MAINTENANCE_JOB_RECORDS } from "./maintenance-contract.js";
 
 /** @internal Internal composition seam; no CLI or wire configuration exposes adapters. */
 export interface JobManagerDependencies { readonly files?: JobFilePort; readonly processes?: JobProcessPort; readonly persistence?: JobPersistencePort }
@@ -44,10 +45,10 @@ export interface JobManagerOptions {
 }
 
 const MAX_INPUT_BYTES = 64 * 1024;
+const TERMINAL_OBSERVATION_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_RETAINED_JOBS = 100;
 const DEFAULT_MAX_LOG_BYTES_PER_JOB = 4 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_LOG_BYTES = 32 * 1024 * 1024;
-const MAX_RETAINED_JOBS = 10_000;
 const MAX_CONFIGURED_LOG_BYTES = 512 * 1024 * 1024;
 
 type TerminationCheck =
@@ -170,7 +171,7 @@ export class JobManager {
     this.runnerStatePath = join(this.stateDir, "runner.json");
     this.runnerId = options.runnerId ?? "runner";
     this.maxConcurrentJobs = positiveInteger(options.maxConcurrentJobs ?? 1, "maxConcurrentJobs");
-    this.maxRetainedJobs = boundedPositiveInteger(options.maxRetainedJobs ?? DEFAULT_MAX_RETAINED_JOBS, 1, MAX_RETAINED_JOBS, "maxRetainedJobs");
+    this.maxRetainedJobs = boundedPositiveInteger(options.maxRetainedJobs ?? DEFAULT_MAX_RETAINED_JOBS, 1, MAX_MAINTENANCE_JOB_RECORDS, "maxRetainedJobs");
     this.maxLogBytesPerJob = boundedPositiveInteger(options.maxLogBytesPerJob ?? DEFAULT_MAX_LOG_BYTES_PER_JOB, 1, MAX_CONFIGURED_LOG_BYTES, "maxLogBytesPerJob");
     this.maxTotalLogBytes = boundedPositiveInteger(options.maxTotalLogBytes ?? DEFAULT_MAX_TOTAL_LOG_BYTES, 1, MAX_CONFIGURED_LOG_BYTES, "maxTotalLogBytes");
     if (this.maxTotalLogBytes < this.maxLogBytesPerJob) throw new Error("maxTotalLogBytes must be at least maxLogBytesPerJob");
@@ -263,6 +264,13 @@ export class JobManager {
 
   public list(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): JobRecord[] {
     return this.filteredList(input);
+  }
+
+  /** Heartbeats report active recorded jobs independently of history pagination. */
+  public activeHistoryJobIds(): string[] {
+    const ids: string[] = [];
+    for (const job of this.jobs.values()) if (job.record_history !== false && isActive(job)) ids.push(job.job_id);
+    return ids;
   }
 
   /** Reconcile recovered PIDs before returning metadata to remote callers. */
@@ -682,6 +690,21 @@ export class JobManager {
     }
     if (expectedChild.exitCode !== null || expectedChild.signalCode !== null) return { safe: false, kind: "terminal", message: "job process has already exited; cancellation was not sent" };
     const inspection = await this.processAdapter.inspectProcess(job.pid, job.process_start_fingerprint);
+    // The probe yields: another cancellation can terminate/reap the leader
+    // after kill(pid, 0) succeeds but before /proc yields its starttime. Recheck
+    // the original local handle before interpreting that inconclusive result;
+    // a witnessed exit joins completion rather than becoming identity loss.
+    const latest = this.jobs.get(job.job_id);
+    const latestChild = this.processes.get(job.job_id);
+    if (latest === undefined || !isActive(latest) || latest.pid !== job.pid) return { safe: false, kind: "terminal", message: "job is no longer active; cancellation was not sent" };
+    if (latestChild !== expectedChild) return { safe: false, kind: "unverified", message: "job process identity could not be verified; cancellation was not sent" };
+    // Proven reuse remains stronger than an older child's pending close. It
+    // must reserve the interrupted outcome before that close flush completes.
+    // Only a missing fingerprint may defer to the original handle's exit.
+    if (process.platform === "linux" && inspection.alive && job.process_start_fingerprint !== null && inspection.fingerprintMatches === false) {
+      return { safe: false, kind: "identity", message: "job process identity could not be verified; cancellation was not sent" };
+    }
+    if (expectedChild.exitCode !== null || expectedChild.signalCode !== null) return { safe: false, kind: "terminal", message: "job process has already exited; cancellation was not sent" };
     if (!inspection.alive) return { safe: false, kind: "terminal", message: "job process has already exited; cancellation was not sent" };
     // Linux exposes a process starttime, so cancellation is fail-closed when
     // either the recorded marker or the verification read is unavailable. A
@@ -689,16 +712,8 @@ export class JobManager {
     if (process.platform === "linux" && (job.process_start_fingerprint === null || inspection.fingerprintMatches !== true)) {
       // Unavailable /proc metadata is not evidence that the original process
       // exited. Keep its handle and admission slot unless reuse is proven.
-      const kind = job.process_start_fingerprint !== null && inspection.fingerprintMatches === false ? "identity" : "unverified";
-      return { safe: false, kind, message: "job process identity could not be verified; cancellation was not sent" };
+      return { safe: false, kind: "unverified", message: "job process identity could not be verified; cancellation was not sent" };
     }
-    // The fingerprint probe yields to the event loop; verify the in-memory
-    // record and ChildProcess again before the signal call.
-    const latest = this.jobs.get(job.job_id);
-    const latestChild = this.processes.get(job.job_id);
-    if (latest === undefined || !isActive(latest) || latest.pid !== job.pid) return { safe: false, kind: "terminal", message: "job is no longer active; cancellation was not sent" };
-    if (expectedChild.exitCode !== null || expectedChild.signalCode !== null) return { safe: false, kind: "terminal", message: "job process has already exited; cancellation was not sent" };
-    if (latestChild !== expectedChild) return { safe: false, kind: "unverified", message: "job process identity could not be verified; cancellation was not sent" };
     return { safe: true };
   }
 
@@ -706,6 +721,7 @@ export class JobManager {
     await this.waitForTerminal(jobId);
     const current = this.jobs.get(jobId);
     if (current !== undefined && !isActive(current)) return current;
+    if (current?.status === "cancelling" && current.cancellation_delivered_at_ms !== null) return current;
     throw new Error(message);
   }
 
@@ -725,7 +741,8 @@ export class JobManager {
     return this.get(job.job_id);
   }
 
-  /** Wait until the local child and its terminal metadata persistence finish. */
+  /** Await close and durability, but return the active state if inherited pipes
+   * outlive the observation window. The close listener still owns completion. */
   private async waitForTerminal(jobId: string): Promise<void> {
     for (;;) {
       // finishOnce publishes the terminal record only after its atomic metadata
@@ -744,11 +761,15 @@ export class JobManager {
       if (current === undefined || !isActive(current)) return;
       const child = this.processes.get(jobId);
       if (child === undefined) return;
-      if (child.exitCode !== null || child.signalCode !== null) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        continue;
-      }
-      await new Promise<void>((resolve) => child.once("close", () => resolve()));
+      // `exit` does not mean `close`: a descendant can retain either output
+      // pipe. Wait for the event in both states rather than spin on exitCode.
+      const closed = await new Promise<boolean>((resolve) => {
+        const done = (value: boolean): void => { clearTimeout(timer); child.removeListener("close", onClose); resolve(value); };
+        const onClose = (): void => done(true);
+        const timer = setTimeout(() => done(false), TERMINAL_OBSERVATION_TIMEOUT_MS);
+        child.once("close", onClose);
+      });
+      if (!closed) return;
     }
   }
 

@@ -7,6 +7,9 @@ export interface RunnerMaintenanceIdentity {
   readonly insecure_local?: boolean;
 }
 
+/** Commands routed by managed launchers to the independently installed CLI. */
+export const MAINTENANCE_SERVICE_COMMANDS = Object.freeze(["install", "migrate", "stop", "restart", "uninstall"] as const);
+
 const controlCharacters = /[\u0000-\u001f\u007f-\u009f]/u;
 const boundedString = (value: unknown, min: number, max: number): value is string => typeof value === "string" && value.length >= min && value.length <= max && !controlCharacters.test(value);
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -31,6 +34,8 @@ export function maintenanceIdentity(value: unknown): RunnerMaintenanceIdentity |
 // The writer and maintenance reader share the durable metadata budget and ID
 // contract; command payloads and recovery annotations are not updater inputs.
 export const MAX_MAINTENANCE_METADATA_BYTES = 8 * 1024 * 1024;
+/** Durable v1 inventory bound shared by job retention and installed managers. */
+export const MAX_MAINTENANCE_JOB_RECORDS = 10_000;
 export function safeMaintenanceJobId(value: string): boolean { return /^job-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value); }
 /** Durable v1 status semantics shared by ordinary writers and installed managers. */
 export const MAINTENANCE_JOB_STATES = Object.freeze({

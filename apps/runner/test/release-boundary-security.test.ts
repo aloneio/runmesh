@@ -4,7 +4,7 @@ import { it, expect, vi } from "vitest";
 import { constants } from "node:fs";
 import { mkdtemp, mkdir, writeFile, readFile, rename, symlink, readdir, rm, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { PathPolicy } from "../src/path-policy.js";
 import { FilesystemService } from "../src/filesystem.js";
@@ -15,6 +15,21 @@ vi.mock("node:fs/promises", async importOriginal => {
   return { ...original, open: vi.fn(original.open) };
 });
 const originalFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+async function maintenanceInstallationFixture(base: string) {
+  const { ManagedInstallationPointer } = await import("../src/updates/installation.js");
+  const root = join(base, "installation");
+  const release = async (version: string) => {
+    const directory = join(root, "versions", version);
+    const packagePath = join(directory, "lib", "node_modules", "@aloneio", "runmesh-runner", "package.json");
+    await mkdir(dirname(packagePath), { recursive: true, mode: 0o700 });
+    await writeFile(packagePath, JSON.stringify({ name: "@aloneio/runmesh-runner", version }), { mode: 0o600 });
+    return { version, directory, packagePath };
+  };
+  const previous = await release("0.1.7"), next = await release("0.1.6");
+  await symlink(previous.directory, join(root, "current"), "dir");
+  return { root, previous, next, pointer: new ManagedInstallationPointer(root) };
+}
 
 it.skipIf(process.platform !== "linux")("AUDIT-PATH: replacing a workspace-root ancestor cannot redirect a read outside the admitted root", async () => {
   const base = await mkdtemp(join(tmpdir(), "runmesh-audit-parent-"));
@@ -175,19 +190,26 @@ it.skipIf(process.platform !== "linux").each(["read", "patch", "context", "metad
   }
 });
 
-it.skipIf(process.platform !== "linux").each(["git-metadata", "profile", "policy", "purge"])("SEC18 rejects remaining metadata FIFO races before waiting for a writer (%s)", async kind => {
+it.skipIf(process.platform !== "linux").each(["git-metadata", "profile", "policy", "purge", "maintenance-job", "maintenance-journal", "maintenance-installation"])("SEC18 rejects remaining metadata FIFO races before waiting for a writer (%s)", async kind => {
   const { createIsolatedGitContext } = await import("../src/git/isolated-context.js");
   const { ProfileStore } = await import("../src/profile.js");
   const { PolicyStore } = await import("../src/policy-store.js");
   const { hostPurgeFilesystem } = await import("../src/purge.js");
+  const { inspectLocalJobs } = await import("../src/updates/job-drain.js");
+  const { loadManagerId } = await import("../src/updates/journal.js");
   const base = await mkdtemp(join(tmpdir(), "runmesh-release-metadata-fifo-"));
   const store = new PolicyStore(base);
-  const path = kind === "git-metadata" ? join(base, ".git", "HEAD") : kind === "policy" ? store.activePath : join(base, "profile.json");
   let swapped = false, nonblocking = false, descriptorOpened = false;
   const closed = vi.fn();
   try {
+    const installation = kind === "maintenance-installation" ? await maintenanceInstallationFixture(base) : undefined;
+    const path = kind === "git-metadata" ? join(base, ".git", "HEAD") : kind === "policy" ? store.activePath
+      : kind === "maintenance-job" ? join(base, "jobs", "job-12345678-1234-1234-1234-123456789abc", "meta.json")
+      : kind === "maintenance-journal" ? join(base, "manager-id.json")
+      : installation?.previous.packagePath ?? join(base, "profile.json");
     if (kind === "git-metadata") await mkdir(join(base, ".git"), { mode: 0o700 });
     if (kind === "policy") await mkdir(store.directory, { mode: 0o700 });
+    if (kind === "maintenance-job") await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     await writeFile(path, kind === "git-metadata" ? "ref: refs/heads/main\n" : "{}\n", { mode: 0o600 });
     vi.mocked(open).mockImplementation(async (candidate, flags, mode) => {
       if (String(candidate) !== path || swapped) return originalFs.open(candidate, flags, mode);
@@ -212,6 +234,9 @@ it.skipIf(process.platform !== "linux").each(["git-metadata", "profile", "policy
       }
       if (kind === "profile") return new ProfileStore({ filePath: path }).load();
       if (kind === "policy") return store.load("r");
+      if (kind === "maintenance-job") return inspectLocalJobs(base);
+      if (kind === "maintenance-journal") return loadManagerId(base);
+      if (installation !== undefined) return installation.pointer.inspect();
       return hostPurgeFilesystem.text(path, 4096);
     };
     await expect(attempt()).rejects.toThrow();
@@ -223,19 +248,22 @@ it.skipIf(process.platform !== "linux").each(["git-metadata", "profile", "policy
   }
 });
 
-it.skipIf(process.platform !== "linux").each(["patch", "policy"])("SEC18 directory durability opens reject FIFO replacements (%s)", async kind => {
+it.skipIf(process.platform !== "linux").each(["patch", "policy", "maintenance-journal", "maintenance-installation"])("SEC18 directory durability opens reject FIFO replacements (%s)", async kind => {
   const { fsyncDirectory } = await import("../src/patch/files.js");
   const { PolicyStore } = await import("../src/policy-store.js");
   const { runnerPolicyChecksum } = await import("@aloneio/runmesh-protocol");
+  const { loadManagerId } = await import("../src/updates/journal.js");
   const base = await mkdtemp(join(tmpdir(), "runmesh-release-directory-fifo-"));
-  const store = new PolicyStore(base), directory = store.directory;
+  const store = new PolicyStore(base);
   let swapped = false, nonblocking = false, directoryOnly = false;
   try {
-    if (kind === "patch") await mkdir(directory, { mode: 0o700 });
+    const installation = kind === "maintenance-installation" ? await maintenanceInstallationFixture(base) : undefined;
+    const directory = installation?.root ?? store.directory;
+    if (kind === "patch" || kind === "maintenance-journal") await mkdir(directory, { mode: 0o700 });
     vi.mocked(open).mockImplementation(async (candidate, flags, mode) => {
       if (String(candidate) === directory && !swapped) {
         swapped = true;
-        await originalFs.rename(directory, join(base, "preserved-policy"));
+        await originalFs.rename(directory, join(base, "preserved-directory"));
         execFileSync("mkfifo", [directory]);
         nonblocking = typeof flags === "number" && (flags & constants.O_NONBLOCK) !== 0;
         directoryOnly = typeof flags === "number" && (flags & constants.O_DIRECTORY) !== 0;
@@ -244,6 +272,8 @@ it.skipIf(process.platform !== "linux").each(["patch", "policy"])("SEC18 directo
       return originalFs.open(candidate, flags, mode);
     });
     if (kind === "patch") await fsyncDirectory(directory);
+    else if (kind === "maintenance-journal") await expect(loadManagerId(directory)).rejects.toThrow();
+    else if (installation !== undefined) await expect(installation.pointer.switch(installation.previous, installation.next, "fifo-fixture")).rejects.toThrow();
     else {
       const unsigned = { schema_version: 1 as const, runner_id: "r", revision: 1, runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] };
       await expect(store.activate({ ...unsigned, checksum: runnerPolicyChecksum(unsigned) })).rejects.toThrow();

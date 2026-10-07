@@ -7,9 +7,7 @@ import { escapeSystemdArgument } from "./escaping.js";
 import { escapeSystemdEnvironment } from "./escaping.js";
 import { escapeXml } from "./escaping.js";
 import type { ExecutionMode } from "./contracts.js";
-import { hashContent } from "./values.js";
 import { MACOS_LABEL } from "./values.js";
-import { MARKER } from "./values.js";
 import { safeServiceIdentity } from "./values.js";
 import type { ServiceAdapterOptions } from "./contracts.js";
 import { serviceExecutionMode } from "./values.js";
@@ -20,7 +18,8 @@ import type { ServiceManifest } from "./contracts.js";
 import { serviceMode } from "./values.js";
 import type { ServiceMode } from "./contracts.js";
 import { serviceProfilePath } from "./layout.js";
-import { windowsArguments } from "./escaping.js";
+import { ownedManifest, parseOwnedManifest } from "./manifest-ownership.js";
+import { refreshNativeServiceBody, renderWindowsDaemonTask } from "./native-template.js";
 
 export function renderService(options: ServiceAdapterOptions = {}): ServiceManifest {
   const platform = options.platform ?? currentServicePlatform();
@@ -35,10 +34,8 @@ export function renderService(options: ServiceAdapterOptions = {}): ServiceManif
     ? renderSystemd(mode, executionMode, invocation, profile, identity)
     : platform === "darwin"
       ? renderLaunchd(mode, executionMode, invocation, identity.user)
-      : renderWindowsTask(mode, executionMode, invocation);
-  const hash = hashContent(body);
-  const marker = `${MARKER}:${hash}`;
-  const content = platform === "linux" ? `# ${marker}\n${body}` : `<!-- ${marker} -->\n${body}`;
+      : renderWindowsDaemonTask({ description: "Runmesh Runner", mode, invocation, systemAccount: executionMode === "privileged_host" ? "SYSTEM" : "NT AUTHORITY\\LOCAL SERVICE" });
+  const { hash, content } = ownedManifest(body, platform, "runner");
   return { platform, mode, executionMode, path: layout.manifestPath, content, hash, serviceUser: identity.user, serviceGroup: identity.group };
 }
 
@@ -50,17 +47,7 @@ function renderSystemd(mode: ServiceMode, executionMode: ExecutionMode, invocati
 
 function renderLaunchd(mode: ServiceMode, executionMode: ExecutionMode, invocation: readonly string[], serviceUser: string): string {
   const userName = mode === "system" && executionMode === "dedicated_user" ? `<key>UserName</key><string>${escapeXml(serviceUser)}</string>` : "";
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${MACOS_LABEL}</string>${userName}<key>ProgramArguments</key><array>${invocation.map((part) => `<string>${escapeXml(part)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>\n`;
-}
-
-function renderWindowsTask(mode: ServiceMode, executionMode: ExecutionMode, invocation: readonly string[]): string {
-  const principal = mode === "system"
-    ? executionMode === "privileged_host"
-      ? `<Principal id="Author"><UserId>SYSTEM</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel></Principal>`
-      : `<Principal id="Author"><UserId>NT AUTHORITY\\LOCAL SERVICE</UserId><LogonType>ServiceAccount</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>`
-    : `<Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>`;
-  const trigger = mode === "system" ? "<BootTrigger><Enabled>true</Enabled></BootTrigger>" : "<LogonTrigger><Enabled>true</Enabled></LogonTrigger>";
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>Runmesh Runner</Description></RegistrationInfo><Triggers>${trigger}</Triggers><Principals>${principal}</Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions Context="Author"><Exec><Command>${escapeXml(invocation[0] ?? "")}</Command><Arguments>${escapeXml(windowsArguments(invocation.slice(1)))}</Arguments></Exec></Actions></Task>\n`;
+  return `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${MACOS_LABEL}</string>${userName}<key>ProgramArguments</key><array>${invocation.map((part) => `<string>${escapeXml(part)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>\n`;
 }
 
 /** Only manifests with an intact marker and content hash are considered ours. */
@@ -68,9 +55,15 @@ export function isManagedService(content: string): boolean {
   // The marker is an ownership boundary, not merely an annotation.  Require
   // it to be the first line so an arbitrary preamble cannot be smuggled in
   // front of a valid hash and then be treated as a native definition we own.
-  const match = /^(?:#\s*|<!--\s*)runmesh-runner-managed:([0-9a-f]{8})\s*(?:-->)?\r?\n/u.exec(content);
-  if (match === null || match[1] === undefined) return false;
-  return hashContent(content.slice(match[0].length)) === match[1];
+  return parseOwnedManifest(content, "runner") !== undefined;
+}
+
+/** Installation-only repair; rollback continues to retain the exact old bytes. */
+export function ensureManagedServiceDefinition(manifest: ServiceManifest): ServiceManifest {
+  const parsed = parseOwnedManifest(manifest.content, "runner");
+  if (parsed === undefined) throw new Error("cannot repair an unmanaged service manifest");
+  const body = refreshNativeServiceBody(parsed.body, manifest.platform);
+  return body === parsed.body ? manifest : { ...manifest, ...ownedManifest(body, manifest.platform, "runner", parsed.newline) };
 }
 
 /**
@@ -81,12 +74,11 @@ export function isManagedService(content: string): boolean {
  */
 export function managedServiceManifestFromContent(manifest: ServiceManifest, content: string, executionMode: ExecutionMode = manifest.executionMode): ServiceManifest {
   if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") throw new Error("execution mode must be dedicated_user or privileged_host");
-  if (!isManagedService(content)) throw new Error("cannot use an unmanaged service manifest");
-  const marker = /^(?:#\s*|<!--\s*)runmesh-runner-managed:[0-9a-f]{8}\s*(?:-->)?\r?\n/u.exec(content);
-  if (marker === null) throw new Error("managed service manifest is malformed");
-  const body = content.slice(marker[0].length);
+  const parsed = parseOwnedManifest(content, "runner");
+  if (parsed === undefined) throw new Error("cannot use an unmanaged service manifest");
+  const { body, hash } = parsed;
   const identity = executionMode === "dedicated_user" ? dedicatedIdentityFromContent(manifest.platform, body) : {};
-  return { ...manifest, executionMode, content, hash: hashContent(body), ...identity };
+  return { ...manifest, executionMode, content, hash, ...identity };
 }
 
 /**
@@ -100,17 +92,16 @@ export function managedServiceManifestFromContent(manifest: ServiceManifest, con
 export function rewriteManagedServiceExecutionMode(manifest: ServiceManifest, existingContent: string, executionMode: ExecutionMode): ServiceManifest {
   if (manifest.mode !== "system") throw new Error("execution-mode rewrites require a system service manifest");
   if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") throw new Error("execution mode must be dedicated_user or privileged_host");
-  if (!isManagedService(existingContent)) throw new Error("cannot rewrite an unmanaged service manifest");
-  const marker = /^(?:#\s*|<!--\s*)runmesh-runner-managed:[0-9a-f]{8}\s*(?:-->)?\r?\n/u.exec(existingContent);
-  if (marker === null) throw new Error("managed service manifest is malformed");
-  const body = existingContent.slice(marker[0].length);
+  const parsed = parseOwnedManifest(existingContent, "runner");
+  if (parsed === undefined) throw new Error("cannot rewrite an unmanaged service manifest");
+  const { body } = parsed;
   const newline = body.includes("\r\n") ? "\r\n" : "\n";
   let rewritten = body;
   if (manifest.platform === "linux") rewritten = rewriteSystemdIdentity(body, executionMode, newline);
   else if (manifest.platform === "darwin") rewritten = rewriteLaunchdIdentity(body, executionMode);
   else rewritten = rewriteWindowsIdentity(body, executionMode);
-  const hash = hashContent(rewritten);
-  const content = manifest.platform === "linux" ? `# ${MARKER}:${hash}${newline}${rewritten}` : `<!-- ${MARKER}:${hash} -->${newline}${rewritten}`;
+  rewritten = refreshNativeServiceBody(rewritten, manifest.platform);
+  const { hash, content } = ownedManifest(rewritten, manifest.platform, "runner", parsed.newline);
   const identity = executionMode === "dedicated_user" ? dedicatedIdentityFromContent(manifest.platform, rewritten) : {};
   return { ...manifest, executionMode, content, hash, ...identity };
 }

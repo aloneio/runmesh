@@ -1,12 +1,12 @@
 import type { CapabilityTarget } from "../../contracts/capabilities.js";
-import type { CatalogAdminPorts } from "../../contracts/catalog.js";
+import type { CatalogSnapshotPorts } from "../../contracts/catalog.js";
 import type { SkillDependencyState } from "../../contracts/skills.js";
 import { parseProfile } from "../../contracts/connector-values.js";
 import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
 
 /** Advisory stored configuration only: no network, token refresh or execution.
  * Caller revalidates client identity; this reader reports shared publication status only. */
-export function createDependencyReader(ports: Pick<CatalogAdminPorts, "repository" | "profile" | "digest">) {
+export function createDependencyReader(ports: CatalogSnapshotPorts) {
   return async (target: Extract<CapabilityTarget, { kind: "remote_tool" }>, signal: AbortSignal): Promise<SkillDependencyState> => {
     try {
       if (signal.aborted) return "unavailable";

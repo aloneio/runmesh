@@ -1,14 +1,15 @@
-import type { CliDependencies } from "./cli/contracts.js";
+import type { MaintenanceCliDependencies } from "./cli/contracts.js";
+import { MAINTENANCE_SERVICE_COMMANDS } from "./maintenance-contract.js";
 import { parseProductArgs, requiredString, storeFor } from "./cli/input.js";
 import { serviceCommand, uninstall } from "./cli/lifecycle.js";
 import { runMaintenanceAgent } from "./updates/agent.js";
 import { assertSupportedNodeVersion, RUNNER_VERSION } from "./version.js";
 
-const MANAGEMENT_COMMANDS = new Set(["install", "migrate", "stop", "restart", "uninstall"]);
-const HELP = "Runmesh maintenance\nUsage: runmesh-maintenance <maintenance-agent|install|migrate|stop|restart|uninstall> [options]\n  --help     Show maintenance commands\n  --version  Show the maintenance package version";
+const MANAGEMENT_COMMANDS = new Set<string>(MAINTENANCE_SERVICE_COMMANDS);
+const HELP = `Runmesh maintenance\nUsage: runmesh-maintenance <maintenance-agent|${MAINTENANCE_SERVICE_COMMANDS.join("|")}> [options]\n  --help     Show maintenance commands\n  --version  Show the maintenance package version`;
 
 /** The manager's entry graph excludes the selected Runner CLI and executor. */
-export async function runMaintenanceCli(argv: readonly string[], dependencies: CliDependencies = {}): Promise<void> {
+export async function runMaintenanceCli(argv: readonly string[], dependencies: MaintenanceCliDependencies = {}): Promise<void> {
   assertSupportedNodeVersion();
   const output = dependencies.stdout ?? ((line: string) => process.stdout.write(`${line}\n`));
   const error = dependencies.stderr ?? ((line: string) => process.stderr.write(`${line}\n`));

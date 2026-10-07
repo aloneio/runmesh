@@ -1,4 +1,5 @@
-import { parseSkillBundle, skillObject } from "./bundle.js";
+import { parseSkillBundle } from "./bundle.js";
+import { skillObject } from "../../contracts/skill-values.js";
 
 /** Uploaded frontmatter describes content; it never grants capabilities. */
 export function skillInstallation(input: unknown) {

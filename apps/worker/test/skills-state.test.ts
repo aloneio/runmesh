@@ -1,12 +1,14 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { SkillState } from "../src/platform/skills/store.js";
 import { CentralSchema } from "../src/platform/capabilities/schema.js";
 import { makeSkillBundle } from "../src/domain/skills/bundle.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
-import { createSkillService } from "../src/application/skills/service.js";
+import { createSkillAdministration } from "../src/application/skills/admin.js";
+import { createSkillReader } from "../src/application/skills/reader.js";
+import { readSkillCapacity } from "../src/platform/skills/capacity.js";
 import type { CapabilityTarget } from "../src/contracts/capabilities.js";
-import { SKILL_LIMITS, SKILL_STORED_BUNDLE_BYTES, type SkillBundle, type SkillPorts } from "../src/contracts/skills.js";
+import { SKILL_LIMITS, SKILL_STORED_BUNDLE_BYTES, type SkillBundle, type SkillReadPorts } from "../src/contracts/skills.js";
 
 const owner = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.get((env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.idFromName(crypto.randomUUID()));
 const principal = { client_id: "client-skills", secret_version: 1 };
@@ -21,7 +23,7 @@ it("Skill dependencies report shared publication status and never hide revoked r
     const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize());
     store.stage(a, 0); store.activate(a.skill_id, a.digest, 1);
     let probes = 0, revokeDuringRead = false, revoked = false;
-    const service = createSkillService({ repository: store, digest: catalogSha256, admin: async () => 'allowed',
+    const service = createSkillReader({ repository: store, digest: catalogSha256,
       identity: async p => revoked ? { state: 'denied' } : ({ state: 'allowed', identity: { schema_version: 2, ...p, label: 'fixture', native_scopes: [] } }),
       remoteDependency: async () => { probes++; if (revokeDuringRead) revoked = true; return 'not_configured'; } });
     const query = { skill_id: a.skill_id, digest: a.digest, path: 'SKILL.md' }, signal = new AbortController().signal;
@@ -45,6 +47,7 @@ it("Skill repository is lazy and preserves approved old bodies across updates, r
     expect(store.activate(a.skill_id, a.digest, 5)).toMatchObject({ state: "written", head: { active_digest: a.digest, revision: 6 } });
     expect(store.stage(b, 2)).toEqual({ state: "conflict", current_revision: 6 });
     expect(store.bundle(b.skill_id, b.digest)).toEqual(b);
+    expect(readSkillCapacity(state.storage.sql, a.skill_id)).toMatchObject({ skill_versions: 2, library_skills: 1 });
   });
 });
 it("accepted Skill metadata remains readable after JSON escaping and storage recreation", async () => {
@@ -65,19 +68,22 @@ it("accepted Skill metadata remains readable after JSON escaping and storage rec
     const reopened = new SkillState(state.storage, () => schema.initialize());
     expect(reopened.bundle(value!.skill_id, value!.digest)).toEqual(value);
     expect(reopened.summary(value!.skill_id, value!.digest)).toEqual(summary);
-    const service = createSkillService({ repository: reopened, digest: catalogSha256, admin: async () => "allowed",
+    const administration = createSkillAdministration({ repository: reopened, digest: catalogSha256, admin: async () => "allowed" });
+    const reader = createSkillReader({ repository: reopened, digest: catalogSha256,
       identity: async p => ({ state: "allowed", identity: { schema_version: 2, ...p, label: "fixture", native_scopes: [] } }) });
     const signal = new AbortController().signal;
-    expect(await service.library("session", undefined, signal)).toMatchObject({ state: "listed", skills: [{ summary }] });
-    expect(await service.list(principal, {}, signal)).toMatchObject({ state: "listed", skills: [{ ...summary, revision: 1 }] });
+    expect(await administration.library("session", undefined, signal)).toMatchObject({ state: "listed", skills: [{ summary }] });
+    expect(await reader.list(principal, {}, signal)).toMatchObject({ state: "listed", skills: [{ ...summary, revision: 1 }] });
   });
 });
 it("Skill stage rolls back content if head publication fails and rejects unknown schema versions", async () => {
   const a = (await bundle())!, b = (await bundle('second'))!;
   await runInDurableObject(owner(), (_instance, state) => {
     const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize()); store.stage(a, 0);
+    const capacity = readSkillCapacity(state.storage.sql, a.skill_id);
     state.storage.sql.exec("CREATE TRIGGER reject_skill_head BEFORE UPDATE ON skill_heads_v1 BEGIN SELECT RAISE(ABORT,'synthetic'); END");
     expect(() => store.stage(b, 1)).toThrow(); expect(store.bundle(b.skill_id, b.digest)).toBeUndefined();
+    expect(readSkillCapacity(state.storage.sql, a.skill_id)).toEqual(capacity);
     state.storage.sql.exec("UPDATE skill_meta SET schema_version=99");
     expect(() => new SkillState(state.storage, () => schema.initialize()).head(a.skill_id)).toThrow("skill_schema_unsupported");
     expect(store.bundle(a.skill_id, a.digest)).toEqual(a);
@@ -123,10 +129,49 @@ it("Skill schema upgrades preserve files, digests, approval, revisions and pause
     for (const item of [a, b]) expect(store.bundle(item.skill_id, item.digest)).toEqual(item);
     expect(store.approved(a.skill_id, a.digest)).toBe(true);
     expect(store.approved(b.skill_id, b.digest)).toBe(false);
+    expect(readSkillCapacity(state.storage.sql, a.skill_id)).toMatchObject({ skill_versions: 2, library_skills: 1,
+      library_bytes: new TextEncoder().encode(JSON.stringify(a) + JSON.stringify(b)).byteLength });
     expect(state.storage.sql.exec("SELECT schema_version FROM skill_meta").toArray()).toEqual([{ schema_version: 2 }]);
     expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='skill_bundles_v1'").toArray()).toEqual([]);
     expect(store.install(b, 3)).toMatchObject({ state: 'written', head: { revision: 4, enabled: true } });
     expect(new SkillState(state.storage, () => undefined).bundle(b.skill_id, b.digest)).toEqual(b);
+  });
+});
+
+it("existing schema-2 content receives one atomic capacity backfill and reconstruction never recounts it", async () => {
+  const first = (await bundle())!, second = (await bundle('second'))!;
+  await runInDurableObject(owner(), (_instance, state) => {
+    const create = () => new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    const store = create(); store.install(first, 0); store.install(second, 1);
+    const expected = readSkillCapacity(state.storage.sql, first.skill_id);
+    state.storage.sql.exec("DROP TABLE skill_capacity_v1");
+    state.storage.sql.exec("DROP TABLE skill_library_capacity_v1");
+    const restored = create(); expect(restored.head(first.skill_id)?.revision).toBe(2);
+    expect(readSkillCapacity(state.storage.sql, first.skill_id)).toEqual(expected);
+    // A migrated projection is authoritative; it is not silently rebuilt on every open.
+    state.storage.sql.exec("UPDATE skill_library_capacity_v1 SET bytes=-1 WHERE id=1");
+    expect(create().head(first.skill_id)?.revision).toBe(2);
+    expect(() => readSkillCapacity(state.storage.sql, first.skill_id)).toThrow('skill_capacity_record_invalid');
+  });
+});
+
+it("a failed capacity backfill rolls back both projections and retries without duplicating content", async () => {
+  const first = (await bundle())!;
+  await runInDurableObject(owner(), (_instance, state) => {
+    const create = () => new SkillState(state.storage, () => undefined), store = create(); store.install(first, 0);
+    const expected = readSkillCapacity(state.storage.sql, first.skill_id);
+    state.storage.sql.exec("DROP TABLE skill_capacity_v1"); state.storage.sql.exec("DROP TABLE skill_library_capacity_v1");
+    const original = state.storage.sql.exec.bind(state.storage.sql);
+    const spy = vi.spyOn(state.storage.sql, 'exec').mockImplementation((query: string, ...args: any[]) => {
+      if (query.startsWith('INSERT INTO skill_library_capacity_v1')) throw new Error('synthetic projection failure');
+      return original(query, ...args);
+    });
+    const restored = create();
+    try { expect(() => restored.head(first.skill_id)).toThrow('synthetic projection failure'); }
+    finally { spy.mockRestore(); }
+    expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name IN ('skill_capacity_v1','skill_library_capacity_v1')").toArray()).toEqual([]);
+    expect(restored.bundle(first.skill_id, first.digest)).toEqual(first);
+    expect(readSkillCapacity(state.storage.sql, first.skill_id)).toEqual(expected);
   });
 });
 it("failed Skill schema upgrades roll back all new tables and can retry", async () => {
@@ -158,9 +203,9 @@ it("Skill reads follow active publications, do not load bodies during listing, a
     const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize());
     store.stage(a, 0); store.activate(a.skill_id, a.digest, 1); store.stage(b, 2); store.activate(b.skill_id, b.digest, 3);
     let revoked = false, onIdentity = () => undefined;
-    const ports: SkillPorts = { repository: store, digest: catalogSha256, admin: async () => 'allowed',
+    const ports: SkillReadPorts = { repository: store, digest: catalogSha256,
       identity: async p => { onIdentity(); return revoked ? { state: 'denied' } : { state: 'allowed', identity: { schema_version: 2, ...p, label: 'test', native_scopes: [] } }; } };
-    const service = createSkillService(ports), signal = new AbortController().signal;
+    const service = createSkillReader(ports), signal = new AbortController().signal;
     const original = store.bundle.bind(store); store.bundle = () => { throw new Error('list must not read bodies'); };
     expect(await service.list(principal, {}, signal)).toMatchObject({ state: 'listed', skills: [{ digest: b.digest }] });
     store.bundle = original;
@@ -171,5 +216,26 @@ it("Skill reads follow active publications, do not load bodies during listing, a
     let reads = 0; onIdentity = () => { if (++reads === 2) revoked = true; };
     expect(await service.read(principal, { skill_id: a.skill_id, digest: b.digest, path: 'SKILL.md' }, signal)).toEqual({ state: 'denied' });
     revoked = true; expect(await service.list(principal, {}, signal)).toEqual({ state: 'denied' });
+  });
+});
+
+it("Skill capacity shares zero-safe metadata totals with installation admission", async () => {
+  const first = (await bundle())!, second = (await bundle('second'))!;
+  await runInDurableObject(owner(), (_instance, state) => {
+    const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize());
+    expect(store.head(first.skill_id)).toBeUndefined();
+    expect(readSkillCapacity(state.storage.sql, first.skill_id)).toMatchObject({ skill_bytes: 0, skill_versions: 0,
+      library_bytes: 0, library_skills: 0, max_versions: SKILL_LIMITS.versions, max_library_bytes: SKILL_LIMITS.storage_bytes });
+    expect(store.install(first, 0).state).toBe('written');
+    const storedBytes = new TextEncoder().encode(JSON.stringify(first)).byteLength;
+    expect(readSkillCapacity(state.storage.sql, first.skill_id)).toMatchObject({ skill_bytes: storedBytes, skill_versions: 1,
+      library_bytes: storedBytes, library_skills: 1 });
+    expect(readSkillCapacity(state.storage.sql, 'another-skill')).toMatchObject({ skill_bytes: 0, skill_versions: 0,
+      library_bytes: storedBytes, library_skills: 1 });
+    // Capacity corruption is rejected before the installation can publish a new head or content.
+    state.storage.sql.exec("UPDATE skill_capacity_v1 SET bytes=-1 WHERE skill_id=?", first.skill_id);
+    expect(() => store.install(second, 1)).toThrow('skill_capacity_record_invalid');
+    expect(store.head(first.skill_id)?.active_digest).toBe(first.digest);
+    expect(store.bundle(second.skill_id, second.digest)).toBeUndefined();
   });
 });

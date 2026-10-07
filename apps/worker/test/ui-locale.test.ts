@@ -6,7 +6,18 @@ import {randomBase64Url,sha256Hex} from "../src/security.js";
 import {enrollmentDocument} from "../src/admin/enrollment-view.js";
 import {clientDetailPage} from "../src/admin/client-views.js";
 import {jobTable,mcpCallTable} from "../src/admin/tables.js";
+import {adminDocument} from "../src/admin/layout.js";
 const request=(lang="en",headers:Record<string,string>={})=>new Request(`https://worker.test/admin?lang=${lang}`,{headers});
+it.each(["en", "zh-CN"])("preserves data title segments including separators and entities in %s", async locale => {
+ for (const value of ["Source", "read", "Write", "Unknown", "Source · Read", "<script>&quot;&amp;</script>"]) {
+  const original=adminDocument([{data:value}, "MCP client"], '<h1>Settings</h1>', "clients");
+  const output=await localizeHtmlResponse(request(locale),new Response(original,{headers:{"content-type":"text/html"}})).text();
+  const escaped=value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+  expect(output).toContain(`<title data-no-i18n>${escaped} · ${locale==="en"?"MCP client":"MCP 客户端"} · Runmesh · ${locale==="en"?"Agent Control Plane":"智能体控制平面"}</title>`);
+  expect(output).not.toContain('data-i18n-title=');
+  expect(output).toContain(`<h1>${locale==="en"?"Settings":"设置"}</h1>`);
+ }
+});
 it("locale priority is explicit query, exact cookie, then quality-ranked browser preferences",()=>{
  expect(requestLocale(request("zh-CN"))).toBe("zh-CN");
  expect(requestLocale(request("en",{cookie:"runmesh_lang=zh-CN"}))).toBe("en");

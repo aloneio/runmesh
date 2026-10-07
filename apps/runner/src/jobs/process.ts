@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { trustedWindowsEnvironment, trustedWindowsRoot } from "../windows-tools.js";
 import type { JobProcessPort } from "./ports.js";
@@ -24,14 +24,16 @@ export function linuxProcessStartFingerprintSync(pid: number | null): string | n
   return linuxProcessObservationSync(pid)?.starttime ?? null;
 }
 
-type LinuxProcessObservation = { readonly state: string; readonly starttime: string };
+type LinuxProcessObservation = { readonly state: string; readonly starttime: string; readonly group: number; readonly session: number };
 
 function parseLinuxProcessStat(value: string): LinuxProcessObservation | null {
   const close = value.lastIndexOf(")");
   if (close < 0) return null;
   const fields = value.slice(close + 2).trim().split(/\s+/);
   const state = fields[0], starttime = fields[19]; // fields after comm start at field 3; field 22 is index 19.
-  return state === undefined || state.length !== 1 || starttime === undefined || !/^\d+$/.test(starttime) ? null : { state, starttime };
+  const group = Number(fields[2]), session = Number(fields[3]);
+  return state === undefined || state.length !== 1 || starttime === undefined || !/^\d+$/.test(starttime)
+    || !Number.isSafeInteger(group) || !Number.isSafeInteger(session) ? null : { state, starttime, group, session };
 }
 
 function isDeadProcessState(state: string): boolean { return state === "Z" || state === "X" || state === "x"; }
@@ -50,6 +52,33 @@ async function linuxProcessObservation(pid: number | null): Promise<LinuxProcess
   try { return parseLinuxProcessStat(await readFile(`/proc/${pid}/stat`, "utf8")); } catch { return null; }
 }
 
+type GroupWitness = { readonly pid: number; readonly starttime: string };
+
+/** Capture membership while the original leader still proves group ownership.
+ * A surviving member keeps that group ID reserved even after its leader exits. */
+function linuxGroupWitnesses(pid: number): GroupWitness[] {
+  if (process.platform !== "linux") return [];
+  let entries: string[];
+  try { entries = readdirSync("/proc"); } catch { return []; }
+  const witnesses: GroupWitness[] = [];
+  for (const entry of entries) {
+    if (!/^[1-9][0-9]*$/u.test(entry)) continue;
+    const memberPid = Number(entry), member = linuxProcessObservationSync(memberPid);
+    if (member !== null && member.group === pid && member.session === pid && !isDeadProcessState(member.state)) {
+      witnesses.push({ pid: memberPid, starttime: member.starttime });
+    }
+  }
+  return witnesses;
+}
+
+function hasLiveGroupWitness(pid: number, witnesses: readonly GroupWitness[]): boolean {
+  return witnesses.some(witness => {
+    const current = linuxProcessObservationSync(witness.pid);
+    return current !== null && current.starttime === witness.starttime && current.group === pid
+      && current.session === pid && !isDeadProcessState(current.state);
+  });
+}
+
 export async function terminateProcess(pid: number | null, expectedFingerprint: string | null = null, expectedChild?: ChildProcess): Promise<boolean> {
   if (pid === null || pid <= 0) return false;
   // A recovered Windows record has only a bare PID. Without the original
@@ -64,17 +93,20 @@ export async function terminateProcess(pid: number | null, expectedFingerprint: 
   // this synchronous signal call; fail closed instead of sending to a reused
   // process group.
   if (!isTerminationTargetValid(pid, expectedFingerprint, expectedChild)) return false;
+  const witnesses = linuxGroupWitnesses(pid);
+  // The /proc walk is not atomic. Only use its membership evidence if the
+  // original leader still has the same identity when delivering the signal.
+  if (!isTerminationTargetValid(pid, expectedFingerprint, expectedChild)) return false;
   const target = -pid;
   try { process.kill(target, "SIGTERM"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
   // Return after delivery rather than after the grace period so `close` cannot
   // race past cancellation classification. Before escalating, prove that the
-  // original leader still exists. A bare PID is not sufficient after a
-  // restart/reuse window: on Linux use /proc starttime, while local ChildProcess
-  // handles provide the best available proof on other POSIX hosts. Recovered
-  // jobs without either proof deliberately skip SIGKILL rather than risking an
-  // unrelated process group.
+  // original leader or a witnessed member still owns the group. Checking only
+  // the leader misses descendants that ignore TERM and inherit output pipes.
+  // Every witness is checked again for birth identity, group and session before
+  // escalation; a recycled PID or a member that left the group is not proof.
   void new Promise((resolve) => setTimeout(resolve, 1_000)).then(() => {
-    if (!isTerminationTargetValid(pid, expectedFingerprint, expectedChild)) return;
+    if (!isTerminationTargetValid(pid, expectedFingerprint, expectedChild) && !hasLiveGroupWitness(pid, witnesses)) return;
     try { process.kill(target, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
   }).catch(() => undefined);
   return true;

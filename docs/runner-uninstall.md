@@ -17,12 +17,12 @@ Managed installations with remote version management keep service commands avail
 For Linux/macOS, replace the hostname with your Worker and run in an administrator terminal:
 
 ```sh
-set -eu
-maintenance="$(mktemp)"
-trap 'rm -f "$maintenance"' EXIT
-curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$maintenance" 'https://your-runmesh.example/runner/uninstall.sh'
-test -s "$maintenance"
-sudo sh "$maintenance" --purge --yes
+(runmesh_script="$(mktemp)" || exit $?
+trap 'runmesh_status=$?; rm -f "$runmesh_script" || :; exit "$runmesh_status"' EXIT
+curl -q -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$runmesh_script" 'https://your-runmesh.example/runner/uninstall.sh' &&
+test -s "$runmesh_script" &&
+sudo sh "$runmesh_script" '--purge' '--yes'
+)
 ```
 
 On Windows, copy the PowerShell removal command from the administrator page. The hosted endpoint is `/runner/uninstall.ps1`, also using `--purge --yes`.

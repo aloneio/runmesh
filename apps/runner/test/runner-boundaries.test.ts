@@ -20,7 +20,7 @@ vi.mock("node:fs/promises", async original => {
 });
 vi.mock("node:fs", async original => {
   const actual = await original<typeof import("node:fs")>();
-  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync), readdirSync: vi.fn(actual.readdirSync) };
 });
 const nativePlatform = process.platform;
 const roots: string[] = [];
@@ -200,7 +200,8 @@ it.each([
   const kill = vi.spyOn(process, "kill").mockReturnValue(true);
   vi.useFakeTimers();
   try {
-    vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat("S"));
+    vi.mocked(syncFs.readdirSync).mockReturnValueOnce([]);
+    vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat("S")).mockReturnValueOnce(processStat("S"));
     expect(await nativeJobProcesses.terminateProcess(424242, "123456")).toBe(true);
     expect(kill).toHaveBeenCalledWith(-424242, "SIGTERM");
     expect(kill).not.toHaveBeenCalledWith(-424242, "SIGKILL");
@@ -211,6 +212,51 @@ it.each([
     vi.clearAllTimers();
     vi.useRealTimers();
   }
+});
+
+it.each(["original", "reused", "other-group", "other-session", "zombie", "missing"])("retains process-group ownership after leader exit only through a live original member (%s)", async state => {
+  Object.defineProperty(process, "platform", { value: "linux" });
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+  const native = await vi.importActual<typeof import("node:fs")>("node:fs");
+  let escalated = false;
+  const memberStat = (): string => {
+    const fields = [state === "zombie" && escalated ? "Z" : "S", "1", escalated && state === "other-group" ? "424244" : "424242",
+      escalated && state === "other-session" ? "424244" : "424242", ...Array<string>(15).fill("0"), escalated && state === "reused" ? "999999" : "123457", "0"];
+    return `424243 (descendant) ${fields.join(" ")}\n`;
+  };
+  vi.useFakeTimers();
+  try {
+    vi.mocked(syncFs.readdirSync).mockReturnValueOnce(["424242", "424243"] as unknown as ReturnType<typeof syncFs.readdirSync>);
+    vi.mocked(syncFs.readFileSync).mockImplementation((path) => {
+      if (String(path) === "/proc/424242/stat") {
+        if (escalated) throw Object.assign(new Error("leader exited"), { code: "ENOENT" });
+        return processStat("S");
+      }
+      if (String(path) === "/proc/424243/stat") {
+        if (escalated && state === "missing") throw Object.assign(new Error("member exited"), { code: "ENOENT" });
+        return memberStat();
+      }
+      throw new Error("unexpected process observation");
+    });
+    expect(await nativeJobProcesses.terminateProcess(424242, "123456")).toBe(true);
+    expect(kill).toHaveBeenCalledWith(-424242, "SIGTERM");
+    escalated = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(kill.mock.calls.filter(([, signal]) => signal === "SIGKILL")).toEqual(state === "original" ? [[-424242, "SIGKILL"]] : []);
+  } finally {
+    vi.mocked(syncFs.readFileSync).mockImplementation(native.readFileSync);
+    vi.mocked(syncFs.readdirSync).mockImplementation(native.readdirSync);
+    vi.clearAllTimers(); vi.useRealTimers();
+  }
+});
+
+it("does not signal a process group when its leader identity changes during membership capture", async () => {
+  Object.defineProperty(process, "platform", { value: "linux" });
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+  vi.mocked(syncFs.readdirSync).mockReturnValueOnce([]);
+  vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat("S")).mockReturnValueOnce(processStat("S", "654321"));
+  expect(await nativeJobProcesses.terminateProcess(424242, "123456")).toBe(false);
+  expect(kill.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
 });
 
 it.skipIf(nativePlatform !== "linux")("AR07 native recovery recognizes an exited child before its parent reaps it", async () => {

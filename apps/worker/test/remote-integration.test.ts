@@ -10,9 +10,32 @@ import { ADMIN_CSRF_COOKIE, ADMIN_SESSION_COOKIE } from "../src/http/constants.j
 import { internalHeaders, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import type { CentralRemote } from "../src/contracts/remote.js";
-import type { CentralDirectoryReader } from "../src/contracts/catalog.js";
+import type { CentralDirectory, CentralDirectoryReader } from "../src/contracts/catalog.js";
 import type { CentralToolVisibilityReader } from "../src/contracts/capabilities.js";
+import type { CentralToolSearch } from "../src/contracts/tool-search.js";
 import { invokeRemote } from "../src/mcp/providers/remote.js";
+import { registerDirectRemoteTools } from "../src/mcp/providers/remote/direct.js";
+import { catalogPublicName } from "../src/contracts/catalog-values.js";
+
+it.each([
+  { profile_id: 123 }, { profile_id: true }, { profile_id: null }, { profile_id: ["docs"] },
+  { view_version: ["a".repeat(64)] },
+])("W08 malformed optional direct-directory fields preserve native tools: %j", async change => {
+  const server = new McpServer({ name: "direct-directory-regression", version: "1" });
+  const register = vi.spyOn(server, "registerTool");
+  const digest = "a".repeat(64);
+  server.registerTool("native_fixture", { inputSchema: z.object({}).strict() }, async () => ({ content: [] }));
+  const entry = { profile_id: "docs", tool_id: `mcp.${digest}`, version: digest,
+    public_name: catalogPublicName("docs", "read", digest), definition: { name: "read", inputSchema: { type: "object" } } };
+  const directory = { state: "listed", view_version: "view_version" in change ? change.view_version : digest,
+    tools: "profile_id" in change ? [entry, { ...entry, profile_id: change.profile_id }] : [entry] };
+  expect(() => registerDirectRemoteTools(server, { list: async () => ({ state: "unavailable" }),
+    call: async () => ({ state: "failed", code: "dependency_unavailable", operation_state: "not_started" }) }, directory as unknown as CentralDirectory)).not.toThrow();
+  expect(register.mock.calls.map(call => call[0])).toEqual(["native_fixture", "remote_status"]);
+  const status = register.mock.calls.find(call => call[0] === "remote_status")!;
+  const result = await (status[2] as () => Promise<{ content: { text: string }[] }>)();
+  expect(JSON.parse(result.content[0]!.text)).toEqual({ state: "unavailable", direct_tools: 0 });
+});
 
 it.each(["not_started", "unknown", "completed"] as const)("W05 busy recovery guidance preserves the %s operation state", async operation_state => {
   const response = await invokeRemote({ list: async () => ({ state: "invalid" }),
@@ -66,8 +89,9 @@ async function fixture(native = false, id = "docs") {
   let instance: CapabilitiesDOv1;
   await runInDurableObject(stub, (_original, state) => { instance = new CapabilitiesDOv1(state, configured); });
   const call = <T>(action: (owner: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => action(instance));
-  const port: CentralRemote & CentralDirectoryReader & CentralToolVisibilityReader = { toolVisibility: principal => call(owner => owner.toolVisibility(principal)),
+  const port: CentralRemote & CentralDirectoryReader & CentralToolVisibilityReader & CentralToolSearch = { toolVisibility: principal => call(owner => owner.toolVisibility(principal)),
     listRemoteProfiles: principal => call(owner => owner.listRemoteProfiles(principal)),
+    searchRemoteTools: (principal, query) => call(owner => owner.searchRemoteTools(principal, query)),
     listDirectory: principal => call(owner => owner.listDirectory(principal)),
     callRemote: (principal, input) => call(owner => owner.callRemote(principal, input)),
     listCatalog: (principal, input) => call(owner => owner.listCatalog(principal, input)),
@@ -113,10 +137,13 @@ it.each(["docs", "docs:reference"])("W05 admin discovery immediately enables cli
     const command = await f.toolCommand();
     const list = await rpc(f.config, f.current.secret, "tools/list", {});
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain("remote_call");
-    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_profiles', 'remote_tools']);
+    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_profiles', 'remote_search', 'remote_tools']);
     const count = f.methods.length;
     const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: id } });
     expect(JSON.parse(page.result.content[0].text).tools[0].tool_id).toBe(command.tool_id);
+    const search = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_search", arguments: { query: "lookup" } });
+    expect(search.result.isError).not.toBe(true);
+    expect(JSON.parse(search.result.content[0].text)).toMatchObject({ state: "listed", tools: [{ profile_id: id, tool_id: command.tool_id, version: command.version, name: "lookup" }] });
     expect(f.methods).toHaveLength(count);
     const response = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_call", arguments: command });
     expect(response.result).toMatchObject({ isError: false, structuredContent: { value: 7 }, content: [{ type: "text", text: "7" }, { type: "image", data: "AA==" }] });
@@ -135,7 +162,7 @@ it("W05 shared clients discover publications without grants and invalid argument
     expect(JSON.parse(profiles.result.content[0].text)).toMatchObject({ state: 'listed', profiles: [{ profile_id: 'docs' }] });
     const tools = (await rpc(config, f.current.secret, 'tools/list', {})).result.tools;
     expect(tools.map((tool: { name: string }) => tool.name)).toEqual(shared.map((tool: { name: string }) => tool.name));
-    expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['remote_profiles', 'remote_tools', 'remote_call', 'remote_status']));
+    expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['remote_profiles', 'remote_search', 'remote_tools', 'remote_call', 'remote_status']));
     expect(tools.some((tool: { name: string }) => tool.name.startsWith('skill_'))).toBe(false);
     expect(await f.port.callRemote(f.current.principal, { ...command, arguments: { value: "7" } })).toMatchObject({ code: "invalid_arguments", operation_state: "not_started" });
     expect(f.methods).toHaveLength(before); expect(f.execute).not.toHaveBeenCalled();

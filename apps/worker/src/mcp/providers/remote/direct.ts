@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { CentralDirectory, RemoteToolDefinition } from "../../../contracts/catalog.js";
-import { catalogJson, catalogObject } from "../../../contracts/catalog-json.js";
-import { catalogPublicName, parseRemoteTool } from "../../../contracts/catalog-values.js";
+import { catalogDigest, catalogJson, catalogObject } from "../../../contracts/catalog-json.js";
+import { parseCatalogTool } from "../../../contracts/catalog-values.js";
 import { invokeRemote, type RemoteToolPort } from "../remote.js";
 import { publishSchema } from "../schema-publication.js";
 
@@ -22,14 +22,14 @@ export function registerDirectRemoteTools(server: McpServer, port: RemoteToolPor
     const names = new Set<string>();
     // Project the directory data; RPC envelope metadata is not catalog content.
     const data = { state: directory.state, tools: directory.tools, view_version: directory.view_version };
-    if (!/^[a-f0-9]{64}$/u.test(directory.view_version) || !Array.isArray(directory.tools) || directory.tools.length > 32 || catalogJson(data, 524_288) === undefined) state = 'unavailable';
+    if (!catalogDigest(directory.view_version) || !Array.isArray(directory.tools) || directory.tools.length > 32 || catalogJson(data, 524_288) === undefined) state = 'unavailable';
     else for (const entry of directory.tools) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) { state = 'unavailable'; break; }
-      const definition = parseRemoteTool(entry.definition);
-      if (!definition || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(entry.profile_id) || !/^mcp[.][a-f0-9]{64}$/u.test(entry.tool_id)
-        || !/^[a-f0-9]{64}$/u.test(entry.version) || entry.public_name !== catalogPublicName(entry.profile_id, definition.name, entry.tool_id.slice(4)) || names.has(entry.public_name)) { state = 'unavailable'; break; }
-      names.add(entry.public_name);
-      ready.push({ name: entry.public_name, command: { profile_id: entry.profile_id, tool_id: entry.tool_id, version: entry.version }, config: {
+      const tool = parseCatalogTool(entry.profile_id, entry);
+      if (!tool || names.has(tool.public_name)) { state = 'unavailable'; break; }
+      const definition = tool.definition;
+      names.add(tool.public_name);
+      ready.push({ name: tool.public_name, command: { profile_id: entry.profile_id, tool_id: tool.tool_id, version: tool.version }, config: {
         ...(definition.description === undefined ? {} : { description: definition.description }), inputSchema: schema(definition.inputSchema),
         ...(definition.outputSchema === undefined ? {} : { outputSchema: schema(definition.outputSchema) }),
         ...(definition.annotations === undefined ? {} : { annotations: definition.annotations }),

@@ -1,11 +1,12 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
 import { CentralSchema } from "../src/platform/capabilities/schema.js";
 import { CatalogState } from "../src/platform/capabilities/catalog-store.js";
 import { createCatalogCursor, newCatalogCursorKey } from "../src/platform/capabilities/catalog-crypto.js";
 import { CATALOG_LIMITS, type CatalogCursor } from "../src/contracts/catalog.js";
-import { catalogDefinition, catalogSnapshot } from "../../../test/domain/catalog-fixtures.js";
+import { catalogDefinition, catalogProfile, catalogSnapshot, fixtureDigest } from "../../../test/domain/catalog-fixtures.js";
+import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
 
 function owner() {
   const namespace = (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
@@ -105,15 +106,85 @@ it("W04 read and immutable insert reject corrupted stored snapshots", async () =
   });
 });
 
-it("W04 per-profile versions are bounded while stop/review of retained data remains possible", async () => {
+it("W04 catalog history rolls over while observed, approved and retained historical versions remain usable", async () => {
   const snapshots = [];
-  for (let i = 0; i <= CATALOG_LIMITS.versions_per_profile; i++) snapshots.push(await catalogSnapshot("docs", [catalogDefinition("search", `Version ${i}`)]));
+  for (let i = 0; i < CATALOG_LIMITS.versions_per_profile + 8; i++) snapshots.push(await catalogSnapshot("docs", [catalogDefinition("search", `Version ${i}`)]));
   await runInDurableObject(owner(), (_instance, state) => {
     const store = repository(state.storage);
-    for (let i = 0; i < CATALOG_LIMITS.versions_per_profile; i++) expect(store.stage(snapshots[i]!, i).state).toBe("written");
-    expect(store.stage(snapshots.at(-1)!, CATALOG_LIMITS.versions_per_profile)).toEqual({ state: "capacity" });
-    expect(store.disable("docs", CATALOG_LIMITS.versions_per_profile).state).toBe("written");
+    expect(store.publish(snapshots[0]!, 0).state).toBe("written");
+    for (let i = 1; i < snapshots.length; i++) expect(store.stage(snapshots[i]!, i).state).toBe("written");
+    expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_snapshots_v1").one().n).toBe(CATALOG_LIMITS.versions_per_profile);
     expect(store.readSnapshot("docs", snapshots[0]!.digest)).toEqual(snapshots[0]);
+    expect(store.readSnapshot("docs", snapshots[1]!.digest)).toBeUndefined();
+    expect(store.readHead("docs")).toMatchObject({ observed_digest: snapshots.at(-1)!.digest, approved_digest: snapshots[0]!.digest });
+    const retained = snapshots.at(-2)!;
+    expect(store.stage(retained, snapshots.length).state).toBe("written");
+    expect(store.approve("docs", retained.digest, ["search"], snapshots.length + 1).state).toBe("written");
+    expect(store.disable("docs", snapshots.length + 2).state).toBe("written");
+    expect(store.readSnapshot("docs", retained.digest)).toEqual(retained);
+  });
+});
+
+it("W04 publishing beyond the history window keeps current upstream tools callable", async () => {
+  const snapshots = [];
+  for (let i = 0; i <= CATALOG_LIMITS.versions_per_profile; i++) snapshots.push(await catalogSnapshot("docs", [catalogDefinition("search", `Release ${i}`)]));
+  await runInDurableObject(owner(), async (_instance, state) => {
+    const store = repository(state.storage), latest = snapshots.at(-1)!;
+    for (let i = 0; i < snapshots.length; i++) expect(store.publish(snapshots[i]!, i).state).toBe("written");
+    const callTool = vi.fn(async () => ({ content: [{ type: "text", text: "current upstream result" }] }));
+    const call = createRemoteCaller({ repository: store, profile: () => catalogProfile(), digest: fixtureDigest,
+      identity: async principal => ({ state: "allowed", identity: { schema_version: 2, ...principal, label: "fixture", native_scopes: [] } }),
+      connector: { validate: () => true, open: async () => ({ current: () => true, close: async () => undefined,
+        listTools: async () => latest.tools.map(tool => tool.definition), callTool }) } });
+    expect(await call({ client_id: "catalog-client", secret_version: 1 }, { profile_id: "docs", tool_id: latest.tools[0]!.tool_id,
+      version: latest.tools[0]!.version, arguments: { query: "current" } }, new AbortController().signal)).toMatchObject({ state: "completed" });
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("W04 failed or stale captures cannot partially prune retained history", async () => {
+  const snapshots = [];
+  for (let i = 0; i <= CATALOG_LIMITS.versions_per_profile; i++) snapshots.push(await catalogSnapshot("docs", [catalogDefinition("search", `Revision ${i}`)]));
+  await runInDurableObject(owner(), (_instance, state) => {
+    const store = repository(state.storage), revision = CATALOG_LIMITS.versions_per_profile, next = snapshots.at(-1)!;
+    for (let i = 0; i < revision; i++) expect(store.publish(snapshots[i]!, i).state).toBe("written");
+    const before = state.storage.sql.exec("SELECT * FROM catalog_snapshots_v1 ORDER BY rowid").toArray();
+    const exec = state.storage.sql.exec.bind(state.storage.sql); let written = 0;
+    const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query, ...args) => { const cursor = exec(query, ...args); written += cursor.rowsWritten; return cursor; });
+    try { expect(store.publish(next, revision - 1)).toEqual({ state: "conflict", current_revision: revision }); expect(written).toBe(0); }
+    finally { spy.mockRestore(); }
+    state.storage.sql.exec("CREATE TRIGGER reject_pruned_head BEFORE UPDATE ON catalog_heads_v1 BEGIN SELECT RAISE(ABORT,'synthetic catalog fault'); END");
+    expect(() => store.publish(next, revision)).toThrow();
+    expect(state.storage.sql.exec("SELECT * FROM catalog_snapshots_v1 ORDER BY rowid").toArray()).toEqual(before);
+    expect(store.readHead("docs")?.revision).toBe(revision);
+    state.storage.sql.exec("DROP TRIGGER reject_pruned_head");
+    expect(store.publish(next, revision).state).toBe("written");
+  });
+});
+
+it("W04 global snapshot pressure preserves current references across all profiles", async () => {
+  const snapshots = [];
+  for (let profile = 0; profile < CATALOG_LIMITS.snapshots / CATALOG_LIMITS.versions_per_profile; profile++) {
+    const versions = [];
+    for (let version = 0; version < CATALOG_LIMITS.versions_per_profile; version++) versions.push(await catalogSnapshot(`profile-${profile}`, [catalogDefinition("search", `Version ${version}`)]));
+    snapshots.push(versions);
+  }
+  const incoming = await catalogSnapshot("new-profile");
+  await runInDurableObject(owner(), (_instance, state) => {
+    const store = repository(state.storage);
+    for (const versions of snapshots) {
+      expect(store.publish(versions[0]!, 0).state).toBe("written");
+      for (let i = 1; i < versions.length; i++) expect(store.stage(versions[i]!, i).state).toBe("written");
+    }
+    expect(store.publish(incoming, 0).state).toBe("written");
+    expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_snapshots_v1").one().n).toBe(CATALOG_LIMITS.snapshots);
+    for (const versions of snapshots) {
+      const first = versions[0]!, latest = versions.at(-1)!;
+      expect(store.readSnapshot(first.profile_id, first.digest)).toEqual(first);
+      expect(store.readSnapshot(latest.profile_id, latest.digest)).toEqual(latest);
+    }
+    expect(store.readSnapshot("profile-0", snapshots[0]![1]!.digest)).toBeUndefined();
+    expect(store.readSnapshot("profile-1", snapshots[1]![1]!.digest)).toEqual(snapshots[1]![1]);
   });
 });
 
@@ -132,15 +203,38 @@ it("W04 bounded catalog storage accepts 100 fixture profiles and 2000 tool defin
 });
 
 it("W04 total storage budget rejects new captures but does not prevent disabling", async () => {
-  const first = await catalogSnapshot(), next = await catalogSnapshot("docs", [catalogDefinition("search", "new")]);
+  const first = await catalogSnapshot(), history = await catalogSnapshot("docs", [catalogDefinition("search", "history")]),
+    observed = await catalogSnapshot("docs", [catalogDefinition("search", "observed")]), next = await catalogSnapshot("docs", [catalogDefinition("search", "new")]);
   await runInDurableObject(owner(), (_instance, state) => {
-    const store = repository(state.storage); store.stage(first, 0);
+    const store = repository(state.storage); store.publish(first, 0); store.stage(history, 1); store.stage(observed, 2);
     // The synthetic second row exercises the accounting limit without allocating
     // a large body. It is never selected, read, approved or presented as a snapshot.
     state.storage.sql.exec("INSERT INTO catalog_snapshots_v1 VALUES (?,?,?,?)", "budget-fixture", "b".repeat(64), CATALOG_LIMITS.storage_bytes, "{}");
-    expect(store.stage(next, 1)).toEqual({ state: "capacity" });
-    expect(store.disable("docs", 1).state).toBe("written");
+    const exec = state.storage.sql.exec.bind(state.storage.sql); let written = 0;
+    const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query, ...args) => { const cursor = exec(query, ...args); written += cursor.rowsWritten; return cursor; });
+    try { expect(store.stage(next, 3)).toEqual({ state: "capacity" }); expect(written).toBe(0); }
+    finally { spy.mockRestore(); }
+    expect(store.readHead("docs")?.revision).toBe(3);
+    expect(store.readSnapshot("docs", history.digest)).toEqual(history);
+    expect(store.disable("docs", 3).state).toBe("written");
     expect(store.readSnapshot("docs", first.digest)).toEqual(first);
+  });
+});
+
+it("W04 byte pressure reclaims unreferenced history while keeping active snapshots on other profiles", async () => {
+  const first = await catalogSnapshot(), history = await catalogSnapshot("docs", [catalogDefinition("search", "history ".repeat(700))]),
+    observed = await catalogSnapshot("docs", [catalogDefinition("search", "observed")]), other = await catalogSnapshot("other"), incoming = await catalogSnapshot("incoming");
+  await runInDurableObject(owner(), (_instance, state) => {
+    const store = repository(state.storage); store.publish(first, 0); store.stage(history, 1); store.stage(observed, 2); store.publish(other, 0);
+    const used = state.storage.sql.exec<{ bytes: number }>("SELECT SUM(bytes) AS bytes FROM catalog_snapshots_v1").one().bytes;
+    // Account for occupied capacity without allocating a 16 MiB test body. This
+    // orphan is never read as content or selected as reclaimable history.
+    state.storage.sql.exec("INSERT INTO catalog_snapshots_v1 VALUES (?,?,?,?)", "budget-fixture", "b".repeat(64), CATALOG_LIMITS.storage_bytes - used, "{}");
+    expect(store.publish(incoming, 0).state).toBe("written");
+    expect(store.readSnapshot("docs", history.digest)).toBeUndefined();
+    for (const protectedSnapshot of [first, observed, other, incoming]) expect(store.readSnapshot(protectedSnapshot.profile_id, protectedSnapshot.digest)).toEqual(protectedSnapshot);
+    expect(store.readHead("docs")?.revision).toBe(3);
+    expect(state.storage.sql.exec<{ bytes: number }>("SELECT SUM(bytes) AS bytes FROM catalog_snapshots_v1").one().bytes).toBeLessThanOrEqual(CATALOG_LIMITS.storage_bytes);
   });
 });
 

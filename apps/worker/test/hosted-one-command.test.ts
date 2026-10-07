@@ -25,7 +25,7 @@ describe("verified one-command enrollment", () => {
       if (mode === "dedicated_user") expect(command).toContain("execution_mode=dedicated_user");
     }
     expect(commands[0]).toContain("curl");
-    expect(commands[0]).toContain("| sudo sh -s --");
+    expect(commands[0]).toContain('test -s &quot;$runmesh_script&quot; &amp;&amp; sudo sh &quot;$runmesh_script&quot;');
     expect(commands[1]).toBe(commands[0]);
     expect(commands[2]).toContain("powershell.exe -NoProfile -NonInteractive");
     expect(html).toContain("Copy installer command");
@@ -35,7 +35,7 @@ describe("verified one-command enrollment", () => {
     for (const [index, command] of uninstallCommands.entries()) {
       expect(command[2]).toBe(command[1]);
       expect(command[2]).toContain(`${origin}/runner/uninstall.${index === 0 ? "sh" : "ps1"}`);
-      expect(command[2]).toContain("--purge --yes");
+      expect(command[2]).toContain(index === 0 ? "&#039;--purge&#039; &#039;--yes&#039;" : "--purge --yes");
       expect(command[2]).not.toContain(code);
     }
   });

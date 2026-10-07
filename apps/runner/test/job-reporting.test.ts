@@ -1,16 +1,24 @@
-import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { JobManager } from "../src/jobs.js";
 import { normalizeJobRecord } from "../src/jobs/records.js";
 import { PathPolicy } from "../src/path-policy.js";
+import { jobRecord } from "./helpers/job-record.js";
 
-async function fixture() {
+async function fixture(completedRecords = 0) {
   const base = await mkdtemp(join(tmpdir(), "runmesh-reporting-"));
   const root = join(base, "work"); await mkdir(root);
   const policy = new PathPolicy([{ workspaceId: "w", rootPath: await realpath(root), readonly: false, shell: false }]);
-  const jobs = new JobManager({ policy, stateDir: join(base, "state"), maxConcurrentJobs: 2 });
+  for (let index = 0; index < completedRecords; index++) {
+    const job = jobRecord({ job_id: "job-00000000-0000-0000-0000-" + String(index).padStart(12, "0"), workspace_id: "w", status: "succeeded", pid: null,
+      updated_at_ms: Date.now() + 60_000 + index, completed_at_ms: Date.now() + 60_000 + index, exit_code: 0 });
+    const directory = join(base, "state", "jobs", job.job_id);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(join(directory, "meta.json"), JSON.stringify(job));
+  }
+  const jobs = new JobManager({ policy, stateDir: join(base, "state"), maxConcurrentJobs: 2, maxRetainedJobs: Math.max(100, completedRecords + 10) });
   await jobs.initialize();
   const input = (id: string, record?: boolean) => ({ workspace_id: "w", command: [process.execPath, "-e", "process.stdout.write('local-only')"],
     created_by_client_id: id, request_id: id, ...(record === undefined ? {} : { record_history: record }) });
@@ -26,6 +34,23 @@ async function fixture() {
     await rm(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   } };
 }
+
+it("active history IDs include a long job outside the history page and omit private jobs", async () => {
+  const f = await fixture(100), started: string[] = [];
+  try {
+    const command = [process.execPath, "-e", "process.stdin.resume()"];
+    const active = await f.jobs.start({ ...f.input("long-running", true), command }); started.push(active.job_id);
+    const hidden = await f.jobs.start({ ...f.input("private-running", false), command }); started.push(hidden.job_id);
+    expect(f.jobs.list()).toHaveLength(100);
+    expect(f.jobs.list().some(job => job.job_id === active.job_id)).toBe(false);
+    expect(f.jobs.activeHistoryJobIds()).toEqual([active.job_id]);
+    await f.jobs.cancel(active.job_id); await f.finished(active.job_id);
+    expect(f.jobs.activeHistoryJobIds()).toEqual([]);
+  } finally {
+    for (const id of started) { await f.jobs.cancel(id); await f.finished(id); }
+    await f.close();
+  }
+});
 
 it("no-record jobs remain locally executable/readable but are omitted before the cloud snapshot limit", async () => {
   const f = await fixture();

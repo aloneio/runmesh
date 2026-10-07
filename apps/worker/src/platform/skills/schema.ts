@@ -1,5 +1,6 @@
 import type { SkillBundle } from "../../contracts/skills.js";
 import { insertSkillContent } from "./content.js";
+import { initializeSkillCapacity } from "./capacity.js";
 
 const tables = ["skill_meta", "skill_heads_v1", "skill_bundles_v1", "skill_bundles_v2", "skill_files_v2"];
 function createContentTables(sql: SqlStorage): void {
@@ -17,13 +18,15 @@ export function initializeSkillSchema(storage: Pick<DurableObjectStorage, "sql" 
       sql.exec("INSERT INTO skill_meta VALUES (1,2)");
       sql.exec("CREATE TABLE skill_heads_v1 (skill_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, staged_digest TEXT NOT NULL, active_digest TEXT, enabled INTEGER NOT NULL)");
       createContentTables(sql);
+      initializeSkillCapacity(sql);
       return;
     }
     if (!existing.includes("skill_meta") || !existing.includes("skill_heads_v1")) throw new Error("skill_schema_unsupported");
     const version = sql.exec<{ schema_version: number }>("SELECT schema_version FROM skill_meta WHERE id=1").toArray()[0]?.schema_version;
-    if (version === 2 && existing.length === 4 && existing.includes("skill_bundles_v2") && existing.includes("skill_files_v2")) return;
+    if (version === 2 && existing.length === 4 && existing.includes("skill_bundles_v2") && existing.includes("skill_files_v2")) { initializeSkillCapacity(sql); return; }
     if (version !== 1 || existing.length !== 3 || !existing.includes("skill_bundles_v1")) throw new Error("skill_schema_unsupported");
     createContentTables(sql);
+    initializeSkillCapacity(sql);
     for (const row of sql.exec<{ skill_id: string; digest: string; content_json: string; bytes: number; approved: number }>("SELECT skill_id,digest,content_json,bytes,approved FROM skill_bundles_v1").toArray()) {
       const bundle = JSON.parse(row.content_json) as SkillBundle;
       if (bundle.skill_id !== row.skill_id || bundle.digest !== row.digest || ![0, 1].includes(row.approved)

@@ -8,7 +8,7 @@ import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransp
 function dependencies() {
   const runtime: ConnectionRuntimePort = { initialize: async () => {}, applyPolicy: () => {}, dispatch: async () => undefined,
     configureJobRetention: () => {}, cleanupJobs: async () => {}, needsHistoryReconciliation: () => false,
-    syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { list: () => [] } };
+    syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { activeHistoryJobIds: () => [] } };
   const policyStore: ConnectionPolicyStorePort = { load: async () => undefined, activate: async () => {} };
   return {runtime, policyStore};
 }

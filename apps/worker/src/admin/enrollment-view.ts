@@ -2,10 +2,15 @@ import { message } from "../i18n/messages.js";
 import type { RunnerExecutionMode } from "../contracts/administration.js";
 import { shellQuote, powershellQuote } from "../installer.js";
 import { adminStyles } from "../admin-styles.js";
-import { escapeHtml } from "./format.js";
+import { escapeHtml, timestamp } from "./format.js";
 import { controlHeader } from "./layout.js";
 import { adminScript } from "./client-script.js";
 import { executionModeFormFields, windowFields } from "./runner-fields.js";
+
+/** A subshell keeps cleanup and failure handling local to the copied command. */
+function downloadedShellCommand(url: string, args: readonly string[]): string {
+  return `(runmesh_script="$(mktemp)" || exit $?; trap 'runmesh_status=$?; rm -f "$runmesh_script" || :; exit "$runmesh_status"' EXIT; curl -q -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$runmesh_script" ${shellQuote(url)} && test -s "$runmesh_script" && sudo sh "$runmesh_script" ${args.map(shellQuote).join(" ")})`;
+}
 
 /** Presentation only. The HTTP adapter must validate origin, enrollment state
  * and privilege acknowledgement before constructing this view model. */
@@ -17,11 +22,9 @@ export interface EnrollmentView {
 }
 export function enrollmentDocument({ publicBase, runnerId, code, csrf, reEnroll, bootstrap, executionMode, maxValidityDays, enrollment }: EnrollmentView): string {
   const installerQuery = executionMode === "dedicated_user" ? "?execution_mode=dedicated_user" : "";
-  const shellInstallerUrl = shellQuote(new URL(`/runner/install.sh${installerQuery}`, publicBase).toString());
   const powerShellInstallerUrl = powershellQuote(new URL(`/runner/install.ps1${installerQuery}`, publicBase).toString());
-  const shellCode = shellQuote(code);
   const powerShellCode = powershellQuote(code);
-  const shellCommand = `curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 ${shellInstallerUrl} | sudo sh -s -- ${shellCode}`;
+  const shellCommand = downloadedShellCommand(new URL(`/runner/install.sh${installerQuery}`, publicBase).toString(), [code]);
   // Invoke a clean PowerShell child so the copied command works from either
   // an elevated PowerShell prompt or cmd.exe, regardless of the operator's
   // profile aliases/functions or execution-policy setting. The installer
@@ -86,8 +89,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
     ? "Install the verified Runner package, then run the commands below. Enter the enrollment code when prompted."
     : "Run the command for your operating system to install and start the Runner.";
   const warningBlock = executionMode === "privileged_host" ? `<p class="warning privileged-host-warning"><span>${escapeHtml(privilegedWarning)}</span></p>` : `<p class="notice">${message("text.selected.restricted.service.account.mode.dedicated.user.the.installer.preserves.this.selec", "en")}</p>`;
-  const enrollmentSummary = enrollment === undefined ? "The one-time enrollment code expires after 30 minutes." : `This code is valid until ${new Date(enrollment.expires_at_ms).toISOString()} and can be used once.`;
-  const uninstallShell = `curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 ${shellQuote(new URL("/runner/uninstall.sh", publicBase).toString())} | sudo sh -s -- --purge --yes`;
+  const enrollmentSummary = enrollment === undefined ? "The one-time enrollment code expires after 30 minutes." : `This code is valid until ${timestamp(enrollment.expires_at_ms)} and can be used once.`;
+  const uninstallShell = downloadedShellCommand(new URL("/runner/uninstall.sh", publicBase).toString(), ["--purge", "--yes"]);
   const uninstallWindows = `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -Uri ${powershellQuote(new URL("/runner/uninstall.ps1", publicBase).toString())}).Content)) --purge --yes"`;
   const removalCommands = bootstrap ? { linux: uninstallShell, macos: uninstallShell, windows: uninstallWindows } : {
     linux: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes",

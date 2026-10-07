@@ -158,8 +158,9 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
         if (!current(record!)) return credentialChanged(record!);
       };
       let tokens = await ports.cipher.open(context(record, "tokens"), record.tokens) as ManagedOAuthTokens;
-      if (record.token_expires_at <= ports.now() + 30_000) {
-        if (!tokens.refresh_token) return fault("reauthorization_required");
+      // Refresh early when available; a non-refreshable token remains usable
+      // through its actual lifetime and the lease checks it again before send.
+      if (tokens.refresh_token && record.token_expires_at <= ports.now() + 30_000) {
         // Only this owner's live refresh is temporary contention. Persisted
         // refreshing state after eviction or failure still needs a new account
         // authorization because a rotating token may already have been used.
@@ -168,7 +169,7 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
         try {
           const client = await ports.cipher.open(context(record, "client"), record.client);
           const fresh = await ports.protocol.refresh({ endpoint: selected.endpoint, origin: base, discovery: record.discovery!,
-            client, refresh_token: tokens.refresh_token, signal, authorize,
+            client, refresh_token: tokens.refresh_token, ...(tokens.issuer === undefined ? {} : { issuer: tokens.issuer }), signal, authorize,
             beforeTokenRequest: () => {
               if (record!.state !== "ready") return fault("reauthorization_required");
               record = replace(record!, { state: "refreshing" });
@@ -179,6 +180,7 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
         } finally { refreshing.delete(selected.profile_id); }
       }
       await authorize();
+      if (record.token_expires_at <= ports.now()) return fault("reauthorization_required");
       const credential = parseCredential({ kind: "bearer", token: tokens.access_token }); if (!credential) return fault("unavailable");
       const lease = record; return { credential, current: () => lease.token_expires_at > ports.now()
         && current(lease) && ports.repository.read(lease.profile_id)?.state === "ready" };

@@ -18,6 +18,10 @@ External SDK imports are checked against Worker roles. HTTP/MCP adapters can loa
 
 Connection submodules depend on narrow ports, while the connection coordinator owns runtime, policy and Job integration. Release models and selection stay separate from release I/O and installer rendering. Patch data contracts use `path-contracts.ts`. See [the ownership reference](architecture-remediation.md#ar09ar14-platform-boundaries-and-failure-seams) for the corresponding roles.
 
+Runner admission decisions live in `domain/runner-admission.ts`. They consume state snapshots and session identities; RunnerDO owns storage ordering and transport. The gate checks synchronous execution and keeps clocks, HTTP, sockets and storage in the owner. Pure regressions cover restart recovery, mutation ownership and stale writers alongside the Worker integration suite.
+
+Central browser request classification lives in `central/request-contract.js`. API response handling and operation scopes use this shared contract, while `central/operations.js` manages UI locks. The request contract has no DOM or scheduling dependencies. Catalog snapshot readers expose only `readHead` and `readSnapshot`; a compiled TypeScript fixture verifies that pagination, remote calls, tool search and Skill dependency inspection retain that boundary.
+
 Fixtures cover `.mts`, `.cts`, JSX, bare built-ins such as `dgram` and `dns/promises`, type-only Cloudflare imports, renamed barrels, nested modules and reverse coordinator dependencies. Positive fixtures cover native adapters, pure hashing and type-only platform ports. Three named Runtime persistence-coordinator test exceptions retain timing that a file-write fault cannot reproduce; replacing one requires equivalent fault timing and assertions.
 
 Central MCP providers consume public contracts, helpers within their own provider and reviewed server/schema SDKs. They cannot import application or platform implementations, unreviewed external packages, client SDKs, or platform I/O globals. Fixtures include direct imports, types, re-exports, nested helpers and dynamic imports. Protocol execution and persistence are injected through ports by composition.
@@ -43,8 +47,8 @@ of its module imports, including external and relative protocol type imports. Ot
 fixtures check reverse imports, intermediary modules, platform types and ambient I/O
 while allowing local scheduling in the coordinator.
 
-The shared async deadline has no module imports or platform I/O. Two reviewed
-feature wrappers supply Connector and remote-capability budgets; this allowance is
+The shared async deadline has no module imports or platform I/O. Reviewed
+feature wrappers supply Connector, remote-capability and Skill source budgets; this allowance is
 limited to those edges. Browser page controls and page mounting share the independent
 fragment helper, with a fixture guarding its dependency direction.
 

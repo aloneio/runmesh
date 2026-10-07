@@ -80,7 +80,8 @@ export async function checkDomainImports(root, files) {
       else if (edge.specifier.startsWith(".")) {
         target = posix.normalize(posix.join(posix.dirname(file), edge.specifier)).replace(/\.js$/u, ".ts");
         assert.ok(!target.startsWith("../") && /^(?:apps\/(?:worker|runner)\/src|packages\/protocol\/src|test\/domain)\//u.test(target), "domain dependency outside reviewed source");
-      } else assert.ok(pureExternal.has(edge.specifier), "domain dependency requires an external side effect/runtime");
+      } else assert.ok(pureExternal.has(edge.specifier)
+        || (file === "apps/worker/src/domain/skills/frontmatter.ts" && edge.specifier === "yaml"), "domain dependency requires an external side effect/runtime");
       if (target) pending.push(target);
     }
   }

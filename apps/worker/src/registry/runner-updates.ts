@@ -4,8 +4,12 @@ import type { RunnerRow, InternalInput, RunnerRecord, RunnerUpdateChannel } from
 
 type UpdateRow = { operation_json: string; claim_epoch: number | null; fingerprint: string };
 export function ensureRunnerUpdatesSchema(sql: SqlStorage): void {
-  if (sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runner_updates'").toArray().length > 0) return;
-  sql.exec("CREATE TABLE runner_updates (runner_id TEXT NOT NULL, lifecycle_id TEXT NOT NULL, operation_id TEXT NOT NULL, operation_json TEXT NOT NULL, claim_epoch INTEGER, fingerprint TEXT NOT NULL, created_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, lifecycle_id, operation_id))");
+  const schema = new Set(sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE (type = 'table' AND name = 'runner_updates') OR (type = 'index' AND name = 'idx_runner_updates_latest')").toArray().map(row => row.name));
+  if (!schema.has("runner_updates")) sql.exec("CREATE TABLE runner_updates (runner_id TEXT NOT NULL, lifecycle_id TEXT NOT NULL, operation_id TEXT NOT NULL, operation_json TEXT NOT NULL, claim_epoch INTEGER, fingerprint TEXT NOT NULL, created_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, lifecycle_id, operation_id))");
+  // SQLite's ascending rowid suffix is scanned backwards with created_at_ms,
+  // preserving the latest-inserted tie break without discarding replay records.
+  // Read before DDL: repeated DO construction must remain free of SQL writes.
+  if (!schema.has("idx_runner_updates_latest")) sql.exec("CREATE INDEX idx_runner_updates_latest ON runner_updates(runner_id, lifecycle_id, created_at_ms)");
 }
 
 /** One active request per installation lifecycle. All decisions and writes are synchronous. */
