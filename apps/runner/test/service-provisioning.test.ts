@@ -25,24 +25,35 @@ function New-Object { param([string]$ComObject) if ($ComObject -ne 'Schedule.Ser
   // Windows PowerShell reconstructs module search paths even with the trusted
   // environment. Load the inbox cmdlets used by the fixture and probe directly
   // so discovery does not scan user or CI-installed modules.
-  const source = "$ErrorActionPreference='Stop'; [Console]::Error.WriteLine('RUNMESH_TEST_TASK_PROBE=started');\n"
-    + "$PSModuleAutoLoadingPreference='None'; Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop; [Console]::Error.WriteLine('RUNMESH_TEST_TASK_PROBE=module_ready');\n"
-    + fixture + "[Console]::Error.WriteLine('RUNMESH_TEST_TASK_PROBE=ready');\n" + script;
+  const source = "$ErrorActionPreference='Stop'; $script:taskProbeClock=[System.Diagnostics.Stopwatch]::StartNew();\n"
+    + "function Write-RunmeshTaskProbeStage([string]$stage) { [Console]::Error.WriteLine(('RUNMESH_TEST_TASK_PROBE={0};elapsed_ms={1}' -f $stage,$script:taskProbeClock.ElapsedMilliseconds)) }; Write-RunmeshTaskProbeStage 'started';\n"
+    + "try {\n$PSModuleAutoLoadingPreference='None'; Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop; Write-RunmeshTaskProbeStage 'module_ready';\n"
+    + fixture + "Write-RunmeshTaskProbeStage 'ready';\ntry {\n" + script
+    // Preserve the generated probe and its exit code, while keeping errors out
+    // of EncodedCommand's host-specific CLIXML formatter. Both exit and throw
+    // execute finally, separating script completion from process teardown.
+    + "\n} finally { Write-RunmeshTaskProbeStage 'completed' }\n"
+    + "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 } finally { Write-RunmeshTaskProbeStage 'exit' }";
   // Match the host executor's trusted environment and working directory, keep
   // this synthetic script literal, and close stdin.
+  const started = performance.now();
   const result = spawnSync(resolveTrustedWindowsTool("powershell.exe", systemRoot), ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(source, "utf16le").toString("base64")], {
     encoding: "utf8", timeout: 12_000, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
     cwd: join(systemRoot, "System32"), env: trustedWindowsEnvironment(systemRoot),
   });
   const stdout = result.stdout ?? "", stderr = result.stderr ?? "";
-  const stage = stderr.includes("RUNMESH_TEST_TASK_PROBE=ready") ? "probe"
-    : stderr.includes("RUNMESH_TEST_TASK_PROBE=module_ready") ? "fixture_setup"
-      : stderr.includes("RUNMESH_TEST_TASK_PROBE=started") ? "module_load" : "startup";
+  const progressPattern = /^RUNMESH_TEST_TASK_PROBE=(started|module_ready|ready|completed|exit);elapsed_ms=(\d+)\r?\n?/gmu;
+  const progress = [...stderr.matchAll(progressPattern)].map(match => ({ phase: match[1]!, elapsed_ms: Number(match[2]) }));
+  const last = progress.at(-1)?.phase;
+  const stage = last === "exit" ? "host_exit" : last === "completed" ? "error_output" : last === "ready" ? "probe"
+    : last === "module_ready" ? "fixture_setup" : last === "started" ? "module_load" : "startup";
+  const scriptCompleted = progress.some(item => item.phase === "completed");
   const code = result.error?.code;
   const diagnostic = JSON.stringify({ native_task_fixture: stage, status: result.status, signal: result.signal,
     error_code: code === undefined ? null : ["ETIMEDOUT", "ENOENT", "EACCES", "EPERM", "ENOBUFS"].includes(code) ? code : "other",
+    elapsed_ms: Math.round(performance.now() - started), progress,
     stdout_bytes: Buffer.byteLength(stdout), stderr_bytes: Buffer.byteLength(stderr) });
-  return { ...result, stage, diagnostic, stdout, stderr: stderr.replace(/^RUNMESH_TEST_TASK_PROBE=(?:started|module_ready|ready)\r?\n/gmu, "") };
+  return { ...result, stage, scriptCompleted, diagnostic, stdout, stderr: stderr.replace(progressPattern, "") };
 }
 
 function expectSyntheticProbeCompleted(result: ReturnType<typeof runSyntheticTaskProbe>): void {
@@ -51,10 +62,18 @@ function expectSyntheticProbeCompleted(result: ReturnType<typeof runSyntheticTas
   expect(result.error === undefined, result.diagnostic).toBe(true);
   expect(result.signal, result.diagnostic).toBeNull();
   expect(result.status, result.diagnostic).not.toBeNull();
-  expect(result.stage, result.diagnostic).toBe("probe");
+  expect(result.scriptCompleted, result.diagnostic).toBe(true);
+  expect(result.stage, result.diagnostic).toBe("host_exit");
 }
 
 describe("native service package ownership", () => {
+  it.skipIf(process.platform !== "win32")("preserves a synthetic probe failure without depending on host error formatting", () => {
+    const result = runSyntheticTaskProbe("throw 'synthetic probe failure'", "stopped");
+    expect(result.status, result.diagnostic).toBe(1);
+    expect(result.stderr.trim()).toBe("synthetic probe failure");
+    expectSyntheticProbeCompleted(result);
+  });
+
   it("preserves a macOS registration when its native state probe is denied", async () => {
     const manifest = renderService({ platform: "darwin", mode: "system" });
     const calls: string[][] = [];
