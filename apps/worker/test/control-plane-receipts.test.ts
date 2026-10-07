@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { runnerEnvironment, runnerExecutionSnapshot } from "../src/application/runner-queries.js";
 import { authThrottlePorts, runnerQueryPorts } from "../src/platform/control-plane-receipts.js";
 import type { WorkerEnv } from "../src/platform/env.js";
-import { loadAdminPageData } from "../src/http/admin-query.js";
+import { loadAdminPageData, loadClientDetailData } from "../src/http/admin-query.js";
 
 const checksum = "a".repeat(64);
 const ready = { ok: true, policy_status: "applied", desired_revision: 1, applied_revision: 1, runner_reported_policy_revision: 1,
@@ -57,6 +57,35 @@ it("hashes edge sources consistently and omits raw addresses from Registry reque
 
 const adminClient = { client_id: "client-1", label: "Retained client", scopes: ["coding:read"], revoked_at_ms: null, last_used_at_ms: null, active_runner_id: null };
 const adminRunner = { runner_id: "runner-1", display_name: "Retained runner", state: "online", last_heartbeat_ms: null, configured_execution_mode: "dedicated_user", public_info: null };
+
+it.each([null, 1000])("client details fetch only their exact identity, including revoked records (%s)", async revoked_at_ms => {
+  const calls: string[] = [], client = { ...adminClient, revoked_at_ms };
+  const env = environment(request => {
+    const path = new URL(request.url).pathname; calls.push(path);
+    if (path === "/auth/clients/client-1") return Response.json(client);
+    if (path === "/auth/clients/client-1/runner-overrides") return Response.json({ overrides: [] });
+    if (path === "/runners") return Response.json({ runners: [adminRunner] });
+    if (path === "/status/features") return Response.json({ features: [] });
+    throw new Error("Unexpected Registry path: " + path);
+  });
+  expect(await loadClientDetailData(env, "client-1")).toMatchObject({ state: "loaded", client, runners: [adminRunner], overrides: [] });
+  expect(calls.sort()).toEqual(["/auth/clients/client-1", "/auth/clients/client-1/runner-overrides", "/runners", "/status/features"].sort());
+});
+
+it.each(["missing", "outage", "malformed", "wrong-identity", "invalid-display", "overrides-unavailable"] as const)("client detail keeps %s separate from a loaded editable client", async scenario => {
+  const env = environment(request => {
+    const path = new URL(request.url).pathname;
+    if (path === "/auth/clients/client-1") return scenario === "missing" ? new Response(null, { status: 404 })
+      : scenario === "outage" ? new Response(null, { status: 503 }) : scenario === "malformed" ? new Response("{")
+      : Response.json(scenario === "wrong-identity" ? { ...adminClient, client_id: "client-2" }
+        : scenario === "invalid-display" ? { ...adminClient, scopes: "invalid" } : adminClient);
+    if (path === "/auth/clients/client-1/runner-overrides") return scenario === "overrides-unavailable" ? new Response(null, { status: 503 }) : Response.json({ overrides: [] });
+    if (path === "/runners") return Response.json({ runners: [adminRunner] });
+    if (path === "/status/features") return Response.json({ features: [] });
+    throw new Error("Unexpected Registry path: " + path);
+  });
+  expect(await loadClientDetailData(env, "client-1")).toEqual({ state: scenario === "missing" ? "missing" : "unavailable" });
+});
 function adminFeatureEnvironment(feature: (request: Request) => Response | Promise<Response>) {
   const calls: string[] = [];
   const env = environment(request => {

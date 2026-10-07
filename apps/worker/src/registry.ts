@@ -149,6 +149,7 @@ export class RegistryDO {
     });
     this.clientsRoutes = createClientsRoutes({
       listMcpClients: (...args) => this.listMcpClients(...args),
+      getMcpClient: (...args) => this.getMcpClient(...args),
       createMcpIdentity: (...args) => this.auth.createMcpIdentity(...args),
       createMcpClient: (...args) => this.createMcpClient(...args),
       setJobRecording: (...args) => this.setJobRecording(...args),

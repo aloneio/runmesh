@@ -24,7 +24,8 @@ export async function handleConnectorInspection(request: Request, env: WorkerEnv
           tools_count: raw.tools_count, observed_at_ms: raw.observed_at_ms }, { headers: centralHeaders });
     } else if (raw?.state === "authorization_required") return Response.json({ state: raw.state }, { headers: centralHeaders });
     else if (raw && ["invalid", "denied", "unavailable"].includes(raw.state))
-      return centralFailure(raw.code && REMOTE_CODES.includes(raw.code) ? "remote_" + raw.code : "central_" + raw.state, raw.state === "invalid" ? 400 : raw.state === "denied" ? 403 : 503);
+      return centralFailure(raw.code && REMOTE_CODES.includes(raw.code) ? "remote_" + raw.code : "central_" + raw.state,
+        raw.state === "invalid" ? 400 : raw.state === "denied" ? 403 : raw.code === "busy" ? 429 : 503);
     return centralFailure("central_result_unconfirmed", 503);
   } catch { return centralFailure("central_result_unconfirmed", 503); }
   finally { if (timer !== undefined) clearTimeout(timer); }

@@ -1,4 +1,4 @@
-import { ResourceTemplate, type McpServer } from "@modelcontextprotocol/server";
+import { ProtocolError, ProtocolErrorCode, ResourceTemplate, type McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { SKILL_LIMITS, type SkillPage, type SkillContent } from "../../contracts/skills.js";
 import { publishSchema } from "./schema-publication.js";
@@ -24,9 +24,27 @@ async function bounded<T>(call: () => Promise<T>): Promise<T | undefined> {
   try { return await Promise.race([call(), new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), SKILL_LIMITS.operation_ms + 1000); })]); }
   catch { return undefined; } finally { if (timer !== undefined) clearTimeout(timer); }
 }
+const recovery = {
+  invalid: { failure_class: "validation", next_action: "correct_request", message: "The Skill request is invalid.", recovery_hint: "Use a skill_id and digest from skill_list, and a file path from its SKILL.md manifest." },
+  denied: { failure_class: "authorization", next_action: "refresh_skill_list", message: "This Skill version is no longer shared with this connection.", recovery_hint: "Refresh skill_list and use the active digest. Check that the Skill is enabled in Runmesh." },
+  missing: { failure_class: "resource", next_action: "refresh_skill_list", message: "The requested Skill file was not found.", recovery_hint: "Refresh skill_list, then read SKILL.md for the current file manifest." },
+  capacity: { failure_class: "capacity", next_action: "wait_and_retry", message: "The Skill service is busy.", recovery_hint: "Wait briefly, then repeat this read request." },
+  unavailable: { failure_class: "availability", next_action: "wait_and_retry", message: "The Skill service is temporarily unavailable.", recovery_hint: "Try this read request again shortly." },
+} as const;
+/** Tools and resources expose the same fixed recovery details; dependency text stays private. */
+const failureDetails = (raw: unknown) => {
+  const value = typeof raw === "object" && raw !== null && "state" in raw ? raw.state : undefined;
+  const state = typeof value === "string" && Object.hasOwn(recovery, value) ? value as keyof typeof recovery : "unavailable";
+  return { code: "skill_" + state, operation_state: "not_started" as const, ...recovery[state] };
+};
 const failure = (raw: unknown) => {
-  const state = typeof raw === "object" && raw !== null && "state" in raw && ["invalid", "denied", "missing", "capacity"].includes(String(raw.state)) ? String(raw.state) : "unavailable";
-  return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: { code: "skill_" + state, operation_state: "not_started" } }) }] };
+  const error = failureDetails(raw);
+  return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error }) }] };
+};
+const resourceFailure = (raw?: unknown): never => {
+  const error = failureDetails(raw);
+  throw new ProtocolError(error.code === "skill_invalid" || error.code === "skill_missing" ? ProtocolErrorCode.InvalidParams : -32000,
+    error.message, { error });
 };
 
 /** Both protocol surfaces call the same live-authorized content use cases. */
@@ -49,26 +67,27 @@ export function registerSkillTools(server: McpServer, port: SkillProviderPort): 
       const seen = new Set<string>();
       let after: string | null = null;
       for (let scanned = 0; scanned < SKILL_LIMITS.skills; scanned += SKILL_LIMITS.page) {
-        const result = page.safeParse(await bounded(() => port.list(after === null ? {} : { after })));
-        if (!result.success) throw new Error("skill_unavailable");
+        const raw = await bounded(() => port.list(after === null ? {} : { after })), result = page.safeParse(raw);
+        if (!result.success) return resourceFailure(raw);
         for (const skill of result.data.skills) {
-          if (seen.has(skill.skill_id) || (after !== null && skill.skill_id <= after)) throw new Error("skill_unavailable");
+          if (seen.has(skill.skill_id) || (after !== null && skill.skill_id <= after)) return resourceFailure();
           seen.add(skill.skill_id);
           resources.push({ uri: uriFor(skill.skill_id, skill.digest, "SKILL.md"), name: skill.name, description: skill.description, mimeType: "text/markdown" });
         }
         const next = result.data.next_after;
         if (next === null) return { resources };
-        if ((after !== null && next <= after) || result.data.skills.some(skill => skill.skill_id > next)) throw new Error("skill_unavailable");
+        if ((after !== null && next <= after) || result.data.skills.some(skill => skill.skill_id > next)) return resourceFailure();
         after = next;
       }
-      throw new Error("skill_unavailable");
+      return resourceFailure();
     },
   }), { description: "Published Skill content at its current immutable digest; no automatic execution.", mimeType: "text/plain" }, async uri => {
-    const parts = uri.pathname.slice(1).split("/").map(decodeURIComponent);
+    let parts: string[];
+    try { parts = uri.pathname.slice(1).split("/").map(decodeURIComponent); } catch { return resourceFailure({ state: "invalid" }); }
     const query = { skill_id: parts[0], digest: parts[1], path: parts.slice(2).join("/") };
-    if (uri.search || uri.hash || !query.skill_id || !query.digest || uri.href !== uriFor(query.skill_id, query.digest, query.path)) throw new Error("skill_invalid");
-    const result = content.safeParse(await bounded(() => port.read(query)));
-    if (!result.success || result.data.skill_id !== query.skill_id || result.data.digest !== query.digest || result.data.path !== query.path) throw new Error("skill_unavailable");
+    if (uri.search || uri.hash || !query.skill_id || !query.digest || uri.href !== uriFor(query.skill_id, query.digest, query.path)) return resourceFailure({ state: "invalid" });
+    const raw = await bounded(() => port.read(query)), result = content.safeParse(raw);
+    if (!result.success || result.data.skill_id !== query.skill_id || result.data.digest !== query.digest || result.data.path !== query.path) return resourceFailure(raw);
     return { contents: [{ uri: uri.href, mimeType: query.path.endsWith(".md") ? "text/markdown" : "text/plain", text: result.data.text,
       _meta: { "runmesh/dependencies": result.data.dependencies, ...(result.data.files ? { "runmesh/files": result.data.files } : {}) } }] };
   });

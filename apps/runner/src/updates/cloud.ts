@@ -1,5 +1,6 @@
 import { RunnerUpdateClaimSchema, RunnerUpdateDrainProofSchema, RunnerUpdateResponseSchema, RunnerUpdateStatusSchema } from "@aloneio/runmesh-protocol";
 import type { RunnerMaintenanceIdentity } from "../maintenance-contract.js";
+import { retryAfterDelayMs } from "../backoff.js";
 import { MaintenanceHttpError } from "./contracts.js";
 import type { CloudMaintenancePort, CloudUpdateObservation, CloudUpdateState, UpdateErrorCode, UpdateOwner } from "./contracts.js";
 
@@ -24,7 +25,7 @@ export function createCloudMaintenance(options: { readonly profile: () => Promis
     const response = await fetchImpl(url, { method: body === undefined ? "GET" : "POST", redirect: "error", credentials: "omit", cache: "no-store", signal,
       headers: { authorization: `Bearer ${profile.token}`, accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new MaintenanceHttpError(response.status); }
+    if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new MaintenanceHttpError(response.status, retryAfterDelayMs(response.headers.get("retry-after") ?? undefined)); }
     const limit = 32 * 1024;
     const declared = response.headers.get("content-length");
     if (response.body === null || (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit))) { void response.body?.cancel().catch(() => undefined); throw new Error("invalid maintenance response"); }

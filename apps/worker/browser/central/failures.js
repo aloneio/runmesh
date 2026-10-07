@@ -9,6 +9,12 @@ export function classifyCentralFailure({ path, body, sourceAction, inspection, r
       || path === 'skill-installations' && ['central_invalid_request', 'skill_invalid_package', 'skill_invalid'].includes(code));
   const failure = messageKey => ({ messageKey, confirmedNotStarted: confirmedInput });
 
+  // Guidance describes a verified failure category; mutation admission remains separate.
+  if (notStarted && status === 404 && code === 'central_disabled') return failure('centralSetupRequired');
+  if (notStarted && status === 429 && code === 'remote_busy') return failure('mcpBusy');
+  if (notStarted && status === 503 && code === 'central_authority_unavailable') return failure('sessionVerificationUnavailable');
+  if (status === 503 && code === 'remote_operation_timed_out') return failure(notStarted ? 'mcpTimedOut' : 'mcpTimeoutUnconfirmed');
+
   // Only an explicit, recognized not-started receipt leaves a write ready for correction.
   if (status === 413 && skillInput && code === 'central_request_too_large' && notStarted)
     return { messageKey: 'skillUploadTooLarge', confirmedNotStarted: true };
@@ -32,6 +38,6 @@ export function classifyCentralFailure({ path, body, sourceAction, inspection, r
   if (code === 'oauth_configuration_required') return failure('oauthConfigurationRequired');
   if (code === 'remote_authorization_required' || code === 'oauth_reauthorization_required') return failure('signInToThisServiceAgainUsingReconnect');
   if (code === 'oauth_unavailable') return failure('authorizationCouldNotBeCompletedRefreshAndReconnectIf');
-  if (code === 'remote_egress_denied' || code === 'remote_endpoint_denied' || code === 'central_disabled') return failure('enterAPublicHttpsMcpUrlPrivateAddressesAnd');
+  if (code === 'remote_egress_denied' || code === 'remote_endpoint_denied') return failure('enterAPublicHttpsMcpUrlPrivateAddressesAnd');
   return failure('operationCouldNotBeConfirmedRefreshTheCurrentState');
 }

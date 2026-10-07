@@ -12,7 +12,7 @@ export type CloudUpdateObservation = RunnerUpdateResponse;
 export type UpdateOwner = RunnerUpdateClaim;
 /** HTTP outcomes consumed by the coordinator, independent of the fetch adapter. */
 export class MaintenanceHttpError extends Error {
-  public constructor(public readonly status: number) { super(`maintenance_http_${status}`); this.name = "MaintenanceHttpError"; }
+  public constructor(public readonly status: number, public readonly retryAfterMs = 30_000) { super(`maintenance_http_${status}`); this.name = "MaintenanceHttpError"; }
 }
 export interface CloudMaintenancePort {
   poll(): Promise<CloudUpdateObservation>;

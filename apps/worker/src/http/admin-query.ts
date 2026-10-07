@@ -71,15 +71,17 @@ type ClientDetailData =
 /** A failed permission read cannot be rendered as an empty, editable list. */
 export async function loadClientDetailData(env: WorkerEnv, clientId: string): Promise<ClientDetailData> {
   try {
-    const [clients, runners, overrides, notices] = await Promise.all([
-      registryGet(env, "/auth/clients").then(response => registryArray(response, "clients")),
+    const [clientResponse, runners, overrides, notices] = await Promise.all([
+      registryGet(env, "/auth/clients/" + encodeURIComponent(clientId)),
       registryGet(env, "/runners").then(response => registryArray(response, "runners")),
       registryGet(env, "/auth/clients/" + encodeURIComponent(clientId) + "/runner-overrides").then(response => registryArray(response, "overrides")),
       loadFeatureNotices(env),
     ]);
-    if (clients === undefined) return { state: "unavailable" };
-    const client = clients.map(clientSummary).find(value => value.client_id === clientId);
-    if (client === undefined) return { state: "missing" };
+    const missing = clientResponse.status === 404;
+    const value = await registryRecord(clientResponse);
+    if (missing) return { state: "missing" };
+    if (value?.client_id !== clientId) return { state: "unavailable" };
+    const client = clientSummary(value);
     if (runners === undefined || overrides === undefined) return { state: "unavailable" };
     return { state: "loaded", client, runners: runners.map(runnerSummary), overrides, notices };
   } catch { return { state: "unavailable" }; }

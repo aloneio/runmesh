@@ -34,6 +34,43 @@ it("repeated administrator session checks perform zero SQL writes", async () => 
   });
 });
 
+it("single-client administration reads one row in a populated library and retains revoked records", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName("client-detail-cost-" + crypto.randomUUID()));
+  await runInDurableObject(stub, async (instance, state) => {
+    state.storage.sql.exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000)
+      INSERT INTO mcp_clients(client_id,label,secret_verifier,secret_prefix,scopes_json,secret_version,created_at_ms,updated_at_ms)
+      SELECT printf('client%04d',x),'Client',printf('%064d',x),'test','["coding:read"]',1,x,x FROM n`);
+    const path = "/auth/clients/client0500";
+    const read = async (target = path) => instance.fetch(new Request("https://registry.internal" + target, {
+      headers: await internalHeaders(secret, "GET", target, ""),
+    }));
+    const original = state.storage.sql.exec.bind(state.storage.sql);
+    let reads = 0, writes = 0;
+    const sql = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: SqlStorageValue[]) => {
+      const cursor = original(query, ...args); reads += cursor.rowsRead; writes += cursor.rowsWritten; return cursor;
+    });
+    try {
+      const response = await read();
+      expect(response.status).toBe(200);
+      const value = await response.json();
+      expect(value).toMatchObject({ client_id: "client0500", revoked_at_ms: null });
+      expect(value).not.toHaveProperty("secret_verifier");
+      expect(reads).toBe(1); expect(writes).toBe(0);
+      expect(sql).toHaveBeenCalledTimes(1);
+    } finally { sql.mockRestore(); }
+    instance.revokeMcpClient("client0500", Date.now());
+    const revoked = await read();
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toMatchObject({ client_id: "client0500", revoked_at_ms: expect.any(Number) });
+    expect((await read("/auth/clients/missing")).status).toBe(404);
+    expect((await instance.fetch(new Request("https://registry.internal" + path))).status).toBe(404);
+    expect((await read(path + "/unexpected")).status).toBe(404);
+    const outage = vi.spyOn(state.storage.sql, "exec").mockImplementation(() => { throw new Error("synthetic client storage outage"); });
+    try { expect((await read()).status).toBe(503); }
+    finally { outage.mockRestore(); }
+  });
+});
+
 it.each(["logout", "expiry", "password"] as const)("session-check replay revalidates %s without granting authority", async reason => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName("admin-replay-" + crypto.randomUUID()));
   await runInDurableObject(stub, async instance => {

@@ -82,6 +82,142 @@ it("rejected release response cancels every retry including the final response",
   } finally { for (const body of bodies) void body.cancel().catch(() => undefined); }
 });
 
+it.each([403, 429, 503])("stops rapid HTTP %s retries when the server provides Retry-After", async status => {
+  const send = vi.fn(async () => new Response("limited", { status, headers: { "retry-after": "120" } })) as unknown as typeof fetch;
+  const response = await releaseFetch("https://example.invalid/release", { method: "GET" }, send);
+  expect(send).toHaveBeenCalledTimes(1);
+  await expect(boundedJson(response)).rejects.toMatchObject({ failure: { phase: "discovery", reason: "http_error", http_status: status } });
+});
+
+it.each(["1", "0", "Wed, 07 Oct 2026 03:00:00 GMT"])("retains the release failure without sleeping or retrying an explicit window %s", async retryAfter => {
+  vi.useFakeTimers();
+  const send = vi.fn(async () => new Response(null, { status: 429, headers: { "retry-after": retryAfter } })) as unknown as typeof fetch;
+  const pending = releaseFetch("https://example.invalid/release", { method: "GET" }, send);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect((await pending).status).toBe(429);
+});
+
+it("does not immediately recheck an explicitly exhausted GitHub rate limit", async () => {
+  const send = vi.fn(async () => new Response(null, { status: 403, headers: { "x-ratelimit-remaining": "0" } })) as unknown as typeof fetch;
+  expect((await releaseFetch("https://example.invalid/release", { method: "GET" }, send)).status).toBe(403);
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+it.each([403, 429, 503])("keeps the existing bounded retries for an ordinary HTTP %s failure", async status => {
+  const send = vi.fn(async () => new Response(null, { status, headers: { "retry-after": "not-a-window", "x-ratelimit-remaining": "1" } })) as unknown as typeof fetch;
+  expect((await releaseFetch("https://example.invalid/release", { method: "GET" }, send)).status).toBe(status);
+  expect(send).toHaveBeenCalledTimes(3);
+});
+
+describe("release rate-limit windows", () => {
+  const started = Date.UTC(2026, 9, 7, 2);
+  it.each([
+    [{ "retry-after": "120" }, 429, 120_000],
+    [{ "retry-after": "Wed, 07 Oct 2026 02:02:00 GMT" }, 429, 120_000],
+    [{ "retry-after": "999999" }, 503, 3_600_000],
+    [{ "retry-after": "Wed, 07 Oct 2099 02:00:00 GMT" }, 503, 3_600_000],
+    [{ "retry-after": "Thu, 07 Oct 2099 02:00:00 GMT" }, 503, undefined],
+    [{ "retry-after": "NaN" }, 429, undefined],
+    [{ "retry-after": "-1" }, 429, undefined],
+    [{ "retry-after": "Infinity" }, 429, undefined],
+    [{ "retry-after": "1.5" }, 429, undefined],
+    [{ "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((started + 180_000) / 1000) }, 403, 180_000],
+    [{ "x-ratelimit-remaining": "0", "x-ratelimit-reset": "NaN" }, 403, 60_000],
+    [{ "x-ratelimit-remaining": "0" }, 403, 60_000],
+    [{ "x-ratelimit-remaining": "1", "x-ratelimit-reset": "NaN" }, 403, undefined],
+  ] as const)("bounds and validates the retry metadata %j", async (headers, status, delay) => {
+    vi.useFakeTimers(); vi.setSystemTime(started);
+    await expect(boundedJson(new Response(null, { status, headers }))).rejects.toMatchObject({ retry_at_ms: delay === undefined ? undefined : started + delay });
+  });
+
+  it("keeps a cold isolate from refreshing again until its retry window ends", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(started);
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(null, { status: 429, headers: { "retry-after": "120" } }))
+      .mockImplementation(async () => Response.json([release(devVersion(71), "2026-10-07T01:00:00Z")]));
+    const runtime = createDevelopmentReleaseRuntime();
+    const dependencies = { fetch: fetchImpl, verify: async () => undefined, cache: undefined, now: () => Date.now(), runtime };
+    expect((await resolveRelease(devEnv, dependencies)).distributable).toBe(false);
+    expect(runtime.next_refresh_at_ms).toBe(started + 120_000);
+    vi.setSystemTime(started + 119_999);
+    expect((await resolveRelease(devEnv, dependencies)).distributable).toBe(false); expect(fetchImpl).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(started + 120_000);
+    expect((await resolveRelease(devEnv, dependencies)).package_version).toBe(devVersion(71)); expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not extend a cached signature's hard expiry while waiting for a retry window", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(started);
+    const descriptor = developmentDescriptor(release(devVersion(70), "2026-10-07T01:00:00Z"))!;
+    const verifiedAt = started - 3_590_000;
+    const cache = { match: async () => Response.json({ schema_version: 1, verified_at_ms: verifiedAt, descriptor }), put: vi.fn(async () => undefined) };
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 503, headers: { "retry-after": "120" } }));
+    const runtime = createDevelopmentReleaseRuntime(), dependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => Date.now(), runtime };
+    expect((await resolveRelease(devEnv, dependencies)).package_version).toBe(descriptor.package_version);
+    expect(runtime.cached?.verified_at_ms).toBe(verifiedAt); expect(runtime.cached?.expires_at_ms).toBe(started + 10_000);
+    vi.setSystemTime(started + 10_000);
+    expect((await resolveRelease(devEnv, dependencies)).distributable).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1); expect(cache.put).not.toHaveBeenCalled();
+  });
+
+  it("does not change release candidates to bypass the same asset host's retry window", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(started);
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => String(url).startsWith("https://api.github.com/")
+      ? Response.json([release(devVersion(72), "2026-10-07T01:00:00Z"), release(devVersion(71), "2026-10-07T01:00:00Z")])
+      : new Response(null, { status: 429, headers: { "retry-after": "120" } }));
+    const runtime = createDevelopmentReleaseRuntime(), onRefreshFailure = vi.fn();
+    expect((await resolveRelease(devEnv, { fetch: fetchImpl, verify: verifyDevelopmentRunnerRelease, cache: undefined, now: () => Date.now(), runtime, onRefreshFailure })).distributable).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(2); expect(runtime.next_refresh_at_ms).toBe(started + 120_000);
+    expect(onRefreshFailure).toHaveBeenCalledWith({ phase: "manifest", reason: "http_error", http_status: 429 });
+  });
+
+  it("preserves a late asset retry window when the refresh deadline is already aborted", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(started);
+    const controller = new AbortController(), timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).startsWith("https://api.github.com/")) return Response.json([release(devVersion(72), "2026-10-07T01:00:00Z")]);
+      controller.abort(new DOMException("Refresh budget exhausted", "TimeoutError"));
+      return new Response(null, { status: 429, headers: { "retry-after": "120" } });
+    });
+    const runtime = createDevelopmentReleaseRuntime(), onRefreshFailure = vi.fn();
+    try {
+      expect((await resolveRelease(devEnv, { fetch: fetchImpl, verify: verifyDevelopmentRunnerRelease, cache: undefined, now: () => Date.now(), runtime, onRefreshFailure })).distributable).toBe(false);
+      expect(fetchImpl).toHaveBeenCalledTimes(2); expect(runtime.next_refresh_at_ms).toBe(started + 120_000);
+      expect(onRefreshFailure).toHaveBeenCalledWith({ phase: "manifest", reason: "timeout" });
+    } finally { timeout.mockRestore(); }
+  });
+
+  it("preserves the discovery window after independently reverifying an expired cached tag", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(started);
+    const descriptor = developmentDescriptor(release(devVersion(70), "2026-10-07T01:00:00Z"))!;
+    let stored = { schema_version: 1, verified_at_ms: started - 3_600_001, descriptor };
+    const cache = { match: async () => Response.json(stored), put: vi.fn(async (_request: Request, response: Response) => { stored = await response.json() as typeof stored; }) };
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 429, headers: { "retry-after": "120" } }));
+    const runtime = createDevelopmentReleaseRuntime(), verify = vi.fn(async () => undefined);
+    const dependencies = { fetch: fetchImpl, verify, cache, now: () => Date.now(), runtime };
+    expect((await resolveRelease(devEnv, dependencies)).package_version).toBe(descriptor.package_version);
+    expect(verify).toHaveBeenCalledOnce(); expect(cache.put).toHaveBeenCalledOnce();
+    expect(runtime.cached?.verified_at_ms).toBe(started); expect(runtime.next_refresh_at_ms).toBe(started + 120_000);
+    vi.setSystemTime(started + 61_000);
+    expect((await resolveRelease(devEnv, dependencies)).package_version).toBe(descriptor.package_version);
+    expect(fetchImpl).toHaveBeenCalledOnce(); expect(runtime.cached?.verified_at_ms).toBe(started);
+  });
+
+  it("does not let a late rate-limit failure replace a newer refresh reservation", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(started);
+    const replies: ((response: Response) => void)[] = [];
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { replies.push(resolve); }));
+    const runtime = createDevelopmentReleaseRuntime(), dependencies = { fetch: fetchImpl, verify: async () => undefined, cache: undefined, now: () => Date.now(), runtime };
+    const old = resolveRelease(devEnv, dependencies); await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(started + 20_001);
+    const newer = resolveRelease(devEnv, dependencies); await vi.advanceTimersByTimeAsync(0);
+    const reservation = runtime.next_refresh_at_ms;
+    replies[0]!(new Response(null, { status: 429, headers: { "retry-after": "120" } }));
+    expect((await old).distributable).toBe(false); expect(runtime.next_refresh_at_ms).toBe(reservation);
+    replies[1]!(Response.json([release(devVersion(71), "2026-10-07T01:00:00Z")]));
+    expect((await newer).package_version).toBe(devVersion(71));
+  });
+});
+
 /** Observe settlement while cleanup is deliberately held, then release the fixture. */
 async function beforeCancellationCompletes(action: (cancel: () => Promise<void>) => Promise<unknown>): Promise<PromiseSettledResult<unknown>> {
   vi.useFakeTimers();

@@ -40,6 +40,54 @@ function recovering(): UpdateJournal {
 }
 
 describe("independent update coordinator", () => {
+  it.each([401, 403])("retains the activation journal and reports rejected HTTP %s credentials without another cloud request", async status => {
+    const test = fixture(); let rejected = 0;
+    const cloud = { ...test.options.cloud, poll: async () => {
+      if (test.active()?.phase === "checking") { rejected++; throw new MaintenanceHttpError(status); }
+      return test.options.cloud.poll();
+    } };
+    await expect(new UpdateCoordinator({ ...test.options, cloud }).runOnce()).rejects.toThrow(`maintenance_http_${status}`);
+    expect(rejected).toBe(1); expect(test.active()?.phase).toBe("checking");
+    expect(test.events).not.toContain("restore");
+    await new UpdateCoordinator(test.options).runOnce();
+    expect(test.operation().state).toBe("rolled_back"); expect(test.events).toContain("restore"); expect(test.active()).toBeUndefined();
+  });
+
+  it.each([401, 403])("keeps HTTP %s visible when authenticating a retained recovery journal", async status => {
+    const test = fixture(), saved = recovering(); test.setJournal(saved); let calls = 0;
+    await expect(new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, poll: async () => { calls++; throw new MaintenanceHttpError(status); } } }).runOnce()).rejects.toThrow(`maintenance_http_${status}`);
+    expect(calls).toBe(1); expect(test.active()).toEqual(saved); expect(test.events).not.toContain("stop");
+    await new UpdateCoordinator(test.options).runOnce();
+    expect(test.operation().state).toBe("rolled_back"); expect(test.active()).toBeUndefined();
+  });
+
+  it.each([429, 503])("keeps HTTP %s activation retry timing inside the existing deadline", async status => {
+    const test = fixture(), delays: number[] = []; let failed = false, checkingReads = 0;
+    const cloud = { ...test.options.cloud, poll: async () => {
+      if (test.active()?.phase === "checking") {
+        checkingReads++;
+        if (!failed) { failed = true; throw new MaintenanceHttpError(status, 120_000); }
+      }
+      return test.options.cloud.poll();
+    } };
+    await new UpdateCoordinator({ ...test.options, cloud, sleep: async ms => { delays.push(ms); await test.options.sleep!(ms); } }).runOnce();
+    // Once activation expires, one authenticated ownership read admits rollback;
+    // a fresh candidate-health request must not bypass the Retry-After window.
+    expect(delays).toEqual([4_000]); expect(checkingReads).toBe(2);
+    expect(test.operation().state).toBe("rolled_back"); expect(test.events).toContain("restore");
+  });
+
+  it("finishes local rollback promptly when stopping during an unknown activation result", async () => {
+    const test = fixture(), controller = new AbortController(); let delays = 0;
+    const cloud = { ...test.options.cloud, poll: async () => {
+      if (test.active()?.phase === "checking") { controller.abort(); throw new DOMException("Stopped", "AbortError"); }
+      return test.options.cloud.poll();
+    } };
+    await expect(new UpdateCoordinator({ ...test.options, cloud, signal: controller.signal, sleep: async ms => { delays++; await test.options.sleep!(ms); } }).runOnce()).rejects.toThrow("rollback_failed");
+    expect(delays).toBe(0); expect(test.events).toContain("restore");
+    expect(test.active()).toMatchObject({ phase: "recovery_required", error_code: "rollback_failed" });
+  });
+
   it("allows an exact signed downgrade and persists success before releasing the cloud fence", async () => {
     const test = fixture(); await new UpdateCoordinator(test.options).runOnce();
     expect(test.events.indexOf("local:preparing")).toBeLessThan(test.events.indexOf("claim"));

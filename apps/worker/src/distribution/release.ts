@@ -39,7 +39,7 @@ async function waitForDevelopmentRelease(dependencies: DevelopmentReleaseDepende
 
 /** One invocation owns its refresh I/O. The injected runtime owns values only. */
 async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number, cached: CachedDevelopmentReleaseRecord | undefined,
-  onDiscoveryFallback: (failure: DevelopmentReleaseFailure) => void): Promise<RunnerReleaseDescriptor> {
+  onDiscoveryFallback: (failure: DevelopmentReleaseFailure, retryAtMs?: number) => void): Promise<RunnerReleaseDescriptor> {
   const { runtime, cache, now, verify } = dependencies;
   const deadline = AbortSignal.timeout(DEV_RELEASE_REFRESH_BUDGET_MS);
   const boundedFetch: typeof fetch = (input, init) => {
@@ -68,7 +68,7 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
     deadline.throwIfAborted();
     candidates = [cached.descriptor];
     revalidating = true;
-    onDiscoveryFallback(failure);
+    onDiscoveryFallback(failure, error instanceof DevelopmentReleaseError ? error.retry_at_ms : undefined);
   }
   let candidateFailure: DevelopmentReleaseFailure | undefined;
   for (const descriptor of candidates) {
@@ -111,7 +111,10 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
         ? completed.descriptor : descriptor;
     } catch (error) {
       const failure = developmentReleaseFailure(error, "verification");
-      if (deadline.aborted) throw new DevelopmentReleaseError("no immutable signed development Runner release is available", { phase: failure.phase, reason: "timeout" });
+      if (deadline.aborted) throw new DevelopmentReleaseError("no immutable signed development Runner release is available", { phase: failure.phase, reason: "timeout" }, error instanceof DevelopmentReleaseError ? error.retry_at_ms : undefined);
+      // Other tags use the same release host. Changing candidates must not
+      // bypass that host's explicit retry window during this refresh.
+      if (error instanceof DevelopmentReleaseError && error.retry_at_ms !== undefined && error.retry_at_ms > now()) throw error;
       candidateFailure ??= failure;
     }
   }
@@ -146,8 +149,10 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
   runtime.next_refresh_at_ms = clock() + DEV_RELEASE_REFRESH_BUDGET_MS;
   const refreshStartedAtMs = performance.now();
   let discoveryFailure: DevelopmentReleaseFailure | undefined;
+  let discoveryRetryAtMs: number | undefined;
   try {
-    const descriptor = await fetchDevelopmentRunnerRelease(dependencies, sequence, cached, failure => { discoveryFailure = failure; });
+    const descriptor = await fetchDevelopmentRunnerRelease(dependencies, sequence, cached, (failure, retryAtMs) => { discoveryFailure = failure; discoveryRetryAtMs = retryAtMs; });
+    if (sequence === runtime.refresh_sequence && discoveryRetryAtMs !== undefined) runtime.next_refresh_at_ms = Math.max(runtime.next_refresh_at_ms, discoveryRetryAtMs);
     // A successfully reverified tag restores availability without erasing the
     // discovery outage that required it. Diagnostics cannot change the result.
     if (discoveryFailure !== undefined) { try { dependencies.onRefreshFailure?.({ ...discoveryFailure, recovery: "reverified" }); } catch { /* observations remain local */ } }
@@ -169,7 +174,8 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
     // A delayed failure must not shorten a newer request's reservation.
     if (sequence === runtime.refresh_sequence) {
       runtime.failed_sequence = sequence;
-      runtime.next_refresh_at_ms = completedAtMs + FAILED_REFRESH_COOLDOWN_MS;
+      runtime.next_refresh_at_ms = Math.max(completedAtMs + FAILED_REFRESH_COOLDOWN_MS,
+        discoveryRetryAtMs ?? 0, error instanceof DevelopmentReleaseError ? error.retry_at_ms ?? 0 : 0);
     }
     // Only the refresh owner reports after recovery; waiters and HTTP retries
     // share this outcome without producing duplicate diagnostics.

@@ -118,7 +118,7 @@ it.each(["delete", "revoke"] as const)("a failed %s keeps the client, session an
   });
 });
 
-it.each(["/auth/clients", "/runners", "/auth/clients/client%3Atarget/runner-overrides"])("keeps failed %s reads distinct from absent clients or empty permissions", async path => {
+it.each(["/auth/clients/client%3Atarget", "/runners", "/auth/clients/client%3Atarget/runner-overrides"])("keeps failed %s reads distinct from absent clients or empty permissions", async path => {
   const f = await fixture(true);
   f.failRead(path);
   const response = await f.open("/admin/clients/" + encodeURIComponent(f.clientId));
@@ -148,9 +148,12 @@ it.each([
   ["missing identifier", { client_id: undefined }],
 ] as const)("does not render invalid client display data as editable permissions: %s", async (_label, invalid) => {
   const f = await fixture(true);
-  f.failRead("/auth/clients", { clients: [{ client_id: f.clientId, label: "Target client", scopes: ["coding:read"],
-    revoked_at_ms: null, last_used_at_ms: null, active_runner_id: null, ...invalid }] });
-  for (const page of ["/admin/clients", "/admin/clients/" + encodeURIComponent(f.clientId)]) {
+  const client = { client_id: f.clientId, label: "Target client", scopes: ["coding:read"],
+    revoked_at_ms: null, last_used_at_ms: null, active_runner_id: null, ...invalid };
+  for (const detail of [false, true]) {
+    const suffix = detail ? "/" + encodeURIComponent(f.clientId) : "";
+    f.failRead("/auth/clients" + suffix, detail ? client : { clients: [client] });
+    const page = "/admin/clients" + suffix;
     const response = await f.open(page);
     expect(response.status).toBe(503);
     const body = await response.text();

@@ -4,6 +4,7 @@ import type { CloudUpdateObservation, LocalUpdatePhase, UpdateCoordinatorOptions
 
 const terminal = (phase: LocalUpdatePhase): phase is "succeeded" | "rolled_back" | "failed" => ["succeeded", "rolled_back", "failed"].includes(phase);
 const needsRecovery = (phase: LocalUpdatePhase): boolean => ["stopping", "switching", "starting", "checking", "rolling_back"].includes(phase);
+const rejectedCredentials = (error: unknown): error is MaintenanceHttpError => error instanceof MaintenanceHttpError && [401, 403].includes(error.status);
 const unavailableObservation = (error: unknown): boolean => error instanceof TypeError
   || error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name)
   || error instanceof MaintenanceHttpError && (error.status >= 500 || [408, 429].includes(error.status));
@@ -83,16 +84,20 @@ export class UpdateCoordinator {
   private async waitForVersion(journal: UpdateJournal, version: string): Promise<void> {
     const deadline = this.now() + (this.options.activationTimeoutMs ?? 120_000);
     while (this.now() < deadline) {
+      if (this.options.signal?.aborted) throw new UpdateFailure("activation_failed");
+      let delayMs = 2_000;
       try {
         const observation = await this.options.cloud.poll();
         if (!this.matches(journal, observation)) throw new UpdateFailure("activation_failed");
         if (observation.observed_new_session && observation.observed_version === version) return;
       } catch (error) {
-        if (error instanceof UpdateFailure) throw error;
+        if (error instanceof UpdateFailure || rejectedCredentials(error)) throw error;
         // Reconnection and transient HTTPS failures remain inside one fixed
         // activation budget, with no mutation or status writes per poll.
+        if (error instanceof MaintenanceHttpError && (error.status === 429 || error.status >= 500)) delayMs = error.retryAfterMs;
       }
-      await this.sleep(2_000);
+      if (this.options.signal?.aborted) throw new UpdateFailure("activation_failed");
+      await this.sleep(Math.min(delayMs, Math.max(0, deadline - this.now())));
     }
     throw new UpdateFailure("activation_failed");
   }
@@ -151,9 +156,10 @@ export class UpdateCoordinator {
         // Changed/re-enrolled credentials always need authenticated ownership.
         if (retryingRecovery || !unavailableObservation(error) || journal.recovery_identity !== identity) throw error;
       }
-    } catch {
+    } catch (error) {
       // No authenticated answer is not proof of replacement. Keep this phase
       // retryable so a rotated credential can confirm ownership when online.
+      if (rejectedCredentials(error)) throw error;
       throw new UpdateFailure("invalid_installation");
     }
     try {
@@ -178,9 +184,10 @@ export class UpdateCoordinator {
       await guardRecovery(); await this.options.service.restoreEnabled(current.service);
       await this.waitForVersion(current, current.previous.version);
       current = await this.write(current, "rolled_back", errorCode);
-    } catch {
+    } catch (error) {
       // Never remove the cloud fence when native rollback is uncertain.
       await this.write(current, "recovery_required", "rollback_failed");
+      if (rejectedCredentials(error)) throw error;
       await this.options.cloud.report(this.owner(current), "checking", { error_code: "rollback_failed" }).catch(() => undefined);
       throw new UpdateFailure("rollback_failed");
     }
@@ -261,6 +268,9 @@ export class UpdateCoordinator {
       this.guard(); await this.options.service.restoreEnabled(journal.service);
       journal = await this.write(journal, "succeeded");
     } catch (error) {
+      // The retained phase already records any native work. Repeated requests
+      // with a rejected credential cannot authorize recovery or finalization.
+      if (rejectedCredentials(error)) throw error;
       const code = error instanceof UpdateFailure ? error.code : failureCode;
       if (needsRecovery(journal.phase)) { await this.rollback(journal, code); return; }
       await this.finish(await this.write(journal, "failed", code)); return;
