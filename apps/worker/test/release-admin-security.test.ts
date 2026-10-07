@@ -260,6 +260,62 @@ it.each(["history-settings", "mcp-calls"].flatMap(part => [false, true].map(malf
   if (part === "history-settings") expect(page).not.toContain('action="/admin/runners/' + runnerId + '/history-settings"');
 });
 
+it("confirms a new central-only client without reading the full client library", async () => {
+  const f = await fixture();
+  const listBytes = await runInDurableObject(f.stub, instance => {
+    const now = Date.now();
+    for (let index = 0; index < 64; index++) expect(instance.createMcpClient({ client_id: "large-library-" + index,
+      label: "Existing client " + "x".repeat(200), secret_verifier: index.toString(16).padStart(64, "0"), secret_prefix: "fixture", scopes: ["coding:read"] }, now)).toBeDefined();
+    return new TextEncoder().encode(JSON.stringify({ clients: instance.listMcpClients() })).byteLength;
+  });
+  expect(listBytes).toBeGreaterThan(16_384);
+  let writes = 0, listReads = 0, detailReads = 0;
+  const localEnv = { ...f.localEnv, REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: (request: Request) => {
+    const path = new URL(request.url).pathname;
+    if (request.method === "POST" && path === "/auth/clients") writes++;
+    if (request.method === "GET" && path === "/auth/clients") listReads++;
+    if (request.method === "GET" && /^\/auth\/clients\/client-/u.test(path)) detailReads++;
+    return f.stub.fetch(request);
+  } }) } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://audit.test/admin/clients", { method: "POST", headers: f.headers,
+    body: new URLSearchParams({ csrf_token: f.csrf, label: "New central-only client", access_mode: "central" }),
+  }), localEnv, {} as ExecutionContext);
+  const page = await response.text();
+  expect(response.status, `Existing library: ${listBytes} bytes; credential unconfirmed: ${page.includes("MCP credential could not be confirmed")}`).toBe(200);
+  expect(page).toMatch(/\/[A-Za-z0-9_-]{43}\/mcp/u);
+  expect({ writes, listReads, detailReads }).toEqual({ writes: 1, listReads: 0, detailReads: 1 });
+  await runInDurableObject(f.stub, instance => {
+    expect(instance.listMcpClients()).toHaveLength(65);
+    expect(instance.listMcpClients().filter(client => client.label === "New central-only client")).toHaveLength(1);
+  });
+});
+
+it.each(["unavailable", "malformed", "wrong-client", "wrong-prefix", "rotated", "revoked", "native-scopes"] as const)(
+  "withholds the central-only client secret after a %s detail readback without replaying creation", async failure => {
+    const f = await fixture(); let writes = 0, reads = 0;
+    const localEnv = { ...f.localEnv, REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === "/auth/clients") writes++;
+      if (request.method !== "GET" || !/^\/auth\/clients\/client-/u.test(path)) return f.stub.fetch(request);
+      reads++;
+      if (failure === "unavailable") return new Response("PRIVATE_READBACK_FAILURE", { status: 503 });
+      if (failure === "malformed") return new Response("{");
+      const actual = await (await f.stub.fetch(request)).json() as Record<string, unknown>;
+      return Response.json({ ...actual, ...(failure === "wrong-client" ? { client_id: "another-client" }
+        : failure === "wrong-prefix" ? { secret_prefix: "mismatch" }
+        : failure === "rotated" ? { secret_version: 2 }
+        : failure === "revoked" ? { revoked_at_ms: Date.now() } : { scopes: ["coding:read"] }) });
+    } }) } } as unknown as typeof env;
+    const response = await worker.fetch(new Request("https://audit.test/admin/clients", { method: "POST", headers: f.headers,
+      body: new URLSearchParams({ csrf_token: f.csrf, label: "Readback fixture", access_mode: "central" }),
+    }), localEnv, {} as ExecutionContext);
+    expect(response.status).toBe(503);
+    const page = await response.text();
+    expect(page).not.toMatch(/\/[A-Za-z0-9_-]{43}\/mcp/u); expect(page).not.toContain("PRIVATE_READBACK_FAILURE");
+    expect({ writes, reads }).toEqual({ writes: 1, reads: 1 });
+    await runInDurableObject(f.stub, instance => { expect(instance.listMcpClients()).toHaveLength(1); });
+  });
+
 it.each(["create", "rotate"] as const)("does not display an unconfirmed MCP %s credential", async action => {
   const f = await fixture(), original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
   const path = action === "create" ? "/auth/clients" : "/auth/clients/test-client/rotate";

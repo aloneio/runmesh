@@ -485,6 +485,9 @@ observation time. A successful replacement requires a fresh authenticated
 session; maintenance reads retain their read-only storage behavior. The CLI
 composition root selects the profile store once, and the supervisor releases
 its own signal listeners and disconnect timer when the connection ends.
+The independent maintenance agent covers initialization with its signal cleanup
+scope. Its journal releases an exclusively created temporary file on any failure
+before replacement; a successful rename transfers ownership to the active path.
 
 Skill HTTP adapters accept error states as strings before classifying operation
 outcomes. Malformed receipts retain the unknown-result classification. Central
@@ -492,3 +495,13 @@ interaction fixtures preserve multiple event listeners and callback identity,
 so workflow invalidation remains observable alongside additional handlers.
 Browser CI diagnostics identify the failing leaf check, including navigation
 handoff, and project only public source coordinates.
+
+Skill detail and mutation receipts bind to the parsed command, next revision,
+enabled state and selected digest at the HTTP boundary. Storage advances the
+head revision while updating approval only when the version first becomes
+approved. Each copy button owns its latest asynchronous feedback. Installed
+package CI compares the complete commit/tree/worktree-state observation; matching
+local edits remain valid and mismatched receipts cannot publish success evidence.
+Client credential confirmation reads the newly created client by ID through the
+existing Registry detail route, keeping single-record evidence independent of
+library size while retaining credential and scope checks.

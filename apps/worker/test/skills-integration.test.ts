@@ -78,6 +78,52 @@ it('invalid Skill actions preserve the installed version and enabled state throu
   expect(disabled.status).toBe(200);
   expect(await disabled.json()).toMatchObject({ state: 'written', head: { enabled: false, revision: 2, active_digest: receipt.digest } });
 });
+it.each(['read-for-disable', 'stale-disable', 'enabled-disable', 'wrong-activation', 'write-for-preview', 'stale-stage'])(
+  'Skill HTTP leaves a mismatched %s receipt unconfirmed without dispatching again', async scenario => {
+    const f = await fixture(), path = 'skills/receipt-binding';
+    const files = [{ path: 'SKILL.md', text: '---\nname: receipt-binding\ndescription: Receipt binding fixture\n---\nInstructions.' }];
+    expect((await f.admin('skill-installations', { expected_revision: 0, files })).status).toBe(200);
+    const found = await (await f.admin(path)).json() as { state: 'found'; head: { skill_id: string; revision: number; staged_digest: string; active_digest: string; enabled: boolean }; bundle: unknown };
+    const head = { ...found.head, revision: 2, enabled: false };
+    let input: Record<string, unknown> = { action: 'disable', expected_revision: 1 };
+    let receipt: unknown = { state: 'written', head };
+    if (scenario === 'read-for-disable') receipt = found;
+    if (scenario === 'stale-disable') receipt = { state: 'written', head: { ...head, revision: 1 } };
+    if (scenario === 'enabled-disable') receipt = { state: 'written', head: { ...head, enabled: true } };
+    if (scenario === 'wrong-activation') {
+      input = { action: 'activate', expected_revision: 1, digest: 'f'.repeat(64) };
+      receipt = { state: 'written', head: { ...head, enabled: true } };
+    }
+    if (scenario === 'write-for-preview') input = { action: 'preview', source: 'local', license: 'MIT', files };
+    if (scenario === 'stale-stage') {
+      input = { action: 'stage', expected_revision: 1, source: 'local', license: 'MIT', files };
+      receipt = { state: 'written', head: { ...head, revision: 1 } };
+    }
+    const mutate = vi.spyOn(f.port, 'mutateSkill').mockResolvedValue(receipt as Awaited<ReturnType<typeof f.port.mutateSkill>>);
+    try {
+      const response = await f.admin(path, input);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: { code: 'central_result_unconfirmed', operation_state: 'unknown' } });
+      expect(mutate).toHaveBeenCalledTimes(1);
+    } finally { mutate.mockRestore(); }
+    expect(await (await f.admin(path)).json()).toEqual(found);
+  });
+it.each(['selected', 'staged'] as const)('Skill HTTP inspection binds the returned bundle to the %s digest', async selected => {
+  const f = await fixture(), path = 'skills/receipt-digest';
+  expect((await f.admin('skill-installations', { expected_revision: 0, files: [
+    { path: 'SKILL.md', text: '---\nname: receipt-digest\ndescription: Receipt digest fixture\n---\nInstructions.' },
+  ] })).status).toBe(200);
+  const found = await (await f.admin(path)).json() as Awaited<ReturnType<typeof f.port.inspectSkill>>;
+  if (found.state !== 'found') throw new Error('fixture installation missing');
+  const receipt = selected === 'staged' ? { ...found, head: { ...found.head, staged_digest: 'f'.repeat(64) } } : found;
+  const inspect = vi.spyOn(f.port, 'inspectSkill').mockResolvedValue(receipt);
+  try {
+    const response = await f.admin(path + (selected === 'selected' ? '?digest=' + 'f'.repeat(64) : ''));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: 'central_result_unconfirmed' } });
+    expect(inspect).toHaveBeenCalledTimes(1);
+  } finally { inspect.mockRestore(); }
+});
 it.each(['research', 'research:docs'])('W07/W08 two independent central-only clients read the same approved bundle through tools and resources without a Runner (%s)', async id => {
   const f = await fixture();
   const path = 'skills/' + encodeURIComponent(id);

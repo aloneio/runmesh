@@ -50,6 +50,31 @@ it("Skill repository is lazy and preserves approved old bodies across updates, r
     expect(readSkillCapacity(state.storage.sql, a.skill_id)).toMatchObject({ skill_versions: 2, library_skills: 1 });
   });
 });
+it.each(["install", "activate"] as const)("Skill %s advances publication without rewriting an already approved version", async action => {
+  const value = (await bundle())!;
+  await runInDurableObject(owner(), (_instance, state) => {
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    expect(store.install(value, 0)).toMatchObject({ state: "written" });
+    const metadata = state.storage.sql.exec("SELECT * FROM skill_version_metadata_v1").toArray();
+    const capacity = readSkillCapacity(state.storage.sql, value.skill_id);
+    const original = state.storage.sql.exec.bind(state.storage.sql); let written = 0;
+    const exec = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+      const cursor = original(query, ...args); written += cursor.rowsWritten; return cursor;
+    });
+    try {
+      const result = action === "install" ? store.install(value, 1) : store.activate(value.skill_id, value.digest, 1);
+      expect(result).toMatchObject({ state: "written", head: { revision: 2, active_digest: value.digest, enabled: true } });
+      expect(written).toBe(1);
+      written = 0;
+      expect(action === "install" ? store.install(value, 1) : store.activate(value.skill_id, value.digest, 1))
+        .toEqual({ state: "conflict", current_revision: 2 });
+      expect(written).toBe(0);
+      expect(store.approved(value.skill_id, value.digest)).toBe(true);
+      expect(state.storage.sql.exec("SELECT * FROM skill_version_metadata_v1").toArray()).toEqual(metadata);
+      expect(readSkillCapacity(state.storage.sql, value.skill_id)).toEqual(capacity);
+    } finally { exec.mockRestore(); }
+  });
+});
 it("accepted Skill metadata remains readable after JSON escaping and storage recreation", async () => {
   const dependencies: CapabilityTarget[] = Array.from({ length: SKILL_LIMITS.dependencies }, (_, index) => ({
     kind: "remote_tool", resource_id: String(index) + "r".repeat(127), version: "a".repeat(64), connection_profile_id: "p".repeat(128),

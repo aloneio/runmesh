@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -12,9 +12,30 @@ import { isJobStatus } from "../src/jobs/records.js";
 import { MAINTENANCE_JOB_STATES } from "../src/maintenance-contract.js";
 import { atomicJson } from "../src/jobs/storage.js";
 
+const journalFault = vi.hoisted(() => ({ directory: "", stage: undefined as "open" | "writeFile" | "sync" | "close" | undefined, unlinked: [] as string[] }));
+vi.mock("node:fs/promises", async importOriginal => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...fs, unlink: async (...args: Parameters<typeof fs.unlink>) => {
+    if (journalFault.directory && String(args[0]).startsWith(journalFault.directory) && String(args[0]).endsWith(".tmp")) journalFault.unlinked.push(String(args[0]));
+    return fs.unlink(...args);
+  }, open: async (...args: Parameters<typeof fs.open>) => {
+    const stage = journalFault.stage;
+    const targeted = stage !== undefined && String(args[0]).startsWith(journalFault.directory) && String(args[0]).endsWith(".tmp");
+    if (targeted && stage === "open") await fs.writeFile(args[0], "another temporary owner", { flag: "wx", mode: 0o600 });
+    const handle = await fs.open(...args);
+    if (targeted) {
+      const close = handle.close.bind(handle);
+      if (stage === "writeFile") handle.writeFile = async () => { throw Object.assign(new Error("journal write fixture"), { code: "ENOSPC" }); };
+      else if (stage === "sync") handle.sync = async () => { throw Object.assign(new Error("journal sync fixture"), { code: "EIO" }); };
+      else if (stage === "close") handle.close = async () => { await close(); throw Object.assign(new Error("journal close fixture"), { code: "EIO" }); };
+    }
+    return handle;
+  } };
+});
+
 const roots: string[] = [];
 async function temporary(): Promise<string> { const root = await mkdtemp(join(tmpdir(), "runmesh-update-")); roots.push(root); return root; }
-afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { journalFault.stage = undefined; journalFault.directory = ""; journalFault.unlinked = []; await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 const jobId = "job-12345678-1234-1234-1234-123456789abc";
 const job = (status: string) => ({ job_id: jobId, workspace_id: "workspace_1", cwd: ".", command: ["node"], shell: false, status, pid: null, created_at_ms: 1, updated_at_ms: 2, record_history: false });
 async function jobsRoot(): Promise<string> { const root = await temporary(); await mkdir(join(root, "jobs")); return root; }
@@ -120,6 +141,33 @@ function checkingJournal(managerId: string): UpdateJournal {
 }
 
 describe("managed version pointer and durable journal", () => {
+  it("preserves a colliding temporary journal when exclusive creation never acquired ownership", async () => {
+    const directory = await temporary(), journal = new FileUpdateJournal(directory), saved = checkingJournal("manager_1");
+    await journal.save(saved);
+    journalFault.directory = directory; journalFault.stage = "open";
+    await expect(journal.save({ ...saved, phase: "succeeded" })).rejects.toMatchObject({ code: "EEXIST" });
+    journalFault.stage = undefined;
+    const colliding = (await readdir(directory)).filter(name => name.endsWith(".tmp"));
+    expect(colliding).toHaveLength(1);
+    expect(await readFile(join(directory, colliding[0]!), "utf8")).toBe("another temporary owner");
+    expect(journalFault.unlinked).toEqual([]);
+    expect(await journal.load()).toEqual(saved);
+  });
+  it.each(["writeFile", "sync", "close"] as const)("cleans its temporary journal after %s fails and preserves the recovery snapshot", async stage => {
+    const directory = await temporary(), journal = new FileUpdateJournal(directory);
+    const saved = checkingJournal("manager_1");
+    await journal.save(saved);
+    journalFault.directory = directory; journalFault.stage = stage;
+    await expect(journal.save({ ...saved, phase: "succeeded" })).rejects.toThrow(`journal ${stage === "writeFile" ? "write" : stage} fixture`);
+    journalFault.stage = undefined;
+    expect(await readdir(directory)).toEqual(["active-operation.json"]);
+    expect(await journal.load()).toEqual(saved);
+    expect(journalFault.unlinked).toHaveLength(1);
+    journalFault.unlinked = [];
+    await journal.save({ ...saved, phase: "succeeded" });
+    expect((await journal.load())?.phase).toBe("succeeded");
+    expect(journalFault.unlinked).toEqual([]);
+  });
   it("rejects an installation reached through an aliased ancestor while accepting its canonical root", async () => {
     const test = await installation(); const container = await temporary(); const alias = join(container, "temp-alias");
     await symlink(dirname(test.root), alias, process.platform === "win32" ? "junction" : "dir");

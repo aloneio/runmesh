@@ -9,7 +9,7 @@ import { runInNewContext } from "node:vm";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
 import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand } from "../scripts/ci-contract.mjs";
-import { gateEvidence, gateJUnit, writeGateReport } from "../scripts/ci-report.mjs";
+import { gateEvidence, gateJUnit, sourceObservation, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
 import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { createUiNavigationDiagnostic, uiNavigationDiagnosticMarker, uiNavigationFailureDiagnostic, withUiNavigationDiagnostic } from "../scripts/ui-browser-diagnostics.mjs";
@@ -287,6 +287,46 @@ for (const [name, body, phase, reason] of [
   const gate = JSON.parse(await readFile(join(f.root, "ci-results/installed_transport.json"), "utf8"));
   const supplement = JSON.parse(await readFile(join(f.root, "ci-results/package-e2e.json"), "utf8"));
   assert.equal(gate.state, "failed"); assert.equal(gate.exit_code, 1); assert.equal(supplement.state, "not_run");
+});
+
+for (const changed of ["tree", "state"]) test(`CI08 installed package evidence must match the observed source ${changed}`, async t => {
+  const f = await ciFailureFixture(t, "installed_transport", "node scripts/fixture-pass.mjs");
+  await writeFile(join(f.root, ".gitignore"), ".verification/\nci-results/\n");
+  const git = (...args) => {
+    const result = spawnSync("git", args, { cwd: f.root, encoding: "utf8", timeout: 15000, windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  git("init", "--quiet"); git("add", ".");
+  git("-c", "user.name=Runmesh Test", "-c", "user.email=runmesh-test@example.test", "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=" + join(f.root, ".git/no-hooks"), "commit", "--quiet", "-m", "fixture source");
+  const observed = sourceObservation(f.root);
+  assert.equal(observed.state, "clean");
+  const evidence = { tests: { state: "passed", total: 1, passed: 1, failed: 0, skipped: 0, todo: 0, files: 1 },
+    source: observed, artifact: { sha256: "c".repeat(64), bytes: 1 },
+    runtime: { platform: process.platform, arch: process.arch, node: process.version }, elapsed_ms: 1 };
+  await mkdir(join(f.root, ".verification"));
+  const write = () => writeFile(join(f.root, ".verification/package-e2e.json"), JSON.stringify(evidence));
+  await write();
+  const matching = f.run(); assert.equal(matching.status, 0, matching.stderr);
+  assert.equal(JSON.parse(await readFile(join(f.root, "ci-results/installed_transport.json"), "utf8")).state, "passed");
+  evidence.source = { ...observed, [changed]: changed === "tree" ? "0".repeat(40) : "dirty" };
+  await write();
+  const mismatched = f.run();
+  assert.equal(mismatched.status, 1, "A matching commit must not hide a different tree or worktree state");
+  assert.match(mismatched.stderr, /RUNMESH_CI_GATE_ERROR gate=installed_transport phase=package_evidence_source reason=invalid_evidence/u);
+  assert.equal(mismatched.stderr.includes(f.root), false);
+  const gate = JSON.parse(await readFile(join(f.root, "ci-results/installed_transport.json"), "utf8"));
+  const supplement = JSON.parse(await readFile(join(f.root, "ci-results/package-e2e.json"), "utf8"));
+  assert.equal(gate.state, "failed"); assert.deepEqual(gate.source, observed);
+  assert.equal(supplement.state, "not_run");
+  if (changed === "state") {
+    await writeFile(join(f.root, "scripts/fixture-pass.mjs"), "// Local edits are valid when both observations agree.\nprocess.exitCode = 0;\n");
+    evidence.source = sourceObservation(f.root); assert.equal(evidence.source.state, "dirty");
+    await write();
+    const local = f.run(); assert.equal(local.status, 0, local.stderr);
+    const localGate = JSON.parse(await readFile(join(f.root, "ci-results/installed_transport.json"), "utf8"));
+    assert.equal(localGate.state, "passed"); assert.deepEqual(localGate.source, evidence.source);
+  }
 });
 
 test("CI08 a new attempt cannot reuse old successful package/browser/transport/provider summaries", async t => {

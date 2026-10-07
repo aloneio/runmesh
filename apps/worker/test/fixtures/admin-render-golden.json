@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "8ea40e2ade46644c4852f73315dad288cdd0b5c4227952bbe22c9bc59fe963e4",
-      "bytes": 182345,
+      "sha256": "2b0faaa42a4ccaaecf759a5cab781ba46700ba92cd238ef9f8eae1a30a20f129",
+      "bytes": 182509,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -33,8 +33,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "dc4fe2b0226c54cae143197dc7cec849d0ea1a5ce353c8b6757fc1d41e5f4433",
-      "bytes": 183005,
+      "sha256": "a1aa3f5944910e61d915b7d80231356d9cf38e578dcca8d8a7a4171d87f3d1fb",
+      "bytes": 183169,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -52,8 +52,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "e96dd8a1dd931eeea8aae52e7e2f27a20cd2d56be0e8f12f9c9a7e8681e5603c",
-      "bytes": 185302,
+      "sha256": "8468d57286a8f3bad7979120072295d33074648d5a642a2f4b7b01565fc82eab",
+      "bytes": 185466,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -423,8 +423,8 @@
           }
         ]
       ],
-      "sha256": "cc68f4c5541baa56b0395c417360af2187608619f195e4de954cc90511ca668c",
-      "bytes": 185651,
+      "sha256": "d79e0480cdf4719e02f6c471ca9920f903f00e6c17f4d063d531a26a6e23f7fa",
+      "bytes": 185815,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -1312,6 +1312,33 @@
         "name": "admin-document",
         "sha256": "aaffd670511a307d835896ee8b4ce3850f608f68727556b0479b70cdfb27aba7",
         "bytes": 186015
+      }
+    ]
+  },
+  "copy_feedback_ownership_review": {
+    "source_baseline": "0fcb629b27e995e2549be57821d16074361e600e",
+    "reviewed_change": "Each copy button owns the latest click feedback. Late clipboard completion cannot overwrite the latest attempt or another button. Replacing only the browser bundle with the committed baseline reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "8ea40e2ade46644c4852f73315dad288cdd0b5c4227952bbe22c9bc59fe963e4",
+        "bytes": 182345
+      },
+      {
+        "name": "setup",
+        "sha256": "dc4fe2b0226c54cae143197dc7cec849d0ea1a5ce353c8b6757fc1d41e5f4433",
+        "bytes": 183005
+      },
+      {
+        "name": "secret",
+        "sha256": "e96dd8a1dd931eeea8aae52e7e2f27a20cd2d56be0e8f12f9c9a7e8681e5603c",
+        "bytes": 185302
+      },
+      {
+        "name": "admin-document",
+        "sha256": "cc68f4c5541baa56b0395c417360af2187608619f195e4de954cc90511ca668c",
+        "bytes": 185651
       }
     ]
   }
