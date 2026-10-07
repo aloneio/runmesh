@@ -16,6 +16,9 @@ const errorKinds = ["type_error", "range_error", "syntax_error", "abort_error", 
 const stages = ["request_validation", "identity_verification", "request_body", "module_loading", "provider_setup",
   "handler_dispatch", "server_factory", "sdk_transport", "response_priming", "response_headers"];
 const reasons = ["invalid_auth_context", "conflicting_auth_context", "already_connected", "network_connection_lost", "unknown"];
+const proxyMethods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+const proxyAttempts = (method, attempts) => proxyMethods.includes(method) && Number.isInteger(attempts)
+  && attempts >= 1 && attempts <= (["GET", "HEAD"].includes(method) ? 3 : 1);
 const HTTP_MARKER = "RUNMESH_E2E_MCP_HTTP_DIAGNOSTIC=";
 const TOOL_RESULT_MARKER = "RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=";
 const WORKER_MARKER = "RUNMESH_E2E_MCP_WORKER_EVENT=";
@@ -210,6 +213,14 @@ function workerEvent(line) {
   for (const [signature, message] of runtimeSignatures) {
     if (runtime === message) return { event: "runtime_log", signature };
   }
+  // Pinned Wrangler wraps an upstream fetch failure with its method, URL and
+  // attempt count. Only the fixed classification and bounded numeric fields
+  // leave this parser; the URL can contain an MCP credential.
+  const proxy = /^Error inside ProxyWorker \(the affected request failed; the dev server continues\): (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) (https?:\/\/[^\s\u0000-\u001f\u007f]+) \(failed after ([1-3]) (attempts?)\): Network connection lost\.$/u.exec(runtime);
+  if (proxy && proxyAttempts(proxy[1], Number(proxy[3])) && proxy[4] === (proxy[3] === "1" ? "attempt" : "attempts")) {
+    try { new URL(proxy[2]); } catch { return undefined; }
+    return { event: "proxy_upstream_connection_lost", method: proxy[1], attempts: Number(proxy[3]) };
+  }
   return undefined;
 }
 
@@ -225,6 +236,8 @@ function safeWorkerEvent(value) {
   if (value.event === "mcp_handler_error" && errorKinds.includes(value.kind) && stages.includes(value.stage) && reasons.includes(value.reason))
     return { event: "mcp_handler_error", kind: value.kind, stage: value.stage, reason: value.reason };
   if (value.event === "runtime_log" && runtimeSignatures.has(value.signature)) return { event: "runtime_log", signature: value.signature };
+  if (value.event === "proxy_upstream_connection_lost" && proxyAttempts(value.method, value.attempts))
+    return { event: "proxy_upstream_connection_lost", method: value.method, attempts: value.attempts };
   if (value.event === "launcher_snapshot" && launcherReasons.includes(value.reason) && exitCode(value.exit_code)
     && (value.signal === null || launcherSignals.includes(value.signal)) && typeof value.teardown_started === "boolean" && typeof value.exited_before_teardown === "boolean")
     return { event: "launcher_snapshot", reason: value.reason, exit_code: value.exit_code, signal: value.signal,
@@ -265,7 +278,7 @@ function eventBudget() {
   const counts = new Map();
   return event => {
     // Separate bounds preserve launcher and fixture evidence during log floods.
-    // Totals: 16 handler + 8 runtime + 4 launcher + 2 primary + 16 cleanup = 46.
+    // Totals: 16 handler + 8 runtime + 8 proxy + 4 launcher + 2 primary + 16 cleanup = 54.
     const key = event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
     const limit = event.event === "mcp_handler_error" ? 16 : event.event === "launcher_snapshot" ? 4
       : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;
