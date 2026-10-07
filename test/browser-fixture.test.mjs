@@ -10,6 +10,7 @@ import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../script
 import { runFixtureCommand, spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../scripts/worker-fixture.mjs";
 import { createTestHttpScope } from "../scripts/test-http-scope.mjs";
 import * as browserDiagnostics from "../scripts/browser-evidence.mjs";
+import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
 async function localHttpFixture(t, handle) {
   const requests = [];
@@ -373,6 +374,7 @@ async function browserGateFixture(t) {
       console.log('RUNMESH_GUIDED_PRODUCT_STAGE=layout_measure');
       console.log('RUNMESH_GUIDED_PRODUCT_STAGE=PRIVATE_STAGE');
       const mode = process.env.BROWSER_FIXTURE_MODE;
+      if (mode === 'source_change') writeFileSync('source.txt', 'changed source');
       if (mode === 'hang' || mode === 'cleanup_hang') {
         const child = spawn(process.execPath, ['-e', "const s=require('node:http').createServer((q,r)=>r.end('alive'));s.listen(0,'127.0.0.1',()=>process.send(s.address().port))"], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
         const port = await new Promise(resolve => child.once('message', resolve));
@@ -420,6 +422,17 @@ for (const mode of ["hang", "cleanup_hang"]) test(`Browser gate bounds guided pr
   assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(report), /PRIVATE_/u);
   const port = Number(await readFile(join(f.directory, "descendant-port"), "utf8"));
   await assert.rejects(fetch(`http://127.0.0.1:${port}`, { signal: AbortSignal.timeout(1000) }));
+});
+
+test("Browser gate rejects source changes after successful browser and guided checks", { skip: process.platform !== "linux" }, async t => {
+  const f = await browserGateFixture(t);
+  const { source } = await initializeSourceCheckout(f.directory, ["budgets.jsonl", "guided-started"]);
+  assert.equal((await f.invoke("success")).code, 0);
+  assert.deepEqual((await f.report()).source, source);
+  const result = await f.invoke("source_change"), report = await f.report();
+  assert.equal(result.code, 1); assert.equal((await f.report("browser")).state, "failed");
+  assert.equal(report.state, "failed"); assert.equal(report.stage, "source_validation"); assert.deepEqual(report.source, source);
+  assert.doesNotMatch(result.stdout, /"browser_gate":"passed"/u);
 });
 
 test("Browser gate shares its deadline and publishes only validated guided evidence", { skip: process.platform !== "linux" }, async t => {

@@ -5,6 +5,13 @@ import { initializeSkillVersionMetadata, recordSkillVersionCreated } from "./ver
 import { readSkillCapacity } from "./capacity.js";
 
 type Storage = Pick<DurableObjectStorage, "sql" | "transactionSync">;
+type SkillHeadRow = Omit<SkillHead, "enabled"> & { enabled: number };
+
+function decodeSkillHead(row: SkillHeadRow): SkillHead {
+  if (![0, 1].includes(row.enabled) || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new Error("skill_record_invalid");
+  return { ...row, enabled: row.enabled === 1 };
+}
+
 /** One immutable content authority, isolated from identity/Runner tables. */
 export class SkillState implements SkillRepository {
   private ready = false;
@@ -18,14 +25,12 @@ export class SkillState implements SkillRepository {
   }
   public head(id: string): SkillHead | undefined {
     this.initialize();
-    const row = this.storage.sql.exec<Omit<SkillHead, "enabled"> & { enabled: number }>("SELECT * FROM skill_heads_v1 WHERE skill_id=?", id).toArray()[0];
-    if (!row) return undefined;
-    if (![0, 1].includes(row.enabled) || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new Error("skill_record_invalid");
-    return { ...row, enabled: row.enabled === 1 };
+    const row = this.storage.sql.exec<SkillHeadRow>("SELECT * FROM skill_heads_v1 WHERE skill_id=?", id).toArray()[0];
+    return row ? decodeSkillHead(row) : undefined;
   }
   public heads(after: string, limit: number): readonly SkillHead[] {
     this.initialize();
-    return this.storage.sql.exec<{ skill_id: string }>("SELECT skill_id FROM skill_heads_v1 WHERE skill_id>? ORDER BY skill_id LIMIT ?", after, limit).toArray().map(row => this.head(row.skill_id)!);
+    return this.storage.sql.exec<SkillHeadRow>("SELECT * FROM skill_heads_v1 WHERE skill_id>? ORDER BY skill_id LIMIT ?", after, limit).toArray().map(decodeSkillHead);
   }
   public bundle(id: string, digest: string): SkillBundle | undefined {
     this.initialize();

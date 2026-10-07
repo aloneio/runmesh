@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { lstat, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ROOT, sourceObservation } from "./ci-report.mjs";
+import { ROOT, sourceObservation, assertSourceObservationUnchanged } from "./ci-report.mjs";
 import { securityTestFiles, projectSecurityEvidence } from "./security-regressions.mjs";
 import { assertSecurityReadiness } from "./release-readiness.mjs";
 import { readEvidenceJson } from "./evidence-io.mjs";
@@ -36,7 +36,7 @@ try {
     assert.equal(processResult.status, 0, `${workspace} security regressions did not pass`);
     reports.push(await readEvidenceJson(report));
   }
-  assert.deepEqual(sourceObservation(), source, "candidate changed during security verification");
+  assertSourceObservationUnchanged(source);
   const evidence = projectSecurityEvidence(manifest, source.commit, reports, ROOT);
   assertSecurityReadiness(manifest, source.commit, evidence);
   await publish(evidence);

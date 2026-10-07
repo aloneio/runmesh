@@ -17,6 +17,7 @@ import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, REQUIR
 import { createUiNavigationDiagnostic, uiNavigationDiagnosticMarker, uiNavigationFailureDiagnostic, withUiNavigationDiagnostic } from "../scripts/ui-browser-diagnostics.mjs";
 import { closeUiBrowserSocket, createUiBrowserProtocol, waitForUiBrowserEndpoint, waitForUiBrowserSocket, waitForUiNavigation } from "../scripts/ui-browser-check.mjs";
 import * as mcpDiagnostics from "../scripts/mcp-diagnostics.mjs";
+import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
 test("CI04 stalled Job fixtures retain one bounded phase snapshot without private request state", () => {
   const snapshot = { event: "fixture_progress", fixture: "job_recording", phase: "admin_login_page", boundary: "body", elapsed_ms: 29950 };
@@ -274,6 +275,24 @@ async function ciFailureFixture(t, id, command, stop = async () => {}) {
   await writeFile(join(root, "scripts/fixture-pass.mjs"), "process.exitCode = 0;\n");
   return { root, run: () => spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), id], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true }) };
 }
+
+for (const exitCode of [0, 7]) test(`CI gate source changes cannot publish stale success after child exit ${exitCode}`, async t => {
+  const f = await ciFailureFixture(t, "tooling", "node scripts/fixture-source.mjs");
+  await writeFile(join(f.root, "scripts/fixture-source.mjs"), `import { writeFileSync } from 'node:fs'; writeFileSync('source.txt', 'changed'); process.exitCode = ${exitCode};\n`);
+  const { source } = await initializeSourceCheckout(f.root);
+  const result = f.run(), gate = JSON.parse(await readFile(join(f.root, "ci-results/tooling.json"), "utf8"));
+  assert.equal(result.status, exitCode || 1);
+  assert.equal(gate.state, "failed"); assert.equal(gate.exit_code, exitCode || 1); assert.deepEqual(gate.source, source);
+  if (exitCode === 0) assert.match(result.stderr, /phase=source_validation reason=invalid_evidence/u);
+  else assert.doesNotMatch(result.stderr, /source_validation/u, "retain the original process failure");
+});
+
+test("CI gate preserves success when the source observation stays unchanged", async t => {
+  const f = await ciFailureFixture(t, "tooling", "node scripts/fixture-pass.mjs");
+  const { source } = await initializeSourceCheckout(f.root);
+  const result = f.run(), gate = JSON.parse(await readFile(join(f.root, "ci-results/tooling.json"), "utf8"));
+  assert.equal(result.status, 0, result.stderr); assert.equal(gate.state, "passed"); assert.deepEqual(gate.source, source);
+});
 
 test("CI08 cancellation finishes terminating the process group after the gate child exits", { skip: process.platform === "win32", timeout: 15000 }, async t => {
   let gate, parentPid, exited;

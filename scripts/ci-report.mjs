@@ -23,6 +23,12 @@ export function sourceObservation(root = ROOT) {
   } catch { return { commit: null, tree: null, state: "unknown" }; }
 }
 
+/** Recheck commit, tree and checkout state before publishing successful evidence.
+ * Dirty/unknown observations remain local observations, not clean-source proof. */
+export function assertSourceObservationUnchanged(source, root = ROOT) {
+  assert.deepEqual(sourceObservation(root), source, "source observation changed during verification");
+}
+
 export function gateEvidence(id, state, elapsedMs, exitCode, source) {
   assert.match(id, /^[a-z][a-z0-9_]{0,63}$/u);
   assert.ok(["not_run", "running", "passed", "failed", "timed_out", "cancelled"].includes(state));

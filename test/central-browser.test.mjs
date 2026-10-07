@@ -703,6 +703,64 @@ function centralDomFixture(t, locale = "en") {
   return { element };
 }
 
+for (const failedCollection of ["profiles", "skills"]) for (const sibling of ["success", "failure", "retired page"])
+test("Library refresh retains its pending " + sibling + " read after " + failedCollection + " fails", async t => {
+  const { element } = centralDomFixture(t);
+  const app = element(), refresh = element("button"), status = element(), serviceForm = element("form");
+  const serviceList = element(), skillList = element();
+  const elements = { "[data-product-status]": status, "[data-product-refresh]": refresh,
+    "[data-service-create]": serviceForm, "[data-service-list]": serviceList, "[data-skill-list]": skillList };
+  app.setAttribute("data-skills", "true");
+  app.querySelector = selector => elements[selector] ?? null;
+  app.querySelectorAll = selector => selector === "button,input,select" ? [refresh] : [];
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "https://worker.test/admin/central" } });
+  t.after(() => previousLocation ? Object.defineProperty(globalThis, "location", previousLocation) : delete globalThis.location);
+  const pending = deferred(), requests = [];
+  let refreshing = false, current = true;
+  const listed = collection => Response.json({ state: "listed", [collection]: [], next_after: null });
+  t.mock.method(globalThis, "fetch", async path => {
+    const collection = path.split("/").at(-1);
+    requests.push(collection);
+    if (!refreshing) return listed(collection);
+    if (collection === failedCollection) return Response.json({ error: { code: "central_authority_unavailable", operation_state: "not_started" } }, { status: 503 });
+    await pending.promise;
+    return sibling === "failure" ? Response.json({ error: { code: "central_denied", operation_state: "not_started" } }, { status: 403 }) : listed(collection);
+  });
+  bindCentralProduct({ querySelector: () => app }, { isCurrent: () => current, navigate() {}, replaceCurrentUrl() {} });
+  await new Promise(setImmediate);
+  assert.equal(refresh.disabled, false);
+  refreshing = true;
+  refresh.dispatch("click");
+  await new Promise(setImmediate);
+  const pendingStatus = status.textContent;
+  try {
+    assert.equal(refresh.disabled, true, "A failed collection cannot release the other collection's pending refresh");
+    assert.equal(app.getAttribute("aria-busy"), "true");
+    refresh.dispatch("click");
+    await new Promise(setImmediate);
+    assert.deepEqual(requests, ["profiles", "skills", "profiles", "skills"], "Another refresh cannot queue redundant collection reads");
+  } finally {
+    if (sibling === "retired page") current = false;
+    pending.resolve();
+    await new Promise(setImmediate);
+  }
+  assert.equal(refresh.disabled, false);
+  assert.equal(app.getAttribute("aria-busy"), "false");
+  if (sibling === "retired page") {
+    assert.equal(status.textContent, pendingStatus, "Settled reads cannot update the status of a retired page");
+    assert.equal(status.getAttribute("data-error"), "false");
+    return;
+  }
+  assert.equal(status.getAttribute("data-error"), "true", "The successful sibling cannot replace the failure with an up-to-date message");
+  assert.equal(status.textContent, createCentralTranslator("en")("sessionVerificationUnavailable"), "The first failure is retained when the other collection also fails");
+  refreshing = false;
+  refresh.dispatch("click");
+  await new Promise(setImmediate);
+  assert.equal(status.getAttribute("data-error"), "false");
+  assert.equal(status.textContent, "List refreshed.");
+});
+
 function oauthHandoffFixture(t, send = async () => undefined, read = async () => {}) {
   const { element } = centralDomFixture(t), list = element(), panel = element(), status = element(), form = element('form');
   form.elements = { endpoint: { value: 'https://created.example/mcp' }, authentication: { value: 'oauth' }, name: { value: 'Created', maxLength: 64 } };

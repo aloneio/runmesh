@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import { CI_CHECKS, CHECK_IDS } from "./ci-contract.mjs";
-import { ROOT, gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
+import { ROOT, gateEvidence, sourceObservation, assertSourceObservationUnchanged, writeGateReport } from "./ci-report.mjs";
 import { packageEvidence } from "./test-evidence.mjs";
 import { writeSupplement } from "./ci-supplement.mjs";
 import { readEvidenceJson } from "./evidence-io.mjs";
@@ -67,7 +67,12 @@ try {
 }
 let evidencePhase = "package_evidence_read";
 try {
+  if (code === 0 && !reason) {
+    evidencePhase = "source_validation";
+    assertSourceObservationUnchanged(source);
+  }
   if (id === "installed_transport" && code === 0 && !reason) {
+    evidencePhase = "package_evidence_read";
     const input = await readEvidenceJson(join(ROOT, ".verification/package-e2e.json"), 65535);
     evidencePhase = "package_evidence_validate";
     const safe = packageEvidence({ tests: input.tests, source: input.source, artifact: input.artifact, ...input.runtime, node: input.runtime.node, elapsedMs: input.elapsed_ms });

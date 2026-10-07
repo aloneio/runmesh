@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, browserFixtureFailureEvidence, guidedProductStageEvidence } from "./browser-evidence.mjs";
 import { mcpWorkerFailureEvidence } from "./mcp-diagnostics.mjs";
 import { writeSupplement } from "./ci-supplement.mjs";
-import { ROOT, gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
+import { ROOT, gateEvidence, sourceObservation, assertSourceObservationUnchanged, writeGateReport } from "./ci-report.mjs";
 import { writeBuildProvenance } from "./build-provenance.mjs";
 import { runFixtureCommand } from "./worker-fixture.mjs";
 
@@ -54,6 +54,8 @@ try {
   stage = "evidence_validation";
   const stat = await lstat(path); assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8 * 1024 * 1024);
   const evidence = browserEvidence(JSON.parse(await readFile(path, "utf8")), 0);
+  stage = "source_validation";
+  assertSourceObservationUnchanged(source);
   await writeSupplement("browser-tests", { schema_version: 1, evidence: "real_local_browser_e2e", attestation: "self_reported", source, ...evidence, runtime: { node: process.version, platform: process.platform, arch: process.arch }, production: "not_run" });
   console.log(JSON.stringify({ browser_gate: "passed", guided_product: guidedProduct, ...evidence })); code = 0;
 } catch (error) {

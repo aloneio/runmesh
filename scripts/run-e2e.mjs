@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeBuildProvenance } from "./build-provenance.mjs";
-import { sourceObservation, gateEvidence, writeGateReport } from "./ci-report.mjs";
+import { sourceObservation, assertSourceObservationUnchanged, gateEvidence, writeGateReport } from "./ci-report.mjs";
 import { writeSupplement } from "./ci-supplement.mjs";
 import { readEvidenceJson } from "./evidence-io.mjs";
 import { summarizeVitest, testFailureEvidence, testErrorDiagnostic } from "./test-evidence.mjs";
@@ -41,6 +41,8 @@ try {
   stage = "evidence_validation";
   result = await readEvidenceJson(report);
   const tests = summarizeVitest(result, 0);
+  stage = "source_validation";
+  assertSourceObservationUnchanged(source);
   if (!packaged) await writeSupplement("transport-tests", { schema_version: 1, evidence: "local_transport_e2e", attestation: "self_reported",
     state: "passed", source, runtime: { node: process.version, platform: process.platform, arch: process.arch }, tests, production: "not_run" });
   process.stdout.write(output.stdout); process.stderr.write(output.stderr);
