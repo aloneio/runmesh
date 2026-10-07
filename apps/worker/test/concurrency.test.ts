@@ -46,6 +46,28 @@ async function withRunner(name: string, callback: (target: TestSession, registry
   });
 }
 describe("RunnerDO concurrency finalization", () => {
+  it.each([false, true])("confirms an idempotent mutation fence after an uncertain write (committed=%s)", async committed => {
+    const stub = env.RUNNER.get(env.RUNNER.idFromName("precommit-persistence-" + crypto.randomUUID()));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const target = await concurrencySession(state);
+      const original = state.storage.put.bind(state.storage);
+      const put = vi.spyOn(state.storage, "put").mockImplementationOnce((async (...args: unknown[]) => {
+        if (committed) await (original as (...args: unknown[]) => Promise<void>)(...args);
+        throw new Error("uncertain admission write");
+      }) as typeof state.storage.put);
+      try {
+        expect(await target.begin("retry-owner")).toBe(503);
+        expect(await target.admission()).toMatchObject({ fenced: true, mutationId: "retry-owner", mutationPhase: "precommit" });
+        expect(await target.begin("retry-owner")).toBe(204);
+        expect(await state.storage.get("policy-admission-v1")).toMatchObject({ fenced: true, mutationId: "retry-owner", mutationPhase: "precommit" });
+        expect(put).toHaveBeenCalledTimes(committed ? 1 : 2);
+        // Once confirmed, duplicate requests need no additional writes.
+        expect(await target.begin("retry-owner")).toBe(204);
+        expect(put).toHaveBeenCalledTimes(committed ? 1 : 2);
+      } finally { put.mockRestore(); }
+    });
+  });
+
   it("does not let a delayed hello overwrite a concurrent policy fence", async () => {
     await withRunner("hello-policy-race", async (target, registry) => {
       let releaseConnect!: () => void;
