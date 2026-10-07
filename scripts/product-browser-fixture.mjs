@@ -58,7 +58,7 @@ export async function createProductFixture() {
       value={state:'started',profile_id:oauthProfileId,authorization_url:pending?'/late-oauth-fixture':'/oauth-fixture'};
      }
     }else if(id==='complete'){
-     if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}
+     if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required',operation_state:'not_started'}};}
      else{
       assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});
       if(controls.oauth.rejectComplete){code=503;value={error:{code:'oauth_unavailable',operation_state:'unknown'}};}

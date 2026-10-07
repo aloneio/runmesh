@@ -9,12 +9,13 @@ export const DEV_RELEASE_DISCOVERY_URL = "https://api.github.com/repos/aloneio/r
 const DEV_RELEASE_CACHE_KEY = new Request("https://runmeshdev.aloneiodev.workers.dev/__internal/verified-dev-runner-release-v1");
 const DEV_RELEASE_FETCH_ATTEMPTS = 3;
 const DEV_RELEASE_RETRY_DELAY_MS = 75;
+const MAX_RELEASE_RETRY_WINDOW_MS = 60 * 60_000;
 const MAX_DISCOVERY_BYTES = 512 * 1024;
 const ALLOWED_RELEASE_ORIGINS = new Set<string>(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS);
 
 /** Errors carry fixed diagnostics separately from messages retained for callers. */
 export class DevelopmentReleaseError extends Error {
-  constructor(message: string, readonly failure: DevelopmentReleaseFailure) { super(message); }
+  constructor(message: string, readonly failure: DevelopmentReleaseFailure, readonly retry_at_ms?: number) { super(message); }
 }
 export function safeDevelopmentReleaseFailure(value: unknown): DevelopmentReleaseFailure {
   if (!isRecord(value) || typeof value.phase !== "string" || !["discovery", "manifest", "signature", "signature_descriptor", "verification"].includes(value.phase)
@@ -62,12 +63,30 @@ function retryableReleaseResponse(response: Response): boolean {
   if (response.status === 403 || response.status === 429 || response.status >= 500) return true;
   return false;
 }
+/** Request-local backpressure only; it never changes verified release lifetime. */
+function releaseRetryAtMs(response: Response, now = Date.now()): number | undefined {
+  const retry = response.headers.get("retry-after")?.trim();
+  let retryAt: number | undefined;
+  if (retry !== undefined && /^\d+$/u.test(retry)) {
+    const seconds = Number(retry);
+    if (Number.isSafeInteger(seconds)) retryAt = now + Math.min(MAX_RELEASE_RETRY_WINDOW_MS, seconds * 1000);
+  } else if (retry !== undefined) {
+    const parsed = Date.parse(retry);
+    if (Number.isFinite(parsed) && new Date(parsed).toUTCString() === retry) retryAt = Math.max(now, parsed);
+  }
+  if (response.status === 403 && response.headers.get("x-ratelimit-remaining")?.trim() === "0") {
+    const reset = response.headers.get("x-ratelimit-reset")?.trim(), seconds = reset !== undefined && /^\d+$/u.test(reset) ? Number(reset) : NaN;
+    const resetAt = Number.isSafeInteger(seconds) && Number.isSafeInteger(seconds * 1000) ? Math.max(now, seconds * 1000) : now + 60_000;
+    retryAt = Math.max(retryAt ?? now, resetAt);
+  }
+  return retryAt === undefined ? undefined : Math.min(now + MAX_RELEASE_RETRY_WINDOW_MS, retryAt);
+}
 export async function releaseFetch(input: string, init: Omit<RequestInit, "signal">, fetchImpl: typeof fetch, phase: DevelopmentReleaseFailure["phase"] = "discovery"): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt < DEV_RELEASE_FETCH_ATTEMPTS; attempt++) {
     try {
       const response = await fetchImpl(input, { ...init, signal: AbortSignal.timeout(10_000) });
-      if (!retryableReleaseResponse(response) || attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) return response;
+      if (!retryableReleaseResponse(response) || releaseRetryAtMs(response) !== undefined || attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) return response;
       // Start disposal without letting a peer's cleanup promise own the retry budget.
       void response.body?.cancel().catch(() => undefined);
     } catch (error) {
@@ -82,7 +101,7 @@ export async function releaseFetch(input: string, init: Omit<RequestInit, "signa
 /** Own the response body even when status or headers reject it before reading. */
 export async function boundedJson(response: Response): Promise<unknown> {
   return releasePhase("discovery", "invalid_response", async () => {
-    if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new DevelopmentReleaseError("development release discovery failed", { phase: "discovery", reason: "http_error", http_status: response.status }); }
+    if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new DevelopmentReleaseError("development release discovery failed", { phase: "discovery", reason: "http_error", http_status: response.status }, releaseRetryAtMs(response)); }
     const declared = response.headers.get("content-length");
     if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > MAX_DISCOVERY_BYTES)) { void response.body?.cancel().catch(() => undefined); throw new Error("development release discovery response is too large"); }
     if (response.body === null) throw new Error("development release discovery response is empty");
@@ -109,7 +128,7 @@ export async function boundedReleaseBytes(url: string, limit: number, fetchImpl:
       if (location === null || redirect === 4) throw new Error("development release redirect is invalid");
       current = new URL(location, current); continue;
     }
-    if (!response.ok || response.body === null) { void response.body?.cancel().catch(() => undefined); throw new DevelopmentReleaseError("development release asset is unavailable", { phase, reason: response.ok ? "invalid_response" : "http_error", ...(!response.ok ? { http_status: response.status } : {}) }); }
+    if (!response.ok || response.body === null) { void response.body?.cancel().catch(() => undefined); throw new DevelopmentReleaseError("development release asset is unavailable", { phase, reason: response.ok ? "invalid_response" : "http_error", ...(!response.ok ? { http_status: response.status } : {}) }, response.ok ? undefined : releaseRetryAtMs(response)); }
     const declared = response.headers.get("content-length");
     if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit)) { void response.body.cancel().catch(() => undefined); throw new Error("development release asset exceeds its size bound"); }
     const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;

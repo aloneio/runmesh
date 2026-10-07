@@ -1,5 +1,10 @@
 const messages = {
   "skillSourceBusy": ["An import is running. Try again when it finishes.", "有一项导入正在进行，请在完成后重试。"],
+  "centralSetupRequired": ["Ask your administrator to finish MCP and Skill setup for this control plane.", "请联系管理员完成此控制端的 MCP 和 Skill 配置。"],
+  "mcpBusy": ["This MCP is busy. Wait briefly, then refresh and try again.", "此 MCP 正忙，请稍后刷新重试。"],
+  "mcpTimedOut": ["The MCP connection timed out. Check the service, then refresh and try again.", "MCP 连接超时，请检查服务后刷新重试。"],
+  "mcpTimeoutUnconfirmed": ["The MCP connection timed out. Refresh to check whether the operation completed.", "MCP 连接超时，请刷新确认操作是否完成。"],
+  "sessionVerificationUnavailable": ["Could not verify your session. Refresh shortly and try again.", "暂时无法验证登录状态，请稍后刷新重试。"],
   "refreshTheLibraryBeforeMakingAnotherChange": ["Refresh before making another change.", "请刷新后再修改。"],
   "thisItemChangedRefreshAndReviewItAgainBefore": ["This item has changed. Refresh before saving.", "内容已更新，请刷新后再保存。"],
   "accessWasDeniedSignInAgainOrCheckThe": ["Access denied. Sign in again or check the MCP authorization.", "访问被拒绝，请重新登录或检查 MCP 授权。"],

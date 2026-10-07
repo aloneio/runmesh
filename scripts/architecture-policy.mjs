@@ -18,7 +18,7 @@ export function layer(path) {
 const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
 const runnerRoot = "apps/runner/src/";
 const maintenanceSharedSources = new Set([
-  "profile.ts", "service.ts", "purge.ts", "windows-tools.ts", "platform-types.ts",
+  "profile.ts", "service.ts", "purge.ts", "windows-tools.ts", "platform-types.ts", "backoff.ts",
   "version.ts", "generated-version.ts", "config.ts", "environment-contracts.ts", "maintenance-contract.ts", "enrollment.ts",
   "cli/contracts.ts", "cli/input.ts", "cli/lifecycle.ts", "cli/service-plan.ts", "cli/reporting.ts", "cli/enrollment.ts",
 ]);
@@ -77,10 +77,13 @@ const registryPlatformTypes = new Set(["DurableObjectState", "DurableObjectStora
 const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSource", "WebTransport", "Worker", "SharedWorker", "caches", "globalThis", "window", "self", "process", "Deno", "Bun"]);
 const updateCore = path => /^apps\/runner\/src\/updates\/(?:contracts|coordinator)\.ts$/u.test(path);
 const nativeServiceContracts = runnerRoot + "services/contracts.ts";
+const runnerBackoff = runnerRoot + "backoff.ts";
 
 /** Conservative source guard: stateful workflows receive API and view ports. */
 export function boundaryNodeProblem(from, node) {
   const source = canonicalSource(from);
+  if (source === runnerBackoff && (node.type === "AwaitExpression" || node.async === true))
+    return "Shared Runner backoff calculates delays synchronously";
   if (source === "apps/worker/src/registry/release-cache.ts" && (node.type === "AwaitExpression" || node.async === true))
     return "Registry release cache admission must stay synchronous";
   if (source === "apps/worker/src/domain/runner-handshake.ts" && (node.type === "AwaitExpression" || node.async === true))
@@ -90,6 +93,9 @@ export function boundaryNodeProblem(from, node) {
   if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
     return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if (source === runnerBackoff
+    && (networkGlobals.has(node.name) || registryPlatformTypes.has(node.name) || ["Request", "Response", "localStorage", "sessionStorage", "indexedDB", "crypto", "performance", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Shared Runner backoff calculates delays without I/O, storage or scheduling";
   if (source === "apps/worker/src/domain/runner-admission.ts"
     && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "performance", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
     return "Runner admission rules must not own transport, storage, clocks or scheduling";
@@ -152,6 +158,7 @@ export function specifierProblem(from, specifier, typeOnly) {
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
   if (source === "apps/worker/src/async-deadline.ts") return "Shared deadline scheduling stays independent of imported implementations";
   if (source === nativeServiceContracts) return "Published native-service contracts are self-contained, without module imports";
+  if (source === runnerBackoff) return "Shared Runner backoff is self-contained, without module imports";
   if (updateCore(source) && external && specifier !== "@aloneio/runmesh-protocol")
     return "Update contracts and coordination use shared protocol and local ports, not external adapters";
   if (isMaintenanceSource(source) && external && !builtin && !purePackages.test(specifier))

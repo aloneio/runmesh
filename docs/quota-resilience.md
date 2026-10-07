@@ -45,6 +45,12 @@ D1 failures start a cooldown for the affected running instance. Daily row-quota 
 
 Enrollment, client and policy storage failures return sanitized availability errors. Preserve existing credentials and data while diagnosing provider failures.
 
+The Runner version manager increases the wait between requests during an outage and follows the server's `Retry-After` interval. A rejected credential pauses cloud requests until the local credential changes; the manager remains running and resumes with the new credential. Its log includes the HTTP status, such as `maintenance_http_429` or `maintenance_http_503`.
+
+Repeated policy confirmations update workspace validation only when its status changes. Runner and policy acknowledgement timestamps still advance so the control plane can track the latest confirmation.
+
+Development release discovery observes upstream retry windows within each running instance. During that wait, downloads use an available verified release within its existing lifetime. The next refresh resumes after the wait; the window is bounded to one hour.
+
 ## Verify or change a deployment
 
 The repository binds production `HISTORY_DB` to `runmesh-audit-history`. Resolve provisioning authorization through the Cloudflare build connection. See [Wrangler provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning).

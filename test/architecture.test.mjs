@@ -299,11 +299,32 @@ test("maintenance shares host adapters and types without acquiring execution dep
     "apps/runner/src/config.ts": 'export type Config = {};',
     "apps/runner/src/service.ts": 'export * from "./services/layout.js";',
     "apps/runner/src/services/layout.ts": 'import "node:path";',
-    "apps/runner/src/updates/agent.ts": 'import "./job-drain.js";',
+    "apps/runner/src/updates/agent.ts": 'import "./job-drain.js"; import "../backoff.js";',
+    "apps/runner/src/backoff.ts": await readFile(join(project, "apps/runner/src/backoff.ts"), "utf8"),
     "apps/runner/src/updates/job-drain.ts": 'import "../maintenance-contract.js"; import "node:fs/promises";',
     "apps/runner/src/maintenance-contract.ts": 'export const terminal = (value: string) => value === "succeeded";',
   });
   assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
+test("shared Runner backoff rejects imports, I/O and scheduling", async t => {
+  for (const source of [
+    'import "./runtime.js";',
+    'import "node:fs/promises";',
+    'import type { Timer } from "node:timers";',
+    'export const delay = () => fetch("https://example.invalid");',
+    'export const delay = () => setTimeout(() => {}, 100);',
+    'export const delay = () => queueMicrotask(() => {});',
+    'export const delay = () => localStorage.getItem("delay");',
+    'export const delay = () => globalThis["fetch"];',
+    'export const delay = async () => 100;',
+  ]) {
+    const f = await fixture(t, {
+      "apps/runner/src/backoff.ts": source,
+      "apps/runner/src/runtime.ts": 'export {};',
+    });
+    assert.ok((await checkArchitecture(f.root)).failures.length > 0, source);
+  }
 });
 
 test("update coordination uses shared ports while retaining local scheduling", async t => {

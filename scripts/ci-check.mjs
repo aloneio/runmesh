@@ -19,6 +19,15 @@ if (process.argv[2] === "--initialize") {
 
 const id = process.argv[2];
 assert.ok(process.argv.length === 3 && Object.hasOwn(CI_CHECKS, id), "Use one declared CI gate ID");
+function reportFailure(phase, error) {
+  // Child startup and evidence failures can include host paths or input values.
+  // Report the owned phase and fixed reason, never the exception text or stack.
+  const code = error?.code;
+  const reason = ["ENOENT", "EACCES", "EPERM", "EAGAIN", "ENOMEM", "EMFILE", "ENFILE", "ENOEXEC", "ENOSPC", "EIO", "EINVAL", "EISDIR", "ENOTDIR"].includes(code) ? code
+    : code === "ERR_ASSERTION" || phase === "package_evidence_validate" || phase === "package_evidence_source" ? "invalid_evidence"
+    : error instanceof SyntaxError ? "invalid_json" : "unknown";
+  console.error(`RUNMESH_CI_GATE_ERROR gate=${id} phase=${phase} reason=${reason}`);
+}
 const source = sourceObservation(), started = Date.now();
 if (id === "toolchain") {
   for (const name of CHECK_IDS) await writeGateReport(gateEvidence(name, "not_run", 0, null, source));
@@ -45,19 +54,23 @@ process.once("SIGINT", interrupted); process.once("SIGTERM", interrupted);
 const timer = setTimeout(() => { reason = "timed_out"; void kill(); }, id === "installed_transport" ? 480000 : 600000);
 let code;
 try {
-  code = await new Promise(resolve => { child.once("error", () => resolve(1)); child.once("close", value => resolve(value ?? 1)); });
+  code = await new Promise(resolve => { child.once("error", error => { reportFailure("process_start", error); resolve(1); }); child.once("close", value => resolve(value ?? 1)); });
 } finally {
   clearTimeout(timer); clearTimeout(killTimer);
   process.removeListener("SIGINT", interrupted); process.removeListener("SIGTERM", interrupted);
 }
+let evidencePhase = "package_evidence_read";
 try {
   if (id === "installed_transport" && code === 0 && !reason) {
     const input = await readEvidenceJson(join(ROOT, ".verification/package-e2e.json"), 65535);
+    evidencePhase = "package_evidence_validate";
     const safe = packageEvidence({ tests: input.tests, source: input.source, artifact: input.artifact, ...input.runtime, node: input.runtime.node, elapsedMs: input.elapsed_ms });
+    evidencePhase = "package_evidence_source";
     assert.equal(safe.source.commit, source.commit, "package evidence belongs to a different source");
     // Validate/project rather than copy an arbitrary hidden directory.
+    evidencePhase = "package_evidence_publish";
     await writeSupplement("package-e2e", safe);
   }
-} catch { code = 1; }
+} catch (error) { reportFailure(evidencePhase, error); code = 1; }
 await writeGateReport(gateEvidence(id, reason ?? (code === 0 ? "passed" : "failed"), Date.now() - started, code, source));
 process.exitCode = reason ? 1 : code;

@@ -316,7 +316,9 @@ export class RegistryPolicy {
         if (updated.rowsWritten !== 1) return undefined;
       }
       this.storage.sql.exec("UPDATE runner_policy_versions SET status = ?, acknowledged_at_ms = ?, validation_summary_json = ? WHERE runner_id = ? AND revision = ?", input.status, nowMs, JSON.stringify(input.workspace_status), runnerId, input.desired_revision);
-      for (const item of input.workspace_status) this.storage.sql.exec("UPDATE managed_workspaces SET validation_status = ? WHERE runner_id = ? AND workspace_id = ?", item.status, runnerId, item.workspace_id);
+      // Reconnects acknowledge every workspace again. Persist only status
+      // transitions while retaining the Runner/version acknowledgement time.
+      for (const item of input.workspace_status) this.storage.sql.exec("UPDATE managed_workspaces SET validation_status = ? WHERE runner_id = ? AND workspace_id = ? AND validation_status IS NOT ?", item.status, runnerId, item.workspace_id, item.status);
       return input.status === "applied" ? "applied" : "invalid";
     });
     return result;

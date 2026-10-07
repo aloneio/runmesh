@@ -5,8 +5,76 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { buildBrowserSource, browserModule, writeBrowserAssets } from "../scripts/generate-browser-assets.mjs";
 import { adminScript } from "../apps/worker/dist/admin/client-script.js";
+import { oauthLanding } from "../apps/worker/dist/http/oauth-landing.js";
+
+async function oauthCallbackReceipt(status, error, query = "state=fixture&code=fixture", locale = "en", csrf = true) {
+  const page = await oauthLanding(locale).text();
+  const decode = value => value.replace(/&quot;/gu, '"').replace(/&#39;/gu, "'").replace(/&lt;/gu, "<").replace(/&gt;/gu, ">").replace(/&amp;/gu, "&");
+  const dataset = Object.fromEntries([...page.matchAll(/data-([a-z]+)="([^"]*)"/gu)].map(([, key, value]) => [key, decode(value)]));
+  const message = {}, title = {}, attributes = new Map(), requests = [], navigations = [], scrubbed = [];
+  const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/u.exec(page)[1];
+  const cookieName = /v.startsWith\('([^']+)='/u.exec(script)[1];
+  await runInNewContext(script, {
+    document: { cookie: csrf ? cookieName + "=fixture" : "", getElementById: id => id === "status" ? message : title,
+      querySelector: () => ({ dataset, setAttribute: (key, value) => attributes.set(key, value) }) },
+    window: { addEventListener() {} }, URLSearchParams, AbortSignal,
+    history: { replaceState: (...args) => scrubbed.push(args[2]) },
+    location: { search: "?" + query, replace: path => navigations.push(path) },
+    fetch: async (path, init) => { requests.push({ path, body: JSON.parse(init.body) }); return Response.json({ error }, { status }); },
+  });
+  return { message: message.textContent, dataset, attributes, requests, navigations, scrubbed };
+}
+
+for (const locale of ["en", "zh-CN"]) for (const [status, code, kind] of [
+  [403, "central_admin_denied", "session"], [400, "oauth_invalid_callback", "expired"],
+  [503, "oauth_configuration_required", "configuration"], [503, "oauth_provider_unsupported", "provider"],
+  [503, "oauth_reauthorization_required", "restart"], [409, "oauth_conflict", "changed"],
+  [403, "oauth_denied", "denied"], [503, "central_authority_unavailable", "unavailable"],
+]) test(`OAuth callback preserves ${code} guidance (${locale})`, async () => {
+  const result = await oauthCallbackReceipt(status, { code, operation_state: "not_started", message: "PRIVATE_PROVIDER_DETAIL" }, undefined, locale);
+  assert.equal(typeof result.dataset[kind], "string");
+  assert.equal(result.message, result.dataset[kind]);
+  assert.equal(result.attributes.get("aria-busy"), "false");
+  assert.equal(result.requests.length, 1);
+  assert.deepEqual(result.navigations, []);
+  assert.deepEqual(result.scrubbed, ["/admin/central/connections/callback"]);
+  assert.equal(result.message.includes("PRIVATE_PROVIDER_DETAIL"), false);
+});
+
+for (const [status, code, state] of [
+  [503, "oauth_configuration_required", "unknown"], [503, "oauth_unavailable", "unknown"],
+  [503, "private-provider-code", "not_started"], [503, "oauth_invalid_callback", "not_started"],
+  [403, "central_admin_denied", undefined],
+]) test(`OAuth callback retains an unconfirmed result for ${status}/${code}/${state}`, async () => {
+  const result = await oauthCallbackReceipt(status, { code, operation_state: state }, "state=fixture&error=access_denied");
+  assert.equal(result.message, result.dataset.unconfirmed);
+  assert.equal(result.requests.length, 1);
+  assert.deepEqual(result.navigations, []);
+});
+
+test("OAuth callback confirms cancellation only from its completed rejection receipt", async () => {
+  const result = await oauthCallbackReceipt(503, { code: "oauth_reauthorization_required", operation_state: "not_started" },
+    "state=fixture&error=access_denied&error_description=PRIVATE_PROVIDER_DETAIL");
+  assert.equal(result.message, result.dataset.cancelled);
+  assert.deepEqual(result.requests, [{ path: "/admin/central/connections/complete", body: { state: "fixture", error: "access_denied" } }]);
+  assert.deepEqual(result.navigations, []);
+});
+
+test("OAuth callback requests a fresh session when its CSRF cookie is absent, without posting the code", async () => {
+  const result = await oauthCallbackReceipt(503, {}, undefined, "en", false);
+  assert.equal(result.message, result.dataset.session);
+  assert.equal(result.requests.length, 0);
+  assert.deepEqual(result.navigations, []);
+});
+
+test("OAuth callback rejects duplicate authorization fields before posting", async () => {
+  const result = await oauthCallbackReceipt(503, {}, "state=one&state=two&code=fixture");
+  assert.equal(result.message, result.dataset.restart);
+  assert.equal(result.requests.length, 0);
+});
 
 test("local browser modules preserve the reviewed rendered script hashes", async () => {
   const baseline = JSON.parse(await readFile(new URL("fixtures/admin-client-baseline.json", import.meta.url), "utf8"));

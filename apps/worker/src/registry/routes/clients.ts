@@ -9,6 +9,7 @@ import { stringField, scopesField, permissionSetField, parsePathIdentifier } fro
 
 export interface ClientsRoutePorts {
   listMcpClients(): McpClientRecord[];
+  getMcpClient(clientId: string): McpClientRecord | undefined;
   createMcpIdentity(input: { client_id: string; label: string; secret_verifier: string; secret_prefix: string; native_scopes: readonly CodingScope[] }, nowMs: number): ClientIdentity | undefined;
   createMcpClient(input: { client_id: string; label: string; secret_verifier: string; secret_prefix: string; scopes: readonly CodingScope[] }, nowMs: number): McpClientRecord | undefined;
   setJobRecording(clientId: string, enabled: boolean, nowMs: number): McpClientRecord | undefined;
@@ -40,6 +41,10 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
       return ports.deleteMcpClient(clientId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
     }
     if (method === "GET" && action === "clients" && clientId === undefined) return Response.json({ clients: ports.listMcpClients() });
+    if (method === "GET" && clientId !== undefined && segments.length === 2) {
+      const client = ports.getMcpClient(clientId);
+      return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client);
+    }
     if (method === "POST" && action === "clients" && clientId === undefined && input.identity_version !== undefined) {
       const parsed = parseMcpIdentity(input);
       if (!parsed.ok) return registryInputError(parsed);

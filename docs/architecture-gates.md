@@ -55,6 +55,11 @@ of its module imports, including external and relative protocol type imports. Ot
 fixtures check reverse imports, intermediary modules, platform types and ambient I/O
 while allowing local scheduling in the coordinator.
 
+The version manager and Runner connection share delay calculations in `backoff.ts`.
+That module remains synchronous and import-free; fixtures reject network, storage
+and scheduling access. The independently installed manager can reuse these rules
+without loading the selected Runner's execution modules.
+
 The shared async deadline has no module imports or platform I/O. Reviewed
 feature wrappers supply Connector, remote-capability and Skill source budgets; this allowance is
 limited to those edges. Browser page controls and page mounting share the independent

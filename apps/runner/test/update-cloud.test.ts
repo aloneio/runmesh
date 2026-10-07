@@ -28,6 +28,14 @@ describe("maintenance HTTPS and CLI", () => {
     await expect(request).rejects.toBeInstanceOf(MaintenanceHttpError);
     await expect(request).rejects.toMatchObject({ status, message: `maintenance_http_${status}` });
   });
+  it.each([429, 503])("retains the retry window for HTTP %s without exposing the response body", async status => {
+    const cloud = createCloudMaintenance({ profile: async () => profile, fetch: (async () => new Response("private-provider-body", { status, headers: { "retry-after": "120" } })) as typeof fetch });
+    await expect(cloud.poll()).rejects.toMatchObject({ status, retryAfterMs: 120_000, message: `maintenance_http_${status}` });
+  });
+  it.each([["invalid", 30_000], ["0", 30_000], ["999999", 900_000]])("bounds the maintenance retry header %s", async (value, expected) => {
+    const cloud = createCloudMaintenance({ profile: async () => profile, fetch: (async () => new Response("", { status: 503, headers: { "retry-after": String(value) } })) as typeof fetch });
+    await expect(cloud.poll()).rejects.toMatchObject({ retryAfterMs: expected });
+  });
   it.each(["ws://remote.test/runner/connect", "wss://user:secret@example.test/runner/connect", "wss://example.test/arbitrary", "wss://example.test/runner/connect?token=secret"])("rejects an invalid maintenance origin %s", server_url => {
     expect(() => maintenanceEndpoint({ ...profile, server_url })).toThrow();
   });

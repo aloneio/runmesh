@@ -134,6 +134,26 @@ it('Acceptance T05 publishes shared discovery without grants and denies unpublis
   expect(toolNames(granted.result.tools)).toEqual([...sharedTools, ...nativeTools, 'remote_status'].sort());
   expect(await f.invoke(o => o.toolVisibility({ client_id: client.id, secret_version: 2 }))).toEqual({ state: 'denied' });
 });
+it.each(['invalid', 'missing', 'denied', 'capacity', 'unavailable'] as const)('Skill tools and resources retain the same %s recovery receipt', async state => {
+  const f = await fixture(), secret = f.clients[0]!.secret;
+  f.port.readSkill = async () => ({ state });
+  f.port.listSkills = async () => ({ state });
+  const tool = await f.rpc(secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: 'fixture', digest: 'a'.repeat(64) } });
+  const error = JSON.parse(tool.result.content[0].text).error;
+  expect(error).toMatchObject({ code: 'skill_' + state, operation_state: 'not_started', message: expect.any(String), recovery_hint: expect.any(String), next_action: expect.any(String) });
+  const resource = await f.rpc(secret, 'resources/read', { uri: 'runmesh-skill://bundle/fixture/' + 'a'.repeat(64) + '/SKILL.md' });
+  expect(resource.error).toMatchObject({ data: { error } });
+  const listed = await f.rpc(secret, 'resources/list', {});
+  expect(listed.error).toMatchObject({ data: { error } });
+});
+
+it('Skill errors retain fixed guidance without reflecting dependency exception details', async () => {
+  const f = await fixture(), secret = f.clients[0]!.secret;
+  f.port.readSkill = async () => { throw new Error('PRIVATE_SKILL_DEPENDENCY_DETAIL'); };
+  const resource = await f.rpc(secret, 'resources/read', { uri: 'runmesh-skill://bundle/fixture/' + 'a'.repeat(64) + '/SKILL.md' });
+  expect(resource.error).toMatchObject({ data: { error: { code: 'skill_unavailable', operation_state: 'not_started' } } });
+  expect(JSON.stringify(resource)).not.toContain('PRIVATE_SKILL_DEPENDENCY_DETAIL');
+});
 it('central visibility failure or malformed metadata hides central discovery without touching native calls', async () => {
   const f = await fixture(['coding:read']), client = f.clients[0]!;
   f.port.toolVisibility = async () => { throw new Error('central unavailable'); };

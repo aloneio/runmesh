@@ -205,6 +205,16 @@ it("connection checks project only observed fields and never save, publish or st
   for (const mutate of [f.port.mutateProfile, f.port.mutateCatalog, f.port.connectionOAuth, f.skillSource]) expect(mutate).not.toHaveBeenCalled();
 });
 
+it.each([['busy', 429], ['operation_timed_out', 503], ['dependency_unavailable', 503]] as const)("connection check %s keeps its HTTP failure category", async (code, status) => {
+  const f = await fixture();
+  f.inspectConnection.mockResolvedValueOnce({ state: 'unavailable', code, message: 'PRIVATE_PROVIDER_DETAIL' });
+  const response = await f.central('connection-check', { endpoint: 'https://docs.example.com/mcp' });
+  expect(response.status).toBe(status);
+  expect(await response.json()).toEqual({ error: { code: 'remote_' + code, operation_state: 'not_started' } });
+  expect(f.inspectConnection).toHaveBeenCalledTimes(1);
+  for (const mutate of [f.port.mutateProfile, f.port.mutateCatalog, f.port.connectionOAuth]) expect(mutate).not.toHaveBeenCalled();
+});
+
 it("connection checks require CSRF, reject malformed observations and return a minimal authorization-required result", async () => {
   const f = await fixture(), endpoint = "https://docs.example.com/mcp";
   for (const overrides of [{ cookie: "" }, { "x-csrf-token": "incorrect" }, { origin: "https://other.test" }])

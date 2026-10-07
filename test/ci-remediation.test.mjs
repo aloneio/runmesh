@@ -236,6 +236,47 @@ test("CI08 Windows initialization creates and resets only transport evidence bef
   assert.notEqual(invalid.status, 0);
 });
 
+async function ciFailureFixture(t, id, command) {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-ci-failure-")); t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "scripts"));
+  for (const name of ["ci-check.mjs", "ci-report.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+    await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, "scripts", name));
+  await writeFile(join(root, "scripts/ci-contract.mjs"), `export const CI_CHECKS=${JSON.stringify({ [id]: command })}; export const CHECK_IDS=Object.keys(CI_CHECKS);\n`);
+  await writeFile(join(root, "scripts/fixture-pass.mjs"), "process.exitCode = 0;\n");
+  return { root, run: () => spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), id], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true }) };
+}
+
+test("CI08 missing gate executable reports a safe process-start diagnostic", async t => {
+  const f = await ciFailureFixture(t, "tooling", "runmesh-ci-missing-executable-fixture");
+  const result = f.run();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /RUNMESH_CI_GATE_ERROR gate=tooling phase=process_start reason=ENOENT/u);
+  assert.equal(result.stderr.includes(f.root), false);
+  assert.equal(result.stderr.includes("runmesh-ci-missing-executable-fixture"), false);
+  const gate = JSON.parse(await readFile(join(f.root, "ci-results/tooling.json"), "utf8"));
+  assert.equal(gate.state, "failed"); assert.equal(gate.exit_code, 1);
+});
+
+for (const [name, body, phase, reason] of [
+  ["missing", undefined, "package_evidence_read", "ENOENT"],
+  ["invalid JSON", "{PRIVATE_EVIDENCE_TEXT", "package_evidence_read", "invalid_json"],
+  ["invalid envelope", JSON.stringify({ runtime: { node: "PRIVATE_RUNTIME_TEXT" } }), "package_evidence_validate", "invalid_evidence"],
+  ["source mismatch", JSON.stringify({ tests: { state: "passed", total: 1, passed: 1, failed: 0, skipped: 0, todo: 0, files: 1 },
+    source: { commit: "a".repeat(40), tree: "b".repeat(40), state: "clean" }, artifact: { sha256: "c".repeat(64), bytes: 1 },
+    runtime: { platform: "linux", arch: "x64", node: "v22.23.2" }, elapsed_ms: 1 }), "package_evidence_source", "invalid_evidence"],
+]) test(`CI08 ${name} package evidence reports the failed phase`, async t => {
+  const f = await ciFailureFixture(t, "installed_transport", "node scripts/fixture-pass.mjs");
+  if (body !== undefined) { await mkdir(join(f.root, ".verification")); await writeFile(join(f.root, ".verification/package-e2e.json"), body); }
+  const result = f.run();
+  assert.equal(result.status, 1);
+  assert.ok(result.stderr.includes(`RUNMESH_CI_GATE_ERROR gate=installed_transport phase=${phase} reason=${reason}`), result.stderr);
+  assert.equal(result.stderr.includes(f.root), false);
+  assert.equal(result.stderr.includes("PRIVATE_"), false);
+  const gate = JSON.parse(await readFile(join(f.root, "ci-results/installed_transport.json"), "utf8"));
+  const supplement = JSON.parse(await readFile(join(f.root, "ci-results/package-e2e.json"), "utf8"));
+  assert.equal(gate.state, "failed"); assert.equal(gate.exit_code, 1); assert.equal(supplement.state, "not_run");
+});
+
 test("CI08 a new attempt cannot reuse old successful package/browser/transport/provider summaries", async t => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-ci-summary-")); t.after(() => rm(root, { recursive: true, force: true }));
   for (const name of ["package-e2e", "browser-tests", "transport-tests", "crossforge-evidence"]) {

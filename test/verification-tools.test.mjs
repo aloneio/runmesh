@@ -314,7 +314,10 @@ test("browser navigation diagnostics retain only complete fixed condition marker
     assert.equal(browserErrorDiagnostic({ message }).navigation_state, undefined);
 });
 
-test("admin setup response diagnostics retain fixed stages and runtime signatures without response content", async () => {
+test("admin setup response diagnostics retain fixed stages and runtime signatures without response content", async t => {
+  // These in-memory fixtures test content classification. Deadline behavior is
+  // covered separately so host scheduling cannot change the expected content.
+  t.mock.method(performance, "now", () => 0);
   for (const stage of ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "private-stage"]) {
     const response = new Response("Error: Network connection lost.\n at https://private-token/admin", {
       status: 500, headers: { "content-type": "text/plain; private=header", "set-cookie": "private-cookie", location: "https://private-location" },
@@ -482,7 +485,8 @@ test("MCP HTTP failures retain only a bounded status from the exact fixed marker
   assert.deepEqual(browserErrorDiagnostic({ message: "private-response RUNMESH_E2E_MCP_HTTP_STATUS=503" }), { kind: "unclassified" });
 });
 
-test("MCP HTTP response evidence retains fixed RPC classifications and the read phase", async () => {
+test("MCP HTTP response evidence retains fixed RPC classifications and the read phase", async t => {
+  t.mock.method(performance, "now", () => 0);
   for (const [id, rpc_id] of [[123, "matches"], [null, "null"], ["private-id", "other"], [undefined, "absent"]]) {
     const response = Response.json({ jsonrpc: "2.0", id, error: { code: -32603, message: "private-token" }, private: "private-body" }, { status: 500 });
     const error = await mcpHttpFailure(response, 123, "read", { cursor: "private-cursor", path: "private-path" });
@@ -498,7 +502,8 @@ test("MCP HTTP response evidence retains fixed RPC classifications and the read 
   }
 });
 
-test("MCP HTTP classification does not publish custom media types, IDs, bodies or malformed RPC fields", async () => {
+test("MCP HTTP classification does not publish custom media types, IDs, bodies or malformed RPC fields", async t => {
+  t.mock.method(performance, "now", () => 0);
   for (const [type, body, content_type, body_kind] of [
     ["text/html", "<p>private-token</p>", "html", "non_json"], ["text/plain", "private", "text", "non_json"],
     ["text/event-stream", "data: private\n\n", "sse", "non_json"], ["application/private-token", "private", "other", "non_json"],
@@ -514,7 +519,8 @@ test("MCP HTTP classification does not publish custom media types, IDs, bodies o
   assert.deepEqual(browserErrorDiagnostic(empty).mcp_response, { content_type: "absent", phase: "read_initial", body_kind: "empty", rpc_code: "absent", rpc_id: "absent" });
 });
 
-test("MCP queued-command failure phases distinguish each operation without arguments", async () => {
+test("MCP queued-command failure phases distinguish each operation without arguments", async t => {
+  t.mock.method(performance, "now", () => 0);
   for (const [name, args, phase] of [
     ["runner_select", { runner_id: "private-runner" }, "runner_select"],
     ["shell", { command: "private-command" }, "shell"],
@@ -531,7 +537,8 @@ test("MCP queued-command failure phases distinguish each operation without argum
   }
 });
 
-test("MCP text failures preserve fixed runtime signatures without publishing a stack", async () => {
+test("MCP text failures preserve fixed runtime signatures without publishing a stack", async t => {
+  t.mock.method(performance, "now", () => 0);
   for (const [runtime_signature, text] of [
     ["network_connection_lost", "Network connection lost."],
     ["cross_request_io", "Cannot perform I/O on behalf of a different request."],

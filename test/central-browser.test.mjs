@@ -347,10 +347,41 @@ test("failure classification keeps protocol guidance and confirmed recovery meta
       { messageKey: "invalidActionRefreshLibrary", confirmedNotStarted: false }],
     ["connections/begin", {}, 503, { error: { code: "oauth_configuration_required" } },
       { messageKey: "oauthConfigurationRequired", confirmedNotStarted: false }],
+    ["discovery/service", {}, 404, { error: { code: "central_disabled", operation_state: "not_started" } },
+      { messageKey: "centralSetupRequired", confirmedNotStarted: false }],
+    ["discovery/service", {}, 429, { error: { code: "remote_busy", operation_state: "not_started" } },
+      { messageKey: "mcpBusy", confirmedNotStarted: false }],
+    ["connection-check", {}, 429, { error: { code: "remote_busy", operation_state: "not_started" } },
+      { messageKey: "mcpBusy", confirmedNotStarted: false }],
+    ["discovery/service", {}, 503, { error: { code: "remote_operation_timed_out", operation_state: "not_started" } },
+      { messageKey: "mcpTimedOut", confirmedNotStarted: false }],
+    ["discovery/service", {}, 503, { error: { code: "remote_operation_timed_out", operation_state: "unknown" } },
+      { messageKey: "mcpTimeoutUnconfirmed", confirmedNotStarted: false }],
+    ["connection-check", {}, 503, { error: { code: "central_authority_unavailable", operation_state: "not_started" } },
+      { messageKey: "sessionVerificationUnavailable", confirmedNotStarted: false }],
   ];
   for (const [path, body, status, value, expected] of cases) {
     Object.freeze(body); Object.freeze(value.error); Object.freeze(value);
     assert.deepEqual(classifyCentralFailure(centralRequestContract(path, body), status, value), expected);
+  }
+});
+
+for (const [code, status, messageKey] of [
+  ['central_disabled', 404, 'centralSetupRequired'], ['remote_busy', 429, 'mcpBusy'],
+  ['remote_operation_timed_out', 503, 'mcpTimedOut'], ['central_authority_unavailable', 503, 'sessionVerificationUnavailable'],
+]) test(`classified ${code} guidance keeps mutation recovery admission`, async t => {
+  const api = client(t, () => Response.json({ error: { code, operation_state: 'not_started', message: 'PRIVATE_UPSTREAM_DETAIL' } }, { status }));
+  await assert.rejects(api.request('discovery/service', { expected_revision: 1 }), { message: messageKey });
+  assert.equal(api.refreshRequired(), true);
+  await assert.rejects(api.request('discovery/service', { expected_revision: 1 }), /refreshTheLibraryBeforeMakingAnotherChange/u);
+  assert.equal(api.requests.length, 1);
+});
+
+test('unconfirmed or mismatched failure receipts never offer capacity or setup retry guidance', () => {
+  for (const [status, code, state] of [[503, 'remote_busy', 'not_started'], [429, 'remote_busy', 'unknown'],
+    [404, 'central_disabled', 'unknown'], [503, 'central_authority_unavailable', 'unknown']]) {
+    const value = classifyCentralFailure(centralRequestContract('discovery/service', {}), status, { error: { code, operation_state: state } });
+    assert.deepEqual(value, { messageKey: 'operationCouldNotBeConfirmedRefreshTheCurrentState', confirmedNotStarted: false });
   }
 });
 
