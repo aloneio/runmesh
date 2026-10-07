@@ -26,7 +26,7 @@ async function fixture() {
   });
   const skillSource = vi.fn(async (_hash: string, _action: string, _input: unknown): Promise<unknown> => undefined);
   const inspectConnection = vi.fn(async (_hash: string, _input: unknown, _origin: string): Promise<unknown> => undefined);
-  const port = { skillSource, inspectConnection, mutateProfile: vi.fn(), mutateCatalog: vi.fn(), connectionOAuth: vi.fn() };
+  const port = { skillSource, inspectConnection, installSkill: vi.fn(async (): Promise<unknown> => undefined), mutateProfile: vi.fn(), mutateCatalog: vi.fn(), connectionOAuth: vi.fn() };
   const get = vi.fn(() => port);
   const config = { ...env, CENTRAL_SKILLS_ENABLED: "1", CAPABILITIES: { idFromName: () => "central", get } } as unknown as WorkerEnv;
   const headers = { cookie: ADMIN_SESSION_COOKIE + "=" + token + "; " + ADMIN_CSRF_COOKIE + "=" + csrf,
@@ -112,6 +112,20 @@ it("source HTTP distinguishes busy, capacity, conflict and unknown outcomes with
   const conflict = await f.request("install", request); expect(conflict.status).toBe(409);
   expect(await conflict.json()).toEqual({ state: "conflict", current_revision: 3 });
   expect(f.skillSource).toHaveBeenCalledTimes(6);
+});
+
+it.each(["source", "folder"])("malformed %s installation error states retain an unknown result", async kind => {
+  const f = await fixture();
+  for (const state of [["invalid"], ["denied"], ["unavailable"]]) {
+    f.skillSource.mockResolvedValueOnce({ state });
+    f.port.installSkill.mockResolvedValueOnce({ state });
+    const response = kind === "source"
+      ? await f.request("install", { source, expected_revision: 0, digest: "a".repeat(64) })
+      : await f.central("skill-installations", { expected_revision: 0, files: [{ path: "SKILL.md", text: skillText }] });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: { code: "central_result_unconfirmed", operation_state: "unknown" } });
+  }
+  expect(kind === "source" ? f.skillSource : f.port.installSkill).toHaveBeenCalledTimes(3);
 });
 
 function githubResponse(input: RequestInfo | URL): Response {

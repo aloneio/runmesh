@@ -40,7 +40,7 @@ export async function handleSkillSource(request: Request, env: WorkerEnv, url: U
     if (result?.state === "source_capacity") return centralFailure("skill_source_capacity", 429);
     if (result?.state === "busy") return centralFailure("skill_source_busy", 429);
     if (result?.state === "capacity") return centralFailure("skill_capacity", 429);
-    if (result && ["invalid", "missing", "denied", "changed", "unavailable"].includes(String(result.state))) {
+    if (result && typeof result.state === "string" && ["invalid", "missing", "denied", "changed", "unavailable"].includes(result.state)) {
       const status = result.state === "invalid" ? 400 : result.state === "missing" ? 404 : result.state === "denied" ? 403
         : result.state === "changed" ? 409 : 503;
       return centralFailure("skill_source_" + result.state, status);

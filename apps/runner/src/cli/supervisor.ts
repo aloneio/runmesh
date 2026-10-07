@@ -7,7 +7,7 @@ import { managedServiceManifestFromContent } from "../service.js";
 import type { ParsedCommand } from "./contracts.js";
 import { parseRunnerArgs } from "../config.js";
 import { profileExecutionMode } from "../profile.js";
-import { ProfileStore } from "../profile.js";
+import type { ProfileStore } from "../profile.js";
 import type { RawRunnerOptions } from "../config.js";
 import { renderService } from "../service.js";
 import { rm } from "node:fs/promises";
@@ -19,11 +19,8 @@ import { validateRunnerConfig } from "../config.js";
 
 export async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   const raw = parseRunnerArgs(parsed.passthrough);
-  const profilePath = typeof parsed.values.profilePath === "string" ? parsed.values.profilePath : undefined;
-  const profileStore = profilePath === undefined
-    ? store
-    : new ProfileStore({ filePath: profilePath, ...(dependencies.servicePlatform === undefined ? {} : { platform: dependencies.servicePlatform }) });
-  const profile = await profileStore.load();
+  // The CLI composition root already selected the explicit/default profile.
+  const profile = await store.load();
   // A system Runner must not consume a canonical profile owned by an
   // untrusted account/group.  This is checked after parsing execution_mode so
   // dedicated_user and privileged_host receive their distinct root:group
@@ -33,8 +30,8 @@ export async function start(parsed: ParsedCommand, store: ProfileStore, error: (
     // A managed system manifest may use a custom dedicated group.  Carry the
     // identity from that manifest into the profile ownership check instead of
     // assuming the built-in `runmesh` group.
-    const serviceGroup = await serviceGroupForManagedProfile(profileStore, dependencies.servicePlatform, dependencies.serviceFilesystem);
-    await profileStore.assertServiceOwnership(profile.execution_mode, serviceGroup);
+    const serviceGroup = await serviceGroupForManagedProfile(store, dependencies.servicePlatform, dependencies.serviceFilesystem);
+    await store.assertServiceOwnership(profile.execution_mode, serviceGroup);
   }
   if ((raw.workspaces?.length ?? 0) > 0) throw new Error("Workspace configuration is centrally managed through the Runmesh Admin Panel; --workspace is not supported.");
   const server = raw.server ?? profile?.server_url;
@@ -66,12 +63,18 @@ export async function start(parsed: ParsedCommand, store: ProfileStore, error: (
     onStateChange: (state) => error(`runner ${config.runnerId}: ${state}`),
     ...(executionMode === "dedicated_user" || executionMode === "privileged_host" ? { executionMode } : {}),
   });
-  if (config.disconnectControlFile !== undefined) installDisconnectControl(runner, config.disconnectControlFile);
+  const stopDisconnectControl = config.disconnectControlFile === undefined ? undefined : installDisconnectControl(runner, config.disconnectControlFile);
   const stop = (): void => runner.stop();
+  const disconnect = (): void => runner.disconnectForTest();
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
   // Local E2E transport control; it has no persisted profile representation.
-  process.on("SIGUSR1", () => runner.disconnectForTest());
-  await runner.start();
+  process.on("SIGUSR1", disconnect);
+  try { await runner.start(); }
+  finally {
+    process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop);
+    process.removeListener("SIGUSR1", disconnect);
+    stopDisconnectControl?.();
+  }
 }
 
 /** Read the managed system definition used by a service-launched `start` and
@@ -92,4 +95,19 @@ async function serviceGroupForManagedProfile(store: ProfileStore, platform: Serv
   } catch { return undefined; }
 }
 
-function installDisconnectControl(runner: RunnerConnection, file: string): void { let busy = false; const interval = setInterval(async () => { if (busy) return; busy = true; try { await access(file); await rm(file, { force: true }); runner.disconnectForTest(); } catch { /* absent */ } finally { busy = false; } }, 50); interval.unref(); }
+function installDisconnectControl(runner: RunnerConnection, file: string): () => void {
+  let busy = false, active = true;
+  const interval = setInterval(async () => {
+    if (busy || !active) return;
+    busy = true;
+    try {
+      await access(file);
+      if (!active) return;
+      await rm(file, { force: true });
+      if (active) runner.disconnectForTest();
+    } catch { /* absent */ }
+    finally { busy = false; }
+  }, 50);
+  interval.unref();
+  return () => { active = false; clearInterval(interval); };
+}

@@ -85,7 +85,7 @@ export function packageEvidence({ tests, source, artifact, platform, arch, node,
 
 const browserSources = ["ui-browser-check.mjs", "product-browser-check.mjs", "product-browser-fixture.mjs",
   "central-management-browser-check.mjs", "central-recovery-browser-check.mjs", "central-oauth-browser-check.mjs",
-  "navigation-browser-check.mjs", "layout-browser-check.mjs", "runner-browser-check.mjs", "skill-upload-browser-check.mjs", "run-browser-e2e.mjs",
+  "navigation-browser-check.mjs", "navigation-handoff-browser-check.mjs", "layout-browser-check.mjs", "runner-browser-check.mjs", "skill-upload-browser-check.mjs", "run-browser-e2e.mjs",
   "browser-worker-fixture.mjs", "worker-fixture.mjs", "run-e2e.mjs", "run-package-e2e.mjs"];
 const browserOperations = ["Runtime.evaluate", "Page.navigate", "Page.getFrameTree", "Target.createTarget", "Target.attachToTarget",
   "Inspector.enable", "Page.enable", "Runtime.enable", "Network.enable", "Network.setCookies", "Network.setCookie", "Emulation.setDeviceMetricsOverride", "Browser.close"];

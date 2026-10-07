@@ -86,3 +86,13 @@ it("the HTTP boundary rejects incomplete or mismatched lifecycle receipts withou
   const unknown = await f.request("cleanup", { fingerprint: "a".repeat(64), expected_revision: 1, confirm: true });
   expect(await unknown.json()).toMatchObject({ error: { code: "skill_lifecycle_unknown", operation_state: "unknown" } });
 });
+
+it("malformed lifecycle error states preserve uncertain cleanup outcomes", async () => {
+  const f = await fixture();
+  for (const state of [["unknown"], ["denied"], ["conflict"]]) {
+    f.port.skillLifecycle = async () => ({ state } as unknown as SkillLifecycleResult);
+    const response = await f.request("cleanup", { fingerprint: "a".repeat(64), expected_revision: 1, confirm: true });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: { code: "skill_lifecycle_unavailable", operation_state: "unknown" } });
+  }
+});

@@ -4,7 +4,7 @@ import { join, resolve, win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
-import { classifyConnectionFailure } from "../src/connection.js";
+import { classifyConnectionFailure, RunnerConnection } from "../src/connection.js";
 import { enrollRunner } from "../src/enrollment.js";
 import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
@@ -694,6 +694,41 @@ describe("runner product CLI and service safety", () => {
       })).rejects.toThrow("local state initialization failed");
       expect(errors).toEqual(["local state initialization failed"]);
     } finally { await test.cleanup(); }
+  });
+  it("uses the CLI-selected profile store once when starting with an explicit profile path", async () => {
+    const test = await fixture();
+    const load = vi.spyOn(test.store, "load").mockResolvedValue(profile());
+    const startRunner = vi.fn(async () => undefined);
+    try {
+      await runCli(["start", "--user", "--profile", test.store.filePath], { store: test.store, startRunner, stderr: () => undefined });
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(startRunner).toHaveBeenCalledWith(expect.objectContaining({ runnerId: "runner-1", server: profile().server_url }));
+    } finally { load.mockRestore(); await test.cleanup(); }
+  });
+  it.each(["completed", "failed"])("releases startup signal handlers and disconnect polling after the Runner %s", async outcome => {
+    const test = await fixture();
+    const signals = ["SIGINT", "SIGTERM", "SIGUSR1"] as const;
+    const before = signals.map(signal => process.listeners(signal));
+    const start = vi.spyOn(RunnerConnection.prototype, "start").mockImplementation(async () => {
+      expect(signals.map(signal => process.listenerCount(signal))).toEqual(before.map(listeners => listeners.length + 1));
+      expect(vi.getTimerCount()).toBe(1);
+      if (outcome === "failed") throw new Error("startup fixture failed");
+    });
+    try {
+      await test.store.save(profile());
+      vi.useFakeTimers();
+      const run = runCli(["start", "--user", "--state-dir", join(test.root, "state"), "--disconnect-control-file", join(test.root, "disconnect")], { store: test.store, stderr: () => undefined });
+      if (outcome === "failed") await expect(run).rejects.toThrow("startup fixture failed");
+      else await run;
+      expect({ listeners: signals.map(signal => process.listenerCount(signal)), pollingTimers: vi.getTimerCount() })
+        .toEqual({ listeners: before.map(listeners => listeners.length), pollingTimers: 0 });
+    } finally {
+      for (const [index, signal] of signals.entries()) {
+        for (const listener of process.listeners(signal)) if (!before[index]!.includes(listener)) process.removeListener(signal, listener);
+      }
+      vi.clearAllTimers(); vi.useRealTimers(); start.mockRestore();
+      await test.cleanup();
+    }
   });
   it("renders dedicated-user manifests and uses privileged host only by explicit mode", () => {
     const linux = renderService({ platform: "linux", mode: "system" });

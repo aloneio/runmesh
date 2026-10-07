@@ -479,3 +479,16 @@ CI matrix versions, platforms and provider job names belong to `ci-contract.mjs`
 Workflow validation and cross-provider evidence consume that same declaration;
 job renaming is checked before publication. Packaged test evidence requires
 string source and runtime identities before projecting its report.
+
+Runner update receipts use the shared presence projection at the request's
+observation time. A successful replacement requires a fresh authenticated
+session; maintenance reads retain their read-only storage behavior. The CLI
+composition root selects the profile store once, and the supervisor releases
+its own signal listeners and disconnect timer when the connection ends.
+
+Skill HTTP adapters accept error states as strings before classifying operation
+outcomes. Malformed receipts retain the unknown-result classification. Central
+interaction fixtures preserve multiple event listeners and callback identity,
+so workflow invalidation remains observable alongside additional handlers.
+Browser CI diagnostics identify the failing leaf check, including navigation
+handoff, and project only public source coordinates.

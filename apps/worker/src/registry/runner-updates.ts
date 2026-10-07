@@ -1,6 +1,7 @@
 import { RunnerUpdateClaimSchema, RunnerUpdateDrainProofSchema, RunnerUpdateOperationSchema, RunnerUpdateStatusSchema, isTerminalRunnerUpdate, type RunnerUpdateOperation, type RunnerUpdateResponse, type RunnerUpdateState } from "@aloneio/runmesh-protocol";
 import type { RegistryStorage } from "./storage.js";
 import type { RunnerRow, InternalInput, RunnerRecord, RunnerUpdateChannel } from "./records.js";
+import { observedRunnerState } from "../contracts/runner-selection.js";
 
 type UpdateRow = { operation_json: string; claim_epoch: number | null; fingerprint: string };
 export function ensureRunnerUpdatesSchema(sql: SqlStorage): void {
@@ -22,12 +23,14 @@ export class RegistryRunnerUpdates {
   private latest(id: string, lifecycleId: string): UpdateRow | undefined {
     return this.storage.sql.exec<UpdateRow>("SELECT operation_json, claim_epoch, fingerprint FROM runner_updates WHERE runner_id = ? AND lifecycle_id = ? ORDER BY created_at_ms DESC, rowid DESC LIMIT 1", id, lifecycleId).toArray()[0];
   }
-  public response(id: string): RunnerUpdateResponse | undefined {
+  public response(id: string, now: number): RunnerUpdateResponse | undefined {
     const runner = this.ports.runnerRow(id);
     if (runner === undefined) return undefined;
     const row = this.latest(id, runner.lifecycle_id);
     const operation = row === undefined ? null : RunnerUpdateOperationSchema.parse(JSON.parse(row.operation_json));
-    const online = runner.state === "online" && runner.session_id !== null;
+    // A delayed alarm is not current evidence that the replacement is alive.
+    // Observe liveness without making maintenance polling write Runner state.
+    const online = observedRunnerState(runner.state, runner.last_heartbeat_ms, now) === "online" && runner.session_id !== null;
     return { operation, cloud_drained: false, cloud_uncertain: false, observed_version: online ? runner.current_runner_version : null,
       observed_new_session: online && row?.claim_epoch !== null && row?.claim_epoch !== undefined && runner.connection_epoch > row.claim_epoch };
   }
@@ -48,7 +51,7 @@ export class RegistryRunnerUpdates {
       if (reused !== undefined) return new Response("update request belongs to a previous Runner lifecycle", { status: 409 });
       const latest = this.latest(id, runner.lifecycle_id);
       if (previous !== undefined) return previous.fingerprint === fingerprint && latest?.operation_json === previous.operation_json
-        ? Response.json(this.response(id)) : new Response("update request changed", { status: 409 });
+        ? Response.json(this.response(id, now)) : new Response("update request changed", { status: 409 });
       if (latest !== undefined) {
         const current = RunnerUpdateOperationSchema.parse(JSON.parse(latest.operation_json));
         if (!isTerminalRunnerUpdate(current.state) || current.error_code === "rollback_failed") return new Response("Runner update already in progress or requires host recovery", { status: 409 });
@@ -56,7 +59,7 @@ export class RegistryRunnerUpdates {
       this.ports.setPolicy(id, { update_channel: input.update_channel as RunnerUpdateChannel,
         ...(input.update_channel === "pinned" ? { desired_runner_version: operation.target_version } : { latest_runner_version: operation.target_version }) }, now);
       this.storage.sql.exec("INSERT INTO runner_updates (runner_id, lifecycle_id, operation_id, operation_json, claim_epoch, fingerprint, created_at_ms) VALUES (?, ?, ?, ?, NULL, ?, ?)", id, runner.lifecycle_id, operation.operation_id, JSON.stringify(operation), fingerprint, now);
-      return Response.json(this.response(id));
+      return Response.json(this.response(id, now));
     });
   }
 
@@ -65,20 +68,20 @@ export class RegistryRunnerUpdates {
     const lifecycleId = method === "GET" ? url.searchParams.get("lifecycle_id") : input.auth_lifecycle_id;
     const credential = method === "GET" ? Number(url.searchParams.get("credential_version")) : input.auth_credential_version;
     if (runner === undefined || runner.lifecycle_id !== lifecycleId || runner.credential_version !== credential) return new Response("unauthorized", { status: 401 });
-    if (method === "GET" && action === undefined) return Response.json(this.response(id));
-    if (method === "GET" && action === "evidence") return Response.json({ update: this.response(id), claim_epoch: this.latest(id, runner.lifecycle_id)?.claim_epoch ?? null, connection_epoch: runner.connection_epoch });
+    if (method === "GET" && action === undefined) return Response.json(this.response(id, now));
+    if (method === "GET" && action === "evidence") return Response.json({ update: this.response(id, now), claim_epoch: this.latest(id, runner.lifecycle_id)?.claim_epoch ?? null, connection_epoch: runner.connection_epoch });
     if (method !== "POST" || (action !== "claim" && action !== "status" && action !== "drain-proof")) return new Response("not found", { status: 404 });
     const { auth_lifecycle_id: _lifecycle, auth_credential_version: _credential, ...body } = input;
     const parsed = action === "claim" ? RunnerUpdateClaimSchema.safeParse(body) : action === "drain-proof" ? RunnerUpdateDrainProofSchema.safeParse(body) : RunnerUpdateStatusSchema.safeParse(body);
     if (!parsed.success) return new Response("invalid update request", { status: 400 });
-    const current = this.response(id)!;
+    const current = this.response(id, now)!;
     const operation = current.operation;
     if (operation === null || parsed.data.operation_id !== operation.operation_id || parsed.data.lifecycle_id !== operation.lifecycle_id || operation.manager_id !== null && operation.manager_id !== parsed.data.manager_id) return new Response("update ownership changed", { status: 409 });
     if (action === "claim") {
       if (operation.manager_id === null && !isTerminalRunnerUpdate(operation.state)) {
         this.write(id, { ...operation, manager_id: parsed.data.manager_id, state: "verifying", original_version: runner.current_runner_version, updated_at_ms: now }, runner.connection_epoch);
       }
-      return Response.json(this.response(id));
+      return Response.json(this.response(id, now));
     }
     if (action === "drain-proof") {
       const baseline = this.latest(id, runner.lifecycle_id)?.claim_epoch;
@@ -90,7 +93,7 @@ export class RegistryRunnerUpdates {
     if (operation.state === status.state && operation.error_code === (status.error_code ?? null)) return Response.json(current);
     if (operation.state === status.state && !isTerminalRunnerUpdate(operation.state)) {
       this.write(id, { ...operation, error_code: status.error_code ?? null, updated_at_ms: now });
-      return Response.json(this.response(id));
+      return Response.json(this.response(id, now));
     }
     if (isTerminalRunnerUpdate(operation.state) || !transitionAllowed(operation.state, status.state)) return new Response("invalid update transition", { status: 409 });
     if (status.state === "succeeded" || status.state === "rolled_back") {
@@ -98,7 +101,7 @@ export class RegistryRunnerUpdates {
       if (!current.observed_new_session || expected === null || current.observed_version !== expected) return new Response("new authenticated Runner version not observed", { status: 409 });
     }
     this.write(id, { ...operation, state: status.state, error_code: status.error_code ?? null, updated_at_ms: now });
-    return Response.json(this.response(id));
+    return Response.json(this.response(id, now));
   }
   private write(id: string, operation: RunnerUpdateOperation, epoch?: number): void {
     this.storage.sql.exec("UPDATE runner_updates SET operation_json = ?, claim_epoch = COALESCE(?, claim_epoch) WHERE runner_id = ? AND lifecycle_id = ? AND operation_id = ?", JSON.stringify(operation), epoch ?? null, id, operation.lifecycle_id, operation.operation_id);
