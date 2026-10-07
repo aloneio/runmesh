@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { UpdateCoordinator } from "../src/updates/coordinator.js";
 import { MaintenanceHttpError, UpdateFailure } from "../src/updates/contracts.js";
+import { waitForRetry } from "../src/updates/wait.js";
 import type { CloudUpdateOperation, CloudUpdateObservation, UpdateCoordinatorOptions, UpdateJournal, UpdateJournalRecord } from "../src/updates/contracts.js";
 
 const operation = (): CloudUpdateOperation => ({ operation_id: "upgrade_1", lifecycle_id: "lifecycle_1", target_version: "0.1.6", target_channel: "stable", manifest_sha256: "a".repeat(64), artifact_sha256: "b".repeat(64), original_version: "0.1.7", manager_id: null, state: "queued", error_code: null, created_at_ms: 1, updated_at_ms: 1 });
@@ -86,6 +87,53 @@ describe("independent update coordinator", () => {
     await expect(new UpdateCoordinator({ ...test.options, cloud, signal: controller.signal, sleep: async ms => { delays++; await test.options.sleep!(ms); } }).runOnce()).rejects.toThrow("rollback_failed");
     expect(delays).toBe(0); expect(test.events).toContain("restore");
     expect(test.active()).toMatchObject({ phase: "recovery_required", error_code: "rollback_failed" });
+  });
+
+  it.each([429, 503])("interrupts an HTTP %s activation retry wait when the manager stops", async status => {
+    vi.useFakeTimers();
+    const test = fixture(), controller = new AbortController();
+    const options = { ...test.options, sleep: (ms: number) => waitForRetry(ms, controller.signal) };
+    let finished = false, checkingReads = 0;
+    const cloud = { ...test.options.cloud, poll: async () => {
+      if (test.active()?.phase === "checking" && ++checkingReads === 1) throw new MaintenanceHttpError(status, 120_000);
+      return test.options.cloud.poll();
+    } };
+    const running = new UpdateCoordinator({ ...options, cloud, now: () => Date.now(), activationTimeoutMs: 120_000, signal: controller.signal }).runOnce()
+      .then(() => { finished = true; return undefined; }, error => { finished = true; return error; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.active()?.phase).toBe("checking"); expect(checkingReads).toBe(1);
+      controller.abort(); await vi.advanceTimersByTimeAsync(0);
+      expect(finished).toBe(true);
+      expect(await running).toMatchObject({ code: "rollback_failed" });
+      expect(test.events).toContain("restore");
+      expect(test.active()).toMatchObject({ phase: "recovery_required", error_code: "rollback_failed" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort(); await vi.runAllTimersAsync(); await running; vi.useRealTimers();
+    }
+  });
+
+  it("stops polling the drain proof when the manager stops during a conflict retry wait", async () => {
+    vi.useFakeTimers();
+    const test = fixture(), controller = new AbortController(); test.setCloudUncertain(true); test.setCloudDrained(false);
+    const options = { ...test.options, sleep: (ms: number) => waitForRetry(ms, controller.signal) };
+    let finished = false, proofReads = 0;
+    const cloud = { ...test.options.cloud, proveStopped: async () => { proofReads++; throw new MaintenanceHttpError(409); } };
+    const running = new UpdateCoordinator({ ...options, cloud, now: () => Date.now(), activationTimeoutMs: 120_000, signal: controller.signal }).runOnce()
+      .then(() => { finished = true; return undefined; }, error => { finished = true; return error; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(test.active()?.phase).toBe("stopping"); expect(proofReads).toBe(1);
+      controller.abort(); await vi.advanceTimersByTimeAsync(0);
+      expect(finished).toBe(true); expect(proofReads).toBe(1);
+      expect(await running).toMatchObject({ code: "rollback_failed" });
+      expect(test.events).toContain("restore"); expect(test.events).not.toContain("switch");
+      expect(test.active()).toMatchObject({ phase: "recovery_required", error_code: "rollback_failed" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort(); await vi.runAllTimersAsync(); await running; vi.useRealTimers();
+    }
   });
 
   it("allows an exact signed downgrade and persists success before releasing the cloud fence", async () => {

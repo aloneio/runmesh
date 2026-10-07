@@ -16,6 +16,7 @@ import { inspectLocalJobs } from "./job-drain.js";
 import { maintenanceManagerLayout } from "./manager-install.js";
 import { createNativeServiceMaintenance } from "./native-service.js";
 import { stageRunnerRelease } from "./release-stager.js";
+import { waitForRetry } from "./wait.js";
 
 export interface MaintenanceAgentOptions {
   readonly profilePath: string;
@@ -25,14 +26,6 @@ export interface MaintenanceAgentOptions {
   readonly fetch?: typeof fetch;
   readonly signal?: AbortSignal;
   readonly onError?: (code: string) => void;
-}
-
-function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise(resolveSleep => {
-    const finish = () => { clearTimeout(timer); signal.removeEventListener("abort", finish); resolveSleep(); };
-    const timer = setTimeout(finish, milliseconds); signal.addEventListener("abort", finish, { once: true });
-  });
 }
 
 /** This entry point can only run from the copied manager runtime and bundle.
@@ -75,7 +68,7 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
           await profile();
           // Keep the manager alive so native KeepAlive cannot create a retry
           // storm. A rotated local credential resumes without a reinstall.
-          if (requestCredential === rejectedCredential) { await sleep(delayMs, signal); continue; }
+          if (requestCredential === rejectedCredential) { await waitForRetry(delayMs, signal); continue; }
           rejectedCredential = undefined; failures = 0; lastError = undefined;
         }
         const saved = await journal.load();
@@ -94,7 +87,7 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
               installation: new ManagedInstallationPointer(layout.layout.installRoot),
               service: createNativeServiceMaintenance(options),
               stage: (target, operationId) => stageRunnerRelease(target, { installRoot: layout.layout.installRoot, operationId, runtimePath: layout.runtimePath, ...(options.fetch === undefined ? {} : { fetch: options.fetch }) }),
-              jobs: () => inspectLocalJobs(layout.layout.stateRoot), signal,
+              jobs: () => inspectLocalJobs(layout.layout.stateRoot), signal, sleep: ms => waitForRetry(ms, signal),
               assertInstallationLock: () => held.assertHeld(),
             });
             await coordinator.runOnce();
@@ -115,7 +108,7 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
       } finally { await lease?.release().catch(() => undefined); }
       // Idle polling is read-only and jittered; active phase writes occur only
       // on transitions, never once per poll or when no operation is offered.
-      await sleep(delayMs, signal);
+      await waitForRetry(delayMs, signal);
     }
   } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
 }

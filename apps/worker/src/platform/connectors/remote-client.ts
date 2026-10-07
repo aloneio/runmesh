@@ -123,7 +123,8 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             if (response.status !== 202) throw new RemoteFault("upstream_protocol_error");
             return new Response(null, { status: 202 });
           }
-          const guarded = await guardedRemoteResponse(response, message.id as string | number, signal, account);
+          const guarded = await guardedRemoteResponse(response, message.id as string | number, signal, account,
+            rule.negotiate === true && method === "server/discover");
           const text = await guarded.text();
           if (!credentialCurrent() || !egressCurrent()) throw new RemoteFault("result_withheld");
           // Detect direct reflection of our bearer; this is not a general DLP promise.
@@ -140,7 +141,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
                 throw new RemoteFault("upstream_protocol_error");
             }
           }
-          return new Response(text, { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+          return new Response(text, { status: guarded.status, headers: { "content-type": guarded.headers.get("content-type")!, "cache-control": "no-store" } });
         } catch (error) {
           lastFault = error instanceof RemoteFault ? error : new RemoteFault(signal.aborted ? "operation_timed_out" : "upstream_unavailable");
           throw lastFault;

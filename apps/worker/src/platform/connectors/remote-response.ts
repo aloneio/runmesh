@@ -26,17 +26,32 @@ export function boundedWireJson(text: string): Record<string, unknown> {
 
 /** Request-scoped JSON/SSE guard. Only a final response for the outbound ID is
  * handed to the SDK. Progress/log frames are discarded, never stored. Reads end
- * at the final SSE response, not at an untrusted peer's optional EOF. */
+ * at the final SSE response, not at an untrusted peer's optional EOF. Discovery
+ * HTTP client errors retain their bounded body and status for SDK negotiation. */
 export async function guardedRemoteResponse(response: Response, id: string | number, signal: AbortSignal,
-  account: (bytes: number) => void): Promise<Response> {
+  account: (bytes: number) => void, discovery = false): Promise<Response> {
   const cancelBody = () => { void response.body?.cancel().catch(() => undefined); };
+  if (signal.aborted) { cancelBody(); throw new RemoteFault("operation_timed_out"); }
   const type = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
   const size = response.headers.get("content-length");
-  if (!response.ok || response.status !== 200 || !["application/json", "text/event-stream"].includes(type ?? "")
+  const discoveryFailure = discovery && response.status >= 400 && response.status < 500 && ![401, 403, 429].includes(response.status);
+  if ((!discoveryFailure && (response.status !== 200 || !["application/json", "text/event-stream"].includes(type ?? "")))
     || (size !== null && (!/^\d+$/u.test(size) || Number(size) > REMOTE_LIMITS.response_bytes))
     || response.headers.has("mcp-session-id")) { cancelBody(); throw new RemoteFault("upstream_protocol_error"); }
   const reader = response.body?.getReader();
-  if (reader === undefined) throw new RemoteFault("upstream_protocol_error");
+  const discoveryResponse = (body: string | null) => {
+    // The SDK also parses JSON-shaped HTTP errors regardless of Content-Type.
+    // Apply the same depth/node budget before that decoder, and normalize
+    // escapes so the caller's credential-reflection check sees string values.
+    const first = body?.trimStart()[0];
+    const bounded = body !== null && (first === "{" || first === "[") ? JSON.stringify(boundedWireJson(body)) : body;
+    return new Response(bounded, { status: response.status,
+      headers: { "content-type": type ?? "text/plain", "cache-control": "no-store" } });
+  };
+  if (reader === undefined) {
+    if (discoveryFailure) return discoveryResponse(null);
+    throw new RemoteFault("upstream_protocol_error");
+  }
   let stopped = false, bytes = 0, fragments = 0, events = 0, pending = "", data: string[] = [], eventBytes = 0;
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const abort = () => { stopped = true; void reader.cancel().catch(() => undefined); };
@@ -69,6 +84,10 @@ export async function guardedRemoteResponse(response: Response, id: string | num
         if (bytes > REMOTE_LIMITS.response_bytes) throw new RemoteFault("upstream_protocol_error");
       }
       pending += chunk.done ? decoder.decode() : decoder.decode(chunk.value, { stream: true });
+      if (discoveryFailure) {
+        if (!chunk.done) continue;
+        return discoveryResponse(pending);
+      }
       if (type === "application/json") {
         if (!chunk.done) continue;
         const value = frame(pending);
