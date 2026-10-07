@@ -398,6 +398,15 @@ async function readUtf8FileSecure(
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
+    // A search hit and its continuation digest must describe one complete
+    // observation, not a prefix or bytes spliced across concurrent writes.
+    // Reuse the same descriptor and policy checks as ordinary file reads;
+    // the caller skips an unstable file while retaining its I/O budget cost.
+    const after = await handle.stat();
+    await policy.verifySnapshot(resolved, snapshot);
+    if (offset !== data.byteLength || !sameIdentity(after, snapshot) || fileObservation(after) !== fileObservation(info)) {
+      throw new RpcRuntimeError("file_changed", "The file changed while it was being searched");
+    }
     const sample = data.subarray(0, offset);
     if (sample.includes(0)) throw new Error("binary file");
     return { content: new TextDecoder("utf-8", { fatal: true }).decode(sample), size: offset };
@@ -577,12 +586,12 @@ function sameIdentity(info: { readonly dev: number; readonly ino: number }, snap
 }
 
 function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("params must be an object");
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object");
   return value as Record<string, unknown>;
 }
 function boundedInteger(value: unknown, min: number, max: number, fallback: number): number {
   if (value === undefined || value === null) return fallback;
   if (typeof value === "string" && /^\d+$/.test(value)) value = Number(value);
-  if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) throw new Error("invalid pagination value");
+  if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) throw new RpcRuntimeError("invalid_params", "invalid pagination value");
   return value as number;
 }

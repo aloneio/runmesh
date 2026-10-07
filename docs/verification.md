@@ -46,7 +46,7 @@ Open `ci-results/` in the job artifacts for JSON summaries and JUnit reports. Tr
 
 Before publishing success, the gates recheck the observed commit, tree and checkout state. A change during verification produces a `source_validation` failure; existing test failures retain their original phase. Local dirty or unknown checkouts keep that status in their reports.
 
-Windows initializes its transport reports before installing dependencies. A `not_run` result means the transport step has not started; check the preceding job steps for the failure.
+Verification, browser and Windows transport jobs initialize their reports before installing npm or dependencies. A `not_run` result means that check has not started; check the preceding job steps for the failure.
 
 ## Verify the installed package
 

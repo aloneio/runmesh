@@ -10,11 +10,17 @@ import { writeSupplement } from "./ci-supplement.mjs";
 import { readEvidenceJson } from "./evidence-io.mjs";
 import { resolveTrustedTaskkillPath } from "./windows-tools.mjs";
 
+async function initializeReports(id, source) {
+  const gates = id === "verify" ? CHECK_IDS : [id];
+  const supplements = id === "verify" ? ["package-e2e", "browser-tests", "transport-tests", "crossforge-evidence"] : [`${id}-tests`];
+  for (const name of gates) await writeGateReport(gateEvidence(name, "not_run", 0, null, source));
+  for (const name of supplements) await writeSupplement(name, { schema_version: 1, state: "not_run", source });
+}
+
 if (process.argv[2] === "--initialize") {
-  assert.deepEqual(process.argv.slice(3), ["transport"], "Use --initialize transport");
-  const source = sourceObservation();
-  await writeGateReport(gateEvidence("transport", "not_run", 0, null, source));
-  await writeSupplement("transport-tests", { schema_version: 1, state: "not_run", source });
+  const id = process.argv[3];
+  assert.ok(process.argv.length === 4 && ["verify", "transport", "browser"].includes(id), "Use --initialize verify, --initialize transport or --initialize browser");
+  await initializeReports(id, sourceObservation());
   process.exit(0);
 }
 
@@ -30,10 +36,7 @@ function reportFailure(phase, error) {
   console.error(`RUNMESH_CI_GATE_ERROR gate=${id} phase=${phase} reason=${reason}`);
 }
 const source = sourceObservation(), started = Date.now();
-if (id === "toolchain") {
-  for (const name of CHECK_IDS) await writeGateReport(gateEvidence(name, "not_run", 0, null, source));
-  for (const name of ["package-e2e", "browser-tests", "transport-tests", "crossforge-evidence"]) await writeSupplement(name, { schema_version: 1, state: "not_run", source });
-}
+if (id === "toolchain") await initializeReports("verify", source);
 await writeGateReport(gateEvidence(id, "running", 0, null, source));
 if (id === "installed_transport") await writeSupplement("package-e2e", { schema_version: 1, state: "not_run", source });
 const [program, ...args] = CI_CHECKS[id].split(" ");

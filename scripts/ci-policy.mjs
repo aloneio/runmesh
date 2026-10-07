@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { parseDocument } from "yaml";
 import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, githubReportUpload, gitlabReportArtifacts, GITLAB_EVENTS } from "./ci-contract.mjs";
-import { GITHUB_JOB_NAMES, NATIVE_RUNNER_PLATFORMS, RUNNER_LTS_VERSIONS } from "./ci-contract.mjs";
+import { GITHUB_JOB_NAMES, NATIVE_RUNNER_PLATFORMS, RUNNER_LTS_VERSIONS, VERIFY_REPORT_INITIALIZATION_COMMAND } from "./ci-contract.mjs";
 
 export function parseCi(source) {
   assert.ok(typeof source === "string" && Buffer.byteLength(source) <= 1048576, "CI YAML byte budget");
@@ -30,6 +30,15 @@ function requiredStep(steps, command, condition) {
   assert.equal(step.shell, undefined, "critical steps must use the reviewed default shell");
   assert.equal(step.if, condition, `critical step condition changed: ${command}`);
   assert.ok(step["continue-on-error"] === undefined && step["working-directory"] === undefined, `nonblocking/relocated critical step: ${command}`);
+}
+function reportInitialization(steps, command, condition, label) {
+  requiredStep(steps, command, condition);
+  const initialization = steps.findIndex(step => step.run === command);
+  const runtime = steps[initialization - 1];
+  assert.ok(runtime?.uses?.startsWith("actions/setup-node@"), `${label} report initialization must immediately follow Node setup`);
+  assert.equal(runtime.with?.["node-version-file"], ".node-version", `${label} reports must use the reviewed Node runtime`);
+  assert.ok(runtime.if === undefined && runtime["continue-on-error"] === undefined, `${label} Node setup must be unconditional and blocking`);
+  assert.equal(steps.findIndex(step => step.run !== undefined), initialization, `${label} reports must exist before any prerequisite command can fail`);
 }
 function reportUpload(job, name) {
   const uploads = job.steps.filter(step => step.uses?.startsWith("actions/upload-artifact@"));
@@ -60,8 +69,9 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   assert.ok(Number.isSafeInteger(verify["timeout-minutes"]) && verify["timeout-minutes"] <= 30);
   assert.ok(verify.defaults === undefined && gh.defaults === undefined, "implicit working-directory/shell overrides are unreviewed");
   for (const id of CHECK_IDS) requiredStep(verify.steps, checkCommand(id));
+  reportInitialization(verify.steps, VERIFY_REPORT_INITIALIZATION_COMMAND, undefined, "Verification");
   const order = verify.steps.filter(s => typeof s.run === "string" && s.run.startsWith("node scripts/ci-check.mjs ")).map(s => s.run);
-  eq(order, CHECK_IDS.map(checkCommand), "mandatory checks reordered, removed, or duplicated");
+  eq(order, [VERIFY_REPORT_INITIALIZATION_COMMAND, ...CHECK_IDS.map(checkCommand)], "mandatory checks reordered, removed, or duplicated");
   for (const name of AGGREGATE_JOBS) {
     hardJob(gh.jobs?.[name], name);
     reportUpload(gh.jobs[name], name);
@@ -76,14 +86,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   eq(gh.jobs["runner-lts"].strategy?.matrix, { node: [...RUNNER_LTS_VERSIONS] }, "LTS matrix must execute every declared runtime");
   for (const command of NATIVE_COMMANDS) requiredStep(gh.jobs["native-runner"].steps, command);
   requiredStep(gh.jobs["native-runner"].steps, WINDOWS_TRANSPORT_STEP.run, WINDOWS_TRANSPORT_STEP.if);
-  const nativeSteps = gh.jobs["native-runner"].steps;
-  requiredStep(nativeSteps, WINDOWS_REPORT_INITIALIZATION_STEP.run, WINDOWS_REPORT_INITIALIZATION_STEP.if);
-  const initialization = nativeSteps.findIndex(step => step.run === WINDOWS_REPORT_INITIALIZATION_STEP.run);
-  const nativeRuntime = nativeSteps[initialization - 1];
-  assert.ok(nativeRuntime?.uses?.startsWith("actions/setup-node@"), "Windows report initialization must immediately follow Node setup");
-  assert.equal(nativeRuntime.with?.["node-version-file"], ".node-version", "Windows reports must use the reviewed Node runtime");
-  assert.ok(nativeRuntime.if === undefined && nativeRuntime["continue-on-error"] === undefined, "native Node setup must be unconditional and blocking");
-  assert.equal(nativeSteps.findIndex(step => step.run !== undefined), initialization, "Windows reports must exist before any prerequisite command can fail");
+  reportInitialization(gh.jobs["native-runner"].steps, WINDOWS_REPORT_INITIALIZATION_STEP.run, WINDOWS_REPORT_INITIALIZATION_STEP.if, "Windows");
   for (const command of LTS_COMMANDS) requiredStep(gh.jobs["runner-lts"].steps, command);
   const ltsSteps = gh.jobs["runner-lts"].steps;
   const runtimeSetup = ltsSteps.filter(step => step.uses?.startsWith("actions/setup-node@")).at(-1);
@@ -93,6 +96,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
     assert.ok(ltsSteps.indexOf(runtimeSetup) < ltsSteps.findIndex(step => step.run === command), "LTS runtime must be selected before its tests");
   }
   for (const command of BROWSER_COMMANDS) requiredStep(gh.jobs.browser.steps, command);
+  reportInitialization(gh.jobs.browser.steps, BROWSER_COMMANDS[0], undefined, "Browser");
   eq(gh.jobs.browser.steps.filter(step => step.run !== undefined).map(step => step.run), BROWSER_COMMANDS, "GitHub browser preparation and tests must execute in the reviewed order");
   const aggregate = gh.jobs["verify-all"];
   assert.equal(aggregate?.defaults, undefined, "aggregate must not override the result-check shell or working directory");
@@ -109,7 +113,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
     assert.ok(gl[name].extends === undefined && gl[name].when === undefined, "unreviewed inherited/manual " + name);
     eq(gl[name].artifacts, gitlabReportArtifacts(), `GitLab ${name} must preserve only the reviewed reports after failure`);
   }
-  eq(gl.verify.script, ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], "GitLab must execute all checks without shell masking");
+  eq(gl.verify.script, [VERIFY_REPORT_INITIALIZATION_COMMAND, "npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], "GitLab must execute all checks without shell masking");
   assert.equal(gl.verify.timeout, "30m");
   eq(gl.browser.script, BROWSER_COMMANDS, "GitLab browser preparation and tests must execute in order without shell masking");
   // Do not accept a shell comment, `|| true`, background process, or test-name

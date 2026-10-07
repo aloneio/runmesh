@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "./ci-policy.mjs";
 import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_ADDED_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, BROWSER_COMMANDS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand, GITLAB_EVENTS } from "./ci-contract.mjs";
+import { VERIFY_REPORT_INITIALIZATION_COMMAND } from "./ci-contract.mjs";
 
 const yaml = value => stringify(value, { aliasDuplicateObjects: false, lineWidth: 0 });
 const checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
@@ -36,6 +37,9 @@ export function proposedCiFiles(input) {
   const sourceCheckout = existing.find(step => step.uses?.startsWith("actions/checkout@"));
   assert.ok(sourceCheckout, "legacy source checkout is required");
   sourceCheckout.with = { ...sourceCheckout.with, "fetch-depth": 0 };
+  const verifyRuntime = existing.findIndex(step => step.uses?.startsWith("actions/setup-node@"));
+  assert.ok(verifyRuntime >= 0, "legacy verification Node setup is required");
+  existing.splice(verifyRuntime + 1, 0, { run: VERIFY_REPORT_INITIALIZATION_COMMAND });
   // Non-critical setup stays as reviewed; each former command maps exactly
   // once to the new wrapper, rather than growing a second execution list.
   for (const [id, command] of Object.entries(CI_CHECKS)) {
@@ -59,7 +63,7 @@ export function proposedCiFiles(input) {
   gh.jobs["verify-all"].steps = [{ name: "Require every mandatory job", env, run: Object.keys(env).map(key => `test "$${key}" = success`).join(" && ") }];
   gl.workflow.rules = rules();
   Object.assign(gl.verify, { variables: { ...gl.verify.variables, GIT_DEPTH: "0" }, timeout: "30m", interruptible: true, allow_failure: false, rules: rules(),
-    script: ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], artifacts: gitlabReportArtifacts() });
+    script: [VERIFY_REPORT_INITIALIZATION_COMMAND, "npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], artifacts: gitlabReportArtifacts() });
   gl.browser = { stage: "verify", timeout: "15m", interruptible: true, allow_failure: false, rules: rules(),
     script: [...BROWSER_COMMANDS], artifacts: gitlabReportArtifacts() };
   // Preserve historical checks and add only the declared later native gates.

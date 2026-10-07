@@ -21,6 +21,7 @@ verify:
   variables:
     GIT_DEPTH: "0"
   script:
+    - node scripts/ci-check.mjs --initialize verify
     - npm install --global npm@10.9.3
     - node scripts/ci-check.mjs toolchain
     - node scripts/ci-check.mjs install
@@ -77,6 +78,7 @@ browser:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - when: never
   script:
+    - node scripts/ci-check.mjs --initialize browser
     - npm install --global npm@10.9.3
     - npm ci
     - npm run typecheck

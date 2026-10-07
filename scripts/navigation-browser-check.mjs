@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 import { adminDocument } from '../apps/worker/dist/admin/layout.js';
+import { enrollmentDocument } from '../apps/worker/dist/admin/enrollment-view.js';
 
 /** Exercise the shipped navigation bundle using disposable HTTP responses. */
 export async function checkAdminNavigation(executable) {
   const requests = [], errors = [];
   let phase, arrived, release;
-  const pageFor = path => adminDocument('Navigation fixture', '<p data-navigation-fixture>' + path + '</p>'
+  const pageFor = path => path === '/admin/enrollment-fixture' ? enrollmentDocument({
+    publicBase: 'https://worker.test', runnerId: 'navigation-fixture', code: 'fixture-code', csrf: 'fixture-csrf',
+    reEnroll: false, bootstrap: false, executionMode: 'dedicated_user', maxValidityDays: 365, enrollment: undefined,
+  }) : adminDocument('Navigation fixture', '<p data-navigation-fixture>' + path + '</p>'
     + (path === '/admin/clients' ? '<a href="#add-client" data-same-page-fragment-link>Add a client</a><div style="height:1800px"></div><section id="add-client"><h2>Add a client</h2><label>Connection label<input name="label"></label></section><div style="height:1000px"></div>' : '')
     + (path === '/admin/settings' ? '<a href="/admin/clients#add-client" data-fragment-link>Add a client</a>' : ''), 'dashboard');
   const server = createServer((req, res) => {
@@ -16,7 +20,7 @@ export async function checkAdminNavigation(executable) {
     requests.push({ path, navigation });
     res.setHeader('content-type', 'text/html');
     res.setHeader('cache-control', 'no-store');
-    if (path === '/admin/runners' && !navigation) {
+    if (phase && path === '/admin/runners' && !navigation) {
       arrived?.();
       if (phase === 'headers') return;
       if (phase === 'body') { res.write('<!doctype html><html>'); return; }
@@ -62,6 +66,27 @@ export async function checkAdminNavigation(executable) {
         assert.deepEqual(requests.filter(request => request.navigation).map(request => request.path), ['/admin', destination]);
       } finally { arrived = undefined; release = undefined; await page.close(); }
     }
+    phase = undefined;
+    const enrollmentPage = await browser.newPage({ viewport: { width: 1800, height: 1000 } });
+    enrollmentPage.on('pageerror', error => errors.push(error.message));
+    try {
+      await enrollmentPage.goto(origin + '/admin/runners');
+      const shellWidth = () => enrollmentPage.locator('[data-page-container].is-active .shell').evaluate(node => node.getBoundingClientRect().width);
+      const directWidth = await shellWidth();
+      await enrollmentPage.goto(origin + '/admin/enrollment-fixture');
+      await enrollmentPage.waitForFunction(() => document.documentElement.getAttribute('data-runmesh-navigation') === 'ready');
+      assert.ok(await shellWidth() < directWidth, 'Enrollment keeps its compact page layout');
+      await enrollmentPage.evaluate(() => { window.navigationFixtureVisited = true; });
+      await enrollmentPage.locator('.dialog-actions a[href="/admin/runners"]').click();
+      await enrollmentPage.waitForURL(origin + '/admin/runners');
+      await enrollmentPage.locator('[data-navigation-fixture]').filter({ hasText: '/admin/runners' }).waitFor();
+      assert.equal(await enrollmentPage.evaluate(() => window.navigationFixtureVisited), true, 'Done uses the existing navigation document');
+      assert.equal(await shellWidth(), directWidth, 'Runners must not inherit the departed enrollment page width');
+      await enrollmentPage.locator('nav a[href="/admin/settings"]').click();
+      await enrollmentPage.waitForURL(origin + '/admin/settings');
+      await enrollmentPage.locator('[data-navigation-fixture]').filter({ hasText: '/admin/settings' }).waitFor();
+      assert.equal(await shellWidth(), directWidth, 'Later pages retain their ordinary layout after enrollment');
+    } finally { await enrollmentPage.close(); }
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     page.on('pageerror', error => errors.push(error.message));
     try {
@@ -129,7 +154,7 @@ export async function checkAdminNavigation(executable) {
       } finally { await repository.close(); }
     } finally { await page.close(); }
     assert.deepEqual(errors, []);
-    return { state: 'passed', scenarios: scenarios.length + 8, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, fragment_focus_and_scroll_restored: true, resized_same_page_fragments_visible: true, same_page_forms_preserved: true, repository_link_preserves_console: true, screenshots: 0 };
+    return { state: 'passed', scenarios: scenarios.length + 9, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, enrollment_layout_scope_restored: true, fragment_focus_and_scroll_restored: true, resized_same_page_fragments_visible: true, same_page_forms_preserved: true, repository_link_preserves_console: true, screenshots: 0 };
   } finally {
     await browser?.close();
     server.closeAllConnections();

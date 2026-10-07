@@ -99,8 +99,7 @@ export const surfacesStyles = `/* Secret & Enrollment Full-Page Dialogs */
   box-shadow:var(--shadow-sm);
 }
 .enrollment-header-actions{display:flex;align-items:center;gap:8px}
-.enrollment-body .shell{max-width:1120px}
-.enrollment-shell{padding-top:24px;padding-bottom:50px}
+.enrollment-shell{max-width:1120px;padding-top:24px;padding-bottom:50px}
 .enrollment-dialog{
   display:block;
   position:static;

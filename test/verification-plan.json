@@ -76,6 +76,7 @@
         "apps/runner/test/context-store.test.ts",
         "apps/runner/test/error-semantics.test.ts",
         "apps/runner/test/filesystem-glob.test.ts",
+        "apps/runner/test/filesystem-search-consistency.test.ts",
         "apps/runner/test/filesystem-search-unicode.test.ts",
         "apps/runner/test/filesystem-security.test.ts",
         "apps/runner/test/filesystem-stat-sampling.test.ts",

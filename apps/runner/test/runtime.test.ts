@@ -12,7 +12,7 @@ import { FilesystemService } from "../src/filesystem.js";
 import { JobManager, type JobEvent, type JobRecord } from "../src/jobs.js";
 import { PathPolicy } from "../src/path-policy.js";
 import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
-import { RunnerRuntime } from "../src/runtime.js";
+import { RunnerRuntime, rpcError } from "../src/runtime.js";
 import { discoverShellRuntime } from "../src/environment.js";
 import type { RunnerConfig, WorkspaceConfig } from "../src/config.js";
 
@@ -202,6 +202,29 @@ describe("workspace path policy", () => {
       await expect(service.list({ workspace_id: test.workspace.workspaceId, path: ".", cursor: 100_001 })).rejects.toThrow(/invalid pagination value/);
       await expect(service.list({ workspace_id: test.workspace.workspaceId, path: ".", cursor: "100001" })).rejects.toThrow(/invalid pagination value/);
     } finally { await test.cleanup(); }
+  });
+
+  it.each([
+    ["fs.read", { path: "sample.txt", limit: 0 }],
+    ["fs.list", { path: ".", cursor: "100001" }],
+    ["fs.search", { query: "needle", context_before: -1 }],
+  ] as const)("classifies invalid %s pagination as a correctable request", async (method, params) => {
+    const test = await fixture();
+    try {
+      await writeFile(join(test.root, "sample.txt"), "needle\n");
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const runtime = new RunnerRuntime({ config, stateDir: test.state });
+      await expect(runtime.dispatch(method, { workspace_id: test.workspace.workspaceId, ...params }).catch(rpcError)).resolves.toMatchObject({
+        code: "invalid_params", failure_class: "validation", operation_state: "not_started", next_action: "correct_request",
+      });
+    } finally { await test.cleanup(); }
+  });
+
+  it("classifies malformed direct filesystem input at the service boundary", async () => {
+    const service = new FilesystemService(new PathPolicy([]));
+    await expect(service.search(null).catch(rpcError)).resolves.toMatchObject({
+      code: "invalid_params", failure_class: "validation", operation_state: "not_started", next_action: "correct_request",
+    });
   });
 
   it("rejects canonical central roots that overlap or nest", async () => {
