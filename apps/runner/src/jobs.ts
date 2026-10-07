@@ -15,7 +15,7 @@ import type { PathPolicy } from "./path-policy.js";
 import type { JobRecord, RecoveryLiveness, JobEvent } from "./jobs/records.js";
 export type { JobRecord, RecoveryLiveness, LocalJobStatus, JobEvent } from "./jobs/records.js";
 import { isActive, occupiesProcessSlot, sameJobProcessIdentity, safeJobId, normalizeJobRecord, isJobStatus, nextJobUpdate } from "./jobs/records.js";
-import { parseInvocation, paramsObject, bounded, positiveInteger, boundedPositiveInteger, relativeWorkspacePath, safeOptionalIdentifier, safeOptionalRequestId, launchRequestFingerprint } from "./jobs/values.js";
+import { parseInvocation, paramsObject, bounded, positiveInteger, boundedPositiveInteger, relativeWorkspacePath, safeOptionalIdentifier, safeOptionalRequestId, launchRequestFingerprint, isErrno } from "./jobs/values.js";
 import { terminalRecoveredJob } from "./jobs/recovery.js";
 import { nativeJobFiles } from "./jobs/storage.js";
 import { nativeJobProcesses, type ProcessTerminator } from "./jobs/process.js";
@@ -208,7 +208,14 @@ export class JobManager {
     for (const entry of await this.files.readdir(this.jobsDir, { withFileTypes: true })) {
       if (!entry.isDirectory() || !safeJobId(entry.name)) continue;
       const metaPath = join(this.jobsDir, entry.name, "meta.json");
-      const parsed = await this.files.readJson<unknown>(metaPath).catch(() => undefined);
+      const parsed = await this.files.readJson<unknown>(metaPath).catch((error: unknown) => {
+        // Missing or already-proven invalid records cannot be recovered. A
+        // transient read failure is different: the record may still be valid.
+        if (isErrno(error, "ENOENT") || error instanceof SyntaxError || isErrno(error, "EFBIG") || isErrno(error, "ENOTDIR")) return undefined;
+        // An unreadable record may still own a live process or retained logs.
+        // Keep initialization retryable rather than omitting that ownership.
+        throw error;
+      });
       // The directory name is the storage boundary.  Never trust a job_id
       // read from JSON to select another path (or even another retained
       // record) during recovery.

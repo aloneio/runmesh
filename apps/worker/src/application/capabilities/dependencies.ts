@@ -2,7 +2,7 @@ import type { CapabilityTarget } from "../../contracts/capabilities.js";
 import type { CatalogSnapshotPorts } from "../../contracts/catalog.js";
 import type { SkillDependencyState } from "../../contracts/skills.js";
 import { parseProfile } from "../../contracts/connector-values.js";
-import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
+import { compatibleApprovedTools, verifiedCatalogSnapshots } from "../../domain/capabilities/catalog.js";
 
 /** Advisory stored configuration only: no network, token refresh or execution.
  * Caller revalidates client identity; this reader reports shared publication status only. */
@@ -19,11 +19,11 @@ export function createDependencyReader(ports: CatalogSnapshotPorts) {
       if (!head?.approved_digest) return "incompatible";
       const observed = ports.repository.readSnapshot(profile.profile_id, head.observed_digest);
       const approved = head.approved_digest === head.observed_digest ? observed : ports.repository.readSnapshot(profile.profile_id, head.approved_digest);
-      if (!observed || !approved || !await verifiedCatalogSnapshot(observed, profile, head.observed_digest, ports.digest)
-        || (approved !== observed && !await verifiedCatalogSnapshot(approved, profile, head.approved_digest, ports.digest))) return "unavailable";
+      const verified = await verifiedCatalogSnapshots(profile, head, { observed, approved }, ports.digest, () => signal.aborted);
+      if (!verified) return "unavailable";
       if (signal.aborted || ports.profile(profile.profile_id)?.revision !== profile.revision
         || ports.repository.readHead(profile.profile_id)?.revision !== head.revision) return "unavailable";
-      return compatibleApprovedTools(observed, approved, head.approved_names).some(t => t.tool_id === target.resource_id && t.version === target.version)
+      return compatibleApprovedTools(verified.observed, verified.approved, head.approved_names).some(t => t.tool_id === target.resource_id && t.version === target.version)
         ? "configured" : "incompatible";
     } catch { return "unavailable"; }
   };

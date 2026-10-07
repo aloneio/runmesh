@@ -8,6 +8,9 @@ import { CATALOG_LIMITS, type CatalogCursor } from "../src/contracts/catalog.js"
 import { catalogDefinition, catalogProfile, catalogSnapshot, fixtureDigest } from "../../../test/domain/catalog-fixtures.js";
 import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
 import { createCatalogManager } from "../src/application/capabilities/catalog-admin.js";
+import { createCatalogReader } from "../src/application/capabilities/catalog-read.js";
+import { createToolSearcher } from "../src/application/capabilities/search.js";
+import { createDependencyReader } from "../src/application/capabilities/dependencies.js";
 
 function owner() {
   const namespace = (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
@@ -44,6 +47,50 @@ it.each(["current", "changed", "approved-history", "aliased-approved", "denied",
     } finally { read.mockRestore(); }
   });
 });
+
+for (const consumer of ["directory", "search", "call", "dependency"] as const) {
+  it.each(["current", "changed", "aliased-approved", "aborted"] as const)(`${consumer} verifies requested catalog digests independently of repository object identity: %s`, async mode => {
+    const first = await catalogSnapshot(), second = await catalogSnapshot("docs", [catalogDefinition("search", "Changed description")]);
+    await runInDurableObject(owner(), async (_instance, state) => {
+      const store = repository(state.storage); store.publish(first, 0);
+      if (mode !== "current") store.stage(second, 1);
+      const controller = new AbortController(), read = vi.spyOn(store, "readSnapshot"), digest = vi.fn(async (content: string) => {
+        const value = await fixtureDigest(content);
+        if (mode === "aborted") controller.abort();
+        return value;
+      });
+      if (mode === "aliased-approved") read.mockReturnValue(second);
+      const principal = { client_id: "catalog-client", secret_version: 1 }, signal = controller.signal, cursorKey = newCatalogCursorKey();
+      const ports = { repository: store, profile: () => catalogProfile(), digest,
+        identity: async () => ({ state: "allowed" as const, identity: { schema_version: 2 as const, ...principal, label: "fixture", native_scopes: [] } }),
+        profiles: () => ({ profiles: [catalogProfile()], next_after: null }),
+        cursor: createCatalogCursor("fixture", () => cursorKey), now: Date.now };
+      const snapshot = mode === "current" ? first : second, tool = snapshot.tools[0]!;
+      const open = vi.fn(async () => ({ current: () => true, close: async () => undefined,
+        listTools: async () => snapshot.tools.map(value => value.definition),
+        callTool: async () => ({ content: [{ type: "text" as const, text: "fixture" }] }) }));
+      try {
+        if (consumer === "directory") {
+          const result = await createCatalogReader(ports)(principal, { profile_id: "docs" }, signal, () => false);
+          expect(result).toMatchObject(mode === "aliased-approved" || mode === "aborted" ? { state: "unavailable" } : { state: "listed", tools: mode === "current" ? [tool] : [] });
+        } else if (consumer === "search") {
+          const result = await createToolSearcher(ports)(principal, { query: "search" }, signal, () => false);
+          expect(result).toMatchObject(mode === "aliased-approved" || mode === "aborted" ? { state: "unavailable" } : { state: "listed", tools: mode === "current" ? [{ tool_id: tool.tool_id, version: tool.version }] : [] });
+        } else if (consumer === "call") {
+          const result = await createRemoteCaller({ ...ports, connector: { validate: () => true, open } })(principal,
+            { profile_id: "docs", tool_id: tool.tool_id, version: tool.version, arguments: { query: "fixture" } }, signal);
+          expect(result).toMatchObject(mode === "current" ? { state: "completed" } : { state: "failed", code: mode === "changed" ? "stale_catalog" : mode === "aborted" ? "operation_timed_out" : "dependency_unavailable", operation_state: "not_started" });
+          expect(open).toHaveBeenCalledTimes(mode === "current" ? 1 : 0);
+        } else {
+          expect(await createDependencyReader(ports)({ kind: "remote_tool", connection_profile_id: "docs", resource_id: tool.tool_id, version: tool.version }, signal))
+            .toBe(mode === "current" ? "configured" : mode === "changed" ? "incompatible" : "unavailable");
+        }
+        expect(read).toHaveBeenCalledTimes(mode === "current" ? 1 : 2);
+        expect(digest).toHaveBeenCalledTimes(mode === "changed" ? 2 : 1);
+      } finally { read.mockRestore(); }
+    });
+  });
+}
 
 it("W04 catalog construction creates no tables and no credentials", async () => {
   await runInDurableObject(owner(), (_instance, state) => {

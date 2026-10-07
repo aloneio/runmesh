@@ -3,7 +3,7 @@ import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
 import { catalogRevision } from "../../contracts/catalog-json.js";
 import { capturedIdentityState, type CapturedIdentity } from "../../contracts/identity.js";
 import { TOOL_SEARCH_LIMITS, parseToolSearchQuery, type ToolSearchPorts, type ToolSearchResult } from "../../contracts/tool-search.js";
-import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
+import { compatibleApprovedTools, verifiedCatalogSnapshots } from "../../domain/capabilities/catalog.js";
 import { createToolSearchRanking, createToolSearchScorer, toolSearchDescription } from "../../domain/capabilities/tool-search.js";
 import { publishedProfiles } from "./published-profiles.js";
 
@@ -39,13 +39,11 @@ export function createToolSearcher(ports: ToolSearchPorts) {
         if (!head || head.profile_id !== profile.profile_id || head.revision !== catalog_revision || !head.approved_digest) return { state: "stale_catalog" };
         const observed = ports.repository.readSnapshot(profile.profile_id, head.observed_digest),
           approved = head.observed_digest === head.approved_digest ? observed : ports.repository.readSnapshot(profile.profile_id, head.approved_digest);
-        if (!observed || !approved || !await verifiedCatalogSnapshot(observed, profile, head.observed_digest, digest)) return { state: "unavailable" };
-        if (stopped()) return { state: "unavailable" };
-        if (observed !== approved && !await verifiedCatalogSnapshot(approved, profile, head.approved_digest, digest)) return { state: "unavailable" };
-        if (stopped()) return { state: "unavailable" };
-        const approvedNames = new Set(approved.tools.map(tool => tool.definition.name));
+        const verified = await verifiedCatalogSnapshots(profile, head, { observed, approved }, digest, stopped);
+        if (!verified) return { state: "unavailable" };
+        const approvedNames = new Set(verified.approved.tools.map(tool => tool.definition.name));
         if (head.approved_names.some(name => !approvedNames.has(name))) return { state: "unavailable" };
-        for (const tool of compatibleApprovedTools(observed, approved, head.approved_names)) {
+        for (const tool of compatibleApprovedTools(verified.observed, verified.approved, head.approved_names)) {
           if (stopped()) return { state: "unavailable" };
           if (++toolCount > TOOL_SEARCH_LIMITS.scan_tools) return { state: "capacity" };
           const profile_name = profile.display_name ?? profile.connector_id,

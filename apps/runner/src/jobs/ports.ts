@@ -10,6 +10,8 @@ export interface JobFilePort {
   appendJobLog(path: string, data: Buffer): Promise<void>;
   safeFileSize(path: string): Promise<number>;
   atomicJson(path: string, value: unknown): Promise<void>;
+  /** ENOENT means absent; SyntaxError, EFBIG and ENOTDIR identify invalid
+   * stored records. Other read failures leave recovery retryable. */
   readJson<T>(path: string): Promise<T>;
   readonly lstat: typeof lstat;
   readonly rm: typeof rm;
