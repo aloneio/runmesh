@@ -11,6 +11,7 @@ import { runInNewContext } from "node:vm";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
 import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand } from "../scripts/ci-contract.mjs";
+import { VERIFY_REPORT_INITIALIZATION_COMMAND } from "../scripts/ci-contract.mjs";
 import { gateEvidence, gateJUnit, sourceObservation, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
 import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
@@ -36,7 +37,9 @@ function fixture() {
   const pkg = { scripts: { "test:unit": "npm run test:domain && npm run test:contracts && npm run test --workspaces", "test:release-tools": "node --test test/x.test.mjs", "test:e2e": "node ./scripts/run-e2e.mjs", "test:package:e2e": "node scripts/run-package-e2e.mjs", "test:browser": "node scripts/run-browser-e2e.mjs" } };
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
   const gh = { on: { push: { branches: ["main", "dev"] }, pull_request: null, workflow_dispatch: null, workflow_call: null }, permissions: { contents: "read" }, jobs: {
-    verify: { "runs-on": "ubuntu-latest", "timeout-minutes": 30, steps: [...CHECK_IDS.map(id => ({ run: checkCommand(id) })), githubReportUpload("verify")] },
+    verify: { "runs-on": "ubuntu-latest", "timeout-minutes": 30, steps: [
+      { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version-file": ".node-version" } },
+      { run: VERIFY_REPORT_INITIALIZATION_COMMAND }, ...CHECK_IDS.map(id => ({ run: checkCommand(id) })), githubReportUpload("verify")] },
     "native-runner": { name: "Runner native checks (${{ matrix.os }})", "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: [
       { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version-file": ".node-version" } },
       { ...WINDOWS_REPORT_INITIALIZATION_STEP }, ...NATIVE_COMMANDS.map(run => ({ run })), { ...WINDOWS_TRANSPORT_STEP }, githubReportUpload("native-runner"),
@@ -46,11 +49,12 @@ function fixture() {
       { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version": "${{ matrix.node }}" } },
       ...LTS_COMMANDS.slice(3).map(run => ({ run })),
     ] },
-    browser: { steps: [...BROWSER_COMMANDS.map(run => ({ run })), githubReportUpload("browser")] },
+    browser: { steps: [{ uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version-file": ".node-version" } },
+      ...BROWSER_COMMANDS.map(run => ({ run })), githubReportUpload("browser")] },
     "verify-all": { if: "always()", needs: [...AGGREGATE_JOBS], steps: [{ env, run: Object.keys(env).map(key => `test "$${key}" = success`).join(" && ") }] },
   } };
   const rules = [...GITLAB_EVENTS.map(expression => ({ if: expression })), { when: "never" }];
-  const gl = { workflow: { rules }, verify: { timeout: "30m", script: ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], rules,
+  const gl = { workflow: { rules }, verify: { timeout: "30m", script: [VERIFY_REPORT_INITIALIZATION_COMMAND, "npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], rules,
     artifacts: gitlabReportArtifacts() },
     browser: { rules, script: [...BROWSER_COMMANDS], artifacts: gitlabReportArtifacts() } };
   return { pkg, gh, gl };
@@ -113,6 +117,14 @@ for (const [name, mutate] of Object.entries({
   "omitted unit check": f => f.gh.jobs.verify.steps = f.gh.jobs.verify.steps.filter(step => step.run !== checkCommand("unit")),
   "duplicated check": f => f.gh.jobs.verify.steps.unshift({ run: checkCommand("unit") }),
   "masked script": f => f.gl.verify.script[1] += " || true",
+  "verification reports are not initialized": f => f.gh.jobs.verify.steps.splice(1, 1),
+  "verification reports initialized before Node": f => f.gh.jobs.verify.steps.unshift(f.gh.jobs.verify.steps.splice(1, 1)[0]),
+  "verification reports initialized after npm setup": f => f.gh.jobs.verify.steps.splice(1, 0, { run: "npm install --global npm@10.9.3" }),
+  "verification report initialization disabled": f => f.gh.jobs.verify.steps[1].if = false,
+  "verification report initialization allows failure": f => f.gh.jobs.verify.steps[1]["continue-on-error"] = true,
+  "verification report initialization duplicated": f => f.gh.jobs.verify.steps.splice(2, 0, { run: VERIFY_REPORT_INITIALIZATION_COMMAND }),
+  "GitLab verification reports are not initialized": f => f.gl.verify.script.shift(),
+  "GitLab verification reports initialized after npm setup": f => f.gl.verify.script.splice(1, 0, f.gl.verify.script.shift()),
   "comment-only check": f => f.gh.jobs.verify.steps[0].run = `# ${f.gh.jobs.verify.steps[0].run}`,
   "removed browser dependency": f => f.gh.jobs["verify-all"].needs.pop(),
   "unconditional success aggregate": f => f.gh.jobs["verify-all"].steps[0].run = "true",
@@ -129,6 +141,19 @@ for (const [name, mutate] of Object.entries({
   "LTS runtime setup allows failure": f => f.gh.jobs["runner-lts"].steps[3]["continue-on-error"] = true,
   "LTS runtime selected after tests": f => f.gh.jobs["runner-lts"].steps.push(f.gh.jobs["runner-lts"].steps.splice(3, 1)[0]),
   "browser optional": f => browserStep(f).if = "false",
+  "browser reports are not initialized": f => f.gh.jobs.browser.steps.splice(1, 1),
+  "browser reports initialized before Node": f => f.gh.jobs.browser.steps.unshift(f.gh.jobs.browser.steps.splice(1, 1)[0]),
+  "browser reports initialized after npm setup": f => f.gh.jobs.browser.steps.splice(2, 0, f.gh.jobs.browser.steps.splice(1, 1)[0]),
+  "browser report initialization disabled": f => f.gh.jobs.browser.steps[1].if = false,
+  "browser report initialization allows failure": f => f.gh.jobs.browser.steps[1]["continue-on-error"] = true,
+  "browser report initialization overrides shell": f => f.gh.jobs.browser.steps[1].shell = "bash {0} || true",
+  "browser report initialization duplicated": f => f.gh.jobs.browser.steps.splice(2, 0, { run: BROWSER_COMMANDS[0] }),
+  "browser Node setup missing": f => f.gh.jobs.browser.steps.shift(),
+  "browser Node setup disabled": f => f.gh.jobs.browser.steps[0].if = false,
+  "browser Node setup allows failure": f => f.gh.jobs.browser.steps[0]["continue-on-error"] = true,
+  "browser Node setup changes runtime": f => f.gh.jobs.browser.steps[0].with["node-version-file"] = "package.json",
+  "GitLab browser reports are not initialized": f => f.gl.browser.script.shift(),
+  "GitLab browser reports initialized after npm setup": f => f.gl.browser.script.splice(1, 0, f.gl.browser.script.shift()),
   "browser test is commented": f => browserStep(f).run = "# npm run test:browser",
   "browser test masks failure": f => browserStep(f).run += " || true",
   "browser test allows failure": f => browserStep(f)["continue-on-error"] = true,
@@ -258,25 +283,33 @@ test("CI08 failed attempts replace successful reports atomically", async t => {
   assert.equal(JSON.parse(await readFile(join(root, "ci-results/unit.json"), "utf8")).state, "failed");
   assert.match(await readFile(join(root, "ci-results/unit.xml"), "utf8"), /failures="1"/u);
 });
-test("CI08 Windows initialization creates and resets only transport evidence before dependency installation", async t => {
+for (const id of ["verify", "transport", "browser"]) test(`CI08 ${id} initialization creates and resets only its evidence before dependency installation`, async t => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-ci-initialize-")); t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "scripts"));
   for (const name of ["ci-check.mjs", "ci-contract.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, "scripts", name));
   const initialize = () => {
-    const result = spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), "--initialize", "transport"], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true });
+    const result = spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), "--initialize", id], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true });
     assert.equal(result.status, 0, result.stderr);
   };
+  const gates = id === "verify" ? CHECK_IDS : [id];
+  const supplements = id === "verify" ? ["package-e2e", "browser-tests", "transport-tests", "crossforge-evidence"] : [`${id}-tests`];
   initialize();
-  assert.deepEqual((await readdir(join(root, "ci-results"))).sort(), ["transport-tests.json", "transport.json", "transport.xml"]);
-  await writeGateReport(gateEvidence("transport", "passed", 1, 0, source), root);
-  await writeSupplement("transport-tests", { state: "passed", stale_fixture: true }, root);
+  assert.deepEqual((await readdir(join(root, "ci-results"))).sort(), [...gates.flatMap(name => [`${name}.json`, `${name}.xml`]), ...supplements.map(name => `${name}.json`)].sort());
+  for (const name of gates) await writeGateReport(gateEvidence(name, "passed", 1, 0, source), root);
+  for (const name of supplements) await writeSupplement(name, { state: "passed", stale_fixture: true }, root);
   initialize();
-  const gate = JSON.parse(await readFile(join(root, "ci-results/transport.json"), "utf8"));
-  const supplement = JSON.parse(await readFile(join(root, "ci-results/transport-tests.json"), "utf8"));
-  assert.equal(gate.state, "not_run"); assert.equal(gate.exit_code, null); assert.equal(gate.elapsed_ms, 0); assert.equal(gate.test_counts, null);
-  assert.deepEqual(supplement, { schema_version: 1, state: "not_run", source: gate.source });
-  assert.match(await readFile(join(root, "ci-results/transport.xml"), "utf8"), /failures="0" skipped="1"/u);
+  const observation = JSON.parse(await readFile(join(root, `ci-results/${gates[0]}.json`), "utf8")).source;
+  for (const name of gates) {
+    const gate = JSON.parse(await readFile(join(root, `ci-results/${name}.json`), "utf8"));
+    assert.equal(gate.state, "not_run"); assert.equal(gate.exit_code, null); assert.equal(gate.elapsed_ms, 0); assert.equal(gate.test_counts, null);
+    assert.deepEqual(gate.source, observation);
+    assert.match(await readFile(join(root, `ci-results/${name}.xml`), "utf8"), /failures="0" skipped="1"/u);
+  }
+  for (const name of supplements) {
+    const supplement = JSON.parse(await readFile(join(root, `ci-results/${name}.json`), "utf8"));
+    assert.deepEqual(supplement, { schema_version: 1, state: "not_run", source: observation });
+  }
   const invalid = spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), "--initialize", "toolchain"], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true });
   assert.notEqual(invalid.status, 0);
 });

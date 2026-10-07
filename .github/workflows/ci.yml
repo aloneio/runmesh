@@ -27,6 +27,7 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
+      - run: node scripts/ci-check.mjs --initialize verify
       - run: npm install --global npm@10.9.3
       - run: node scripts/ci-check.mjs toolchain
       - run: node scripts/ci-check.mjs install
@@ -178,6 +179,7 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
+      - run: node scripts/ci-check.mjs --initialize browser
       - run: npm install --global npm@10.9.3
       - run: npm ci
       - run: npm run typecheck

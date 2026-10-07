@@ -76,8 +76,10 @@ export const NATIVE_COMMANDS = Object.freeze([
 ]);
 export const WINDOWS_TRANSPORT_STEP = Object.freeze({ run: "npm run test:e2e", if: "matrix.os == 'windows-latest'" });
 export const WINDOWS_REPORT_INITIALIZATION_STEP = Object.freeze({ run: "node scripts/ci-check.mjs --initialize transport", if: WINDOWS_TRANSPORT_STEP.if });
+export const VERIFY_REPORT_INITIALIZATION_COMMAND = "node scripts/ci-check.mjs --initialize verify";
 export const LTS_COMMANDS = Object.freeze(["npm ci", "npm run build", "npm run pack:smoke", "npm run test --workspace=@aloneio/runmesh-runner", "node apps/runner/dist/runmesh.cjs --version"]);
 export const BROWSER_COMMANDS = Object.freeze([
+  "node scripts/ci-check.mjs --initialize browser",
   "npm install --global npm@10.9.3", "npm ci", "npm run typecheck", "npm run build", "npm run browser:install", "npm run test:browser",
 ]);
 export const checkCommand = id => `node scripts/ci-check.mjs ${id}`;
