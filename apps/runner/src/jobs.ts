@@ -380,12 +380,15 @@ export class JobManager {
     await this.reconcileRecoveredJobs();
     const mustQueue = reservedJob === undefined && (this.activeCount() >= this.maxConcurrentJobs || this.queue.size > 0);
     const client = createdByClientId ?? "local";
+    // A rejected launch does not need storage capacity. Check queue admission
+    // before making room for a new record, preserving existing task history
+    // and logs when the caller must retry without starting a command.
+    if (mustQueue && (params.queue === false || this.queueAuthorizer === undefined || this.queue.limit === 0)) throw new RpcRuntimeError("busy", `max concurrent jobs (${this.maxConcurrentJobs}) reached; queued admission is unavailable`);
+    if (mustQueue && (this.queue.size >= this.queue.limit || this.queue.count(client) >= this.queue.perClient)) throw new RpcRuntimeError("queue_full", "Waiting queue or per-client queue limit reached");
     if (reservedJob === undefined) {
       await this.pruneRetainedJobs(this.maxRetainedJobs - 1);
       if (this.jobs.size >= this.maxRetainedJobs) throw new RpcRuntimeError("busy", `max retained jobs (${this.maxRetainedJobs}) reached while active and queued jobs are retained`);
     }
-    if (mustQueue && (params.queue === false || this.queueAuthorizer === undefined || this.queue.limit === 0)) throw new RpcRuntimeError("busy", `max concurrent jobs (${this.maxConcurrentJobs}) reached; queued admission is unavailable`);
-    if (mustQueue && (this.queue.size >= this.queue.limit || this.queue.count(client) >= this.queue.perClient)) throw new RpcRuntimeError("queue_full", "Waiting queue or per-client queue limit reached");
     const now = Date.now();
     const job: JobRecord = reservedJob ?? {
       job_id: `job-${randomUUID()}`, workspace_id: workspace.workspaceId, cwd: relativeWorkspacePath(workspace, cwd.path),

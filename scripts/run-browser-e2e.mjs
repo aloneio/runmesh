@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, lstat, realpath, rm } from "node:fs/promises";
+import { mkdtemp, lstat, realpath, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, browserFixtureFailureEvidence, guidedProductStageEvidence } from "./browser-evidence.mjs";
@@ -8,8 +8,9 @@ import { writeSupplement } from "./ci-supplement.mjs";
 import { ROOT, gateEvidence, sourceObservation, assertSourceObservationUnchanged, writeGateReport } from "./ci-report.mjs";
 import { writeBuildProvenance } from "./build-provenance.mjs";
 import { runFixtureCommand } from "./worker-fixture.mjs";
+import { readEvidenceJson } from "./evidence-io.mjs";
 
-const start = Date.now(), source = sourceObservation(); let temporaryRoot, directory, path, code = 1, stage = "configuration", termination, guided;
+const start = Date.now(), source = sourceObservation(); let temporaryRoot, directory, path, rawReport, code = 1, stage = "configuration", termination, guided;
 // Both suites, including their fixture cleanup, share one process budget.
 // A stalled guided check must still leave time for the gate to record failure.
 const deadline = start + 420000;
@@ -52,8 +53,8 @@ try {
   assert.equal(completed.screenshots, 0, "guided product evidence must use DOM checks");
   const guidedProduct = { state: "passed", screenshots: 0 };
   stage = "evidence_validation";
-  const stat = await lstat(path); assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8 * 1024 * 1024);
-  const evidence = browserEvidence(JSON.parse(await readFile(path, "utf8")), 0);
+  rawReport = await readEvidenceJson(path);
+  const evidence = browserEvidence(rawReport, 0);
   stage = "source_validation";
   assertSourceObservationUnchanged(source);
   await writeSupplement("browser-tests", { schema_version: 1, evidence: "real_local_browser_e2e", attestation: "self_reported", source, ...evidence, runtime: { node: process.version, platform: process.platform, arch: process.arch }, production: "not_run" });
@@ -64,8 +65,10 @@ try {
   // subprocess stderr, reports, assertion values, cookies, or screenshots.
   let failure = { report_available: false };
   try {
-    const stat = await lstat(path);
-    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8 * 1024 * 1024) failure = browserFailureEvidence(JSON.parse(await readFile(path, "utf8")));
+    // A failed child needs one bounded read. Reuse evidence already read in
+    // the success path; a failed file validation must never retry that path.
+    if (rawReport === undefined && ["test_execution", "guided_product"].includes(stage)) rawReport = await readEvidenceJson(path);
+    failure = browserFailureEvidence(rawReport);
   } catch { /* A missing or malformed private report remains unavailable. */ }
   const workerEvents = mcpWorkerFailureEvidence(error?.stderr);
   const guidedStage = stage === "guided_product" ? guidedProductStageEvidence(error?.stdout ?? guided?.stdout) : undefined;

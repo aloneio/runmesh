@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../scripts/browser-worker-fixture.mjs";
@@ -336,12 +336,19 @@ async function browserGateFixture(t) {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const directory = await mkdtemp(join(tmpdir(), "runmesh-browser-wrapper-"));
   t.after(async () => {
+    const abandoned = await readFile(join(directory, "evidence-directory"), "utf8").catch(error => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    if (abandoned !== undefined) {
+      assert.equal(dirname(abandoned), await realpath(tmpdir())); assert.ok(basename(abandoned).startsWith("runmesh-browser-gate-"));
+      await rm(abandoned, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    }
     assert.equal(dirname(directory), tmpdir()); assert.ok(basename(directory).startsWith("runmesh-browser-wrapper-"));
     await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   });
   await mkdir(join(directory, "scripts"));
   await mkdir(join(directory, "node_modules/vitest"), { recursive: true });
-  for (const file of ["run-browser-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "browser-evidence.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const file of ["run-browser-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "browser-evidence.mjs", "test-evidence.mjs", "evidence-io.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await writeFile(join(directory, "scripts", file === "worker-fixture.mjs" ? "actual-worker-fixture.mjs" : file), await readFile(join(root, "scripts", file)));
   await writeFile(join(directory, "scripts/build-provenance.mjs"), "export async function writeBuildProvenance() {}\n");
   // Keep real process-tree management and ordinary startup budgets. Shorten
@@ -358,10 +365,37 @@ async function browserGateFixture(t) {
   await writeFile(join(directory, "node_modules/vitest/vitest.mjs"), `
     import { writeFileSync } from 'node:fs';
     await new Promise(resolve => setTimeout(resolve, 350));
-    writeFileSync(process.env.RUNMESH_TEST_RESULT_PATH, JSON.stringify({ success: true, numFailedTestSuites: 0,
+    const report = JSON.stringify({ success: true, numFailedTestSuites: 0,
       numTotalTests: 1, numPassedTests: 1, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0,
       testResults: [{ status: 'passed', name: '/private/test/browser/admin-ui.browser.test.ts', assertionResults: [{
-        status: 'passed', title: 'renders stable single-locale dashboard and navigation in Chromium' }] }] }));
+        status: 'passed', title: 'renders stable single-locale dashboard and navigation in Chromium' }] }] });
+    const offset = report.indexOf('private');
+    writeFileSync(process.env.RUNMESH_TEST_RESULT_PATH, process.env.BROWSER_FIXTURE_MODE === 'invalid_utf8_report'
+      ? Buffer.concat([Buffer.from(report.slice(0, offset)), Buffer.from([255]), Buffer.from(report.slice(offset + 1))])
+      : report);
+  `);
+  // Inject an actual path change after the public stat boundary. The gate must
+  // reject the changed evidence without waiting for a FIFO writer or decoding
+  // a substituted file as the original report.
+  await writeFile(join(directory, "evidence-race-hook.mjs"), `
+    import fs from 'node:fs';
+    import { basename, dirname } from 'node:path';
+    import { execFileSync } from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const original = fs.promises.lstat;
+    let changed = false;
+    fs.promises.lstat = async (file, ...args) => {
+      const info = await original(file, ...args);
+      if (!changed && basename(String(file)) === 'result.json' && basename(dirname(String(file))).startsWith('runmesh-browser-gate-')) {
+        changed = true;
+        const mode = process.env.BROWSER_FIXTURE_MODE;
+        if (mode === 'report_growth_race' || mode === 'failed_report_growth_race') fs.appendFileSync(file, Buffer.alloc(8 * 1024 * 1024, 32));
+        if (mode === 'report_symlink_race') { fs.renameSync(file, String(file) + '.original'); fs.symlinkSync(String(file) + '.original', file); }
+        if (mode === 'report_fifo_race') { fs.writeFileSync('evidence-directory', dirname(String(file))); fs.unlinkSync(file); execFileSync('mkfifo', [String(file)]); }
+      }
+      return info;
+    };
+    syncBuiltinESMExports();
   `);
   await writeFile(join(directory, "scripts/product-browser-check.mjs"), `
     import { writeFileSync } from 'node:fs';
@@ -385,7 +419,7 @@ async function browserGateFixture(t) {
         } await new Promise(() => {}); }
         finally { await new Promise(() => {}); }
       }
-      if (mode === 'failure') {
+      if (mode === 'failure' || mode === 'failed_report_growth_race') {
         console.error('RUNMESH_BROWSER_FIXTURE_FAILURE=' + JSON.stringify({ phase: 'primary', error: { kind: 'assertion_failed', location: { file: 'scripts/product-browser-check.mjs', line: 27, column: 3 } } }));
         console.error('RUNMESH_BROWSER_FIXTURE_FAILURE=' + JSON.stringify({ phase: 'browser_close', error: { kind: 'timeout' } }));
         const error = new Error('AssertionError: PRIVATE_ASSERTION');
@@ -402,12 +436,26 @@ async function browserGateFixture(t) {
   return { directory, async invoke(mode) {
     await rm(join(directory, "budgets.jsonl"), { force: true });
     try {
-      return { code: 0, ...await runFixtureCommand(process.execPath, [join(directory, "scripts/run-browser-e2e.mjs")], {
+      return { code: 0, ...await runFixtureCommand(process.execPath, ["--import", pathToFileURL(join(directory, "evidence-race-hook.mjs")).href, join(directory, "scripts/run-browser-e2e.mjs")], {
         cwd: directory, env: { ...env, BROWSER_FIXTURE_MODE: mode, RUNMESH_CHROMIUM_EXECUTABLE: process.execPath }, timeout: 7000, maxBuffer: 65536,
       }) };
     } catch (error) { return { code: error.code, error, stdout: error.stdout, stderr: error.stderr }; }
   }, async report(name = "browser-tests") { return JSON.parse(await readFile(join(directory, "ci-results", name + ".json"), "utf8")); } };
 }
+
+for (const mode of ["report_growth_race", "report_symlink_race", "report_fifo_race", "invalid_utf8_report", "failed_report_growth_race"])
+  test(`Browser gate rejects ${mode} through the shared evidence boundary`, { skip: process.platform !== "linux" }, async t => {
+    const f = await browserGateFixture(t);
+    assert.equal((await f.invoke("success")).code, 0);
+    const result = await f.invoke(mode), report = await f.report();
+    assert.equal(result.error?.termination_reason, undefined, "evidence rejection must finish before the outer watchdog");
+    assert.equal(result.code, 1);
+    assert.equal((await f.report("browser")).state, "failed");
+    assert.equal(report.state, "failed");
+    assert.equal(report.stage, mode === "failed_report_growth_race" ? "guided_product" : "evidence_validation");
+    assert.equal(report.report_available, false);
+    assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(report), /PRIVATE_|"browser_gate":"passed"/u);
+  });
 
 for (const mode of ["hang", "cleanup_hang"]) test(`Browser gate bounds guided product ${mode} and its descendants`, { skip: process.platform !== "linux" }, async t => {
   const f = await browserGateFixture(t), result = await f.invoke(mode);
