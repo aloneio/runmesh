@@ -20,11 +20,11 @@ function fixture() {
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
   const gh = { on: { push: { branches: ["main", "dev"] }, pull_request: null, workflow_dispatch: null, workflow_call: null }, permissions: { contents: "read" }, jobs: {
     verify: { "runs-on": "ubuntu-latest", "timeout-minutes": 30, steps: [...CHECK_IDS.map(id => ({ run: checkCommand(id) })), githubReportUpload("verify")] },
-    "native-runner": { "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: [
+    "native-runner": { name: "Runner native checks (${{ matrix.os }})", "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: [
       { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version-file": ".node-version" } },
       { ...WINDOWS_REPORT_INITIALIZATION_STEP }, ...NATIVE_COMMANDS.map(run => ({ run })), { ...WINDOWS_TRANSPORT_STEP }, githubReportUpload("native-runner"),
     ] },
-    "runner-lts": { strategy: { matrix: { node: ["22.23.2", "24.21.0"] } }, steps: [
+    "runner-lts": { name: "Runner LTS (${{ matrix.node }})", strategy: { matrix: { node: ["22.23.2", "24.21.0"] } }, steps: [
       ...LTS_COMMANDS.slice(0, 3).map(run => ({ run })),
       { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version": "${{ matrix.node }}" } },
       ...LTS_COMMANDS.slice(3).map(run => ({ run })),
@@ -43,6 +43,18 @@ const browserStep = f => f.gh.jobs.browser.steps.find(step => step.run === "npm 
 const transportStep = f => f.gh.jobs["native-runner"].steps.find(step => step.run === WINDOWS_TRANSPORT_STEP.run);
 const initializationStep = f => f.gh.jobs["native-runner"].steps.find(step => step.run === WINDOWS_REPORT_INITIALIZATION_STEP.run);
 test("CI02 normal closed execution grammar is accepted", () => assert.equal(verify(fixture()).critical_checks, CHECK_IDS.length));
+for (const id of ["verify", "browser", "verify-all", "native-runner", "runner-lts"])
+test(`CI02 rejects provider evidence name drift for ${id}`, () => {
+  const value = fixture(); verify(value);
+  value.gh.jobs[id].name = "Renamed " + id;
+  assert.throws(() => verify(value));
+});
+for (const id of ["native-runner", "runner-lts"])
+test(`CI02 rejects omitted provider matrix name for ${id}`, () => {
+  const value = fixture(); verify(value);
+  delete value.gh.jobs[id].name;
+  assert.throws(() => verify(value));
+});
 for (const [name, mutate] of Object.entries({
   "disabled step": f => f.gh.jobs.verify.steps[0].if = false,
   "dynamic disabled step": f => f.gh.jobs.verify.steps[0].if = "github.event_name == 'never'",

@@ -406,6 +406,6 @@ export class RegistryAuth {
   public activeRunnerContext(runnerId: string, updatedAtMs: number | null): ActiveRunnerContext {
     const row = this.ports.runnerRow(runnerId);
     if (row === undefined || row.token_verifier.length === 0) return { runner_id: runnerId, state: "unavailable", available: false, updated_at_ms: updatedAtMs };
-    return safeRunnerContext(decodeRunner(row), updatedAtMs);
+    return safeRunnerContext(decodeRunner(row, Date.now()), updatedAtMs);
   }
 }

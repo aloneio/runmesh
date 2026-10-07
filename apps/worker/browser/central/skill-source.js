@@ -9,7 +9,7 @@ export function bindSkillSource({ app, api, view, t, refresh, run, getSkills, op
   view.onInvalidate(invalidate);
   for (const name of ['repository', 'commit', 'path']) form.elements[name].addEventListener('input', invalidate);
   const limits = app.querySelector('[data-skill-source-limits]');
-  if (limits) limits.textContent = t('skillSourceLimits').replace('{files}', form.dataset.maxFiles);
+  if (limits) limits.textContent = t('skillSourceLimits', { files: form.dataset.maxFiles });
   form.addEventListener('submit', event => {
     event.preventDefault();
     run(async () => {

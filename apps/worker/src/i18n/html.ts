@@ -24,7 +24,7 @@ export function localizeHtmlResponse(request: Request, response: Response): Resp
     element(element){
       const skip=skipTags.has(element.tagName)||element.hasAttribute("data-no-i18n")||element.getAttribute("translate")?.toLowerCase()==="no";
       if(skip && !voidTags.has(element.tagName)){excluded++;element.onEndTag(()=>{excluded--;});}
-      if(!excluded && !skip)for(const name of ["aria-label","alt","placeholder","title"]){const old=element.getAttribute(name);if(old!==null){const next=localizeUiText(decodeText(old),locale);if(next!==old)element.setAttribute(name,next);}}
+      if(!excluded && !skip)for(const name of ["aria-label","alt","placeholder","title","data-password-show","data-password-hide","data-submit-pending"]){const old=element.getAttribute(name);if(old!==null){const next=localizeUiText(decodeText(old),locale);if(next!==old)element.setAttribute(name,next);}}
       if(element.tagName === "html")element.setAttribute("lang",locale);
     }
   }).on("title[data-i18n-title]", {

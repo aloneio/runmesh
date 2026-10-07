@@ -588,13 +588,37 @@ test(`copy controls report ${failure} in ${lang} and recover on retry`, async ()
 
 test("initial and dynamic password controls update the same icon and accessible labels once", () => {
   const h = controlsFixture(), icons = [];
-  for (let i = 0; i < 2; i++) {
+  for (const [show, hide] of [["Show password", "Hide password"], ["显示密码", "隐藏密码"]]) {
     const button = element(), input = { type: "password" }; button.closest = () => ({ querySelector: () => input });
+    button.setAttribute("data-password-show", show); button.setAttribute("data-password-hide", hide);
     const root = h.root({ ".pwd-toggle-btn": [button] }); h.controls.bindPageControls(root); h.controls.bindPageControls(root);
-    button.dispatch("click"); assert.equal(input.type, "text"); assert.equal(button.getAttribute("aria-label"), "Hide password"); icons.push(button.innerHTML);
-    button.dispatch("click"); assert.equal(input.type, "password"); assert.equal(button.getAttribute("title"), "Show password");
+    button.dispatch("click"); assert.equal(input.type, "text"); assert.equal(button.getAttribute("aria-label"), hide); icons.push(button.innerHTML);
+    button.dispatch("click"); assert.equal(input.type, "password"); assert.equal(button.getAttribute("title"), show);
+    assert.equal(button.events.get("click").length, 1);
   }
   assert.equal(icons[0], icons[1]); assert.match(icons[0], /<line/);
+});
+
+test("login feedback uses each rendered form's copy and leaves one native submit in charge", () => {
+  const h = controlsFixture();
+  for (const [pending, width] of [["Signing in...", 172], ["正在初始化...", 0]]) {
+    const form = element(), button = element();
+    button.textContent = "Ready"; button.offsetWidth = width; button.disabled = false;
+    button.setAttribute("data-submit-pending", pending);
+    form.querySelector = selector => selector === ".login-submit-btn" ? button : null;
+    form.submit = form.requestSubmit = () => assert.fail("A submit listener must not start a second submission");
+    form.getAttribute = () => assert.fail("Form feedback must not infer copy from a route");
+    const root = h.root({ "form.login-form": [form] });
+    h.controls.bindPageControls(root); h.controls.bindPageControls(root);
+    form.dispatch("submit", { defaultPrevented: true });
+    assert.equal(button.disabled, false); assert.equal(button.textContent, "Ready");
+    const event = { defaultPrevented: false, submitter: button, preventDefault() { assert.fail("Native form validation and navigation remain enabled"); } };
+    form.dispatch("submit", event);
+    assert.equal(button.disabled, true); assert.equal(button.textContent, pending);
+    assert.equal(button.style.width, width ? width + "px" : "100%");
+    assert.equal(event.submitter, button);
+    assert.equal(form.events.get("submit").length, 1);
+  }
 });
 test("rebinding execution-mode controls does not duplicate listeners or lose initial synchronization", () => {
   const h = controlsFixture(), input = element(), confirmation = {}, warning = {}; input.value = "privileged_host";

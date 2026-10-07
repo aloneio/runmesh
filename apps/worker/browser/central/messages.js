@@ -145,7 +145,8 @@ const messages = {
   "thisSkillIsAlreadyInstalledReviewTheUpdateAnd": ["This Skill is already installed. Update it with the selected files?", "此 Skill 已安装，是否用所选文件更新？"]
 };
 
-/** All central workflow copy shares one locale selection. */
+/** One locale and literal, single-pass parameter expansion for every workflow. */
 export function createCentralTranslator(locale) {
-  return key => messages[key][locale === "zh-CN" ? 1 : 0];
+  return (key, values = {}) => messages[key][locale === "zh-CN" ? 1 : 0]
+    .replace(/\{(\w+)\}/gu, (placeholder, name) => Object.hasOwn(values, name) ? String(values[name]) : placeholder);
 }

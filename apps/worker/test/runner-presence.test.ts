@@ -41,6 +41,82 @@ it("projects expired and missing heartbeats consistently without waiting for mai
   });
 });
 
+it("observes presence and validity at one instant for each public Runner snapshot", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(crypto.randomUUID()));
+  await runInDurableObject(stub, (registry, state) => {
+    const now = Date.now();
+    for (const id of ["boundary-one", "boundary-two"]) {
+      registry.registerRunner(id, "a".repeat(64), now, undefined, "dedicated_user");
+      state.storage.sql.exec("UPDATE runners SET state='online', last_heartbeat_ms=?, valid_until_ms=? WHERE runner_id=?", now - 45_000, now + 1, id);
+    }
+    const observations = [
+      () => [registry.getRunner("boundary-one")!],
+      () => [registry.getRunnerExecutionState("boundary-one")!.runner],
+      () => registry.listRunners(),
+      () => registry.dashboardSnapshot().runners,
+    ];
+    const clock = vi.spyOn(Date, "now");
+    try {
+      for (const observe of observations) {
+        clock.mockReset().mockReturnValue(now + 1).mockReturnValueOnce(now);
+        // Advancing the clock after the initial observation must not expire
+        // validity separately, or split identical Runners across two states.
+        const atBoundary = observe();
+        expect(atBoundary.length).toBeGreaterThan(0);
+        expect(atBoundary.every(runner => runner.state === "online" && runner.validity_status === "active")).toBe(true);
+        clock.mockReset().mockReturnValue(now + 1);
+        const expired = observe();
+        expect(expired.length).toBe(atBoundary.length);
+        expect(expired.every(runner => runner.state === "stale" && runner.validity_status === "expired")).toBe(true);
+        state.storage.sql.exec("UPDATE runners SET state='online'");
+      }
+    } finally { clock.mockRestore(); }
+  });
+});
+
+it("persists an expired presence once while repeated and missing Runner observations stay read-only", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(crypto.randomUUID()));
+  await runInDurableObject(stub, (registry, state) => {
+    const now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const cases = [
+      { id: "expired", heartbeat: now - 45_001, writes: 1, reads: 3 },
+      { id: "boundary", heartbeat: now - 45_000, writes: 0, reads: 2 },
+      { id: "missing", heartbeat: null, writes: 0, reads: 2 },
+    ];
+    try {
+      for (const item of cases) {
+        registry.registerRunner(item.id, "a".repeat(64), now, undefined, "dedicated_user");
+        state.storage.sql.exec("UPDATE runners SET state='online', session_id='observed-session', last_heartbeat_ms=? WHERE runner_id=?", item.heartbeat, item.id);
+        const sql = vi.spyOn(state.storage.sql, "exec");
+        try {
+          const record = registry.getRunner(item.id)!;
+          const execution = registry.getRunnerExecutionState(item.id)!;
+          expect(execution.runner).toEqual(record);
+          expect(execution.lifecycle_id).toEqual(expect.any(String));
+          expect(execution.session_id).toBe(record.session_id);
+          expect(sql.mock.calls.filter(([query]) => query.startsWith("UPDATE "))).toHaveLength(item.writes);
+          expect(sql.mock.calls.filter(([query]) => query.startsWith("SELECT "))).toHaveLength(item.reads);
+          sql.mockClear();
+          registry.getRunner(item.id);
+          registry.getRunnerExecutionState(item.id);
+          expect(sql.mock.calls).toHaveLength(2);
+          expect(sql.mock.calls.every(([query]) => query.startsWith("SELECT "))).toBe(true);
+        } finally { sql.mockRestore(); }
+      }
+      registry.revokeRunner("boundary", "boundary", now);
+      expect(registry.getRunnerExecutionState("boundary")).toMatchObject({ runner: { state: "offline", last_heartbeat_ms: null }, session_id: null });
+      registry.deleteRunner("boundary", "boundary", now);
+      const sql = vi.spyOn(state.storage.sql, "exec");
+      try {
+        expect(registry.getRunner("boundary")).toBeUndefined();
+        expect(registry.getRunnerExecutionState("boundary")).toBeUndefined();
+        expect(sql.mock.calls).toHaveLength(2);
+        expect(sql.mock.calls.every(([query]) => query.startsWith("SELECT "))).toBe(true);
+      } finally { sql.mockRestore(); }
+    } finally { clock.mockRestore(); }
+  });
+});
+
 it.each(["offline", "stale"] as const)("keeps runner_current and runner_list valid MCP replies when the Runner is %s", async expected => {
   const id = env.REGISTRY.idFromName(crypto.randomUUID());
   const stub = env.REGISTRY.get(id);

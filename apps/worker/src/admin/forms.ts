@@ -9,7 +9,8 @@ import { workspacePermissionPreset } from "../contracts/permission-profiles.js";
 export const IDENTIFIER_INPUT_PATTERN = String.raw`[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}`;
 
 export function passwordToggle(): string {
-  return `<button type="button" class="pwd-toggle-btn" aria-label="Show password">
+  const show = escapeHtml(message("auth.showPassword", "en")), hide = escapeHtml(message("auth.hidePassword", "en"));
+  return `<button type="button" class="pwd-toggle-btn" aria-label="${show}" data-password-show="${show}" data-password-hide="${hide}">
     <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
   </button>`;
 }

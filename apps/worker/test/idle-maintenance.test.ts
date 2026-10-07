@@ -3,6 +3,33 @@ import { expect, it, vi } from "vitest";
 import { REGISTRY_HISTORY_CLEANUP_INTERVAL_MS } from "../src/registry.js";
 import { internalHeaders, INTERNAL_SIGNATURE_SKEW_MS } from "../src/security.js";
 
+it("expires Runner presence in one batch and keeps the exact heartbeat boundary online", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`presence-maintenance-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (instance, state) => {
+    const now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      for (const [id, heartbeat] of [["expired-one", now - 45_001], ["expired-two", now - 60_000], ["missing", null], ["boundary", now - 45_000]] as const) {
+        instance.registerRunner(id, "synthetic", now, undefined, "dedicated_user");
+        state.storage.sql.exec("UPDATE runners SET state='online', last_heartbeat_ms=? WHERE runner_id=?", heartbeat, id);
+      }
+      const sql = vi.spyOn(state.storage.sql, "exec");
+      try {
+        await instance.alarm();
+        const presenceWrites = () => sql.mock.calls.filter(([query]) => query.startsWith("UPDATE runners SET state = 'stale'"));
+        expect(presenceWrites()).toHaveLength(1);
+        expect(state.storage.sql.exec("SELECT runner_id, state FROM runners ORDER BY runner_id").toArray()).toEqual([
+          { runner_id: "boundary", state: "online" }, { runner_id: "expired-one", state: "stale" },
+          { runner_id: "expired-two", state: "stale" }, { runner_id: "missing", state: "stale" },
+        ]);
+        expect(await state.storage.getAlarm()).toBe(now + 1_000);
+        sql.mockClear();
+        await instance.alarm();
+        expect(presenceWrites()).toHaveLength(0);
+      } finally { sql.mockRestore(); }
+    } finally { clock.mockRestore(); }
+  });
+});
+
 it("does not rescan unrelated history on each liveness alarm, with the cleanup deadline stored durably", async () => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`idle-maintenance-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (instance, state) => {

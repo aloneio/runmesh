@@ -460,3 +460,22 @@ Browser collection receipts derive their items field from the request contract.
 The API requires an array and an explicit null or nonempty continuation cursor,
 and rejects repeated cursors and empty pages that claim further results. A failed
 reload retains uncertain-write state until a complete collection is observed.
+
+Runner presence uses one threshold and a pure projection in
+`contracts/runner-selection.ts`. Registry owns the clock and supplies one
+observation time to expiry checks and record projection. Detail and execution
+reads share synchronous refresh logic; alarm expiry remains one batch update.
+
+Update recovery and manager removal share the strict local terminal-phase
+predicate. Job completion re-observes the current process identity after awaiting
+a cancellation decision, so newer metadata retains ownership of the outcome.
+
+Password controls and authentication progress receive localized copy from their
+rendered attributes. Native form submission owns validation and navigation.
+Central's translator owns named interpolation and inserts user values literally
+in one pass, including dollar signs and placeholder-shaped names.
+
+CI matrix versions, platforms and provider job names belong to `ci-contract.mjs`.
+Workflow validation and cross-provider evidence consume that same declaration;
+job renaming is checked before publication. Packaged test evidence requires
+string source and runtime identities before projecting its report.

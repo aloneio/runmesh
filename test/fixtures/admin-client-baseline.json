@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "9ffab45c59c4a108739d7c0cc28a4a0faa03cb1cc6a8c6cb64db2e9151d92543",
+      "sha256": "91db93662a673d715f082df2e3ba7ab55393097ea1aef1d46acf8087ad5b6e1f",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "c530ec95ffca373b207ccc6e68cb17afab94548aba23f3a575868387191cc1c7",
+      "sha256": "a5224c2fb1e435e04a8e97736713e0e3a50c1751b66df59e1d7fd37863688ce8",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -477,6 +477,25 @@
       {
         "nonce": "test-nonce",
         "sha256": "cf357141bc1d488527684f8d9b495e2bfc812443bc31efd20e0f7cc18aca4a15"
+      }
+    ]
+  },
+  "localized_controls_interpolation_review": {
+    "source_baseline": "2a51a0bec5d4e12600b118928e3f628d460c0721",
+    "reviewed_change": "Password and submit controls receive localized attributes from rendered markup; form submission stays native. Central translation performs named interpolation once with literal user values. Restoring the prior browser bundle and removing only the three new localized data attributes reproduces every prior renderer hash and byte count.",
+    "markup_changes": [
+      "data-password-show",
+      "data-password-hide",
+      "data-submit-pending"
+    ],
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "9ffab45c59c4a108739d7c0cc28a4a0faa03cb1cc6a8c6cb64db2e9151d92543"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "c530ec95ffca373b207ccc6e68cb17afab94548aba23f3a575868387191cc1c7"
       }
     ]
   }

@@ -7,6 +7,9 @@ import {enrollmentDocument} from "../src/admin/enrollment-view.js";
 import {clientDetailPage} from "../src/admin/client-views.js";
 import {jobTable,mcpCallTable} from "../src/admin/tables.js";
 import {adminDocument} from "../src/admin/layout.js";
+import {authEntryDocument} from "../src/admin/auth-views.js";
+import {passwordToggle} from "../src/admin/forms.js";
+import {message} from "../src/i18n/messages.js";
 const request=(lang="en",headers:Record<string,string>={})=>new Request(`https://worker.test/admin?lang=${lang}`,{headers});
 it.each(["en", "zh-CN"])("preserves data title segments including separators and entities in %s", async locale => {
  for (const value of ["Source", "read", "Write", "Unknown", "Source · Read", "<script>&quot;&amp;</script>"]) {
@@ -72,6 +75,31 @@ it("the public login response has a fully localized browser title",async()=>{
  const html=await response.text(),title=/<title>([^<]+)<\/title>/.exec(html)?.[1];
  expect(title).toBe("Runmesh · 智能体控制平面登录");
  expect(response.headers.get("content-language")).toBe("zh-CN");
+});
+
+it.each(["en", "zh-CN"] as const)("authentication controls receive their interaction copy from the message catalog in %s", async locale => {
+ for (const kind of ["login", "setup"] as const) {
+  const source=authEntryDocument(kind,"synthetic-csrf");
+  const output=await localizeHtmlResponse(request(locale),new Response(source,{headers:{"content-type":"text/html"}})).text();
+  const pending=message(kind==="setup"?"text.initializing":"text.signing.in",locale);
+  expect(output).toContain(`data-submit-pending="${pending}"`);
+  expect(output).toContain(`data-password-show="${message("auth.showPassword",locale)}"`);
+  expect(output).toContain(`data-password-hide="${message("auth.hidePassword",locale)}"`);
+  expect(output).toContain(`aria-label="${message("auth.showPassword",locale)}"`);
+  const submit=/<button\b[^>]*class="login-submit-btn"[^>]*>/u.exec(output)?.[0];
+  expect(submit).toBeDefined();
+  expect(submit).not.toMatch(/\b(?:name|value|formaction)=/u);
+ }
+ const settings=await localizeHtmlResponse(request(locale),new Response(`<html><body>${passwordToggle()}</body></html>`,{headers:{"content-type":"text/html"}})).text();
+ expect(settings).toContain(`data-password-show="${message("auth.showPassword",locale)}"`);
+ expect(settings).toContain(`data-password-hide="${message("auth.hidePassword",locale)}"`);
+});
+
+it("interaction copy localization preserves excluded and unreviewed data attributes",async()=>{
+ const source='<html><body><button data-password-show="Show password" data-password-hide="Hide password" data-submit-pending="Signing in..." data-private-value="Show password">Login</button><button data-no-i18n data-password-show="Show password" data-password-hide="Hide password" data-submit-pending="Initializing...">Login</button></body></html>';
+ const output=await localizeHtmlResponse(request("zh-CN"),new Response(source,{headers:{"content-type":"text/html"}})).text();
+ expect(output).toContain('data-password-show="显示密码" data-password-hide="隐藏密码" data-submit-pending="正在登录..." data-private-value="Show password"');
+ expect(output).toContain('<button data-no-i18n data-password-show="Show password" data-password-hide="Hide password" data-submit-pending="Initializing...">Login</button>');
 });
 
 it("I18N01 translations preserve restricted defaults and destructive cleanup scope",()=>{

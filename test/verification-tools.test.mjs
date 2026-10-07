@@ -876,6 +876,16 @@ test("AR08 package observations never imply signing, production or other native 
   for (const key of ["production", "signed_release", "account_quotas", "host_catalog"]) assert.deepEqual(value[key], { state: "not_run" });
   assert.ok(!JSON.stringify(value).includes("private")); assert.ok(!JSON.stringify(value).includes("email"));
 });
+
+for (const field of ["commit", "tree", "arch", "node"])
+test(`AR08 package evidence rejects array-valued ${field}`, () => {
+  const input = { tests: summarizeVitest(reporter(), 0), source: { commit: "a".repeat(40), tree: "b".repeat(40), state: "clean" },
+    artifact: { sha256: "c".repeat(64), bytes: 100 }, platform: "linux", arch: "arm64", node: "v22.23.2", elapsedMs: 1000 };
+  packageEvidence(input);
+  const owner = field === "commit" || field === "tree" ? input.source : input;
+  owner[field] = [owner[field]];
+  assert.throws(() => packageEvidence(input));
+});
 test("AR08 documentation must cover each real tool and action without fictional inputs", () => {
   const contract = { contractFacts: { tools: ["read"], actions: [{ tool: "read", action: "read" }] }, exampleProblem: e => e.arguments.bad ? "bad input" : undefined };
   const examples = [{ id: "file", tool: "read", action: "read", accepts: true, arguments: {} }];

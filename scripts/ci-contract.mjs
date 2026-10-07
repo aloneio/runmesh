@@ -49,6 +49,19 @@ export function gitlabReportArtifacts() {
   return { when: "always", expire_in: "14 days", paths: [...REPORT_PATHS], reports: { junit: "ci-results/*.xml" } };
 }
 export const AGGREGATE_JOBS = Object.freeze(["verify", "native-runner", "runner-lts", "browser"]);
+/** Workflow validation and provider evidence share the same matrix identities. */
+export const NATIVE_RUNNER_PLATFORMS = Object.freeze(["ubuntu-latest", "windows-latest", "macos-latest"]);
+export const RUNNER_LTS_VERSIONS = Object.freeze(["22.23.2", "24.21.0"]);
+export const GITHUB_JOB_NAMES = Object.freeze({
+  verify: "verify", browser: "browser", "verify-all": "verify-all",
+  "native-runner": "Runner native checks (${{ matrix.os }})",
+  "runner-lts": "Runner LTS (${{ matrix.node }})",
+});
+export const REQUIRED_GITHUB_JOBS = Object.freeze([
+  GITHUB_JOB_NAMES.verify, GITHUB_JOB_NAMES.browser, GITHUB_JOB_NAMES["verify-all"],
+  ...NATIVE_RUNNER_PLATFORMS.map(os => GITHUB_JOB_NAMES["native-runner"].replace("${{ matrix.os }}", os)),
+  ...RUNNER_LTS_VERSIONS.map(node => GITHUB_JOB_NAMES["runner-lts"].replace("${{ matrix.node }}", node)),
+]);
 /** Native gates added after the frozen CI migration input. */
 export const NATIVE_ADDED_COMMANDS = Object.freeze([
   "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs",
