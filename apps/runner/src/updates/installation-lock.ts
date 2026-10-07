@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { constants, lstatSync } from "node:fs";
+import { constants, lstatSync, type Stats } from "node:fs";
 import { link, lstat, mkdir, open, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { trustedWindowsEnvironment, resolveTrustedWindowsTool, trustedWindowsRoot } from "../windows-tools.js";
@@ -79,10 +79,19 @@ async function directoryLease(path: string): Promise<InstallationLease | undefin
   // Prepare the complete owner record before publishing a no-replace hardlink.
   // A crash at any earlier point leaves only an unreferenced private directory.
   await mkdir(directory, { mode: 0o700 });
-  const handle = await open(leasePath, "wx", 0o600);
-  try { await handle.writeFile(JSON.stringify({ schema_version: 1, generation })); await handle.sync(); } finally { await handle.close(); }
-  await writeFile(ownerPath, "", { flag: "wx", mode: 0o600 }); await syncDirectory(directory);
-  const leaseInfo = await lstat(leasePath);
+  let leaseInfo: Stats;
+  try {
+    const handle = await open(leasePath, "wx", 0o600);
+    try { await handle.writeFile(JSON.stringify({ schema_version: 1, generation })); await handle.sync(); } finally { await handle.close(); }
+    await writeFile(ownerPath, "", { flag: "wx", mode: 0o600 }); await syncDirectory(directory);
+    leaseInfo = await lstat(leasePath);
+  } catch (error) {
+    // This unpublished generation belongs to this attempt. Reclaim only its
+    // known files and empty directory; never scan or remove another owner.
+    await Promise.all([ownerPath, leasePath].map(file => unlink(file).catch(() => undefined)));
+    await rmdir(directory).catch(() => undefined);
+    throw error;
+  }
   try { await link(leasePath, path); }
   catch (error) { await removeGeneration(directory, marker); if (code(error) === "EEXIST") return undefined; throw error; }
   let held = true;

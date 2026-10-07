@@ -28,6 +28,62 @@ function scoped() { return env.RUNNER.get(env.RUNNER.idFromName(`update-maintena
 const active = (pending = 1): MaintenanceConnection => ({ lifecycle_id: owner.lifecycle_id, epoch: 4, session_id: "old-session", pending, open: true });
 
 describe("Runner update maintenance fencing", () => {
+  it.each([202, 401, 403, 409, 503])("requires completed evidence and preserves Registry rejection HTTP %s", async status => {
+    await runInDurableObject(scoped(), async (_instance, state) => {
+      const f = fixture(state.storage); await f.maintenance.load();
+      const value = await (await f.ports.registry()).json();
+      f.ports.registry = async () => Response.json(value, { status });
+      const put = vi.spyOn(state.storage, "put");
+      try {
+        expect((await call(f.maintenance, "begin")).status).toBe(status < 400 ? 503 : status);
+        expect(f.maintenance.blocked).toBe(false); expect(put).not.toHaveBeenCalled();
+      } finally { put.mockRestore(); }
+    });
+  });
+
+  it.each(["oversized", "invalid-json", "null"])("rejects %s Registry evidence without claiming a maintenance owner", async fault => {
+    await runInDurableObject(scoped(), async (_instance, state) => {
+      const f = fixture(state.storage); await f.maintenance.load();
+      const value = await (await f.ports.registry()).json() as Record<string, unknown>;
+      f.ports.registry = async () => fault === "oversized" ? Response.json({ ...value, padding: "x".repeat(32_768) }) : new Response(fault === "null" ? "null" : "{");
+      const put = vi.spyOn(state.storage, "put");
+      try {
+        expect((await call(f.maintenance, "begin")).status).toBe(503);
+        expect(f.maintenance.blocked).toBe(false); expect(put).not.toHaveBeenCalled();
+      } finally { put.mockRestore(); }
+    });
+  });
+
+  it("releases the maintenance queue after a stalled Registry evidence body without committing its claim", async () => {
+    await runInDurableObject(scoped(), async (_instance, state) => {
+      const f = fixture(state.storage); await f.maintenance.load();
+      const good = f.ports.registry;
+      const value = await (await good()).text();
+      let stream!: ReadableStreamDefaultController<Uint8Array>, cancelled = 0, calls = 0;
+      f.ports.registry = async () => ++calls === 1 ? new Response(new ReadableStream<Uint8Array>({
+        start(controller) { stream = controller; controller.enqueue(new TextEncoder().encode(value)); },
+        cancel() { cancelled++; },
+      })) : good();
+      const put = vi.spyOn(state.storage, "put");
+      vi.useFakeTimers();
+      let first: Promise<Response> | undefined, second: Promise<Response> | undefined;
+      try {
+        let settled = false;
+        first = call(f.maintenance, "begin").then(response => { settled = true; return response; });
+        second = call(f.maintenance, "begin");
+        await vi.advanceTimersByTimeAsync(5001);
+        expect(settled).toBe(true);
+        expect((await first).status).toBe(503);
+        expect((await second).status).toBe(200);
+        expect(cancelled).toBe(1); expect(calls).toBe(2); expect(put).toHaveBeenCalledTimes(1);
+      } finally {
+        try { stream.close(); } catch { /* cancelled by the bounded reader */ }
+        await Promise.all([first?.catch(() => undefined), second?.catch(() => undefined)]);
+        vi.useRealTimers(); put.mockRestore();
+      }
+    });
+  });
+
   it("retains the newest disconnect while retrying an earlier failed uncertainty write", async () => {
     await runInDurableObject(scoped(), async (_instance, state) => {
       const f = fixture(state.storage); await call(f.maintenance, "begin");

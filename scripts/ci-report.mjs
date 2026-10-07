@@ -8,10 +8,13 @@ import { fileURLToPath } from "node:url";
 export const ROOT = fileURLToPath(new URL("../", import.meta.url));
 export function sourceObservation(root = ROOT) {
   try {
-    const git = (...args) => execFileSync("git", ["--no-optional-locks", "--no-replace-objects", ...args], { cwd: root, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] }).trim();
-    const commit = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
-    assert.match(commit, /^[a-f0-9]{40}$/u); assert.match(tree, /^[a-f0-9]{40}$/u);
-    return { commit, tree, state: git("status", "--porcelain", "--untracked-files=all") === "" ? "clean" : "dirty" };
+    const git = (...args) => execFileSync("git", ["--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", ...args], { cwd: root, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] }).trim();
+    const commit = git("rev-parse", "HEAD"); assert.match(commit, /^[a-f0-9]{40}$/u);
+    const tree = git("rev-parse", `${commit}^{tree}`); assert.match(tree, /^[a-f0-9]{40}$/u);
+    const state = git("status", "--porcelain", "--untracked-files=all") === "" ? "clean" : "dirty";
+    // A checkout change must not combine one commit with another tree/status.
+    assert.equal(git("rev-parse", "HEAD"), commit, "source changed during observation");
+    return { commit, tree, state };
   } catch { return { commit: null, tree: null, state: "unknown" }; }
 }
 

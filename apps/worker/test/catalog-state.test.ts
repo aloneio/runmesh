@@ -7,6 +7,7 @@ import { createCatalogCursor, newCatalogCursorKey } from "../src/platform/capabi
 import { CATALOG_LIMITS, type CatalogCursor } from "../src/contracts/catalog.js";
 import { catalogDefinition, catalogProfile, catalogSnapshot, fixtureDigest } from "../../../test/domain/catalog-fixtures.js";
 import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
+import { createCatalogManager } from "../src/application/capabilities/catalog-admin.js";
 
 function owner() {
   const namespace = (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
@@ -16,6 +17,33 @@ function repository(storage: DurableObjectStorage) {
   const schema = new CentralSchema(storage);
   return new CatalogState(storage, () => schema.initialize());
 }
+
+it.each(["current", "changed", "approved-history", "aliased-approved", "denied", "revision"])("catalog inspection verifies each distinct snapshot once and preserves final fences: %s", async mode => {
+  const first = await catalogSnapshot(), second = await catalogSnapshot("docs", [catalogDefinition("search", "New description")]);
+  await runInDurableObject(owner(), async (_instance, state) => {
+    const store = repository(state.storage); store.publish(first, 0);
+    if (mode === "changed" || mode === "approved-history" || mode === "aliased-approved") store.stage(second, 1);
+    const read = vi.spyOn(store, "readSnapshot"), digest = vi.fn(fixtureDigest);
+    if (mode === "aliased-approved") read.mockReturnValue(second);
+    let authorizations = 0;
+    const manager = createCatalogManager({ repository: store, profile: () => catalogProfile(), digest,
+      authorize: async () => {
+        if (++authorizations === 2) {
+          if (mode === "denied") return "denied";
+          if (mode === "revision") store.disable("docs", 1);
+        }
+        return "allowed";
+      } });
+    try {
+      const result = await manager.inspect("docs", mode === "approved-history" ? first.digest : undefined, new AbortController().signal, () => false);
+      expect(result.state).toBe(mode === "denied" ? "denied" : mode === "revision" || mode === "aliased-approved" ? "unavailable" : "found");
+      if (result.state === "found") expect(result.changes).toEqual([{ name: "search", state: mode === "changed" ? "changed" : "unchanged" }]);
+      expect(read).toHaveBeenCalledTimes(mode === "changed" || mode === "aliased-approved" ? 2 : 1);
+      expect(digest).toHaveBeenCalledTimes(mode === "changed" ? 2 : 1);
+      expect(authorizations).toBe(mode === "aliased-approved" ? 1 : 2);
+    } finally { read.mockRestore(); }
+  });
+});
 
 it("W04 catalog construction creates no tables and no credentials", async () => {
   await runInDurableObject(owner(), (_instance, state) => {

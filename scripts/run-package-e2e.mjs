@@ -22,12 +22,11 @@ let temp, rawReport, testResult, phase = "preflight", step = "preflight", report
 async function command(file, args, timeout = 120000, env = process.env) {
   return exec(file, args, { cwd: root, env, timeout, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
 }
-async function sourceIdentity() {
-  const git = async (...args) => (await command("git", ["--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", ...args], 10000)).stdout.trim();
-  const commit = await git("rev-parse", "HEAD"), tree = await git("rev-parse", "HEAD^{tree}");
-  assert.match(commit, /^[a-f0-9]{40}$/u); assert.match(tree, /^[a-f0-9]{40}$/u);
-  for (const declared of [process.env.GITHUB_SHA, process.env.CI_COMMIT_SHA]) if (declared) assert.equal(declared, commit, "CI source differs from checkout");
-  return { commit, tree, state: await git("status", "--porcelain", "--untracked-files=all") === "" ? "clean" : "dirty" };
+function sourceIdentity() {
+  const observed = sourceObservation(root);
+  assert.notEqual(observed.state, "unknown", "CI source observation unavailable");
+  for (const declared of [process.env.GITHUB_SHA, process.env.CI_COMMIT_SHA]) if (declared) assert.equal(declared, observed.commit, "CI source differs from checkout");
+  return observed;
 }
 async function writeReport(value) {
   const path = join(reportDir, `${randomUUID()}.tmp`);

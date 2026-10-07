@@ -141,7 +141,7 @@ it("does not rewrite an unchanged owned fence on repeated reconstruction", async
   });
 });
 
-it.each(["warm", "reconstructed", "cleanup-unavailable", "cleanup-retry", "cleanup-retry-reconstructed", "issuance-unknown", "issuance-response-lost"])("browser enrollment regeneration preserves recovery evidence via actual durable objects: %s", async mode => {
+it.each(["warm", "reconstructed", "cleanup-unavailable", "cleanup-oversized", "cleanup-retry", "cleanup-retry-reconstructed", "issuance-unknown", "issuance-response-lost"])("browser enrollment regeneration preserves recovery evidence via actual durable objects: %s", async mode => {
   const f = await fixture(), session = randomBase64Url(), csrf = randomBase64Url();
   const sessionHash = await sha256Hex(session), csrfHash = await sha256Hex(csrf);
   await runInDurableObject(f.registry, instance => {
@@ -177,16 +177,16 @@ it.each(["warm", "reconstructed", "cleanup-unavailable", "cleanup-retry", "clean
       get: () => ({ fetch: async (request: Request) => {
         if (mode === "cleanup-retry-reconstructed" && cleanupFailed && new URL(request.url).pathname === "/begin-policy-mutation") current = runnerRegistryFaults(state, workerEnv).runner;
         if (new URL(request.url).pathname === "/cancel-policy-mutation") {
-          if (mode === "cleanup-unavailable" || (mode.startsWith("cleanup-retry") && !cleanupFailed)) {
+          if (mode === "cleanup-unavailable" || mode === "cleanup-oversized" || (mode.startsWith("cleanup-retry") && !cleanupFailed)) {
             cleanupFailed = true;
-            return Response.json({ error: { code: "mutation_state_changed", message: "PRIVATE_UPSTREAM_SENTINEL" } }, { status: 409 });
+            return Response.json({ error: { code: "mutation_state_changed", message: "PRIVATE_UPSTREAM_SENTINEL" }, ...(mode === "cleanup-oversized" ? { padding: "x".repeat(32_768) } : {}) }, { status: 409 });
           }
           if (mode === "reconstructed") current = runnerRegistryFaults(state, workerEnv).runner;
         }
         return current.fetch(request);
       } }),
     } as unknown as typeof env.RUNNER;
-    for (let attempt = 0; attempt < (mode === "cleanup-unavailable" ? 1 : 2); attempt++) {
+    for (let attempt = 0; attempt < (mode === "cleanup-unavailable" || mode === "cleanup-oversized" ? 1 : 2); attempt++) {
       const response = await worker.fetch(new Request("https://worker.test/admin/runners/" + f.runnerId + "/enrollment", {
         method: "POST", headers: { origin: "https://worker.test", "content-type": "application/x-www-form-urlencoded",
           cookie: "__Host-runmesh_admin_session=" + session + "; __Host-runmesh_admin_csrf=" + csrf },
@@ -195,9 +195,9 @@ it.each(["warm", "reconstructed", "cleanup-unavailable", "cleanup-retry", "clean
       if (mode === "issuance-unknown" || (mode === "issuance-response-lost" && attempt === 0)) {
         expect(response.status).toBe(503);
         expect(await response.text()).not.toContain('<code class="mono" data-no-i18n>');
-      } else if (mode === "cleanup-unavailable" || (mode.startsWith("cleanup-retry") && attempt === 0)) {
+      } else if (mode === "cleanup-unavailable" || mode === "cleanup-oversized" || (mode.startsWith("cleanup-retry") && attempt === 0)) {
         expect(response.status).toBe(503);
-        expect(response.headers.get("x-runmesh-error-code")).toBe("mutation_state_changed");
+        expect(response.headers.get("x-runmesh-error-code")).toBe(mode === "cleanup-oversized" ? "cleanup_unavailable" : "mutation_state_changed");
         expect(response.headers.get("x-runmesh-error-phase")).toBe("enrollment_fence_release");
         const text = await response.text();
         expect(text).toContain("Generate a new enrollment code to try again.");
@@ -211,7 +211,7 @@ it.each(["warm", "reconstructed", "cleanup-unavailable", "cleanup-retry", "clean
       }
     }
     expect(await control(current, f.runnerId).admission()).toMatchObject({ fenced: true, reconciled: false,
-      ...(mode === "cleanup-unavailable" || mode === "issuance-unknown" ? { mutationPhase: "precommit" } : { mutationId: "restart-reconcile" }) });
+      ...(mode === "cleanup-unavailable" || mode === "cleanup-oversized" || mode === "issuance-unknown" ? { mutationPhase: "precommit" } : { mutationId: "restart-reconcile" }) });
   });
   await runInDurableObject(f.registry, (instance, state) => {
     expect(instance.getRunnerExecutionState(f.runnerId)!.runner.credential_version).toBe(3);

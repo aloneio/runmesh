@@ -4,14 +4,55 @@ import { constants } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { acquireInstallationLock } from "../src/updates/installation-lock.js";
 
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, open: vi.fn(actual.open), lstat: vi.fn(actual.lstat), readFile: vi.fn(actual.readFile) };
+  return { ...actual, open: vi.fn(actual.open), lstat: vi.fn(actual.lstat), readFile: vi.fn(actual.readFile), writeFile: vi.fn(actual.writeFile) };
 });
 const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+it.skipIf(process.platform === "win32").each(["open", "write", "sync", "close", "marker", "directory-sync", "metadata"])("cleans only its own unpublished installation-lock preparation after %s fails", async phase => {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-install-lock-preparation-"));
+  const unrelated = join(root, `.installation.lock.manager-${randomUUID()}`);
+  const failure = Object.assign(new Error(`installation-lock ${phase} failed`), { code: "EIO" });
+  let failed = false;
+  const fail = () => { failed = true; throw failure; };
+  try {
+    await mkdir(unrelated); await actual.writeFile(join(unrelated, "lease.json"), "unrelated incomplete preparation");
+    vi.mocked(open).mockImplementation(async (path, flags, mode) => {
+      const preparing = basename(String(path)) === "lease.json" && flags === "wx";
+      if (preparing && phase === "open" && !failed) fail();
+      const handle = await actual.open(path, flags, mode);
+      if (preparing && !failed) {
+        if (phase === "write") handle.writeFile = async () => fail();
+        if (phase === "sync") handle.sync = async () => fail();
+        if (phase === "close") { const close = handle.close.bind(handle); handle.close = async () => { await close(); fail(); }; }
+      }
+      if (basename(String(path)).startsWith(".installation.lock.manager-") && phase === "directory-sync" && !failed) handle.sync = async () => fail();
+      return handle;
+    });
+    vi.mocked(writeFile).mockImplementation(async (path, data, options) => {
+      if (basename(String(path)).startsWith("owner-") && phase === "marker" && !failed) { await actual.writeFile(path, data, options); fail(); }
+      return actual.writeFile(path, data, options);
+    });
+    vi.mocked(lstat).mockImplementation((async (...args: Parameters<typeof actual.lstat>) => {
+      if (basename(String(args[0])) === "lease.json" && phase === "metadata" && !failed) fail();
+      return actual.lstat(...args);
+    }) as typeof actual.lstat);
+    await expect(acquireInstallationLock("user", root)).rejects.toBe(failure);
+    expect(failed).toBe(true);
+    expect(await readdir(root)).toEqual([basename(unrelated)]);
+    expect(await actual.readFile(join(unrelated, "lease.json"), "utf8")).toBe("unrelated incomplete preparation");
+    const retry = await acquireInstallationLock("user", root); expect(retry).toBeDefined();
+    retry!.assertHeld(); await retry!.release();
+    expect(await readdir(root)).toEqual([basename(unrelated)]);
+  } finally {
+    vi.mocked(open).mockImplementation(actual.open); vi.mocked(writeFile).mockImplementation(actual.writeFile); vi.mocked(lstat).mockImplementation(actual.lstat);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it.runIf(process.platform === "linux").each(["metadata", "directory"])("rejects an installation-lock %s FIFO replacement without a writer", async kind => {
   const base = await mkdtemp(join(tmpdir(), "runmesh-install-lock-fifo-")), root = join(base, "installation"), lock = join(root, ".installation.lock");
