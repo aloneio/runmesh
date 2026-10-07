@@ -1,13 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../scripts/browser-worker-fixture.mjs";
 import { runFixtureCommand, spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../scripts/worker-fixture.mjs";
 import { createTestHttpScope } from "../scripts/test-http-scope.mjs";
+import * as browserDiagnostics from "../scripts/browser-evidence.mjs";
 
 async function localHttpFixture(t, handle) {
   const requests = [];
@@ -276,4 +278,171 @@ test("Fixture command bounds private output and stops a descendant holding a loc
 test("Fixture command preserves successful UTF-8 output split across stream chunks", async () => {
   const result = await runFixtureCommand(process.execPath, ["-e", "const b=Buffer.from('é😀');process.stdout.write(b.subarray(0,1));setTimeout(()=>process.stdout.write(b.subarray(1)),50)"], { timeout: 5_000, maxBuffer: 1_024 });
   assert.deepEqual(result, { stdout: "é😀", stderr: "" });
+});
+
+test("Browser cleanup retains the primary failure and starts independent cleanup before a slow browser closes", async () => {
+  const closed = Promise.withResolvers(), entered = Promise.withResolvers(), emitted = [], calls = [];
+  const primary = Object.assign(new Error("PRIVATE_PRIMARY"), { code: "ERR_ASSERTION" });
+  const pending = browserDiagnostics.withBrowserFixtureCleanup(async () => { throw primary; }, [
+    { phase: "browser_close", run: async () => { calls.push("browser"); entered.resolve(); await closed.promise; throw new Error("PRIVATE_CLOSE"); } },
+    { phase: "fixture_close", run: async () => { calls.push("fixture"); } },
+    { phase: "temporary_cleanup", run: async () => { calls.push("temporary"); } },
+  ], text => emitted.push(text));
+  const rejected = assert.rejects(pending, error => error === primary);
+  await entered.promise; await new Promise(setImmediate);
+  assert.deepEqual(calls, ["browser", "fixture", "temporary"]);
+  assert.deepEqual(browserDiagnostics.browserFixtureFailureEvidence(emitted.join("")), [{ phase: "primary", error: { kind: "assertion_failed" } }]);
+  closed.resolve(); await rejected;
+  assert.deepEqual(browserDiagnostics.browserFixtureFailureEvidence(emitted.join("")), [
+    { phase: "primary", error: { kind: "assertion_failed" } }, { phase: "browser_close", error: { kind: "unclassified" } },
+  ]);
+  assert.doesNotMatch(emitted.join(""), /PRIVATE_/u);
+});
+
+test("Browser cleanup failure fails an otherwise successful check and reports each failed resource", async () => {
+  const emitted = [], calls = [];
+  await assert.rejects(browserDiagnostics.withBrowserFixtureCleanup(async () => "passed", [
+    { phase: "browser_close", run: () => { calls.push("browser"); throw Object.assign(new Error("PRIVATE_CLOSE"), { code: "EACCES" }); } },
+    { phase: "fixture_close", run: async () => { calls.push("fixture"); throw new Error("PRIVATE_SERVER timed out"); } },
+    { phase: "temporary_cleanup", run: async () => { calls.push("temporary"); } },
+  ], text => emitted.push(text)), error => error instanceof AggregateError && error.errors.length === 2);
+  assert.deepEqual(calls, ["browser", "fixture", "temporary"]);
+  assert.deepEqual(browserDiagnostics.browserFixtureFailureEvidence(emitted.join("")), [
+    { phase: "browser_close", error: { kind: "permission_denied" } }, { phase: "fixture_close", error: { kind: "timeout" } },
+  ]);
+  assert.doesNotMatch(emitted.join(""), /PRIVATE_/u);
+});
+
+test("Guided browser diagnostics project only fixed stages and classified failure fields", () => {
+  const lines = ["PRIVATE_BODY", browserDiagnostics.guidedProductStageMarker("layout_navigation"),
+    "RUNMESH_GUIDED_PRODUCT_STAGE=PRIVATE_STAGE\n", browserDiagnostics.guidedProductStageMarker("layout_measure"),
+    "RUNMESH_GUIDED_PRODUCT_STAGE=layout_cleanup PRIVATE_SUFFIX\n"];
+  assert.equal(browserDiagnostics.guidedProductStageEvidence(lines.join("\n")), "layout_measure");
+  assert.throws(() => browserDiagnostics.guidedProductStageMarker("PRIVATE_STAGE"));
+  const marker = value => "RUNMESH_BROWSER_FIXTURE_FAILURE=" + JSON.stringify(value) + "\n";
+  const output = browserDiagnostics.browserFixtureFailureEvidence([
+    marker({ phase: "primary", error: { kind: "assertion_failed", message: "PRIVATE_MESSAGE", location: { file: "scripts/layout-browser-check.mjs", line: 20, column: 3 }, PRIVATE_FIELD: true } }),
+    marker({ phase: "browser_close", error: { kind: "PRIVATE_KIND" } }),
+    marker({ phase: "PRIVATE_PHASE", error: { kind: "timeout" } }),
+    marker({ phase: "temporary_cleanup", error: { kind: "permission_denied", location: { file: "/PRIVATE/path", line: 1, column: 1 } } }),
+  ].join(""));
+  assert.deepEqual(output, [{ phase: "primary", error: { kind: "assertion_failed", location: { file: "scripts/layout-browser-check.mjs", line: 20, column: 3 } } },
+    { phase: "temporary_cleanup", error: { kind: "permission_denied" } }]);
+  assert.doesNotMatch(JSON.stringify(output), /PRIVATE_/u);
+});
+
+async function browserGateFixture(t) {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const directory = await mkdtemp(join(tmpdir(), "runmesh-browser-wrapper-"));
+  t.after(async () => {
+    assert.equal(dirname(directory), tmpdir()); assert.ok(basename(directory).startsWith("runmesh-browser-wrapper-"));
+    await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  });
+  await mkdir(join(directory, "scripts"));
+  await mkdir(join(directory, "node_modules/vitest"), { recursive: true });
+  for (const file of ["run-browser-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "browser-evidence.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+    await writeFile(join(directory, "scripts", file === "worker-fixture.mjs" ? "actual-worker-fixture.mjs" : file), await readFile(join(root, "scripts", file)));
+  await writeFile(join(directory, "scripts/build-provenance.mjs"), "export async function writeBuildProvenance() {}\n");
+  // Keep real process-tree management and ordinary startup budgets. Shorten
+  // only the deliberately hung guided child; the outer watchdog bounds tests.
+  await writeFile(join(directory, "scripts/worker-fixture.mjs"), `
+    import { appendFileSync } from 'node:fs';
+    import { runFixtureCommand as actual } from './actual-worker-fixture.mjs';
+    export function runFixtureCommand(file, args, options) {
+      appendFileSync('budgets.jsonl', JSON.stringify({ timeout: options.timeout }) + '\\n');
+      const injectedHang = args[0].endsWith('/scripts/product-browser-check.mjs') && ['hang', 'cleanup_hang'].includes(process.env.BROWSER_FIXTURE_MODE);
+      return actual(file, args, { ...options, timeout: injectedHang ? Math.min(options.timeout, 1500) : options.timeout });
+    }
+  `);
+  await writeFile(join(directory, "node_modules/vitest/vitest.mjs"), `
+    import { writeFileSync } from 'node:fs';
+    await new Promise(resolve => setTimeout(resolve, 350));
+    writeFileSync(process.env.RUNMESH_TEST_RESULT_PATH, JSON.stringify({ success: true, numFailedTestSuites: 0,
+      numTotalTests: 1, numPassedTests: 1, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0,
+      testResults: [{ status: 'passed', name: '/private/test/browser/admin-ui.browser.test.ts', assertionResults: [{
+        status: 'passed', title: 'renders stable single-locale dashboard and navigation in Chromium' }] }] }));
+  `);
+  await writeFile(join(directory, "scripts/product-browser-check.mjs"), `
+    import { writeFileSync } from 'node:fs';
+    import { spawn } from 'node:child_process';
+    import { pathToFileURL } from 'node:url';
+    import { resolve } from 'node:path';
+    export async function checkGuidedProduct() {
+      writeFileSync('guided-started', 'yes');
+      console.log('PRIVATE_GUIDED_STDOUT'); console.error('PRIVATE_GUIDED_STDERR');
+      console.log('RUNMESH_GUIDED_PRODUCT_STAGE=layout_measure');
+      console.log('RUNMESH_GUIDED_PRODUCT_STAGE=PRIVATE_STAGE');
+      const mode = process.env.BROWSER_FIXTURE_MODE;
+      if (mode === 'hang' || mode === 'cleanup_hang') {
+        const child = spawn(process.execPath, ['-e', "const s=require('node:http').createServer((q,r)=>r.end('alive'));s.listen(0,'127.0.0.1',()=>process.send(s.address().port))"], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+        const port = await new Promise(resolve => child.once('message', resolve));
+        writeFileSync('descendant-port', String(port));
+        try { if (mode === 'cleanup_hang') {
+          console.error('RUNMESH_BROWSER_FIXTURE_FAILURE=' + JSON.stringify({ phase: 'primary', error: { kind: 'assertion_failed', message: 'PRIVATE_PRIMARY', location: { file: 'scripts/layout-browser-check.mjs', line: 20, column: 3 } } }));
+          throw new Error('PRIVATE_ORIGINAL_FAILURE');
+        } await new Promise(() => {}); }
+        finally { await new Promise(() => {}); }
+      }
+      if (mode === 'failure') {
+        console.error('RUNMESH_BROWSER_FIXTURE_FAILURE=' + JSON.stringify({ phase: 'primary', error: { kind: 'assertion_failed', location: { file: 'scripts/product-browser-check.mjs', line: 27, column: 3 } } }));
+        console.error('RUNMESH_BROWSER_FIXTURE_FAILURE=' + JSON.stringify({ phase: 'browser_close', error: { kind: 'timeout' } }));
+        const error = new Error('AssertionError: PRIVATE_ASSERTION');
+        error.stack = 'Error: AssertionError: PRIVATE_ASSERTION\\n at fixture (scripts/product-browser-check.mjs:27:3)'; throw error;
+      }
+      if (mode === 'invalid_result') return { state: 'failed', screenshots: 0 };
+      return { state: 'passed', screenshots: 0, PRIVATE_FIELD: 'PRIVATE_VALUE' };
+    }
+    if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+      if (process.env.BROWSER_FIXTURE_MODE !== 'missing_result') console.log(JSON.stringify(await checkGuidedProduct()));
+    }
+  `);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:RUNMESH_|GIT_)/u.test(key)));
+  return { directory, async invoke(mode) {
+    await rm(join(directory, "budgets.jsonl"), { force: true });
+    try {
+      return { code: 0, ...await runFixtureCommand(process.execPath, [join(directory, "scripts/run-browser-e2e.mjs")], {
+        cwd: directory, env: { ...env, BROWSER_FIXTURE_MODE: mode, RUNMESH_CHROMIUM_EXECUTABLE: process.execPath }, timeout: 7000, maxBuffer: 65536,
+      }) };
+    } catch (error) { return { code: error.code, error, stdout: error.stdout, stderr: error.stderr }; }
+  }, async report(name = "browser-tests") { return JSON.parse(await readFile(join(directory, "ci-results", name + ".json"), "utf8")); } };
+}
+
+for (const mode of ["hang", "cleanup_hang"]) test(`Browser gate bounds guided product ${mode} and its descendants`, { skip: process.platform !== "linux" }, async t => {
+  const f = await browserGateFixture(t), result = await f.invoke(mode);
+  assert.equal(result.error?.termination_reason, undefined, "the gate must return before the outer test watchdog");
+  assert.equal(result.code, 1);
+  assert.equal((await f.report("browser")).state, "timed_out");
+  const report = await f.report(); assert.equal(report.state, "failed"); assert.equal(report.stage, "guided_product");
+  assert.equal(report.termination_reason, "timeout");
+  assert.equal(report.guided_product_stage, "layout_measure");
+  if (mode === "cleanup_hang") assert.deepEqual(report.guided_product_failures,
+    [{ phase: "primary", error: { kind: "assertion_failed", location: { file: "scripts/layout-browser-check.mjs", line: 20, column: 3 } } }]);
+  assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(report), /PRIVATE_/u);
+  const port = Number(await readFile(join(f.directory, "descendant-port"), "utf8"));
+  await assert.rejects(fetch(`http://127.0.0.1:${port}`, { signal: AbortSignal.timeout(1000) }));
+});
+
+test("Browser gate shares its deadline and publishes only validated guided evidence", { skip: process.platform !== "linux" }, async t => {
+  const f = await browserGateFixture(t), result = await f.invoke("success");
+  assert.equal(result.code, 0, result.stderr);
+  const budgets = (await readFile(join(f.directory, "budgets.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(budgets.length, 2); assert.ok(budgets[1].timeout < budgets[0].timeout - 300);
+  assert.deepEqual(JSON.parse(result.stdout.trim()).guided_product, { state: "passed", screenshots: 0 });
+  assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(await f.report()), /PRIVATE_/u);
+  assert.equal((await f.report("browser")).state, "passed");
+  for (const mode of ["failure", "missing_result", "invalid_result"]) {
+    const failed = await f.invoke(mode), report = await f.report();
+    assert.equal(failed.code, 1); assert.equal(report.state, "failed"); assert.equal(report.stage, "guided_product");
+    if (mode === "invalid_result") assert.equal(report.guided_product_stage, "layout_measure");
+    assert.equal((await f.report("browser")).state, "failed");
+    assert.doesNotMatch(failed.stdout + failed.stderr + JSON.stringify(report), /PRIVATE_/u);
+    if (mode === "failure") {
+      assert.equal(report.subprocess_exit_code, 1);
+      assert.deepEqual(report.guided_product_error, { kind: "assertion_failed", location: { file: "scripts/product-browser-check.mjs", line: 27, column: 3 } });
+      assert.deepEqual(report.guided_product_failures, [
+        { phase: "primary", error: { kind: "assertion_failed", location: { file: "scripts/product-browser-check.mjs", line: 27, column: 3 } } },
+        { phase: "browser_close", error: { kind: "timeout" } },
+      ]);
+    }
+  }
 });

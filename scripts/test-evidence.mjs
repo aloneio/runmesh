@@ -110,6 +110,21 @@ const failureKinds = [
   [/EACCES|EPERM/u, "permission_denied"],
 ];
 
+const diagnosticKinds = Object.freeze([...new Set([...failureKinds.map(([, kind]) => kind),
+  "unclassified", "mcp_http_failure", "job_completion_failure", "output_limit_exceeded", "process_terminated",
+  "process_exit", "file_or_command_missing", "resource_exhausted", "invalid_evidence"])]);
+
+/** Reconstruct classified fields from a diagnostic marker, never its raw text. */
+export function projectTestErrorDiagnostic(value) {
+  if (!value || typeof value !== "object" || !diagnosticKinds.includes(value.kind)) return undefined;
+  const result = { kind: value.kind }, location = value.location;
+  if (location && (testFiles.includes(location.file) || browserSources.some(name => location.file === "scripts/" + name))
+    && Number.isInteger(location.line) && location.line > 0 && location.line <= 9999999
+    && Number.isInteger(location.column) && location.column > 0 && location.column <= 99999)
+    result.location = { file: location.file, line: location.line, column: location.column };
+  return result;
+}
+
 export function testFailureDetails(messages) {
   // Reporter messages can contain credentials and response bodies. Match bounded
   // input, then emit fixed labels and public source coordinates only.

@@ -16,6 +16,7 @@ import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
 import { loadAdminJobPage } from '../apps/worker/dist/admin-jobs.js';
 import { isSafeIdentifier } from '../apps/worker/dist/security.js';
 import { PRODUCT_VERSION } from '../apps/worker/dist/generated-version.js';
+import { guidedProductStageMarker, withBrowserFixtureCleanup } from './browser-evidence.mjs';
 
 // Reuse public render fixtures; measurements exercise the shipped CSS and browser bundle.
 const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage, clientsPage, clientDetailPage, runnersPage, runnerDetailPage };
@@ -351,6 +352,8 @@ async function checkIdentifierInputs(page) {
 
 /** Local layout and native form validation; never capture screenshots or use a user's browser. */
 export async function checkAdminLayout(executable) {
+  const stage = value => { const marker = guidedProductStageMarker(value); try { process.stdout.write(marker); } catch { /* Diagnostics do not own fixture cleanup. */ } };
+  stage('layout_setup');
   const documents = await fixtureDocuments(), errors = [], failures = [];
   const auth = { requests: [], pending: undefined };
   const digest = 'a'.repeat(64);
@@ -381,15 +384,19 @@ export async function checkAdminLayout(executable) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = 'http://127.0.0.1:' + server.address().port;
   let browser, measurements = 0, identifierInputs = 0;
-  try {
+  return withBrowserFixtureCleanup(async () => {
     browser = await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) });
     const page = await browser.newPage(); page.on('pageerror', error => errors.push(error.message));
+    stage('layout_auth');
     const authSubmissions = await checkAuthSubmissions(page, origin, auth);
     for (const locale of ['en', 'zh-CN']) for (const width of viewports) for (const path of documents.keys()) {
+      stage('layout_navigation');
       await page.setViewportSize({ width, height: 1000 });
       await page.goto(origin + path + '?lang=' + locale);
       if (path.endsWith('/central')) await page.locator('[data-central-product][aria-busy="false"]').waitFor();
+      stage('layout_localization');
       await localizeFixture(page, locale);
+      stage('layout_forms');
       if (await page.locator('[data-app-header]').count()) {
         assert.equal(await page.locator('.brand').getAttribute('href'), 'https://github.com/aloneio/runmesh');
         assert.equal(await page.locator('.brand').getAttribute('target'), '_blank');
@@ -405,8 +412,10 @@ export async function checkAdminLayout(executable) {
         assert.deepEqual(await form.evaluate(node => Object.fromEntries(new FormData(node))), { stream: 'stdout', bytes: '4096', view: 'tail' });
       }
       const measure = async state => {
+        stage('layout_measure');
         measurements++;
         for (const issue of await layoutIssues(page)) failures.push({ locale, width, path, state, issue });
+        stage('layout_forms');
       };
       await measure('initial');
       if (path.includes('clients-')) {
@@ -459,6 +468,7 @@ export async function checkAdminLayout(executable) {
       }
     }
     // A resized command panel must return to its natural wide-layout height.
+    stage('layout_resize');
     await page.setViewportSize({ width: 390, height: 1000 });
     await page.goto(origin + '/layout/enrollment-manual');
     await page.setViewportSize({ width: 1365, height: 1000 });
@@ -474,7 +484,10 @@ export async function checkAdminLayout(executable) {
       client_cell_content_contained: true, runner_cell_content_contained: true, runner_version_form_preserved: true,
       recording_form_order_and_alignment: true, uninstall_command_copy_preserved: true, identifier_inputs_validated: identifierInputs,
       native_auth_submissions: authSubmissions, screenshots: 0 };
-  } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
+  }, [
+    { phase: 'browser_close', run: () => { stage('layout_cleanup'); return browser?.close(); } },
+    { phase: 'fixture_close', run: () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())) },
+  ], text => process.stderr.write(text));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) console.log(JSON.stringify(await checkAdminLayout(process.env.RUNMESH_CHROMIUM_EXECUTABLE)));
