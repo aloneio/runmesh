@@ -488,6 +488,12 @@ its own signal listeners and disconnect timer when the connection ends.
 The independent maintenance agent covers initialization with its signal cleanup
 scope. Its journal releases an exclusively created temporary file on any failure
 before replacement; a successful rename transfers ownership to the active path.
+Windows uninstall owns its private temporary runtime until cleanup completes.
+Sharing and lock violations share one bounded retry budget; other cleanup errors
+return immediately, and cleanup diagnostics preserve a prior uninstall exit code.
+An installed uninstall helper retains the independent manager's version, just
+like its runtime and bundle. Installation checks ownership and trusted paths;
+byte-for-byte comparison applies only to a helper created by that installation.
 
 Skill HTTP adapters accept error states as strings before classifying operation
 outcomes. Malformed receipts retain the unknown-result classification. Central

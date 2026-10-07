@@ -51,9 +51,33 @@ try {
   & $runtime $bundle @args
   $result=$LASTEXITCODE
 } finally {
-  $current=[IO.DirectoryInfo]::new($temporary)
-  if($current.Exists -and $current.Parent.FullName.TrimEnd('\') -eq $tempParent.TrimEnd('\') -and ($current.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
-    [IO.Directory]::Delete($temporary,$true)
+  $cleanupTimer=[Diagnostics.Stopwatch]::StartNew()
+  try {
+    while($true) {
+      $current=[IO.DirectoryInfo]::new($temporary)
+      if(-not $current.Exists) { break }
+      if($current.Parent.FullName.TrimEnd('\') -ne $tempParent.TrimEnd('\') -or ($current.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Maintenance temporary path changed before cleanup'
+      }
+      try {
+        [IO.Directory]::Delete($temporary,$true)
+        break
+      } catch {
+        # The command has exited, but Windows may still hold its image or a
+        # scanner handle. Retry only sharing/lock violations, within one budget.
+        $failure=$_.Exception
+        $locked=$false
+        while($null -ne $failure) {
+          if($failure -is [IO.IOException] -and ($failure.HResult -band 65535) -in @(32,33)) { $locked=$true; break }
+          $failure=$failure.InnerException
+        }
+        if(-not $locked -or $cleanupTimer.ElapsedMilliseconds -ge 5000) { throw }
+        [Threading.Thread]::Sleep(100)
+      }
+    }
+  } catch {
+    [Console]::Error.WriteLine('Maintenance temporary cleanup failed for "'+$temporary+'": '+$_.Exception.Message)
+    if($result -eq 0) { $result=1 }
   }
 }
 exit $result

@@ -131,6 +131,64 @@ it("retains the stable management package across ordinary uninstall and reinstal
   expect(test.stats.has(test.paths.managerRoot)).toBe(false);
 });
 
+it.each([false, true])("retains the installed Windows uninstall helper when another CLI installs the Runner (retained package: %s)", async retained => {
+  const test = fixture("win32"); await managerInstall(test.options);
+  const helper = test.paths.path.join(test.paths.managerRoot, "uninstall.ps1");
+  const previousHelper = test.files.get(helper)!.replace("$result=1", "$result=1\r\n# Installed independently of the selected Runner package");
+  test.files.set(helper, previousHelper);
+  if (retained) await managerUninstall({ ...test.options, preservePackage: true });
+  test.oldRunner(); test.calls.length = 0;
+  test.files.set(test.maintenanceBundle, "another Runner package maintenance program");
+  const writes: string[] = [];
+  const filesystem = { ...test.options.filesystem, write: async (path: string, content: string) => {
+    writes.push(path); await test.options.filesystem.write(path, content);
+  } };
+  await expect(managerInstall({ ...test.options, filesystem })).resolves.toEqual({ enabled: true });
+  expect(test.files.get(helper)).toBe(previousHelper);
+  expect(writes).not.toContain(helper);
+  expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  expect(test.files.get(test.paths.runtimePath)).toBe("runtime bytes");
+  expect(test.copies).toHaveLength(2);
+  expect(test.calls.some(call => call.includes("--help"))).toBe(false);
+  expect(test.isActive()).toBe(true);
+});
+
+it("rejects a changed newly written Windows helper before registering its manager", async () => {
+  const test = fixture("win32"), helper = test.paths.path.join(test.paths.managerRoot, "uninstall.ps1");
+  const filesystem = { ...test.options.filesystem, write: async (path: string, content: string) => {
+    await test.options.filesystem.write(path, path === helper ? content + "\r\nchanged after creation" : content);
+  } };
+  await expect(managerInstall({ ...test.options, filesystem })).rejects.toThrow("helper changed during installation");
+  expect(test.stats.has(test.paths.managerRoot)).toBe(false);
+  expect(test.files.has(test.paths.manifestPath)).toBe(false);
+  expect(test.calls.some(call => call.includes("/Create") || call.includes("/Run"))).toBe(false);
+  expect(test.files.get(test.options.profilePath)).toBe("existing credential profile");
+});
+
+it.each(["linked", "directory", "aliased", "untrusted-acl", "different-installation", "missing-metadata"] as const)(
+  "retains the Windows manager ownership checks when its existing helper is %s", async failure => {
+    const test = fixture("win32"); await managerInstall(test.options);
+    const helper = test.paths.path.join(test.paths.managerRoot, "uninstall.ps1");
+    const metadata = test.paths.path.join(test.paths.managerRoot, "installation.json");
+    const previousHelper = test.files.get(helper)!;
+    test.calls.length = 0;
+    if (failure === "linked") test.stats.set(helper, { ...test.stats.get(helper)!, symlink: true });
+    if (failure === "directory") test.stats.set(helper, { ...test.stats.get(helper)!, file: false, directory: true });
+    if (failure === "different-installation") test.files.set(metadata, "another installation");
+    if (failure === "missing-metadata") { test.files.delete(metadata); test.stats.delete(metadata); }
+    const filesystem = { ...test.options.filesystem, realpath: async (path: string) => failure === "aliased" && path === helper
+      ? test.paths.path.join(test.paths.managerRoot, "another-helper.ps1") : test.options.filesystem.realpath(path) };
+    const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+      if (failure === "untrusted-acl" && name === "powershell.exe" && args.at(-1)?.includes(`Get-Acl -LiteralPath '${helper}'`)) return { exitCode: 1 };
+      return test.options.executor.execute(name, args);
+    } };
+    await expect(managerInstall({ ...test.options, filesystem, executor })).rejects.toThrow();
+    expect(test.files.get(helper)).toBe(previousHelper);
+    expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+    expect(test.copies).toHaveLength(2);
+    expect(test.calls.some(call => call.includes("/Create") || call.includes("/Run"))).toBe(false);
+  });
+
 it("does not register maintenance for a custom Runner executable", async () => {
   const test = fixture("linux");
   test.files.set(test.manifest.path, renderService({ platform: "linux", executablePath: "/srv/custom/bin/runmesh" }).content);

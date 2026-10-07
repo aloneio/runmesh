@@ -363,9 +363,15 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
     }
     if (platform === "win32") {
       const helper = path.join(managerRoot, "uninstall.ps1");
-      if (await filesystem.stat(helper) === undefined) await filesystem.write(helper, renderWindowsMaintenanceUninstall());
+      // The installed helper belongs to the same independent manager package
+      // as its runtime and bundle, not to the currently selected Runner CLI.
+      let generated: string | undefined;
+      if (await filesystem.stat(helper) === undefined) {
+        generated = renderWindowsMaintenanceUninstall();
+        await filesystem.write(helper, generated);
+      }
       await host.trustedTreePath(helper, "file", layout.installRoot);
-      if (await filesystem.read(helper) !== renderWindowsMaintenanceUninstall()) throw new Error("maintenance uninstall helper differs from this installation");
+      if (generated !== undefined && await filesystem.read(helper) !== generated) throw new Error("maintenance uninstall helper changed during installation");
     }
     await installManagementLaunchers(host, rollback => { rollbackLaunchers = rollback; });
     serviceAttempted = true;
