@@ -13,6 +13,31 @@ import { checkAdminLayout } from './layout-browser-check.mjs';
 import { checkSkillUploads } from './skill-upload-browser-check.mjs';
 import { checkCentralManagement } from './central-management-browser-check.mjs';
 import { checkCentralRecovery } from './central-recovery-browser-check.mjs';
+import { guidedProductStageMarker, withBrowserFixtureCleanup } from './browser-evidence.mjs';
+
+// Chromium reports an unread fetch body cancelled by the retired page as a
+// failed request. Playwright Response.finished() can remain pending for it.
+function observeRetiredRequest(page, request) {
+ let finish;
+ const result = new Promise(resolve => { finish = resolve; });
+ const complete = error => { dispose(); finish(error); };
+ const succeeded = current => { if (current === request) complete(); };
+ const failed = current => {
+  if (current !== request) return;
+  const reason = request.failure()?.errorText;
+  complete(reason === 'net::ERR_ABORTED' ? undefined : new Error('Detached OAuth request failed: ' + reason));
+ };
+ const closed = () => complete(new Error('Page closed before detached OAuth request completed'));
+ const timer = setTimeout(() => complete(new Error('Detached OAuth request timed out')), 10000);
+ function dispose() {
+  clearTimeout(timer);
+  page.off('requestfinished', succeeded); page.off('requestfailed', failed); page.off('close', closed);
+ }
+ page.on('requestfinished', succeeded); page.on('requestfailed', failed); page.on('close', closed);
+ // Store an outcome until the scenario awaits it, so an earlier UI assertion
+ // can fail and dispose this observer without an unhandled promise rejection.
+ return { wait: async () => { const error = await result; if (error) throw error; }, dispose };
+}
 
 async function checkClientPermissions(browser, origin, errors) {
  for(const locale of ['en','zh-CN']) {
@@ -120,21 +145,33 @@ async function checkOAuthReturnHistory(page, origin, requests, entry) {
 
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
 export async function checkGuidedProduct(executable) {
+ const stage = value => { const marker = guidedProductStageMarker(value); try { process.stdout.write(marker); } catch { /* Diagnostics do not own fixture cleanup. */ } };
+ stage('layout');
  await checkAdminLayout(executable);
+ stage('navigation');
  await checkAdminNavigation(executable);
+ stage('navigation_handoffs');
  await checkNavigationHandoffs(executable);
+ stage('runner_actions');
  await checkRunnerActions(executable);
- const fixture = await createProductFixture();
- const { digest, toolVersion, profiles, library, requests, exceptions, catalogs, controls, origin } = fixture;
- const skillFolder=await mkdtemp(join(tmpdir(),'runmesh-product-skill-'));
- let browser;
- try{
+ let fixture, skillFolder, browser;
+ return withBrowserFixtureCleanup(async () => {
+  stage('product_setup');
+  fixture = await createProductFixture();
+  const { digest, toolVersion, profiles, library, requests, exceptions, catalogs, controls, origin } = fixture;
+  skillFolder=await mkdtemp(join(tmpdir(),'runmesh-product-skill-'));
   browser=await chromium.launch({headless:true,...(executable?{executablePath:executable}:{})});
+  stage('central_recovery');
   await checkCentralRecovery(browser);
+  stage('client_permissions');
   await checkClientPermissions(browser,origin,exceptions);
+  stage('skill_file_errors');
   await checkSkillFileErrors(browser,origin,requests,library);
+  stage('central_management');
   await checkCentralManagement(browser,origin);
+  stage('skill_uploads');
   await checkSkillUploads(browser,origin,requests,library);
+  stage('product_workflows');
   const context=await browser.newContext({viewport:{width:1365,height:1000}});
   const page=await context.newPage();page.on('pageerror',e=>exceptions.push(e.message));
   await page.goto(origin+'/admin');
@@ -433,7 +470,7 @@ export async function checkGuidedProduct(executable) {
   controls.discovery.invalidReceipt=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   // Departed pages retire at navigation start, even while the next GET is pending.
   for(const pendingDestination of [true,false]){
-   let releaseOAuth,releaseDestination=()=>{},destinationStarted;
+   let releaseOAuth,releaseDestination=()=>{},destinationStarted,settledOAuth;
    const destinationRequested=new Promise(resolve=>{destinationStarted=resolve;});
    controls.oauth.delayed=new Promise(resolve=>{releaseOAuth=resolve;});
    if(pendingDestination){
@@ -442,7 +479,8 @@ export async function checkGuidedProduct(executable) {
    }
    try{
     const pendingOAuth=page.waitForRequest(request=>request.url().endsWith('/connections/begin'));
-    await page.getByRole('button',{name:'Reconnect',exact:true}).click();await pendingOAuth;
+    await page.getByRole('button',{name:'Reconnect',exact:true}).click();
+    settledOAuth=observeRetiredRequest(page,await pendingOAuth);
     assert.equal(await status.textContent(),'Opening the MCP sign-in page…','Internal reconciliation must not replace sign-in progress with List refreshed');
     await page.locator('.control-nav a[href="/admin"]').click();
     if(pendingDestination){
@@ -452,8 +490,7 @@ export async function checkGuidedProduct(executable) {
      await page.waitForURL(url=>url.pathname==='/admin');
      assert.equal(await page.locator('[data-central-product]').count(),0);
     }
-    const settledOAuth=page.waitForResponse(response=>response.url().endsWith('/connections/begin'));
-    releaseOAuth();await(await settledOAuth).finished();
+    releaseOAuth();await settledOAuth.wait();
     if(pendingDestination){
      await page.waitForFunction(()=>document.querySelector('[data-central-product]')?.getAttribute('aria-busy')!=='true');
      assert.equal(new URL(page.url()).pathname,'/admin/central','A late OAuth handoff must leave the selected navigation in control');
@@ -462,7 +499,8 @@ export async function checkGuidedProduct(executable) {
     }
     await page.waitForURL(url=>url.pathname==='/admin');await page.waitForLoadState('networkidle');
     assert.equal(await page.getByRole('heading',{name:'Dashboard',exact:true}).count(),1);
-   }finally{releaseOAuth();releaseDestination();controls.oauth.delayed=undefined;if(pendingDestination)await page.unroute(origin+'/admin');}
+    console.log('guided-product-browser: detached OAuth ' + (pendingDestination ? 'pending destination' : 'mounted destination') + ' passed');
+   }finally{settledOAuth?.dispose();releaseOAuth();releaseDestination();controls.oauth.delayed=undefined;if(pendingDestination)await page.unroute(origin+'/admin');}
    await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
    await page.locator('[data-central-product][aria-busy="false"]').waitFor();
    // Background recovery releases each MCP separately after the list is ready.
@@ -590,7 +628,11 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).isDisabled(),true);
   assert.deepEqual(exceptions,[]);
   return {state:'passed',single_dashboard:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,pending_service_failure_isolation:true,recovery_refresh_failure_blocks_writes:true,oauth_return_recovers_other_services:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
- }finally{await browser?.close();await fixture.close();await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
+ }, [
+  { phase: 'browser_close', run: () => { stage('product_cleanup'); return browser?.close(); } },
+  { phase: 'fixture_close', run: () => fixture?.close() },
+  { phase: 'temporary_cleanup', run: async () => { if (skillFolder) { await rm(join(skillFolder,'SKILL.md'),{force:true}); await rmdir(skillFolder); } } },
+ ], text => process.stderr.write(text));
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  console.log(JSON.stringify(await checkGuidedProduct(process.env.RUNMESH_CHROMIUM_EXECUTABLE)));

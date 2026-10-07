@@ -1,16 +1,23 @@
-import { checkGuidedProduct } from "./product-browser-check.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, lstat, realpath, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
-import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic } from "./browser-evidence.mjs";
+import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, browserFixtureFailureEvidence, guidedProductStageEvidence } from "./browser-evidence.mjs";
 import { mcpWorkerFailureEvidence } from "./mcp-diagnostics.mjs";
 import { writeSupplement } from "./ci-supplement.mjs";
 import { ROOT, gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
 import { writeBuildProvenance } from "./build-provenance.mjs";
 import { runFixtureCommand } from "./worker-fixture.mjs";
 
-const start = Date.now(), source = sourceObservation(); let temporaryRoot, directory, path, code = 1, stage = "configuration", termination;
+const start = Date.now(), source = sourceObservation(); let temporaryRoot, directory, path, code = 1, stage = "configuration", termination, guided;
+// Both suites, including their fixture cleanup, share one process budget.
+// A stalled guided check must still leave time for the gate to record failure.
+const deadline = start + 420000;
+function remainingBudget() {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw Object.assign(new Error("Fixture command timed out"), { termination_reason: "timeout", killed: true });
+  return remaining;
+}
 await writeGateReport(gateEvidence("browser", "running", 0, null, source));
 await writeSupplement("browser-tests", { schema_version: 1, state: "not_run", source });
 try {
@@ -29,12 +36,21 @@ try {
   await writeBuildProvenance(ROOT);
   stage = "test_execution";
   const result = await runFixtureCommand(process.execPath, [join(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--config", "vitest.browser.config.ts"], {
-    cwd: ROOT, timeout: 420000, maxBuffer: 8 * 1024 * 1024,
+    cwd: ROOT, timeout: remainingBudget(), maxBuffer: 8 * 1024 * 1024,
     env: { ...process.env, VITE_CONFIG_NATIVE_IGNORE_WARNING: "true", RUNMESH_TEST_RESULT_PATH: path, RUNMESH_CHROMIUM_EXECUTABLE: executable, RUNMESH_BROWSER_OUTPUT: "" },
   });
   process.stdout.write(result.stdout); process.stderr.write(result.stderr);
   stage = "guided_product";
-  const guidedProduct = await checkGuidedProduct(executable);
+  guided = await runFixtureCommand(process.execPath, [join(ROOT, "scripts/product-browser-check.mjs")], {
+    cwd: ROOT, timeout: remainingBudget(), maxBuffer: 8 * 1024 * 1024,
+    env: { ...process.env, RUNMESH_CHROMIUM_EXECUTABLE: executable },
+  });
+  // The product CLI ends with a result. Keep its assertion values and other
+  // output private, projecting only the fixed fields needed for acceptance.
+  const completed = JSON.parse(guided.stdout.trim().split(/\r?\n/u).at(-1));
+  assert.equal(completed?.state, "passed", "guided product checks did not pass");
+  assert.equal(completed.screenshots, 0, "guided product evidence must use DOM checks");
+  const guidedProduct = { state: "passed", screenshots: 0 };
   stage = "evidence_validation";
   const stat = await lstat(path); assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8 * 1024 * 1024);
   const evidence = browserEvidence(JSON.parse(await readFile(path, "utf8")), 0);
@@ -50,8 +66,16 @@ try {
     if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8 * 1024 * 1024) failure = browserFailureEvidence(JSON.parse(await readFile(path, "utf8")));
   } catch { /* A missing or malformed private report remains unavailable. */ }
   const workerEvents = mcpWorkerFailureEvidence(error?.stderr);
-  const diagnostics = { stage, error: browserErrorDiagnostic(error), subprocess_exit_code: stage === "test_execution" && Number.isSafeInteger(error?.code) ? error.code : null,
-    ...failure, ...(workerEvents.length > 0 ? { worker_events: workerEvents } : {}) };
+  const guidedStage = stage === "guided_product" ? guidedProductStageEvidence(error?.stdout ?? guided?.stdout) : undefined;
+  const guidedFailures = stage === "guided_product" ? browserFixtureFailureEvidence(error?.stderr ?? guided?.stderr) : [];
+  const diagnostics = { stage, error: browserErrorDiagnostic(error), subprocess_exit_code: ["test_execution", "guided_product"].includes(stage) && Number.isSafeInteger(error?.code) ? error.code : null,
+    ...failure, ...(workerEvents.length > 0 ? { worker_events: workerEvents } : {}),
+    ...(["timeout", "interrupted", "output_limit"].includes(termination) ? { termination_reason: termination } : {}),
+    ...(guidedStage === undefined ? {} : { guided_product_stage: guidedStage }),
+    ...(guidedFailures.length > 0 ? { guided_product_failures: guidedFailures } : {}),
+    ...(stage === "guided_product" && typeof error?.stderr === "string" && error.stderr.length > 0
+      ? { guided_product_error: guidedFailures.find(failure => failure.phase === "primary")?.error
+        ?? browserErrorDiagnostic({ message: error.stderr }) } : {}) };
   await writeSupplement("browser-tests", { schema_version: 1, state: "failed", source, ...diagnostics });
   console.error(JSON.stringify({ browser_gate: "failed", ...diagnostics }));
   console.error("browser_gate_failed: missing, skipped or failing real browser evidence; inspect the CI job");
