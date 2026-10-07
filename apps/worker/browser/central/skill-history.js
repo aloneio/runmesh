@@ -13,9 +13,6 @@ export function createSkillHistory({ app, api, view, t, refresh, inspect, getSki
     node.focus?.({ preventScroll: true });
     node.scrollIntoView?.({ block: 'nearest' });
   }
-  function text(key, values) {
-    return Object.entries(values).reduce((value, [name, replacement]) => value.replace('{' + name + '}', String(replacement)), t(key));
-  }
   function bytes(value) {
     return value < 1048576 ? (value / 1024).toFixed(1) + ' KiB' : (value / 1048576).toFixed(1) + ' MiB';
   }
@@ -28,9 +25,9 @@ export function createSkillHistory({ app, api, view, t, refresh, inspect, getSki
     if (current !== generation) return;
     const { head, capacity, versions } = data;
     panel.hidden = false;
-    const heading = el('h2', text('skillHistoryTitle', { name }));
-    panel.append(heading, el('p', text('skillVersionCapacity', { count: capacity.skill_versions, max: capacity.max_versions, bytes: bytes(capacity.skill_bytes) })),
-      el('p', text('skillLibraryCapacity', { count: capacity.library_skills, max: capacity.max_skills, bytes: bytes(capacity.library_bytes), limit: bytes(capacity.max_library_bytes) }), 'muted'));
+    const heading = el('h2', t('skillHistoryTitle', { name }));
+    panel.append(heading, el('p', t('skillVersionCapacity', { count: capacity.skill_versions, max: capacity.max_versions, bytes: bytes(capacity.skill_bytes) })),
+      el('p', t('skillLibraryCapacity', { count: capacity.library_skills, max: capacity.max_skills, bytes: bytes(capacity.library_bytes), limit: bytes(capacity.max_library_bytes) }), 'muted'));
     if (capacity.skill_versions >= capacity.max_versions) panel.append(el('p', t('skillVersionLimitCleanup')));
     const selected = new Set();
     const confirmation = el('section');
@@ -69,7 +66,7 @@ export function createSkillHistory({ app, api, view, t, refresh, inspect, getSki
       const result = await api(path + '/cleanup-preview', { digests: [...selected], expected_revision: head.revision });
       assertCurrent();
       const plan = result.plan;
-      review(t('confirmSkillCleanup'), text('skillCleanupSummary', { count: plan.digests.length, bytes: bytes(plan.bytes) }), async () => {
+      review(t('confirmSkillCleanup'), t('skillCleanupSummary', { count: plan.digests.length, bytes: bytes(plan.bytes) }), async () => {
         if (plan.expires_at_ms <= Date.now()) throw new Error(t('skillCleanupExpired'));
         const receipt = await api(path + '/cleanup', { fingerprint: plan.fingerprint, expected_revision: plan.revision, confirm: true });
         const matchesPlan = receipt.freed_bytes === plan.bytes && receipt.deleted_digests.length === plan.digests.length
@@ -87,7 +84,7 @@ export function createSkillHistory({ app, api, view, t, refresh, inspect, getSki
       const label = version.digest.slice(0, 12);
       card.append(el('h3', label));
       const flags = [version.active && t('activeSkillVersion'), version.staged && t('latestSkillVersion'), version.pinned && t('pinnedSkillVersion')].filter(Boolean);
-      card.append(el('p', [flags.join(' · '), text('skillVersionFiles', { count: version.file_count, bytes: bytes(version.bytes) })].filter(Boolean).join(' · '), 'muted'));
+      card.append(el('p', [flags.join(' · '), t('skillVersionFiles', { count: version.file_count, bytes: bytes(version.bytes) })].filter(Boolean).join(' · '), 'muted'));
       if (version.created_at_ms !== null) {
         const time = el('time', new Date(version.created_at_ms).toLocaleString(document.documentElement.lang));
         time.dateTime = new Date(version.created_at_ms).toISOString();
@@ -104,7 +101,7 @@ export function createSkillHistory({ app, api, view, t, refresh, inspect, getSki
         say(t(version.pinned ? 'skillVersionUnpinned' : 'skillVersionPinned'));
       }));
       if (!head.enabled || !version.active) button(actions, t('restoreSkillVersion'), action(async () => {
-        review(t('restoreSkillVersion'), text('skillRestoreSummary', { digest: label }), async () => {
+        review(t('restoreSkillVersion'), t('skillRestoreSummary', { digest: label }), async () => {
           await api(path, { action: 'activate', expected_revision: head.revision, digest: version.digest });
           await refresh();
           const latest = getSkills().find(item => item.head.skill_id === skillId)?.head;
@@ -121,7 +118,7 @@ export function createSkillHistory({ app, api, view, t, refresh, inspect, getSki
           if (checkbox.checked) selected.add(version.digest); else selected.delete(version.digest);
           preview.disabled = selected.size === 0;
         });
-        choice.append(checkbox, el('span', text('selectSkillVersionCleanup', { digest: label })));
+        choice.append(checkbox, el('span', t('selectSkillVersionCleanup', { digest: label })));
         card.append(choice);
       }
       card.append(actions);

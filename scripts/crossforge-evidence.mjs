@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { REQUIRED_GITHUB_JOBS } from "./ci-contract.mjs";
 
 /** Validate provider-returned identities, not a user-supplied success label.
  * The caller must retrieve these objects from the fixed provider endpoints. */
@@ -12,8 +13,7 @@ export function validateCrossforgeEvidence(expected, data) {
   assert.equal(gh.status, "completed"); assert.equal(gh.conclusion, "success");
   assert.ok(Number.isSafeInteger(gh.id) && gh.id > 0 && Number.isSafeInteger(gh.run_attempt) && gh.run_attempt > 0);
   assert.ok(Array.isArray(data.githubJobs) && data.githubJobs.length > 0);
-  const required = ["verify", "browser", "verify-all", "Runner native checks (ubuntu-latest)", "Runner native checks (windows-latest)", "Runner native checks (macos-latest)", "Runner LTS (22.23.2)", "Runner LTS (24.21.0)"];
-  for (const name of required) {
+  for (const name of REQUIRED_GITHUB_JOBS) {
     const jobs = data.githubJobs.filter(job => job.name === name);
     assert.equal(jobs.length, 1, `missing/ambiguous required GitHub job: ${name}`);
     const job = jobs[0];

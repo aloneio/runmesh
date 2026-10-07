@@ -20,6 +20,21 @@ function deferred() {
   return { promise, resolve };
 }
 
+test("Central translations expand only template-owned parameters once and preserve missing values", () => {
+  for (const locale of ["en", "zh-CN"]) {
+    const t = createCentralTranslator(locale);
+    const bytes = "$& $` $' {count}";
+    const capacity = t("skillVersionCapacity", { count: "{max}", max: 32, bytes });
+    assert.equal(capacity, "{max} / 32 " + (locale === "en" ? "versions" : "个版本") + " · " + bytes);
+    const title = t("skillHistoryTitle");
+    assert.equal(t("skillHistoryTitle", {}), title);
+    assert.equal(t("skillHistoryTitle", { unrelated: "unused" }), title);
+    assert.equal(t("skillHistoryTitle", Object.create({ name: "inherited" })), title);
+    assert.equal(t("skillHistoryTitle", { name: "" }), title.replace("{name}", ""));
+    assert.equal(t("inspectionToolsChecked", { count: 0 }), locale === "en" ? "Tool list checked · 0 tools" : "工具列表检查完成 · 0 个工具");
+  }
+});
+
 test("central request contracts keep recovery scopes and read-only POST receipts aligned", () => {
   const cases = [
     ['profiles?after=page-1', undefined, false, 'mcp-list', false, ['listed'], 'profiles'],
@@ -832,6 +847,15 @@ for (const locale of ["en", "zh-CN"]) test("Skill version history renders capaci
   assert.ok(ui.nodes(ui.panel).some(node => node.textContent.includes("4 / 32")));
   assert.equal(document.activeElement.tag, "h2", "Opening history moves keyboard focus to its heading");
   assert.equal(ui.requests.length, 1, "History loads metadata without fetching file bodies");
+});
+
+for (const locale of ["en", "zh-CN"]) test("Skill history preserves literal replacement characters in user names in " + locale, async t => {
+  const ui = skillHistoryFixture(t, undefined, locale);
+  for (const name of ["Research $& notes", "Research $` notes", "Research $' notes", "Research {count} notes"]) {
+    await ui.history.open("research", name);
+    const heading = ui.nodes(ui.panel).find(node => node.tag === "h2");
+    assert.equal(heading.textContent, name + (locale === "en" ? " · Version history" : " · 版本记录"));
+  }
 });
 
 test("Skill cleanup previews an exact selection and writes only after confirmation", async t => {

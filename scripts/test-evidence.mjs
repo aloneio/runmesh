@@ -70,10 +70,11 @@ export function packageEvidence({ tests, source, artifact, platform, arch, node,
   assert.ok(tests.passed > 0 && tests.failed === 0 && tests.files > 0);
   assert.equal(tests.total, tests.passed + tests.failed + tests.skipped + tests.todo);
   assert.ok(artifact && hash(artifact.sha256) && integer(artifact.bytes) && artifact.bytes > 0);
-  assert.ok(source && /^[a-f0-9]{40}$/u.test(source.commit) && /^[a-f0-9]{40}$/u.test(source.tree));
+  assert.ok(source);
+  assert.match(source.commit, /^[a-f0-9]{40}$/u); assert.match(source.tree, /^[a-f0-9]{40}$/u);
   assert.ok(["clean", "dirty"].includes(source.state));
   assert.ok(["linux", "darwin", "win32"].includes(platform));
-  assert.ok(/^[A-Za-z0-9_-]{1,20}$/u.test(arch) && /^v[0-9.]+$/u.test(node)); assert.ok(integer(elapsedMs));
+  assert.match(arch, /^[A-Za-z0-9_-]{1,20}$/u); assert.match(node, /^v[0-9.]+$/u); assert.ok(integer(elapsedMs));
   return { schema_version: 1, evidence: "local_packaged_runner_e2e", attestation: "self_reported",
     source: { commit: source.commit, tree: source.tree, state: source.state },
     artifact: { sha256: artifact.sha256, bytes: artifact.bytes, signed: false, published: false },

@@ -85,8 +85,7 @@ export function createSkillWorkflow({
     bundleBytes: Number(importer.dataset.maxBundleBytes)
   };
   function sizeError() {
-    return new Error(t('skillFileLimits').replace('{files}', limits.files)
-      .replace('{fileMiB}', limits.fileBytes / 1048576).replace('{bundleMiB}', limits.bundleBytes / 1048576));
+    return new Error(t('skillFileLimits', { files: limits.files, fileMiB: limits.fileBytes / 1048576, bundleMiB: limits.bundleBytes / 1048576 }));
   }
   if (importer) ['files', 'folder'].forEach(function (name) {
     importer.elements[name].addEventListener('change', function () {

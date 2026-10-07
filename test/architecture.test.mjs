@@ -59,6 +59,11 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["Runner presence contract owns clock", { "apps/worker/src/contracts/runner-selection.ts": 'export const present = () => Date.now();' }],
+  ["Runner presence contract owns scheduling", { "apps/worker/src/contracts/runner-selection.ts": 'export const present = () => setTimeout(() => {}, 1);' }],
+  ["Runner presence contract yields", { "apps/worker/src/contracts/runner-selection.ts": 'export const present = async () => true;' }],
+  ["Runner presence contract owns storage", { "apps/worker/src/contracts/runner-selection.ts": 'export interface State { storage: SqlStorage }' }],
+  ["Runner presence contract imports peer implementation", { "apps/worker/src/contracts/runner-selection.mts": 'import { read } from "./other.js";', "apps/worker/src/contracts/other.ts": 'export const read = () => true;' }],
   ["Administrator session contract to connector identity", { "apps/worker/src/contracts/admin-session.ts": 'import type { AdminDecision } from "./connectors.js";', "apps/worker/src/contracts/connectors.ts": 'export type AdminDecision = {};' }],
   ["Administrator session contract to receipt implementation", { "apps/worker/src/contracts/admin-session.ts": 'import { read } from "./control-plane-receipts.js";', "apps/worker/src/contracts/control-plane-receipts.ts": 'export const read = () => ({});' }],
   ["Administrator session contract to renamed adapter", { "apps/worker/src/contracts/admin-session.mts": 'import type { Receipt } from "./session-helper.js";', "apps/worker/src/contracts/session-helper.ts": 'export type Receipt = {};' }],

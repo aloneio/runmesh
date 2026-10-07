@@ -212,6 +212,37 @@ describe("completion coordination through scoped ports", () => {
     expect(h.state.retired).toBe(kind !== "replacement");
     expect(h.state.completed).toEqual([]);
   });
+  it.each(["removed", "terminal", "replacement", "same-process"])("rechecks %s metadata after awaiting a newer termination decision", async kind => {
+    const h = completion();
+    const latest = kind === "removed" ? undefined : jobRecord({
+      status: kind === "terminal" ? "interrupted" : "cancelling",
+      pid: kind === "replacement" ? 999 : 100,
+      output_truncated: true,
+      cancellation_delivered_at_ms: 75,
+      updated_at_ms: 102
+    });
+    h.ports.persist = async record => {
+      h.state.persisted.push(record);
+      if (h.state.persisted.length === 1) h.state.current = jobRecord({ status: "cancelling" });
+    };
+    h.ports.pendingTermination = () => h.state.persisted.length === 1 ? (async () => {
+      await Promise.resolve();
+      h.state.current = latest;
+      return true;
+    })() : undefined;
+    await h.finish(143);
+    if (kind === "same-process") {
+      expect(h.state.current).toMatchObject({ status: "cancelled", output_truncated: true, cancellation_delivered_at_ms: 75, updated_at_ms: 103 });
+      expect(h.state.persisted[1]).toBe(h.state.current);
+      expect(h.state.completed).toEqual([h.state.current]);
+    } else {
+      expect(h.state.current).toBe(latest);
+      expect(h.state.persisted).toHaveLength(1);
+      expect(h.state.completed).toEqual([]);
+    }
+    expect(h.state.retired).toBe(kind !== "replacement");
+    expect(h.state.reserved).toBe(false);
+  });
   it("releases terminal reservation after a failed durable write", async () => {
     const h = completion();
     h.ports.persist = async () => {

@@ -66,7 +66,7 @@ export async function finishJobCompletion(ports: CompletionPorts, code: number |
     // completion event) when this stale finish task resumes. The map check
     // is intentionally after the durability barrier: before it, `prior` is
     // still the active record whose terminal write is authorized above.
-    const afterPersist = ports.current();
+    let afterPersist = ports.current();
     if (afterPersist === undefined) {
       ports.retireProcess();
       return;
@@ -96,6 +96,16 @@ export async function finishJobCompletion(ports: CompletionPorts, code: number |
       // zero: the cancellation caller may still be persisting its decision.
       const latestAttempt = ports.pendingTermination();
       if (latestAttempt !== undefined) pendingDelivered = (await latestAttempt.catch(() => false)) || pendingDelivered;
+      // The termination decision yields too. Merge against its latest same-child
+      // snapshot; a different identity or terminal recovery owns its own outcome.
+      const afterTermination = ports.current();
+      if (afterTermination !== afterPersist) {
+        if (afterTermination === undefined || !isActive(afterTermination) || !sameJobProcessIdentity(afterTermination, prior)) {
+          if (afterTermination === undefined || !isActive(afterTermination)) ports.retireProcess();
+          return;
+        }
+        afterPersist = afterTermination;
+      }
       const cancellationPending = afterPersist.status === "cancelling" && !pendingDelivered && !ports.terminationDelivered() && afterPersist.cancellation_delivered_at_ms === null;
       if (cancellationPending) {
         // The first terminal write was authorized against `prior`, but the

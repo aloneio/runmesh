@@ -1,4 +1,5 @@
 import type { ActiveRunnerContext } from "../contracts/runner-selection.js";
+import { observedRunnerState } from "../contracts/runner-selection.js";
 import { parseNativeScopes, parseStoredNativeScopes } from "../contracts/identity.js";
 import { JobCompletedSchema } from "@aloneio/runmesh-protocol";
 import { JobStartedSchema } from "@aloneio/runmesh-protocol";
@@ -96,13 +97,12 @@ export function emptyMutationState(): RunnerMutationState {
   return { runner_exists: false, lifecycle_id: null, runner_state: null, credential_mutation_committed: false, credential_mutation_kind: null, enrollment_mutation_committed: false, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
 }
 
-export function decodeRunner(row: RunnerRow): RunnerRecord {
+export function decodeRunner(row: RunnerRow, nowMs: number): RunnerRecord {
   // Maintenance may be delayed. Every public snapshot must independently
   // expire online presence, including list/dashboard and missing heartbeats.
-  const state = row.state === "online" && (row.last_heartbeat_ms === null || row.last_heartbeat_ms < Date.now() - 45_000)
-    ? "stale" : row.state;
+  const state = observedRunnerState(row.state, row.last_heartbeat_ms, nowMs);
   return {
-    valid_from_ms: row.valid_from_ms, valid_until_ms: row.valid_until_ms, validity_status: validityStatus(row),
+    valid_from_ms: row.valid_from_ms, valid_until_ms: row.valid_until_ms, validity_status: validityStatus(row, nowMs),
     runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state, connection_epoch: row.connection_epoch,
     configured_execution_mode: validExecutionMode(row.configured_execution_mode) ? row.configured_execution_mode : null,
     credential_version: row.credential_version, session_id: row.session_id, metadata: row.metadata_json === null ? null : JSON.parse(row.metadata_json) as RunnerMetadata,

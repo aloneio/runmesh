@@ -30,9 +30,9 @@ export function createServiceInspection({ app, api, view, t, run }) {
       panel.append(el('p', message));
       say(message);
     } else {
-      panel.append(el('p', result.endpoint, 'muted'), el('p', t('inspectionProtocol').replace('{version}', result.server.protocol_version)));
+      panel.append(el('p', result.endpoint, 'muted'), el('p', t('inspectionProtocol', { version: result.server.protocol_version })));
       const caps = result.server.capabilities;
-      if (caps.tools) panel.append(el('p', t('inspectionToolsChecked').replace('{count}', result.tools_count)));
+      if (caps.tools) panel.append(el('p', t('inspectionToolsChecked', { count: result.tools_count })));
       else panel.append(el('p', t('inspectionHandshakeComplete')));
       const declarations = el('ul');
       for (const key of ['resources', 'prompts', 'tasks', 'apps']) {

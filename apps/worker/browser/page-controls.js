@@ -139,9 +139,9 @@ function createPageControls({
         var input = wrap.querySelector("input");
         if (!input) return;
         var isPwd = input.type === "password";
+        var buttonLabel = btn.getAttribute(isPwd ? "data-password-hide" : "data-password-show");
+        if (!buttonLabel) return;
         input.type = isPwd ? "text" : "password";
-        var isZh = document.documentElement.lang === "zh-CN";
-        var buttonLabel = isPwd ? isZh ? "隐藏密码" : "Hide password" : isZh ? "显示密码" : "Show password";
         btn.setAttribute("aria-label", buttonLabel);
         btn.setAttribute("title", buttonLabel);
         btn.innerHTML = isPwd ? "<svg class=\"eye-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24\"></path><line x1=\"1\" y1=\"1\" x2=\"23\" y2=\"23\"></line></svg>" : "<svg class=\"eye-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z\"></path><circle cx=\"12\" cy=\"12\" r=\"3\"></circle></svg>";
@@ -149,19 +149,17 @@ function createPageControls({
     });
     root.querySelectorAll("form.login-form").forEach(function (form) {
       if (!claim(form, "login")) return;
-      form.addEventListener("submit", function () {
+      form.addEventListener("submit", function (event) {
+        if (event.defaultPrevented) return;
         var btn = form.querySelector(".login-submit-btn");
         if (!btn || btn.disabled) return;
-        var isZh = document.documentElement.lang === "zh-CN";
-        var isSetup = form.getAttribute("action") === "/setup";
-        var loadingText = isSetup ? isZh ? "正在初始化..." : "Initializing..." : isZh ? "正在登录..." : "Signing in...";
+        var loadingText = btn.getAttribute("data-submit-pending");
+        if (!loadingText) return;
         var origWidth = btn.offsetWidth;
         btn.style.width = origWidth > 0 ? origWidth + "px" : "100%";
         btn.disabled = true;
         btn.textContent = loadingText;
-        try {
-          form.submit();
-        } catch (e) {}
+        // The native submit already owns validation, the submitter and navigation.
       });
     });
     root.querySelectorAll("form").forEach(function (form) {

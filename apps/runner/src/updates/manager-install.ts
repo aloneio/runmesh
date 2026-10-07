@@ -12,6 +12,7 @@ import { hasStandardEffectiveMaintenanceLaunch, hasStandardMaintenanceLaunch, ma
 import { renderManagedLauncher, renderWindowsMaintenanceUninstall } from "./launchers.js";
 import type { MaintenanceLayout } from "./native-service.js";
 import { trustedWindowsEnvironment, trustedWindowsRoot } from "../windows-tools.js";
+import { isTerminalLocalUpdatePhase } from "./contracts.js";
 
 export interface MaintenanceManagerFileStat {
   readonly file: boolean;
@@ -425,7 +426,7 @@ async function assertFinishedManagerJournal(host: ReturnType<typeof managerHost>
   await host.trustedTreePath(journalPath, "file", host.managerRoot);
   let journal: unknown;
   try { journal = JSON.parse(await host.filesystem.read(journalPath) ?? ""); } catch { throw new Error("maintenance journal is invalid; retain the manager for recovery"); }
-  if (typeof journal !== "object" || journal === null || !("phase" in journal) || !["succeeded", "rolled_back", "failed"].includes(String(journal.phase))) {
+  if (typeof journal !== "object" || journal === null || !("phase" in journal) || !isTerminalLocalUpdatePhase(journal.phase)) {
     throw new Error("Runner maintenance is unfinished; recover it before uninstalling or purging the installation");
   }
 }

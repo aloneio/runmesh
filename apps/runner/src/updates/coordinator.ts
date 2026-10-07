@@ -1,8 +1,7 @@
 import { isTerminalRunnerUpdate } from "@aloneio/runmesh-protocol";
-import { MaintenanceHttpError, UpdateFailure } from "./contracts.js";
+import { isTerminalLocalUpdatePhase, MaintenanceHttpError, UpdateFailure } from "./contracts.js";
 import type { CloudUpdateObservation, LocalUpdatePhase, UpdateCoordinatorOptions, UpdateErrorCode, UpdateJournal, UpdateJournalRecord, UpdateOwner, UpdatePreparation } from "./contracts.js";
 
-const terminal = (phase: LocalUpdatePhase): phase is "succeeded" | "rolled_back" | "failed" => ["succeeded", "rolled_back", "failed"].includes(phase);
 const needsRecovery = (phase: LocalUpdatePhase): boolean => ["stopping", "switching", "starting", "checking", "rolling_back"].includes(phase);
 const rejectedCredentials = (error: unknown): error is MaintenanceHttpError => error instanceof MaintenanceHttpError && [401, 403].includes(error.status);
 const unavailableObservation = (error: unknown): boolean => error instanceof TypeError
@@ -51,7 +50,7 @@ export class UpdateCoordinator {
     this.guard(); await this.options.journal.complete(preparation);
   }
   private async finish(journal: UpdateJournal): Promise<void> {
-    if (!terminal(journal.phase)) throw new UpdateFailure("local_state_invalid");
+    if (!isTerminalLocalUpdatePhase(journal.phase)) throw new UpdateFailure("local_state_invalid");
     // Persist terminal local state before asking the cloud to remove its fence.
     // A lost HTTP response can only replay this idempotent acknowledgement; it
     // must never roll back a target after the cloud has admitted new jobs.
@@ -200,7 +199,7 @@ export class UpdateCoordinator {
     if (saved !== undefined) {
       if (saved.manager_id !== this.options.managerId) throw new UpdateFailure("local_state_invalid");
       if (saved.phase === "preparing") { await this.finishPreparation(saved); return; }
-      if (terminal(saved.phase)) { await this.finish(saved); return; }
+      if (isTerminalLocalUpdatePhase(saved.phase)) { await this.finish(saved); return; }
       if (saved.phase === "recovery_required") {
         // A transient native failure remains retryable after the next poll.
         // rollback revalidates cloud ownership, identity and every pointer

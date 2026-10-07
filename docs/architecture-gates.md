@@ -77,6 +77,12 @@ fragment helper, with a fixture guarding its dependency direction.
 
 ## Scope and limits
 
+Runner presence and selection rules use supplied timestamps and observations in
+their self-contained contract. Fixtures check clock, storage, scheduling, async
+execution and module-import boundaries. Registry retains the synchronous refresh
+and batch maintenance writes. CI configuration and provider evidence share matrix
+identities from `ci-contract.mjs`; name-drift regressions keep both checks aligned.
+
 The checker reads source without importing it or executing embedded installer text. It conservatively treats bare `require()` as module loading. Parsing is bounded to 5,000 files, 1 MiB per file, 16 MiB total source and 20,000 directory entries; parser or tooling failures produce a failed check.
 
 Use runtime and security tests for dependency internals, embedded scripts, reflection/eval and runtime network loading. Evaluate a refactor by its ownership, dependency direction and preserved behavior; line count is only a navigation aid.

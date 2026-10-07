@@ -44,6 +44,10 @@ export type LocalUpdatePhase = typeof LOCAL_UPDATE_PHASES[number];
 export function isLocalUpdatePhase(value: unknown): value is LocalUpdatePhase {
   return typeof value === "string" && LOCAL_UPDATE_PHASES.some(phase => phase === value);
 }
+/** Shared by recovery acknowledgement and independent manager removal. */
+export function isTerminalLocalUpdatePhase(value: unknown): value is Extract<LocalUpdatePhase, "succeeded" | "rolled_back" | "failed"> {
+  return value === "succeeded" || value === "rolled_back" || value === "failed";
+}
 export interface UpdateJournal {
   readonly schema_version: 1;
   readonly operation: CloudUpdateOperation;

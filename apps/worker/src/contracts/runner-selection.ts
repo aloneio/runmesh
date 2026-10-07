@@ -1,4 +1,12 @@
 export type RunnerConnectionState = "online" | "offline" | "stale";
+export const RUNNER_PRESENCE_TIMEOUT_MS = 45_000;
+
+/** Read-time presence remains accurate when the maintenance alarm is delayed. */
+export function observedRunnerState(state: RunnerConnectionState, lastHeartbeatMs: number | null, nowMs: number): RunnerConnectionState {
+  return state === "online" && (lastHeartbeatMs === null || lastHeartbeatMs < nowMs - RUNNER_PRESENCE_TIMEOUT_MS)
+    ? "stale" : state;
+}
+
 export type AppliedPolicyIdentity = {
   readonly applied_revision: number;
   readonly active_checksum: string;

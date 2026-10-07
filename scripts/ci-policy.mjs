@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { parseDocument } from "yaml";
 import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, githubReportUpload, gitlabReportArtifacts, GITLAB_EVENTS } from "./ci-contract.mjs";
+import { GITHUB_JOB_NAMES, NATIVE_RUNNER_PLATFORMS, RUNNER_LTS_VERSIONS } from "./ci-contract.mjs";
 
 export function parseCi(source) {
   assert.ok(typeof source === "string" && Buffer.byteLength(source) <= 1048576, "CI YAML byte budget");
@@ -49,6 +50,8 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   eq(gh.on?.push?.branches, ["main", "dev"], "main/dev push coverage");
   for (const event of ["pull_request", "workflow_dispatch", "workflow_call"]) assert.ok(Object.hasOwn(gh.on, event), `missing ${event}`);
   eq(gh.permissions, { contents: "read" }, "ordinary CI token must be read-only");
+  for (const [id, name] of Object.entries(GITHUB_JOB_NAMES))
+    assert.equal(gh.jobs?.[id]?.name ?? id, name, `${id} must retain its provider evidence name`);
   const verify = gh.jobs?.verify; hardJob(verify, "GitHub verify");
   assert.equal(verify["runs-on"], "ubuntu-latest");
   assert.ok(Number.isSafeInteger(verify["timeout-minutes"]) && verify["timeout-minutes"] <= 30);
@@ -65,9 +68,9 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
       if (step.uses) assert.match(step.uses, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[a-f0-9]{40}$/u, "actions must use full immutable commits");
     }
   }
-  eq(gh.jobs["native-runner"].strategy?.matrix, { os: ["ubuntu-latest", "windows-latest", "macos-latest"] }, "native matrix must execute every declared platform");
+  eq(gh.jobs["native-runner"].strategy?.matrix, { os: [...NATIVE_RUNNER_PLATFORMS] }, "native matrix must execute every declared platform");
   assert.equal(gh.jobs["native-runner"]["runs-on"], "${{ matrix.os }}", "native jobs must run on their matrix platform");
-  eq(gh.jobs["runner-lts"].strategy?.matrix, { node: ["22.23.2", "24.21.0"] }, "LTS matrix must execute every declared runtime");
+  eq(gh.jobs["runner-lts"].strategy?.matrix, { node: [...RUNNER_LTS_VERSIONS] }, "LTS matrix must execute every declared runtime");
   for (const command of NATIVE_COMMANDS) requiredStep(gh.jobs["native-runner"].steps, command);
   requiredStep(gh.jobs["native-runner"].steps, WINDOWS_TRANSPORT_STEP.run, WINDOWS_TRANSPORT_STEP.if);
   const nativeSteps = gh.jobs["native-runner"].steps;

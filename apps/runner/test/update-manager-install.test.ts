@@ -191,6 +191,38 @@ it("retains the stopped independent manager and its journal when an update needs
   expect(test.files.get(test.options.profilePath)).toBe("existing credential profile");
 });
 
+it.each(["linux", "darwin", "win32"] as const)("retains %s recovery files when a terminal phase is not a string", async platform => {
+  const test = fixture(platform);
+  await managerInstall(test.options);
+  const stateDirectory = test.paths.path.join(test.paths.managerRoot, "state");
+  await test.options.filesystem.mkdir(stateDirectory, 0o700);
+  const journal = test.paths.path.join(stateDirectory, "active-operation.json");
+  await test.options.filesystem.write(journal, "{}");
+  const manifest = test.files.get(test.paths.manifestPath);
+  const removals: string[] = [];
+  const filesystem = { ...test.options.filesystem, remove: async (path: string) => { removals.push(path); await test.options.filesystem.remove(path); } };
+  for (const phase of ["succeeded", "rolled_back", "failed"]) {
+    const content = JSON.stringify({ phase: [phase] });
+    test.files.set(journal, content);
+    await expect(managerUninstall({ ...test.options, filesystem })).rejects.toThrow("maintenance is unfinished");
+    expect(removals).toEqual([]);
+    expect(test.files.get(journal)).toBe(content);
+    expect(test.files.get(test.paths.manifestPath)).toBe(manifest);
+    expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  }
+});
+
+it.each(["succeeded", "rolled_back", "failed"])("permits uninstall after a %s phase", async phase => {
+  const test = fixture("linux");
+  await managerInstall(test.options);
+  const stateDirectory = test.paths.path.join(test.paths.managerRoot, "state");
+  await test.options.filesystem.mkdir(stateDirectory, 0o700);
+  await test.options.filesystem.write(test.paths.path.join(stateDirectory, "active-operation.json"), JSON.stringify({ phase }));
+  await managerUninstall(test.options);
+  expect(test.stats.has(test.paths.managerRoot)).toBe(false);
+  expect(test.files.has(test.paths.manifestPath)).toBe(false);
+});
+
 it.each(["linux", "darwin", "win32"] as const)("keeps the %s user manager in the user's service domain", platform => {
   const layout = serviceLayout({ platform, mode: "user", home: platform === "win32" ? "C:\\Users\\fixture" : "/home/fixture" });
   const rendered = renderMaintenanceManager({ platform, mode: "user", profilePath: serviceProfilePath(layout), installRoot: layout.installRoot, home: platform === "win32" ? "C:\\Users\\fixture" : "/home/fixture" });

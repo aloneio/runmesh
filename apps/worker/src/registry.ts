@@ -11,6 +11,7 @@ import { RegistryFeatureHealthStore } from "./registry/feature-health.js";
 import { historyCleanupDue, nextHistoryCleanupDeadline, nextMaintenanceDeadline } from "./registry/maintenance-plan.js";
 import { createCoreRegistrySchema, registrySchemaIsCurrent, hasPersistedRegistrySchema, ensureJobHistorySettings } from "./registry/schema.js";
 import type { RunnerConnectionState } from "./contracts/runner-selection.js";
+import { RUNNER_PRESENCE_TIMEOUT_MS } from "./contracts/runner-selection.js";
 import type { PolicyReadiness } from "./contracts/runner-selection.js";
 import type { McpClientActiveRunner } from "./contracts/runner-selection.js";
 import type { McpRunnerSelectionResult } from "./contracts/runner-selection.js";
@@ -297,10 +298,10 @@ export class RegistryDO {
     // Reads are cheap compared with a Durable Object storage write. Avoid
     // issuing no-op UPDATE/DELETE statements on every maintenance alarm when
     // there is nothing to transition or expire.
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM runners WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?) LIMIT 1", nowMs - 45_000).toArray().length > 0) {
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM runners WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?) LIMIT 1", nowMs - RUNNER_PRESENCE_TIMEOUT_MS).toArray().length > 0) {
       this.ctx.storage.sql.exec(
         `UPDATE runners SET state = 'stale', updated_at_ms = ?
-         WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)`, nowMs, nowMs - 45_000,
+         WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)`, nowMs, nowMs - RUNNER_PRESENCE_TIMEOUT_MS,
       );
     }
     // Liveness and exact audit expiry retain their existing deadlines. Other
@@ -336,10 +337,10 @@ export class RegistryDO {
         // was removed, or when only a later history cleanup remains. Healthy
         // heartbeats need just this read, not another SQL scan or alarm write.
         const current = await this.ctx.storage.getAlarm();
-        if (current !== null && current <= nowMs + 45_000) return;
+        if (current !== null && current <= nowMs + RUNNER_PRESENCE_TIMEOUT_MS) return;
       }
       const nextStale = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
-        "SELECT MIN(COALESCE(last_heartbeat_ms, 0) + 45000) AS next_ms FROM runners WHERE state = 'online'",
+        "SELECT MIN(COALESCE(last_heartbeat_ms, 0) + ?) AS next_ms FROM runners WHERE state = 'online'", RUNNER_PRESENCE_TIMEOUT_MS,
       ).toArray()[0]?.next_ms;
       const nextAudit = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
         "SELECT MIN(completed_at_ms) + ? AS next_ms FROM mcp_calls", MCP_AUDIT_RETENTION_MS,

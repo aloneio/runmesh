@@ -74,30 +74,92 @@ async function fixtureDocuments() {
 // The disposable Node server has no Worker HTMLRewriter. Apply the same text
 // translator to server-rendered text, leaving user content and dynamic cards alone.
 export async function localizeFixture(page, locale) {
+  const attributes = ['aria-label', 'alt', 'placeholder', 'title', 'data-password-show', 'data-password-hide', 'data-submit-pending'];
   const excluded = 'script,style,pre,code,textarea,svg,[data-no-i18n],[translate="no" i],'
     + '[data-service-list],[data-skill-list],[data-service-tools],[data-service-inspection],[data-skill-review],'
     + '[data-skill-history],[data-skill-source-preview],[data-registry-results]';
-  const texts = await page.evaluate(excluded => {
+  const texts = await page.evaluate(({ excluded, attributes }) => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT), texts = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (!node.parentElement.closest(excluded)) texts.push(node.textContent);
     }
-    for (const node of document.querySelectorAll('[aria-label],[alt],[placeholder],[title]')) if (!node.closest(excluded))
-      for (const name of ['aria-label', 'alt', 'placeholder', 'title']) if (node.hasAttribute(name)) texts.push(node.getAttribute(name));
+    for (const node of document.querySelectorAll(attributes.map(name => '[' + name + ']').join(','))) if (!node.closest(excluded))
+      for (const name of attributes) if (node.hasAttribute(name)) texts.push(node.getAttribute(name));
     return texts;
-  }, excluded);
+  }, { excluded, attributes });
   const translations = Object.fromEntries(texts.map(text => [text, localizeUiText(text, locale)]));
-  await page.evaluate(({ translations, excluded }) => {
+  await page.evaluate(({ translations, excluded, attributes }) => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (!node.parentElement.closest(excluded) && Object.hasOwn(translations, node.textContent)) node.textContent = translations[node.textContent];
     }
-    for (const node of document.querySelectorAll('[aria-label],[alt],[placeholder],[title]')) if (!node.closest(excluded))
-      for (const name of ['aria-label', 'alt', 'placeholder', 'title']) {
+    for (const node of document.querySelectorAll(attributes.map(name => '[' + name + ']').join(','))) if (!node.closest(excluded))
+      for (const name of attributes) {
         const value = node.getAttribute(name);
         if (value !== null && Object.hasOwn(translations, value)) node.setAttribute(name, translations[value]);
       }
-  }, { translations, excluded });
+  }, { translations, excluded, attributes });
+}
+
+async function checkAuthSubmissions(page, origin, auth) {
+  let submissions = 0;
+  await page.exposeFunction('__runmeshAuthSubmitted', state => auth.pending?.observed.resolve(state));
+  for (const locale of ['en', 'zh-CN']) for (const kind of ['login', 'setup']) {
+    await page.goto(origin + '/layout/' + kind + '?lang=' + locale);
+    await localizeFixture(page, locale);
+    const form = page.locator('form.login-form'), button = form.locator('.login-submit-btn');
+    const password = 'layout-fixture-password', csrf = await form.locator('[name=csrf_token]').inputValue();
+    const show = locale === 'en' ? 'Show password' : '显示密码', hide = locale === 'en' ? 'Hide password' : '隐藏密码';
+    for (const field of await form.locator('.password-input-wrap').all()) {
+      const input = field.locator('input'), toggle = field.locator('.pwd-toggle-btn');
+      await input.fill(password);
+      assert.equal(await toggle.getAttribute('aria-label'), show);
+      await toggle.click();
+      assert.equal(await input.getAttribute('type'), 'text');
+      assert.equal(await toggle.getAttribute('aria-label'), hide);
+      assert.equal(await toggle.getAttribute('title'), hide);
+      await toggle.click();
+      assert.equal(await input.getAttribute('type'), 'password');
+      assert.equal(await toggle.getAttribute('aria-label'), show);
+    }
+    const received = Promise.withResolvers(), observed = Promise.withResolvers(), response = Promise.withResolvers();
+    const destination = '/layout/auth-complete?kind=' + kind + '&lang=' + locale;
+    auth.pending = { path: '/' + kind, received, observed, response, destination };
+    // Observe after the shipped submit listener, before navigation begins.
+    // Locator reads during a held POST wait for that same navigation to finish.
+    await form.evaluate(form => form.addEventListener('submit', () => {
+      const button = form.querySelector('.login-submit-btn');
+      void window.__runmeshAuthSubmitted({ disabled: button.disabled, text: button.textContent });
+    }, { once: true }));
+    const deadline = setTimeout(() => {
+      const error = new Error('Auth form did not submit within 15 seconds: ' + kind + '/' + locale);
+      received.reject(error); observed.reject(error);
+    }, 15_000);
+    const submission = Promise.all([received.promise, observed.promise]);
+    const before = auth.requests.length, click = button.click();
+    try {
+      const [request, state] = await Promise.race([submission, click.then(() => submission)]);
+      assert.equal(state.disabled, true);
+      assert.equal(state.text, kind === 'setup'
+        ? locale === 'en' ? 'Initializing...' : '正在初始化...'
+        : locale === 'en' ? 'Signing in...' : '正在登录...');
+      assert.equal(request.method, 'POST');
+      assert.match(request.contentType, /^application\/x-www-form-urlencoded(?:;|$)/);
+      assert.deepEqual(Object.fromEntries(new URLSearchParams(request.body)), {
+        csrf_token: csrf, password, ...(kind === 'setup' ? { confirm_password: password } : {}),
+      });
+      response.resolve();
+      await Promise.all([click, page.waitForURL(origin + destination)]);
+      assert.equal(auth.requests.length - before, 1, kind + ' submits exactly one native POST');
+      submissions++;
+    } finally {
+      clearTimeout(deadline);
+      response.resolve();
+      await click.catch(() => undefined);
+      auth.pending = undefined;
+    }
+  }
+  return submissions;
 }
 
 async function layoutIssues(page) {
@@ -290,10 +352,22 @@ async function checkIdentifierInputs(page) {
 /** Local layout and native form validation; never capture screenshots or use a user's browser. */
 export async function checkAdminLayout(executable) {
   const documents = await fixtureDocuments(), errors = [], failures = [];
+  const auth = { requests: [], pending: undefined };
   const digest = 'a'.repeat(64);
   const profile = { profile_id: 'layout-docs', connector_id: 'layout-docs', display_name: 'Documentation-' + 'long-name-'.repeat(6), endpoint: 'https://docs.example.com/' + 'long-path-'.repeat(10) + '/mcp', revision: 1, enabled: true, authentication: 'oauth', credential: null };
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1'), locale = url.searchParams.get('lang') === 'zh-CN' ? 'zh-CN' : 'en';
+    if (req.method === 'POST' && auth.pending?.path === url.pathname) {
+      const pending = auth.pending, chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const request = { method: req.method, contentType: req.headers['content-type'], body: Buffer.concat(chunks).toString('utf8') };
+      auth.requests.push(request); pending.received.resolve(request);
+      await pending.response.promise;
+      res.writeHead(303, { location: pending.destination }); res.end(); return;
+    }
+    if (url.pathname === '/layout/auth-complete') {
+      res.setHeader('content-type', 'text/html'); res.end(documents.get('/layout/login')); return;
+    }
     if (documents.has(url.pathname)) {
       res.setHeader('content-type', 'text/html');
       res.end(documents.get(url.pathname).replace('<html lang="en">', '<html lang="' + locale + '">')); return;
@@ -310,6 +384,7 @@ export async function checkAdminLayout(executable) {
   try {
     browser = await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) });
     const page = await browser.newPage(); page.on('pageerror', error => errors.push(error.message));
+    const authSubmissions = await checkAuthSubmissions(page, origin, auth);
     for (const locale of ['en', 'zh-CN']) for (const width of viewports) for (const path of documents.keys()) {
       await page.setViewportSize({ width, height: 1000 });
       await page.goto(origin + path + '?lang=' + locale);
@@ -397,7 +472,8 @@ export async function checkAdminLayout(executable) {
     assert.deepEqual(failures, [], 'UI geometry regressions: ' + JSON.stringify(failures));
     return { state: 'passed', measurements, locales: ['en', 'zh-CN'], viewports, navigation_rail_contained: true,
       client_cell_content_contained: true, runner_cell_content_contained: true, runner_version_form_preserved: true,
-      recording_form_order_and_alignment: true, uninstall_command_copy_preserved: true, identifier_inputs_validated: identifierInputs, screenshots: 0 };
+      recording_form_order_and_alignment: true, uninstall_command_copy_preserved: true, identifier_inputs_validated: identifierInputs,
+      native_auth_submissions: authSubmissions, screenshots: 0 };
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 }
 
