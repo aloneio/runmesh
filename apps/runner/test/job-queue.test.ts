@@ -9,11 +9,11 @@ import { PathPolicy } from "../src/path-policy.js";
 import { FairJobQueue } from "../src/job-queue.js";
 const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 async function wait(done:()=>boolean){for(let i=0;i<400;i++){if(done())return;await sleep(20);}throw new Error("queue did not converge");}
-async function fixture(authorize=vi.fn(async()=>true), files: JobFilePort = nativeJobFiles){
+async function fixture(authorize=vi.fn(async()=>true), files: JobFilePort = nativeJobFiles, maxRetainedJobs = 100){
  const base=await mkdtemp(join(tmpdir(),"runmesh-fair-queue-"));const root=join(base,"work");await mkdir(root);
  const policy=new PathPolicy([{workspaceId:"w",rootPath:await realpath(root),readonly:false,shell:false}]);
  const started:string[]=[];
- const jobs=new JobManager({policy,stateDir:join(base,"state"),maxConcurrentJobs:1,maxQueuedJobs:4,maxQueuedJobsPerClient:2,authorizeQueuedJob:authorize,onEvent:e=>{if(e.type==="started")started.push(e.job.request_id??"");}}, {files});
+ const jobs=new JobManager({policy,stateDir:join(base,"state"),maxConcurrentJobs:1,maxQueuedJobs:4,maxQueuedJobsPerClient:2,maxRetainedJobs,authorizeQueuedJob:authorize,onEvent:e=>{if(e.type==="started")started.push(e.job.request_id??"");}}, {files});
  await jobs.initialize();
  const launch=(client:string,id:string,delay=80,extra:Record<string,unknown>={})=>jobs.start({workspace_id:"w",command:[process.execPath,"-e",`setTimeout(()=>process.stdout.write(${JSON.stringify(id)}),${delay})`],created_by_client_id:client,request_id:id,...extra});
  const hold=(client:string,id:string)=>jobs.start({workspace_id:"w",command:[process.execPath,"-e",`const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(join(root,id+".release"))})){clearInterval(t);process.stdout.write(${JSON.stringify(id)});}},15);`],created_by_client_id:client,request_id:id});
@@ -52,6 +52,27 @@ it("per-client limits do not prevent another client from entering the queue",asy
   expect((await f.launch("b","b1")).status).toBe("queued");
   await expect(f.launch("b","immediate",80,{queue:false})).rejects.toMatchObject({code:"busy"});
  }finally{await f.close();}
+});
+it.each(["busy", "queue_full"])("keeps retained task history when a new launch is rejected as %s", async reason => {
+ const f = await fixture(vi.fn(async () => true), nativeJobFiles, reason === "busy" ? 2 : 4);
+ try {
+  const retained = await f.launch("a", "retained", 0);
+  await wait(() => f.jobs.get(retained.job_id).status === "succeeded");
+  await f.jobs.flushPersistence();
+  const recordPath = join(f.base, "state", "jobs", retained.job_id, "meta.json");
+  const recordBefore = await readFile(recordPath);
+  await f.hold("a", "hold");
+  if (reason === "queue_full") {
+   await f.launch("a", "waiting-1");
+   await f.launch("a", "waiting-2");
+  }
+  const idsBefore = f.jobs.list().map(job => job.job_id).sort();
+  await expect(f.launch("a", "rejected", 80, reason === "busy" ? { queue: false } : {}))
+   .rejects.toMatchObject({ code: reason });
+  expect(f.jobs.list().map(job => job.job_id).sort()).toEqual(idsBefore);
+  expect(await readFile(recordPath)).toEqual(recordBefore);
+  expect(await f.jobs.logs(retained.job_id)).toMatchObject({ data: "retained" });
+ } finally { await f.release("hold"); await f.close(); }
 });
 it("a queued task is refused if fresh authorization or the local policy changed",async()=>{
  const authorization=vi.fn(async()=>false),f=await fixture(authorization);try{

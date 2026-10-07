@@ -7,14 +7,13 @@ import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import type { RunnerPolicy } from "@aloneio/runmesh-protocol";
 import { isSafeIdentifier } from "../security.js";
 import { validityStatus } from "../validity.js";
-import type { PolicyAcknowledgementResult, PermissionSet, WorkspaceValidationStatus, RunnerRecord, WorkspaceRecord, PolicyVersionRow, PolicyMutationKind, PolicyMutationRow, ManagedWorkspaceRow } from './records.js';
+import type { PolicyAcknowledgementResult, PermissionSet, WorkspaceValidationStatus, RunnerRecord, McpClientRecord, WorkspaceRecord, PolicyVersionRow, PolicyMutationKind, PolicyMutationRow, ManagedWorkspaceRow } from './records.js';
 import { LOCKED_PERMISSIONS } from './records.js';
 import { validLifecycleId, validSessionId, matchesTransportIdentity, decodeWorkspace, uniqueIds, parsePermissionSet, validPermissionSet, validWorkspaceInput, validPolicyJson, validOptionalMutationId, policyMutationFingerprint, expectedRegistryConflict } from './values.js';
 import type { RegistryStorage } from './storage.js';
 import type { PolicyPorts } from './ports.js';
 
-/** Policy operations over a single Registry database. Construction has no I/O.
- * SQL text, arguments, transaction callbacks and await positions are retained. */
+/** Policy operations over a single Registry database. Construction has no I/O. */
 export class RegistryPolicy {
   public policyMutationId(runnerId: string, revision: number): string | null {
     return this.storage.sql.exec<{ mutation_id: string | null }>(
@@ -55,12 +54,18 @@ export class RegistryPolicy {
 
   public effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
     const client = this.ports.getMcpClient(clientId);
-    if (client === undefined || client.revoked_at_ms !== null || !client.scopes.includes("coding:read") || !this.getSnapshotAuthorization(runnerId).ok) return undefined;
-    const policy = this.getActivePolicySnapshot(runnerId);
-    if (policy === undefined) return undefined;
+    if (client === undefined || client.revoked_at_ms !== null || !client.scopes.includes("coding:read")) return undefined;
+    const authorized = this.authorizedPolicySnapshot(runnerId);
+    if (!authorized.ok) return undefined;
+    const policy = authorized.policy;
+    // This synchronous read uses one verified snapshot and current permission
+    // ceiling for the whole list. Nothing is cached between requests.
+    let ceiling: PermissionSet | undefined;
     const workspaces = policy.workspaces.flatMap((workspace) => {
-      const permissions = this.effectivePermissions(clientId, runnerId, workspace.workspace_id);
-      return permissions?.read === true ? [{ workspace_id: workspace.workspace_id, enabled: true, permissions }] : [];
+      if (!workspace.enabled) return [];
+      ceiling ??= this.permissionsForPolicy(client, policy);
+      const permissions = intersectPermissionSets(ceiling, workspace.permissions);
+      return permissions.read ? [{ workspace_id: workspace.workspace_id, enabled: true, permissions }] : [];
     });
     return { runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces };
   }
@@ -96,11 +101,20 @@ export class RegistryPolicy {
     if (client === undefined || client.revoked_at_ms !== null || policy === undefined) return undefined;
     const workspace = policy.workspaces.find((candidate) => candidate.workspace_id === workspaceId);
     if (workspace === undefined || !workspace.enabled) return undefined;
-    const override = this.clientRunnerPermissions(clientId, runnerId) ?? { read: true, edit: true, shell: true, job_control: true };
-    return intersectPermissionSets(permissionSetFromScopes(client.scopes), override, policy.runner_permissions, workspace.permissions);
+    return intersectPermissionSets(this.permissionsForPolicy(client, policy), workspace.permissions);
+  }
+
+  private permissionsForPolicy(client: McpClientRecord, policy: RunnerPolicy): PermissionSet {
+    const override = this.clientRunnerPermissions(client.client_id, policy.runner_id) ?? { read: true, edit: true, shell: true, job_control: true };
+    return intersectPermissionSets(permissionSetFromScopes(client.scopes), override, policy.runner_permissions);
   }
 
   public getSnapshotAuthorization(runnerId: string): { readonly ok: true; readonly revision: number; readonly checksum: string } | { readonly ok: false; readonly code: "policy_pending" | "stale_policy"; readonly reason: string } {
+    const authorized = this.authorizedPolicySnapshot(runnerId);
+    return authorized.ok ? { ok: true, revision: authorized.policy.revision, checksum: authorized.policy.checksum } : authorized;
+  }
+
+  private authorizedPolicySnapshot(runnerId: string): { readonly ok: true; readonly policy: RunnerPolicy } | { readonly ok: false; readonly code: "policy_pending" | "stale_policy"; readonly reason: string } {
     const runner = this.ports.runnerRow(runnerId);
     if (runner === undefined) return { ok: false, code: "stale_policy", reason: "runner is missing" };
     if (validityStatus(runner) !== "active") return { ok: false, code: "stale_policy", reason: "runner authorization is outside its validity window" };
@@ -111,7 +125,7 @@ export class RegistryPolicy {
     if (!Number.isSafeInteger(revision) || revision === null || revision <= 0 || typeof checksum !== "string" || !/^[a-f0-9]{64}$/.test(checksum)) return { ok: false, code: "policy_pending", reason: "active policy identity is incomplete" };
     const active = this.getActivePolicySnapshot(runnerId);
     if (active === undefined || active.revision !== revision || active.checksum !== checksum) return { ok: false, code: "stale_policy", reason: "immutable active policy snapshot is unavailable" };
-    return { ok: true, revision, checksum };
+    return { ok: true, policy: active };
   }
 
   public getDesiredPolicySnapshot(runnerId: string): RunnerPolicy | undefined {

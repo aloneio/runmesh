@@ -1237,7 +1237,7 @@ describe("persistent local jobs", () => {
   it("keeps active jobs when the retained-job quota is exhausted", async () => {
     const test = await fixture();
     try {
-      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxRetainedJobs: 1, maxConcurrentJobs: 1 });
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxRetainedJobs: 1, maxConcurrentJobs: 2 });
       await manager.initialize();
       const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setTimeout(() => {}, 2000)"] });
       await expect(manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] })).rejects.toThrow(/max retained jobs/);
