@@ -528,6 +528,75 @@ test("AR03 narrow contracts and platform types need no concrete adapter dependen
   const result = await f.run(); assert.equal(result.status, 0, result.stderr);
 });
 
+test("architecture resolution follows TypeScript extension substitution", async t => {
+  const cases = [
+    ["view.js", "view.tsx", "export const value = 1;"],
+    ["jsx.jsx", "jsx.tsx", "export const value = 1;"],
+    ["declaration.js", "declaration.d.ts", "export type Value = number;", true],
+    ["esm.mjs", "esm.d.mts", "export type Value = number;", true],
+    ["common.cjs", "common.d.cts", "export type Value = number;", true],
+    ["javascript.js", "javascript.jsx", "export const value = 1;"],
+  ];
+  const prefix = "apps/worker/src/";
+  const f = await fixture(t, {
+    "package.json": JSON.stringify({ type: "module" }),
+    "tsconfig.json": JSON.stringify({ compilerOptions: { module: "nodenext", target: "es2022", jsx: "preserve", allowJs: true, noEmit: true, strict: true, types: [] }, files: [prefix + "main.ts"] }),
+    [prefix + "main.ts"]: cases.map(([specifier, , , typeOnly], index) => typeOnly
+      ? `import type { Value as Value${index} } from "./${specifier}"; export type Result${index} = Value${index};`
+      : `import { value as value${index} } from "./${specifier}"; export const result${index} = value${index};`).join("\n"),
+    ...Object.fromEntries(cases.map(([, target, content]) => [prefix + target, content])),
+    // A same-named runtime file must not hide the TypeScript source graph.
+    [prefix + "view.js"]: "export const value = 2;",
+  });
+  const compiled = spawnSync(process.execPath, [join(project, "node_modules/typescript/bin/tsc"), "-p", join(f.root, "tsconfig.json"), "--traceResolution"], { cwd: f.root, encoding: "utf8", timeout: 60000, windowsHide: true });
+  assert.ifError(compiled.error);
+  assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+  const report = await checkArchitecture(f.root);
+  for (const [specifier, target, , typeOnly = false] of cases) {
+    assert.ok(compiled.stdout.replaceAll("\\", "/").includes(`Module name './${specifier}' was successfully resolved to '${join(f.root, prefix, target).replaceAll("\\", "/")}'`), target);
+    assert.ok(report.edges.some(edge => edge.from === prefix + "main.ts" && edge.to === prefix + target && edge.typeOnly === typeOnly), target);
+  }
+  assert.deepEqual(report.failures, []);
+});
+
+for (const extension of ["js", "mjs", "cjs"]) test(`declarations preserve ${extension} runtime dependencies`, async t => {
+  const prefix = "apps/worker/src/", declaration = extension === "js" ? "d.ts" : extension === "mjs" ? "d.mts" : "d.cts";
+  const files = {
+    [prefix + "main.ts"]: `import { render } from "./view.${extension}"; export const result = render("test");`,
+    [prefix + `view.${declaration}`]: "export declare const render: (name: string) => string;",
+    [prefix + `view.${extension}`]: 'import { result } from "./main.js"; export const render = name => name;',
+  };
+  const f = await fixture(t, files), report = await checkArchitecture(f.root);
+  assert.deepEqual(report.runtimeCycles, [[prefix + "main.ts", prefix + `view.${extension}`]]);
+  assert.ok(report.edges.some(edge => edge.to === prefix + `view.${declaration}` && edge.typeOnly));
+  const missing = await fixture(t, Object.fromEntries(Object.entries(files).filter(([path]) => path !== prefix + `view.${extension}`)));
+  assert.ok((await checkArchitecture(missing.root)).failures.some(value => value.includes("unresolved runtime source import")));
+});
+
+test("declaration imports contribute only to the type dependency graph", async t => {
+  const prefix = "apps/worker/src/";
+  const f = await fixture(t, {
+    [prefix + "main.ts"]: 'import type { Value } from "./view.js"; export const result = 1; export type Selected = Value;',
+    [prefix + "view.d.ts"]: 'import { result } from "./main.js"; export type Value = typeof result;',
+  });
+  const report = await checkArchitecture(f.root);
+  assert.deepEqual(report.runtimeCycles, []);
+  assert.deepEqual(report.typeCycles, [[prefix + "main.ts", prefix + "view.d.ts"]]);
+  assert.ok(report.edges.every(edge => edge.typeOnly));
+});
+
+for (const typeOnly of [false, true]) test(`extension substitution retains ${typeOnly ? "type-inclusive" : "runtime"} cycle detection`, async t => {
+  const prefix = "apps/worker/src/";
+  const f = await fixture(t, {
+    [prefix + "main.ts"]: 'import { render } from "./view.js"; export type Name = string; export const result = render("test");',
+    [prefix + "view.tsx"]: `${typeOnly ? 'import type { Name }' : 'import { result }'} from "./main.js"; export const render = (name: string) => name;`,
+    [prefix + "view.js"]: "export const render = name => name;",
+  });
+  const report = await checkArchitecture(f.root);
+  assert.deepEqual(typeOnly ? report.typeCycles : report.runtimeCycles, [[prefix + "main.ts", prefix + "view.tsx"]]);
+  assert.ok(report.failures.some(value => value.includes(typeOnly ? "type-inclusive dependency cycle" : "runtime dependency cycle")));
+});
+
 for (const extension of ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"]) {
   test(`AR09 platform boundaries include ${extension} modules and type imports`, async t => {
     const f = await fixture(t, {

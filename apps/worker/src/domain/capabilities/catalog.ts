@@ -1,4 +1,4 @@
-import { CATALOG_LIMITS, type CatalogDelta, type CatalogSnapshot, type CatalogTool, type RemoteToolDefinition } from "../../contracts/catalog.js";
+import { CATALOG_LIMITS, type CatalogDelta, type CatalogHead, type CatalogSnapshot, type CatalogTool, type RemoteToolDefinition } from "../../contracts/catalog.js";
 import type { ConnectionProfile } from "../../contracts/connectors.js";
 import { catalogDigest, catalogJson } from "../../contracts/catalog-json.js";
 import { catalogPublicName, parseCatalogSnapshot } from "../../contracts/catalog-values.js";
@@ -36,6 +36,21 @@ export async function verifiedCatalogSnapshot(snapshot: CatalogSnapshot, profile
     || parsed.endpoint !== profile.endpoint || parsed.digest !== expectedDigest) return false;
   const content = snapshotContent(parsed);
   return content !== undefined && await digest(content) === expectedDigest;
+}
+
+/** Shared publication proof. Reuse verification only for equal requested
+ * digests; repository object identity has no publication semantics. */
+export async function verifiedCatalogSnapshots(profile: ConnectionProfile,
+  head: Pick<CatalogHead, "observed_digest" | "approved_digest">,
+  captured: { readonly observed: CatalogSnapshot | undefined; readonly approved: CatalogSnapshot | undefined },
+  digest: (canonical: string) => Promise<string>, expired: () => boolean): Promise<{ readonly observed: CatalogSnapshot; readonly approved: CatalogSnapshot } | undefined> {
+  const observed = captured.observed;
+  if (!observed || head.approved_digest === null || expired()
+    || !await verifiedCatalogSnapshot(observed, profile, head.observed_digest, digest) || expired()) return undefined;
+  const approved = head.approved_digest === head.observed_digest ? observed : captured.approved;
+  if (!approved || (head.approved_digest !== head.observed_digest
+    && !await verifiedCatalogSnapshot(approved, profile, head.approved_digest, digest)) || expired()) return undefined;
+  return { observed, approved };
 }
 
 export function catalogChanges(observed: CatalogSnapshot, approved: CatalogSnapshot | undefined): CatalogDelta[] {

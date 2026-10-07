@@ -8,11 +8,21 @@ import { SOURCE_ROOTS, SOURCE_PACKAGES, MISSING_GENERATED, RETIRED_PATTERNS, lay
 const builtin = new Set(builtinModules.map(name => name.replace(/^node:/u, "")));
 const extensions = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
 const platform = /^(?:cloudflare:|cloudflare\/|cloudflare$|workerd(?:\/|$)|@cloudflare\/|@modelcontextprotocol\/|agents(?:\/|$))/u;
-const sourceVariants = path => [...new Set([
-  path.replace(/\.js$/u, ".ts").replace(/\.mjs$/u, ".mts").replace(/\.cjs$/u, ".cts"), path,
-  ...[".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs"].map(ext => path + ext),
-  ...[".ts", ".js"].map(ext => path + "/index" + ext),
-])];
+const runtimeExtensions = {
+  ".js": [".ts", ".tsx", ".d.ts", ".js", ".jsx"],
+  ".jsx": [".tsx", ".d.ts", ".jsx"],
+  ".mjs": [".mts", ".d.mts", ".mjs"],
+  ".cjs": [".cts", ".d.cts", ".cjs"],
+};
+const sourceVariants = path => {
+  const extension = /\.(?:jsx?|mjs|cjs)$/u.exec(path)?.[0];
+  // TypeScript substitutes extensions before consulting the runtime file.
+  // Matching that order keeps same-named JS from hiding source dependencies.
+  if (extension) return runtimeExtensions[extension].map(value => path.slice(0, -extension.length) + value);
+  return [path, ...[".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs"].map(ext => path + ext),
+    ...[".ts", ".js"].map(ext => path + "/index" + ext)];
+};
+const declarationSource = path => /\.d\.[cm]?ts$/u.test(path);
 
 /** Syntax inspection only: never import or evaluate scanned source. */
 export function dependencies(text, filename, inspectNode = () => undefined) {
@@ -85,12 +95,18 @@ export async function checkArchitecture(root) {
     }
   };
   for (const rootPath of SOURCE_ROOTS) await collect(rootPath);
-  const resolve = (file, specifier) => {
+  const resolve = (file, specifier, typeOnly) => {
     if (specifier.startsWith(".")) {
       const target = posix.normalize(posix.join(posix.dirname(file), specifier));
       const reason = dependencyProblem(file, target);
       if (reason) return { reason };
-      const path = sourceVariants(target).find(value => sources.has(value));
+      const candidates = sourceVariants(target), path = candidates.find(value => sources.has(value));
+      if (path && declarationSource(path) && !typeOnly) {
+        // Declarations describe a value import, but do not replace its runtime
+        // module. Retain both edges so neither dependency graph loses cycles.
+        const runtime = candidates.find(value => !declarationSource(value) && sources.has(value));
+        return { path: runtime, declarationPath: path, ...(runtime ? {} : { reason: "unresolved runtime source import" }) };
+      }
       return path ? { path } : MISSING_GENERATED.has(target.replace(/\.js$/u, ".ts")) ? {} : { reason: "unresolved relative source import" };
     }
     for (const [name, target] of Object.entries(SOURCE_PACKAGES)) {
@@ -117,14 +133,16 @@ export async function checkArchitecture(root) {
     catch { failures.push(`${file}: source parsing failed`); continue; }
     for (const edge of imports) {
       if (typeof edge.specifier !== "string") { failures.push(`${file}:${edge.line}: computed module loading is not statically reviewable`); continue; }
-      const platformReason = specifierProblem(file, edge.specifier, edge.typeOnly);
+      const edgeTypeOnly = edge.typeOnly || declarationSource(file);
+      const platformReason = specifierProblem(file, edge.specifier, edgeTypeOnly);
       if (platformReason) failures.push(`${file}:${edge.line}: ${platformReason}`);
-      const target = resolve(file, edge.specifier);
+      const target = resolve(file, edge.specifier, edgeTypeOnly);
       if (target.reason) failures.push(`${file}:${edge.line}: ${target.reason}`);
-      if (target.path) {
-        const resolvedReason = dependencyProblem(file, target.path);
+      for (const [path, typeOnly] of [[target.path, edgeTypeOnly], [target.declarationPath, true]]) {
+        if (!path) continue;
+        const resolvedReason = dependencyProblem(file, path);
         if (resolvedReason && resolvedReason !== target.reason) failures.push(`${file}:${edge.line}: ${resolvedReason}`);
-        edges.push({ from: file, to: target.path, typeOnly: edge.typeOnly });
+        edges.push({ from: file, to: path, typeOnly });
       }
     }
   }

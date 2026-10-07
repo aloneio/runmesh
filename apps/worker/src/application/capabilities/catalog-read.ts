@@ -4,7 +4,7 @@ import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
 import { parseProfile } from "../../contracts/connector-values.js";
 import { capturedIdentityState, type CapturedIdentity } from "../../contracts/identity.js";
 import { catalogRevision } from "../../contracts/catalog-json.js";
-import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
+import { compatibleApprovedTools, verifiedCatalogSnapshots } from "../../domain/capabilities/catalog.js";
 
 /** Per-profile bounded directory view. No upstream fan-out or cached permission.
  * This is directory access only; it does not grant execution admission. */
@@ -35,12 +35,9 @@ export function createCatalogReader(ports: CatalogReadPorts) {
       if (head.approved_digest !== null) {
         const observed = ports.repository.readSnapshot(profile.profile_id, head.observed_digest);
         const approved = head.approved_digest === head.observed_digest ? observed : ports.repository.readSnapshot(profile.profile_id, head.approved_digest);
-        if (observed === undefined || approved === undefined
-          || !await verifiedCatalogSnapshot(observed, profile, head.observed_digest, ports.digest)) return { state: "unavailable" };
-        if (expired() || signal.aborted) return { state: "unavailable" };
-        if (approved !== observed && !await verifiedCatalogSnapshot(approved, profile, head.approved_digest, ports.digest)) return { state: "unavailable" };
-        if (head.approved_names.some(name => !approved.tools.some(tool => tool.definition.name === name))) return { state: "unavailable" };
-        tools = compatibleApprovedTools(observed, approved, head.approved_names);
+        const verified = await verifiedCatalogSnapshots(profile, head, { observed, approved }, ports.digest, () => expired() || signal.aborted);
+        if (!verified || head.approved_names.some(name => !verified.approved.tools.some(tool => tool.definition.name === name))) return { state: "unavailable" };
+        tools = compatibleApprovedTools(verified.observed, verified.approved, head.approved_names);
         tools.sort((a, b) => a.public_name < b.public_name ? -1 : a.public_name > b.public_name ? 1 : 0);
       }
       if (expired() || signal.aborted) return { state: "unavailable" };

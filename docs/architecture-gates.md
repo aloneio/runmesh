@@ -8,6 +8,8 @@ Worker and Runner depend on the shared protocol. Keep application-specific depen
 
 The graph covers import declarations, re-exports, literal dynamic imports, literal CommonJS `require`, TypeScript import types and external-module references. Resolve relative imports and project aliases explicitly. Computed module loads, unresolved modules, unsupported package subpaths and source symlinks fail the check. Runtime and type-inclusive cycles are classified separately, and both fail.
 
+Runtime `.js`, `.jsx`, `.mjs` and `.cjs` imports use TypeScript's extension substitution order, including JSX sources. When a value import has a declaration file, the graph retains the declaration as a type edge alongside the JavaScript runtime edge. A compiler-backed fixture checks the selected source files; cycle fixtures cover both runtime and type-only dependencies through these imports.
+
 `scripts/architecture-policy.mjs` defines roles and allowed edges. `scripts/architecture-graph.mjs` discovers imports and detects cycles. The generated Worker provenance and browser modules are permitted to be absent before a build; build and typecheck prepare and validate them.
 
 ## Maintain the gate

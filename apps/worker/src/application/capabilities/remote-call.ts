@@ -4,7 +4,7 @@ import { capturedIdentityState, type CapturedIdentity } from "../../contracts/id
 import { parseProfile } from "../../contracts/connector-values.js";
 import { catalogJson } from "../../contracts/catalog-json.js";
 import { parseCatalogHead } from "../../contracts/catalog-values.js";
-import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
+import { compatibleApprovedTools, verifiedCatalogSnapshots } from "../../domain/capabilities/catalog.js";
 import { remoteDeadline } from "./remote-deadline.js";
 
 /** Execution has its own admission, independent of a previous directory read.
@@ -32,10 +32,10 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
         if (head === undefined || head.profile_id !== profile.profile_id || head.approved_digest === null) throw new RemoteFault("stale_catalog");
         const observed = ports.repository.readSnapshot(profile.profile_id, head.observed_digest);
         const approved = head.approved_digest === head.observed_digest ? observed : ports.repository.readSnapshot(profile.profile_id, head.approved_digest);
-        if (observed === undefined || approved === undefined || !await verifiedCatalogSnapshot(observed, profile, head.observed_digest, ports.digest)
-          || (approved !== observed && !await verifiedCatalogSnapshot(approved, profile, head.approved_digest, ports.digest))) throw new RemoteFault("dependency_unavailable");
+        const verified = await verifiedCatalogSnapshots(profile, head, { observed, approved }, ports.digest, expired);
         if (expired()) throw new RemoteFault("operation_timed_out");
-        const tool = compatibleApprovedTools(observed, approved, head.approved_names).find(tool => tool.tool_id === command.tool_id && tool.version === command.version);
+        if (!verified) throw new RemoteFault("dependency_unavailable");
+        const tool = compatibleApprovedTools(verified.observed, verified.approved, head.approved_names).find(tool => tool.tool_id === command.tool_id && tool.version === command.version);
         if (tool === undefined) throw new RemoteFault("stale_catalog");
         if (!ports.connector.validate(tool.definition.inputSchema, command.arguments)) throw new RemoteFault("invalid_arguments");
         const fence = async () => {
