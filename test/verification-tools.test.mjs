@@ -15,6 +15,7 @@ import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST }
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
 import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
+import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plan = JSON.parse(await readFile(join(root, "test/verification-plan.json"), "utf8"));
@@ -110,7 +111,8 @@ async function transportFixture(t) {
     }
     console.log('private-stdout'); console.error('private-stderr');
     if (mode === 'missing_report') process.exit(0);
-    const failed = mode !== 'success';
+    if (mode.startsWith('source_change')) writeFileSync('source.txt', 'changed source');
+    const failed = !['success', 'source_change'].includes(mode);
     const marker = mcpToolResultDiagnostic('job_logs_initial', { structuredContent: { data: 'é', returned_bytes: 1, page_protocol: 1, next_cursor: null } });
     const result = { success: !failed, numFailedTestSuites: failed ? 1 : 0, numTotalTests: 1,
       numPassedTests: failed ? 0 : 1, numFailedTests: failed ? 1 : 0, numPendingTests: 0, numTodoTests: 0,
@@ -142,6 +144,18 @@ test("transport wrapper archives counts and replaces stale success with safe fai
   assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(report), /private/);
   assert.equal(f.invoke("missing_report").status, 1);
   assert.equal((await f.report()).report_available, false);
+});
+
+for (const mode of ["source_change", "source_change_failure"]) test(`transport gate retains source and failure boundaries for ${mode}`, async t => {
+  const f = await transportFixture(t), { source } = await initializeSourceCheckout(f.directory);
+  assert.equal(f.invoke("success").status, 0);
+  assert.deepEqual((await f.report()).source, source);
+  const result = f.invoke(mode), report = await f.report();
+  assert.equal(result.status, 1);
+  assert.equal((await f.report("transport")).state, "failed");
+  assert.equal(report.state, "failed"); assert.deepEqual(report.source, source);
+  assert.equal(report.stage, mode === "source_change" ? "source_validation" : "test_execution");
+  assert.doesNotMatch(result.stdout, /"transport_gate":"passed"/u);
 });
 
 test("installed transport keeps its caller's raw report without overwriting source transport evidence", async t => {

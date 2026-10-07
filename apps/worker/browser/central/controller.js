@@ -88,7 +88,14 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, r
   }
   async function refresh() {
     view.invalidate();
-    await Promise.all([refreshProfiles({ silent: true }), refreshSkills({ silent: true })]);
+    const reads = [refreshProfiles({ silent: true }), refreshSkills({ silent: true })];
+    try { await Promise.all(reads); }
+    catch (error) {
+      // Keep the library lock until the sibling read settles, preserving the
+      // first failure without admitting duplicate refreshes behind a slow read.
+      await Promise.allSettled(reads);
+      throw error;
+    }
     view.say(t('libraryIsUpToDate'));
   }
   refreshButton.addEventListener('click', () => operations.run(refresh, 'library'));

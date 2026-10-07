@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
 import { CentralSchema } from "../src/platform/capabilities/schema.js";
 import { ConnectionState } from "../src/platform/connectors/store.js";
@@ -39,6 +39,39 @@ it("W03 observed revisions prevent overwrites and destination changes", async ()
   });
 });
 
+it("connection profile pages use one bounded metadata read without changing pagination", async () => {
+  await runInDurableObject(owner(), (_instance, state) => {
+    const repository = store(state);
+    const profiles = Array.from({ length: 52 }, (_, index) => ({ ...record.profile, profile_id: `profile-${String(index).padStart(2, "0")}` }));
+    for (const profile of profiles) expect(repository.replace({ ...record, profile }, 0)).toMatchObject({ state: "written" });
+    const original = state.storage.sql.exec.bind(state.storage.sql);
+    const measurements: Array<{ after: string; queries: number; read: number; written: number }> = [];
+    for (const after of ["", "profile-49", "profile-51"]) {
+      const cursors: SqlStorageCursor<Record<string, SqlStorageValue>>[] = [];
+      const exec = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+        const cursor = original(query, ...args); cursors.push(cursor); return cursor;
+      });
+      try {
+        const candidates = profiles.filter(profile => profile.profile_id > after);
+        expect(repository.list(after)).toEqual({ profiles: candidates.slice(0, 50),
+          next_after: candidates.length > 50 ? candidates[49]!.profile_id : null });
+        measurements.push({ after, queries: cursors.length,
+          read: cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0),
+          written: cursors.reduce((sum, cursor) => sum + cursor.rowsWritten, 0) });
+      } finally { exec.mockRestore(); }
+    }
+    console.info("connection-profile-page-sql", JSON.stringify(measurements));
+    for (const measurement of measurements) {
+      expect(measurement.read).toBeLessThanOrEqual(51);
+      expect(measurement.queries).toBe(1);
+      expect(measurement.written).toBe(0);
+    }
+    state.storage.sql.exec("UPDATE connection_profiles_v1 SET profile_json='invalid' WHERE profile_id='profile-50'");
+    expect(repository.list()).toEqual({ profiles: profiles.slice(0, 50), next_after: "profile-49" });
+    expect(() => repository.list("profile-49")).toThrow("connector_record_invalid");
+  });
+});
+
 it("W03 schema upgrades are forward-only and never clear unknown version data", async () => {
   await runInDurableObject(owner(), (_instance, state) => {
     const repository = store(state); repository.replace(record, 0);
@@ -68,6 +101,8 @@ it.each(["invalid-json", "wrong-id", "wrong-revision", "oversized-envelope"])("W
     if (field === "wrong-revision") state.storage.sql.exec("UPDATE connection_profiles_v1 SET revision=2");
     if (field === "oversized-envelope") state.storage.sql.exec("UPDATE connection_profiles_v1 SET envelope_json=?", "a".repeat(CONNECTOR_LIMITS.profile_bytes + 1));
     expect(() => repository.read("profile-a")).toThrow("connector_record_invalid");
+    expect(() => repository.list()).toThrow("connector_record_invalid");
+    expect(repository.list("profile-a")).toEqual({ profiles: [], next_after: null });
     expect(state.storage.sql.exec("SELECT * FROM connection_profiles_v1").toArray()).toHaveLength(1);
   });
 });

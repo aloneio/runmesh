@@ -5,6 +5,16 @@ import { parseProfile, validProfileEnvelope } from "../../contracts/connector-va
 type Storage = Pick<DurableObjectStorage, "sql" | "transactionSync">;
 type Row = { profile_id: string; revision: number; profile_json: string; envelope_json: string };
 
+function decodeProfileRecord(row: Row): ProfileRecord {
+  try {
+    if (row.profile_json.length > CONNECTOR_LIMITS.profile_bytes || row.envelope_json.length > CONNECTOR_LIMITS.profile_bytes) throw new Error();
+    const profile = parseProfile(JSON.parse(row.profile_json)), rawEnvelope: unknown = JSON.parse(row.envelope_json);
+    const envelope = rawEnvelope === null ? null : undefined;
+    if (profile === undefined || envelope === undefined || !validProfileEnvelope(profile, envelope) || profile.profile_id !== row.profile_id || profile.revision !== row.revision) throw new Error();
+    return { profile, envelope };
+  } catch { throw new Error("connector_record_invalid"); }
+}
+
 /** Connection metadata only; OAuth secrets belong to their own repository. Parent initialization is injected by composition. */
 export class ConnectionState implements ProfileRepository {
   private ready = false;
@@ -33,20 +43,15 @@ export class ConnectionState implements ProfileRepository {
     this.initialize();
     const row = this.storage.sql.exec<Row>("SELECT profile_id,revision,profile_json,envelope_json FROM connection_profiles_v1 WHERE profile_id=?", profileId).toArray()[0];
     if (row === undefined) return undefined;
-    try {
-      if (row.profile_json.length > CONNECTOR_LIMITS.profile_bytes || row.envelope_json.length > CONNECTOR_LIMITS.profile_bytes) throw new Error();
-      const profile = parseProfile(JSON.parse(row.profile_json)), rawEnvelope: unknown = JSON.parse(row.envelope_json);
-      const envelope = rawEnvelope === null ? null : undefined;
-      if (profile === undefined || envelope === undefined || !validProfileEnvelope(profile, envelope) || profile.profile_id !== profileId || row.profile_id !== profileId || profile.revision !== row.revision) throw new Error();
-      return { profile, envelope };
-    } catch { throw new Error("connector_record_invalid"); }
+    if (row.profile_id !== profileId) throw new Error("connector_record_invalid");
+    return decodeProfileRecord(row);
   }
 
   /** Bounded metadata-only page. Credential envelopes are never projected. */
   public list(after = ""): { profiles: ProfileRecord["profile"][]; next_after: string | null } {
     this.initialize();
-    const rows = this.storage.sql.exec<{ profile_id: string }>("SELECT profile_id FROM connection_profiles_v1 WHERE profile_id>? ORDER BY profile_id LIMIT 51", after).toArray();
-    const profiles = rows.slice(0, 50).map(row => this.read(row.profile_id)!.profile);
+    const rows = this.storage.sql.exec<Row>("SELECT profile_id,revision,profile_json,envelope_json FROM connection_profiles_v1 WHERE profile_id>? ORDER BY profile_id LIMIT 51", after).toArray();
+    const profiles = rows.slice(0, 50).map(row => decodeProfileRecord(row).profile);
     return { profiles, next_after: rows.length > 50 ? profiles.at(-1)!.profile_id : null };
   }
 

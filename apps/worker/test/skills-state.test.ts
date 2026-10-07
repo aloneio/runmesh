@@ -50,6 +50,55 @@ it("Skill repository is lazy and preserves approved old bodies across updates, r
     expect(readSkillCapacity(state.storage.sql, a.skill_id)).toMatchObject({ skill_versions: 2, library_skills: 1 });
   });
 });
+it("Skill head pages use one bounded read and preserve ordering, cursors and enabled state", async () => {
+  const values = await Promise.all(Array.from({ length: 7 }, (_, index) => makeSkillBundle({
+    skill_id: `skill-${String(index).padStart(2, "0")}`, source: "reviewed", license: "MIT", files: [
+      { path: "SKILL.md", text: `---\nname: skill-${String(index).padStart(2, "0")}\ndescription: Read documentation\n---\nInstructions` },
+    ],
+  }, catalogSha256)));
+  await runInDurableObject(owner(), (_instance, state) => {
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    for (const [index, value] of values.entries()) {
+      expect(value).toBeDefined();
+      expect(index % 2 === 0 ? store.install(value!, 0) : store.stage(value!, 0)).toMatchObject({ state: "written" });
+    }
+    const expected = values.map(value => store.head(value!.skill_id)!);
+    const original = state.storage.sql.exec.bind(state.storage.sql);
+    const measurements: Array<{ after: string; limit: number; queries: number; read: number; written: number }> = [];
+    for (const [after, limit] of [["", 3], ["skill-02", 2], ["skill-06", 3], ["skill-01", 0]] as const) {
+      const cursors: SqlStorageCursor<Record<string, SqlStorageValue>>[] = [];
+      const exec = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+        const cursor = original(query, ...args); cursors.push(cursor); return cursor;
+      });
+      try {
+        const page = store.heads(after, limit);
+        expect(page).toEqual(expected.filter(head => head.skill_id > after).slice(0, limit));
+        measurements.push({ after, limit, queries: cursors.length,
+          read: cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0),
+          written: cursors.reduce((sum, cursor) => sum + cursor.rowsWritten, 0) });
+      } finally { exec.mockRestore(); }
+    }
+    console.info("skill-head-page-sql", JSON.stringify(measurements));
+    for (const measurement of measurements) {
+      expect(measurement.read).toBeLessThanOrEqual(Math.max(1, measurement.limit));
+      expect(measurement.queries).toBe(1);
+      expect(measurement.written).toBe(0);
+    }
+  });
+});
+it.each([["enabled", 2], ["enabled", -1], ["revision", 0], ["revision", 1.5]] as const)(
+  "Skill single and paged heads reject invalid %s=%s", async (column, value) => {
+    const item = (await bundle())!;
+    await runInDurableObject(owner(), (_instance, state) => {
+      const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+      expect(store.install(item, 0)).toMatchObject({ state: "written" });
+      state.storage.sql.exec(`UPDATE skill_heads_v1 SET ${column}=? WHERE skill_id=?`, value, item.skill_id);
+      expect(() => store.head(item.skill_id)).toThrow("skill_record_invalid");
+      expect(() => store.heads("", 1)).toThrow("skill_record_invalid");
+      expect(store.heads(item.skill_id, 1)).toEqual([]);
+    });
+  },
+);
 it.each(["install", "activate"] as const)("Skill %s advances publication without rewriting an already approved version", async action => {
   const value = (await bundle())!;
   await runInDurableObject(owner(), (_instance, state) => {
