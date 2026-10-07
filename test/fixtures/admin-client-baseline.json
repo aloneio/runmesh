@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "7573e25866739b113965d34130150dadf325d14fc62e4276c77e3784d7cbb6c5",
+      "sha256": "b5758e914ea4ece079f8f15f385c9b6a4f00d5fa7cf1372a68550a81b3bf2652",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "b0470b3b0edb5b5222419ed105aa77ac92a46414e25c3bb144779c017610c32c",
+      "sha256": "08a72820c0061d4e64f9ac1e21ce7fe7fdd8e8c9dcb306b4eb3a35816118be07",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -556,6 +556,21 @@
       {
         "nonce": "test-nonce",
         "sha256": "c0d0cc02a275ddefab60a41063c8448f062a9005f7bbf1b244feb10f5dbbefa4"
+      }
+    ]
+  },
+  "login_navigation_handoff_review": {
+    "source_baseline": "4f3e84a1288b3e96100817629ae5fdbbdc58363f",
+    "reviewed_change": "Navigation hands redirected login documents to full navigation without treating normal session expiry as a missing admin root. The latest queued destination remains authoritative, redirected external documents stay outside the admin DOM, and ordinary same-origin admin redirects retain soft mounting. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "7573e25866739b113965d34130150dadf325d14fc62e4276c77e3784d7cbb6c5"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "b0470b3b0edb5b5222419ed105aa77ac92a46414e25c3bb144779c017610c32c"
       }
     ]
   }

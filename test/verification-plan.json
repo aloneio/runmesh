@@ -68,6 +68,7 @@
         "apps/runner/test/connection-budgets.test.ts",
         "apps/runner/test/connection-handshake.test.ts",
         "apps/runner/test/connection-outage.test.ts",
+        "apps/runner/test/context-directory-concurrency.test.ts",
         "apps/runner/test/context-governance.test.ts",
         "apps/runner/test/context-recovery.test.ts",
         "apps/runner/test/context-retention-plan.test.ts",

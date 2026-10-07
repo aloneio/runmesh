@@ -224,6 +224,48 @@ for (const failure of ["network", "locale"]) test("a " + failure + " fallback ke
   assert.equal(h.context.location.href, "https://worker.test/admin/clients");
 });
 
+for (const destination of ["https://worker.test/", "https://worker.test/login", "https://identity.test/login"])
+for (const queued of [false, true]) test("a redirected navigation hands off " + destination + " without parsing the document (queued " + queued + ")", async () => {
+  const h = harness(), current = h.nav.capturePage(), errors = [];
+  let finish, cancelled = 0, parsed = 0, read = 0;
+  h.context.fetch = (url, options) => {
+    h.fetched.push({ url, options });
+    if (h.fetched.length > 1) return Promise.resolve({ ok: false, status: 503 });
+    return new Promise(resolve => { finish = resolve; });
+  };
+  h.context.onError = error => errors.push(error);
+  // The redirected login document has its own layout and no admin page root.
+  h.context.parse = () => { parsed++; return { querySelector: () => null }; };
+  const pending = h.open("/admin/runners");
+  if (queued) await h.open("/admin/clients");
+  finish({ ok: true, redirected: true, url: destination,
+    body: { cancel: async () => { cancelled++; } }, text: async () => { read++; return "login document"; } });
+  await pending;
+  const target = queued ? "https://worker.test/admin/clients" : destination.startsWith("https://worker.test/") ? destination : "https://worker.test/admin/runners";
+  assert.equal(h.context.location.href, target);
+  assert.deepEqual(errors, [], "Normal session expiry is a navigation handoff, not a missing-root error");
+  assert.equal(cancelled, 1, "The unused redirected document body is released");
+  assert.equal(read, 0);
+  assert.equal(parsed, 0);
+  assert.equal(h.fetched.length, 1);
+  assert.equal(h.mounted.length, 0);
+  assert.equal(h.nav.isLoading(), false);
+  assert.equal(current(), false);
+  assert.equal(h.nav.capturePage()(), false);
+});
+
+test("a redirected admin document keeps ordinary soft navigation", async () => {
+  const h = harness(), errors = [];
+  h.context.fetch = async () => ({ ok: true, redirected: true, url: "https://worker.test/admin/clients",
+    body: { cancel: () => assert.fail("An admin page body is still needed for mounting") }, text: async () => "admin document" });
+  h.context.onError = error => errors.push(error);
+  await h.open("/admin/clients");
+  assert.equal(h.context.location.href, "https://worker.test/admin");
+  assert.equal(h.mounted.length, 1);
+  assert.equal(h.mounted[0].title, "admin document");
+  assert.deepEqual(errors, []);
+});
+
 test("a failed mount retires the partially bound page before full navigation", async () => {
   const h = harness(); let partiallyBound;
   h.context.view.mount = () => { partiallyBound = h.nav.capturePage(); throw new Error("history update failed"); };
