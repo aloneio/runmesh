@@ -785,6 +785,14 @@ test("direct browser failures use optional error stacks and retain only allowlis
   assert.deepEqual(browserErrorDiagnostic(undefined), { kind: "unclassified" });
 });
 
+test("navigation handoff failures identify the leaf check instead of its product coordinator", () => {
+  for (const prefix of ["C:\\private\\scripts\\", "/private/scripts/"]) {
+    const error = { code: "ERR_ASSERTION", message: "private-response", stack: `AssertionError: private-token\n    at handoff (${prefix}navigation-handoff-browser-check.mjs:104:7)\n    at checkGuidedProduct (${prefix}product-browser-check.mjs:125:2)` };
+    assert.deepEqual(browserErrorDiagnostic(error), { kind: "assertion_failed", location: { file: "scripts/navigation-handoff-browser-check.mjs", line: 104, column: 7 } });
+    assert.doesNotMatch(JSON.stringify(browserErrorDiagnostic(error)), /private/u);
+  }
+});
+
 test("browser diagnostics bound retained failures and message inspection", () => {
   const summary = browserFailureEvidence({ testResults: [{ assertionResults: Array.from({ length: 40 }, () => ({
     status: "failed", title: "private-title", failureMessages: ["private-response"],

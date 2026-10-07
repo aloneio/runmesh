@@ -19,9 +19,9 @@ export async function handleSkillLifecycleAdmin(request: Request, env: WorkerEnv
     const raw = await Promise.race([owner.skillLifecycle(admission.session_hash, id, action, admission.body),
       new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), SKILL_LIMITS.operation_ms + 1000); })]);
     const result = skillObject(raw);
-    if (result && ["invalid", "missing", "denied", "unavailable", "unknown", "conflict", "expired", "protected"].includes(String(result.state))) {
+    if (result && typeof result.state === "string" && ["invalid", "missing", "denied", "unavailable", "unknown", "conflict", "expired", "protected"].includes(result.state)) {
       const status = result.state === "invalid" ? 400 : result.state === "missing" ? 404 : result.state === "denied" ? 403
-        : ["conflict", "expired", "protected"].includes(String(result.state)) ? 409 : 503;
+        : ["conflict", "expired", "protected"].includes(result.state) ? 409 : 503;
       return Response.json({ error: { code: "skill_lifecycle_" + result.state, operation_state: result.state === "unknown" ? "unknown" : "not_started",
         ...(lifecycleRevision(result.current_revision) ? { current_revision: result.current_revision } : {}) } }, { status, headers: centralHeaders });
     }

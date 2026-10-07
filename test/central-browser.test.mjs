@@ -20,6 +20,23 @@ function deferred() {
   return { promise, resolve };
 }
 
+function fixtureEventMethods() {
+  const listeners = new Map();
+  return {
+    addEventListener(name, listener) {
+      if (!listeners.has(name)) listeners.set(name, new Set());
+      listeners.get(name).add(listener);
+    },
+    removeEventListener(name, listener) { listeners.get(name)?.delete(listener); },
+    dispatch(name, event = { preventDefault() {} }) {
+      const current = listeners.get(name);
+      for (const listener of [...current ?? []]) if (current.has(listener)) listener.call(this, event);
+      return !event.defaultPrevented;
+    },
+    dispatchEvent(event) { return this.dispatch(event.type, event); },
+  };
+}
+
 test("Central translations expand only template-owned parameters once and preserve missing values", () => {
   for (const locale of ["en", "zh-CN"]) {
     const t = createCentralTranslator(locale);
@@ -186,9 +203,8 @@ for (const [name, path, body, receipt] of [
 
 test("a committed create with an incomplete receipt cannot create a duplicate from the same form", async t => {
   function element() {
-    const events = new Map();
     return { isConnected: true, disabled: false, textContent: "", style: {}, children: [],
-      addEventListener: (name, action) => events.set(name, action), dispatch(name, event) { events.get(name)?.(event); },
+      ...fixtureEventMethods(),
       setAttribute() {}, getAttribute() {}, append(...nodes) { this.children.push(...nodes); }, appendChild(node) { this.children.push(node); }, replaceChildren() { this.children = []; },
       querySelector: () => null, querySelectorAll: () => [], classList: { toggle() {} }, scrollIntoView() {},
     };
@@ -615,11 +631,10 @@ const lifecyclePlan = () => ({ fingerprint: lifecycleFingerprint, skill_id: "res
 
 function centralDomFixture(t, locale = "en") {
   function element(tag = "div") {
-    const events = new Map(), attributes = new Map();
+    const attributes = new Map();
     const node = { tag, children: [], hidden: false, textContent: "", disabled: false, isConnected: true,
       append(...children) { this.children.push(...children); }, appendChild(child) { this.children.push(child); }, replaceChildren() { this.children = []; },
-      addEventListener: (name, handler) => events.set(name, handler), dispatch(name, event = { preventDefault() {} }) { events.get(name)?.(event); },
-      dispatchEvent(event) { this.dispatch(event.type, event); return true; },
+      ...fixtureEventMethods(),
       setAttribute(name, value) { attributes.set(name, String(value)); }, getAttribute(name) { return attributes.get(name) ?? null; },
       focus() { document.activeElement = this; }, scrollIntoView() {}, classList: { toggle() {} } };
     return node;
@@ -1303,6 +1318,29 @@ test("Registry preview only reads metadata; choosing a candidate fills Connect a
   assert.equal(ui.form.elements.name.value, "example/team-mcp");
   assert.equal(ui.inspectionPanel.hidden, true, "Filling the endpoint dispatches input and invalidates old inspection");
   assert.equal(ui.requests.length, 2, "The candidate button never starts a profile write, OAuth flow, or second network request");
+});
+
+test("Registry input preserves workflow invalidation alongside ordered event observers", async t => {
+  const ui = registryFixture(t), input = ui.form.elements.endpoint, observed = [];
+  await ui.inspection.inspect({ endpoint: input.value });
+  await ui.preview();
+  const candidate = ui.buttons()[0];
+  const receivers = [];
+  function first() { receivers.push(this); observed.push('first'); }
+  function second() { receivers.push(this); observed.push('second'); }
+  input.addEventListener('input', first);
+  input.addEventListener('input', first);
+  input.addEventListener('input', second);
+  await ui.click(candidate);
+  assert.deepEqual(observed, ['first', 'second'], 'Distinct callbacks run in registration order; the same callback runs once');
+  assert.ok(receivers.every(receiver => receiver === input), 'Listeners receive their element as this');
+  assert.equal(ui.inspectionPanel.hidden, true, 'An observer must not overwrite the real workflow invalidation listener');
+  input.removeEventListener('input', first);
+  await ui.inspection.inspect({ endpoint: input.value });
+  await ui.click(candidate);
+  assert.deepEqual(observed, ['first', 'second', 'second']);
+  assert.equal(ui.inspectionPanel.hidden, true, 'Removing one observer preserves both the workflow and the other observer');
+  assert.equal(ui.requests.filter(request => request.path === 'registry-preview').length, 1);
 });
 
 for (const reason of ["file", "refresh"]) test("Registry prior candidate is invalidated by " + reason, async t => {

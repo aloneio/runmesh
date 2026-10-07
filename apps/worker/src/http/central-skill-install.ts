@@ -26,7 +26,7 @@ export async function handleSkillInstallation(request: Request, env: WorkerEnv, 
     if (result?.state === "conflict" && Number.isSafeInteger(result.current_revision) && (result.current_revision as number) >= 0) {
       return Response.json({ state: "conflict", skill_id: installation.bundle.skill_id, current_revision: result.current_revision }, { status: 409, headers: centralHeaders });
     }
-    if (result && ["invalid", "denied", "capacity", "unavailable"].includes(String(result.state))) {
+    if (result && typeof result.state === "string" && ["invalid", "denied", "capacity", "unavailable"].includes(result.state)) {
       return centralFailure("skill_" + result.state, result.state === "invalid" ? 400 : result.state === "denied" ? 403 : result.state === "capacity" ? 429 : 503);
     }
     return centralFailure("central_result_unconfirmed", 503, "unknown");

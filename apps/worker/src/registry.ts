@@ -634,7 +634,7 @@ export class RegistryDO {
     if (segments[0] === "auth" && segments[1] === "runners" && segments.length === 4 && segments[3] === "update") {
       const id = parsePathIdentifier(segments[2]);
       if (id === undefined) return new Response("not found", { status: 404 });
-      if (request.method === "GET") return Response.json(this.runnerUpdates.response(id) ?? { operation: null });
+      if (request.method === "GET") return Response.json(this.runnerUpdates.response(id, now) ?? { operation: null });
       if (request.method === "POST") return this.runnerUpdates.create(id, input, now);
     }
     if (request.method === "POST" && segments.length === 2 && segments[0] === "enrollments" && segments[1] === "lookup") {

@@ -191,7 +191,7 @@ describe("independent Runner update control", () => {
       for (const progress of ["draining", "installing", "checking"]) expect((await instance.fetch(await signed(`/runners/${runnerId}/update/status`, { ...claim, state: progress }))).status).toBe(200);
       const success = { ...claim, state: "succeeded", observed_version: create.target_version };
       expect((await instance.fetch(await signed(`/runners/${runnerId}/update/status`, success))).status).toBe(409);
-      state.storage.sql.exec("UPDATE runners SET current_runner_version = ?, connection_epoch = 5, session_id = 'replacement' WHERE runner_id = ?", create.target_version, runnerId);
+      state.storage.sql.exec("UPDATE runners SET current_runner_version = ?, connection_epoch = 5, session_id = 'replacement', last_heartbeat_ms = ? WHERE runner_id = ?", create.target_version, Date.now(), runnerId);
       const terminal = await instance.fetch(await signed(`/runners/${runnerId}/update/status`, success));
       expect(terminal.status).toBe(200);
       expect((await terminal.json() as RunnerUpdateResponse).operation?.state).toBe("succeeded");
@@ -209,6 +209,60 @@ describe("independent Runner update control", () => {
     expect((await SELF.fetch(`https://worker.test/runner/${encodeURIComponent(id)}/update`, { headers: { Authorization: "Bearer invalid" } })).status).toBe(401);
     const polled = await SELF.fetch(`https://worker.test/runner/${encodeURIComponent(id)}/update`, { headers: { Authorization: `Bearer ${token}` } });
     expect(polled.status).toBe(200); expect((await polled.json() as RunnerUpdateResponse).operation).toBeNull();
+  });
+
+  it.each(["succeeded", "rolled_back"] as const)("never confirms %s from an expired or missing heartbeat when maintenance is delayed", async terminal => {
+    await runInDurableObject(scoped(), async (instance, state) => {
+      const now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const { runnerId, lifecycleId } = await setup(instance), create = createInput(lifecycleId);
+        state.storage.sql.exec("UPDATE runners SET current_runner_version='0.1.7', state='online', session_id='original', connection_epoch=4, last_heartbeat_ms=? WHERE runner_id=?", now, runnerId);
+        await instance.fetch(await signed(`/auth/runners/${runnerId}/update`, create));
+        const maintenance = new RunnerUpdateMaintenance({ storage: state.storage,
+          registry: async (id, action) => instance.fetch(await signed(`/runners/${encodeURIComponent(id)}${action}`)),
+          connections: () => [], pendingReplies: () => 0,
+        });
+        const localEnv = { ...env,
+          REGISTRY: { idFromName: env.REGISTRY.idFromName.bind(env.REGISTRY), get: () => ({ fetch: (request: Request) => instance.fetch(request) }) },
+          RUNNER: { idFromName: env.RUNNER.idFromName.bind(env.RUNNER), get: () => ({ fetch: async (request: Request) => maintenance.handle(request, await request.text()) }) },
+        } as unknown as WorkerEnv;
+        const external = (action = "", payload?: Record<string, unknown>) => {
+          const url = new URL(`https://worker.test/runner/${runnerId}/update${action}`);
+          return handleRunnerUpdate(new Request(url, { method: payload === undefined ? "GET" : "POST", headers: { authorization: `Bearer ${token}` }, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) }), localEnv, url);
+        };
+        const claim = { operation_id: create.operation_id, lifecycle_id: lifecycleId, manager_id: "manager-a" };
+        expect((await external("/claim", claim)).status).toBe(200);
+        expect(maintenance.blocksLifecycle(lifecycleId)).toBe(true);
+        for (const progress of ["draining", "installing", "checking"]) expect((await external("/status", { ...claim, state: progress })).status).toBe(200);
+        const version = terminal === "succeeded" ? create.target_version : "0.1.7";
+        const status = { ...claim, state: terminal, observed_version: version };
+        for (const heartbeat of [now - 45_001, null]) {
+          state.storage.sql.exec("UPDATE runners SET current_runner_version=?, state='online', connection_epoch=5, session_id='replacement', last_heartbeat_ms=? WHERE runner_id=?", version, heartbeat, runnerId);
+          // No alarm or detail query runs first: status must validate its own
+          // current-session evidence before committing a terminal update.
+          expect((await external("/status", status)).status).toBe(409);
+          expect(maintenance.blocksLifecycle(lifecycleId)).toBe(true);
+          const exec = state.storage.sql.exec.bind(state.storage.sql); let written = 0;
+          const sql = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => { const cursor = exec(query, ...args); written += cursor.rowsWritten; return cursor; });
+          try {
+            for (let index = 0; index < 3; index++) {
+              const response = await external();
+              expect(await response.json()).toMatchObject({ operation: { state: "checking" }, observed_version: null, observed_new_session: false });
+            }
+            expect(written).toBe(0);
+          } finally { sql.mockRestore(); }
+        }
+        // The exact shared heartbeat boundary remains admissible.
+        state.storage.sql.exec("UPDATE runners SET last_heartbeat_ms=? WHERE runner_id=?", now - 45_000, runnerId);
+        const confirmed = await external("/status", status);
+        expect(confirmed.status).toBe(200);
+        expect(await confirmed.json()).toMatchObject({ operation: { state: terminal }, observed_version: version, observed_new_session: true });
+        expect(maintenance.blocksLifecycle(lifecycleId)).toBe(false);
+        // A lost terminal acknowledgement stays idempotent after liveness expires.
+        clock.mockReturnValue(now + 1);
+        expect((await external("/status", status)).status).toBe(200);
+      } finally { clock.mockRestore(); }
+    });
   });
 
   it("accepts only trusted canonical stable and development versions", () => {
@@ -240,7 +294,7 @@ describe("independent Runner update control", () => {
       for (const progress of ["draining", "installing", "checking"]) await instance.fetch(await signed(`/runners/${runnerId}/update/status`, { ...claim, state: progress }));
       const rollback = { ...claim, state: "rolled_back", error_code: "activation_failed" };
       expect((await instance.fetch(await signed(`/runners/${runnerId}/update/status`, rollback))).status).toBe(409);
-      state.storage.sql.exec("UPDATE runners SET connection_epoch = 5, session_id = 'restored' WHERE runner_id = ?", runnerId);
+      state.storage.sql.exec("UPDATE runners SET connection_epoch = 5, session_id = 'restored', last_heartbeat_ms = ? WHERE runner_id = ?", Date.now(), runnerId);
       expect((await instance.fetch(await signed(`/runners/${runnerId}/update/status`, rollback))).status).toBe(200);
       const next = createInput(lifecycleId);
       await instance.fetch(await signed(`/auth/runners/${runnerId}/update`, next));
