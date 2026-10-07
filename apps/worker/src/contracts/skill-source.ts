@@ -1,5 +1,5 @@
 import type { SkillBundle, SkillFile, SkillMutation, SkillRepository } from "./skills.js";
-import type { AdminDecision } from "./connectors.js";
+import type { AdminDecision } from "./admin-session.js";
 
 export const SKILL_SOURCE_LIMITS = Object.freeze({ files: 32, directory_depth: 8, tree_entries: 2048, metadata_bytes: 524_288, operation_ms: 25_000, active: 2 });
 export interface SkillSource { readonly repository: string; readonly commit: string; readonly path: string }

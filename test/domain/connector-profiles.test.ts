@@ -1,7 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createProfileManager } from "../../apps/worker/src/application/connectors/profiles.js";
 import { profileEndpoint } from "../../apps/worker/src/contracts/connector-values.js";
-import type { AdminDecision, ProfileRecord, ProfileResult } from "../../apps/worker/src/contracts/connectors.js";
+import type { AdminDecision } from "../../apps/worker/src/contracts/admin-session.js";
+import type { ProfileRecord, ProfileResult } from "../../apps/worker/src/contracts/connectors.js";
 
 const command = { action: "connect", profile_id: "docs", connector_id: "docs", endpoint: "https://docs.example.com/mcp",
   authentication: "none" };

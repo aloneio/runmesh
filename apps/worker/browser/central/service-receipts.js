@@ -1,4 +1,16 @@
 /** Service metadata is validated without importing DOM workflows into the API. */
+export function validProfileWriteReceipt(request, value) {
+  const profile = value.profile;
+  return profile?.profile_id === request.id && Number.isSafeInteger(profile?.revision) && profile.revision >= 1
+    && typeof profile.enabled === 'boolean' && ['none', 'oauth'].includes(profile.authentication);
+}
+
+export function validAuthorizationStartReceipt(value) {
+  if (typeof value.authorization_url !== 'string' || !value.authorization_url.trim()) return false;
+  try { new URL(value.authorization_url, 'https://runmesh.invalid'); return true; }
+  catch { return false; }
+}
+
 export function validServiceInspection(value) {
   if (value.state === 'authorization_required') return true;
   const server = value.server, capabilities = server?.capabilities;

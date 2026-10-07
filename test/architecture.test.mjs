@@ -11,11 +11,12 @@ import { checkCommand } from "../scripts/ci-contract.mjs";
 import { bundleRunner } from "../scripts/build-runner-bundle.mjs";
 
 const project = fileURLToPath(new URL("../", import.meta.url));
-test("catalog and maintenance consumers retain their scoped structural ports", () => {
+test("catalog, maintenance and byte-reading consumers retain their scoped structural ports", () => {
   const result = spawnSync(process.execPath, [join(project, "node_modules/typescript/bin/tsc"),
     "--noEmit", "--strict", "--skipLibCheck", "--target", "es2022", "--module", "nodenext", "--types", "node", "--ignoreConfig",
     join(project, "test/fixtures/catalog-read-ports.ts"),
-    join(project, "test/fixtures/service-profile-ports.ts")], { cwd: project, encoding: "utf8", timeout: 60000, windowsHide: true });
+    join(project, "test/fixtures/service-profile-ports.ts"),
+    join(project, "test/fixtures/positioned-byte-reader.ts")], { cwd: project, encoding: "utf8", timeout: 60000, windowsHide: true });
   assert.ifError(result.error);
   assert.equal(result.signal, null);
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -58,6 +59,15 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["Administrator session contract to connector identity", { "apps/worker/src/contracts/admin-session.ts": 'import type { AdminDecision } from "./connectors.js";', "apps/worker/src/contracts/connectors.ts": 'export type AdminDecision = {};' }],
+  ["Administrator session contract to receipt implementation", { "apps/worker/src/contracts/admin-session.ts": 'import { read } from "./control-plane-receipts.js";', "apps/worker/src/contracts/control-plane-receipts.ts": 'export const read = () => ({});' }],
+  ["Administrator session contract to renamed adapter", { "apps/worker/src/contracts/admin-session.mts": 'import type { Receipt } from "./session-helper.js";', "apps/worker/src/contracts/session-helper.ts": 'export type Receipt = {};' }],
+  ["Administrator session contract to external schema", { "apps/worker/src/contracts/admin-session.ts": 'import { z } from "zod";' }],
+  ["Administrator session contract owns HTTP", { "apps/worker/src/contracts/admin-session.ts": 'export const read = () => Response.json({});' }],
+  ["Administrator session contract owns deadline", { "apps/worker/src/contracts/admin-session.ts": 'export const read = () => new AbortController();' }],
+  ["Administrator session contract owns storage", { "apps/worker/src/contracts/admin-session.ts": 'export const read = (store: DurableObjectStorage) => store.get("session");' }],
+  ["Administrator session contract owns clock", { "apps/worker/src/contracts/admin-session.ts": 'export const read = () => Date.now();' }],
+  ["Administrator session contract yields", { "apps/worker/src/contracts/admin-session.ts": 'export async function read() {}' }],
   ["Runner admission to transport types", { "apps/worker/src/domain/runner-admission.ts": 'import type { RunnerDO } from "../runner-do.js";', "apps/worker/src/runner-do.ts": 'export class RunnerDO {}' }],
   ["Runner admission to adapter intermediary", { "apps/worker/src/domain/runner-admission.mts": 'import "./helper.js";', "apps/worker/src/domain/helper.ts": 'export {};' }],
   ["Runner admission owns storage", { "apps/worker/src/domain/runner-admission.ts": 'export const restore = (storage: DurableObjectStorage) => storage.get("admission");' }],
@@ -371,12 +381,23 @@ test("Skill source syntax contracts and the bounded YAML parser have independent
   assert.ok(report.edges.filter(edge => edge.from.startsWith("apps/worker/src/contracts/")).every(edge => edge.to.startsWith("apps/worker/src/contracts/")));
 });
 
+test("Administrator session decisions are shared by HTTP and Central composition through a pure receipt contract", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/contracts/admin-session.ts": await readFile(join(project, "apps/worker/src/contracts/admin-session.ts"), "utf8"),
+    "apps/worker/src/contracts/control-plane-receipts.ts": 'export interface JsonReceipt { status: number; value: unknown }',
+    "apps/worker/src/http/session.ts": 'import { projectAdminSessionReceipt } from "../contracts/admin-session.js";',
+    "apps/worker/src/capabilities-do.ts": 'import { projectAdminSessionReceipt } from "./contracts/admin-session.js";',
+    "apps/worker/src/contracts/skills.ts": 'import type { AdminDecision } from "./admin-session.js";',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
 test("Skill lifecycle values and receipt projection are shared through pure contracts", async t => {
   const sources = {};
   for (const name of ["skill-lifecycle", "skill-lifecycle-values", "skill-lifecycle-receipts", "skill-values", "skills", "identity"])
     sources[`apps/worker/src/contracts/${name}.ts`] = await readFile(join(project, `apps/worker/src/contracts/${name}.ts`), "utf8");
   Object.assign(sources, {
-    "apps/worker/src/contracts/connectors.ts": 'export type AdminDecision = { state: "allowed" };',
+    "apps/worker/src/contracts/admin-session.ts": 'export type AdminDecision = { state: "allowed" };',
     "apps/worker/src/contracts/capabilities.ts": 'export type CapabilityTarget = { capability_id: string };',
     "apps/worker/src/contracts/skill-manifest.ts": 'export type SkillFileManifest = { path: string };',
     "apps/worker/src/http/central-skill-lifecycle.ts": 'import { projectSkillLifecycleReceipt } from "../contracts/skill-lifecycle-receipts.js";',

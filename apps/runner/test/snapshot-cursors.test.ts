@@ -136,11 +136,11 @@ it("R07 one snapshot reads source bytes once across 100 small pages", async () =
 it("R07 snapshot capture has global in-flight admission and bounded partial-read attempts", async () => {
   const f=await fixture(), path=join(f.workspace.rootPath,"a");await writeFile(path,"a");const info=await stat(path);
   let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
-  const handle={read:async(buffer:Buffer)=>{await gate;buffer[0]=65;return {bytesRead:1,buffer};}} as unknown as FileHandle;
+  const handle={read:async(buffer:Buffer)=>{await gate;buffer[0]=65;return {bytesRead:1,buffer};}};
   const pending=Array.from({length:4},()=>captureFile(handle,info));
   await expect(captureFile(handle,info)).rejects.toMatchObject({code:"busy"});release();await Promise.all(pending);
   const partial=vi.fn(async(buffer:Buffer,offset:number)=>{buffer[offset]=65;return {bytesRead:1,buffer};});
-  await expect(captureFile({read:partial} as unknown as FileHandle,{...info,size:65})).rejects.toMatchObject({code:"read_budget_exhausted"});
+  await expect(captureFile({read:partial},{...info,size:65})).rejects.toMatchObject({code:"read_budget_exhausted"});
   expect(partial).toHaveBeenCalledTimes(64);
 });
 

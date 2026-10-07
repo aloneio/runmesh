@@ -39,7 +39,11 @@ export interface InstallationPointerPort {
   switch(previous: InstalledRelease, next: InstalledRelease, operationId: string): Promise<void>;
   restore(previous: InstalledRelease, next: InstalledRelease | undefined, operationId: string): Promise<void>;
 }
-export type LocalUpdatePhase = "claimed" | "staged" | "draining" | "stopping" | "switching" | "starting" | "checking" | "rolling_back" | "succeeded" | "rolled_back" | "failed" | "recovery_required";
+export const LOCAL_UPDATE_PHASES = Object.freeze(["claimed", "staged", "draining", "stopping", "switching", "starting", "checking", "rolling_back", "succeeded", "rolled_back", "failed", "recovery_required"] as const);
+export type LocalUpdatePhase = typeof LOCAL_UPDATE_PHASES[number];
+export function isLocalUpdatePhase(value: unknown): value is LocalUpdatePhase {
+  return typeof value === "string" && LOCAL_UPDATE_PHASES.some(phase => phase === value);
+}
 export interface UpdateJournal {
   readonly schema_version: 1;
   readonly operation: CloudUpdateOperation;

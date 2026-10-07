@@ -22,6 +22,13 @@ Runner admission decisions live in `domain/runner-admission.ts`. They consume st
 
 Central browser request classification lives in `central/request-contract.js`. API response handling and operation scopes use this shared contract, while `central/operations.js` manages UI locks. The request contract has no DOM or scheduling dependencies. Catalog snapshot readers expose only `readHead` and `readSnapshot`; a compiled TypeScript fixture verifies that pagination, remote calls, tool search and Skill dependency inspection retain that boundary.
 
+Administrator session decisions live in `contracts/admin-session.ts`. HTTP and
+Central composition supply parsed Registry receipts and retain their own request
+deadlines. The contract references only the shared receipt type; fixtures keep
+feature dependencies, transport, storage, clocks and asynchronous work with their
+respective owners. MCP, Skill and catalog administration use the same identity
+type directly.
+
 Collection contracts also identify the response items field. The API validates the
 items array and explicit continuation cursor before the controller accepts a
 complete reload. Shared identity decisions live in `contracts/identity.ts`;
@@ -29,6 +36,9 @@ application readers retain their own asynchronous checks and result mapping.
 Runner service lifecycle commands consume `ServiceProfilePort`, while service
 planning needs only the path and read method. Compiled positive and negative
 fixtures enforce these capabilities independently of the concrete profile store.
+The same fixture lane checks positioned byte readers: native file handles satisfy
+the port, while page algorithms receive reading capability with metadata, mutation
+and handle lifetime owned by their adapters.
 
 Fixtures cover `.mts`, `.cts`, JSX, bare built-ins such as `dgram` and `dns/promises`, type-only Cloudflare imports, renamed barrels, nested modules and reverse coordinator dependencies. Positive fixtures cover native adapters, pure hashing and type-only platform ports. Three named Runtime persistence-coordinator test exceptions retain timing that a file-write fault cannot reproduce; replacing one requires equivalent fault timing and assertions.
 

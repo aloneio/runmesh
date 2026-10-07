@@ -1,3 +1,5 @@
+import type { AdminDecision } from "./admin-session.js";
+
 /** Profiles are owned explicitly. A client label is not a natural-person identity. */
 export interface ConnectionProfile {
   readonly schema_version: 1;
@@ -32,7 +34,6 @@ export interface ProfileRepository {
   read(profileId: string): ProfileRecord | undefined;
   replace(record: ProfileRecord, expectedRevision: number): ProfileResult;
 }
-export type AdminDecision = "allowed" | "denied" | "unavailable";
 export interface ProfileServicePorts {
   readonly repository: ProfileRepository;
   readonly authorize: (signal: AbortSignal) => Promise<AdminDecision>;

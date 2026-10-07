@@ -50,6 +50,16 @@ owns UI locks. Catalog queries, remote calls, tool search and Skill dependency
 inspection share read-only snapshot ports. Administration supplies mutation ports;
 compiled type fixtures and runtime regressions verify the distinction.
 
+The browser request contract also selects profile, authorization and Skill
+installation receipts. Feature receipt modules validate their content, while
+`api.js` owns HTTP handling and recovery admission. Route decisions have one owner
+for success validation and failure classification.
+
+`contracts/admin-session.ts` projects Registry receipts into administrator session
+decisions for HTTP and Central composition. Request deadlines and cancellation
+stay with each caller. MCP, Skill and catalog contracts import the shared
+administrator decision directly, independently of connector types.
+
 Registry owns HMAC routing and synchronous transactions; RunnerDO owns session
 dispatch. `contracts/admin-views.ts` defines display shapes, and
 `application/admin-projections.ts` selects permitted fields after authorization.
@@ -89,6 +99,11 @@ constructor signatures remain stable; declaration generation strips internal
 overloads. `pack:smoke` compiles ESM and CommonJS consumers using the published
 package declarations.
 
+`page-read.ts` declares the byte-reading port used by page and cursor algorithms.
+Native file handles supply this capability directly; tests supply the same narrow
+port to exercise short reads and truncation. File opening, metadata checks and
+handle lifetime remain with the adapters.
+
 Systemd, launchd and Task Scheduler have separate adapters. CLI input, enrollment,
 diagnosis and lifecycle commands have separate owners. Patch planning and Git
 projection are separated from native execution, while their coordinators own the
@@ -111,6 +126,10 @@ The update coordinator imports update contracts and the shared protocol;
 composition supplies HTTP, native-service, storage and release adapters.
 Release staging consumes the same target and verified-release types. Architecture
 fixtures enforce this direction for runtime and type imports.
+
+The update contract also owns local phase values and their derived TypeScript
+type. Journal parsing uses those same values and checks that persisted phases and
+service selectors are strings before recovery uses them.
 
 `apps/runner/src/maintenance-entry.ts` and `maintenance-cli.ts` build the independent
 `dist/maintenance.cjs` artifact. Initial manager installation copies this artifact

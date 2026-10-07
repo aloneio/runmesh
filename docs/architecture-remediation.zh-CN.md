@@ -55,6 +55,14 @@ API 使用该契约解释响应，`operations.js` 管理页面操作锁。目录
 业务用例。Application 模块不能导入平台模块，包括平台类型。MCP 和管理操作通过
 共享契约校验策略是否已应用，再决定是否派发操作。
 
+`contracts/admin-session.ts` 将 Registry 回执投影为 HTTP 和 Central 共用的管理员
+会话判定。各调用方继续管理请求期限和取消；MCP、Skill 和工具目录契约直接引用
+共享管理员类型，使身份规则与连接器类型各自维护。
+
+浏览器的 `central/request-contract.js` 同时选择 MCP 配置、授权和 Skill 安装的回执
+类型。各功能的回执模块校验内容，`api.js` 负责 HTTP 处理和恢复操作准入，成功校验
+与失败分类共用同一份路由决策。
+
 渲染器直接引用 `contracts/admin-views.ts` 的展示类型。`runnerDetailPage` 接收一个
 具名输入对象，避免诊断、历史和注册码等可选数据在位置参数中混淆。
 
@@ -75,6 +83,9 @@ JobManager 管理准入、运行记录、终态落盘及取消／恢复顺序。
 公开构造签名保持稳定，声明生成会去除内部重载。`pack:smoke` 使用发布包声明
 编译 ESM 和 CommonJS 使用者。
 
+`page-read.ts` 定义分页和游标算法所需的字节读取端口。原生文件句柄直接提供该能力，
+测试通过相同的窄端口模拟短读和截断；文件打开、元数据检查和句柄生命周期归适配器管理。
+
 systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、注册、诊断和
 生命周期命令分别维护。补丁规划、Git 投影与原生执行分开，由协调者管理完整操作。
 `registry/schema.ts` 在 Registry 同步启动阶段提供 DDL 和结构检查。
@@ -90,6 +101,9 @@ systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、�
 原生适配器共同引用，使发布的服务类型声明与内部协议包保持独立。
 更新协调器依赖更新契约和共享协议，由装配层提供 HTTP、原生服务、存储及发行版适配器。
 发行版准备过程复用同一份目标与验证结果类型，架构回归检查普通导入和类型导入的依赖方向。
+
+更新契约也统一定义本地阶段值，并从这些值推导 TypeScript 类型。日志解析复用同一份
+阶段定义，在恢复前确认阶段和原生服务选项都是字符串。
 
 `apps/runner/src/maintenance-entry.ts` 与 `maintenance-cli.ts` 构建独立的
 `dist/maintenance.cjs`。首次安装管理器时，该产物复制到

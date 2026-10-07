@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "0a7beac4626ed46196a7b9ea6fe53763ac515a7cc6aa9fa2f0d78d08d3a225a2",
+      "sha256": "9ffab45c59c4a108739d7c0cc28a4a0faa03cb1cc6a8c6cb64db2e9151d92543",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "cf357141bc1d488527684f8d9b495e2bfc812443bc31efd20e0f7cc18aca4a15",
+      "sha256": "c530ec95ffca373b207ccc6e68cb17afab94548aba23f3a575868387191cc1c7",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -462,6 +462,21 @@
       {
         "nonce": "test-nonce",
         "sha256": "0bf1d15c39d930de9f763092077fcc89145555b2b39969b29506ef7da6e5c60b"
+      }
+    ]
+  },
+  "request_receipt_ownership_review": {
+    "source_baseline": "82dad6ffa82e690f183a55a0ca4dae6b9bd3c0b6",
+    "reviewed_change": "Central request classification owns route metadata for success receipts and failure categories; existing feature receipt modules own content validation. HTTP, mutation admission and unknown-result recovery retain their prior behavior. Rebuilding the committed browser bundle and substituting only that bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "0a7beac4626ed46196a7b9ea6fe53763ac515a7cc6aa9fa2f0d78d08d3a225a2"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "cf357141bc1d488527684f8d9b495e2bfc812443bc31efd20e0f7cc18aca4a15"
       }
     ]
   }

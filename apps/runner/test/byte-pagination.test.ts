@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile, appendFile, rm, realpath, stat, utimes, type FileHandle } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, appendFile, rm, realpath, stat, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
@@ -89,7 +89,7 @@ it("R07 a completed execution retains its real Job result when log retrieval fai
 
 it("R07 page readers tolerate short OS reads and bound internal read attempts", async () => {
   const read = vi.fn(async (buffer: Buffer, offset: number) => { buffer[offset] = 65; return { bytesRead: 1, buffer }; });
-  const handle = { read } as unknown as FileHandle;
+  const handle = { read };
   expect((await readPageBytes(handle, 5, 4, "file_changed")).toString()).toBe("AAAA");
   expect(read.mock.calls.map(call => call[1])).toEqual([0, 1, 2, 3]);
   read.mockClear();

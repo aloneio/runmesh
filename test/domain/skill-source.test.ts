@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createSkillSourceService } from "../../apps/worker/src/application/skills/source.js";
-import type { AdminDecision } from "../../apps/worker/src/contracts/connectors.js";
+import type { AdminDecision } from "../../apps/worker/src/contracts/admin-session.js";
 import type { SkillSourcePort, SkillSourcePorts } from "../../apps/worker/src/contracts/skill-source.js";
 import type { SkillBundle, SkillMutation } from "../../apps/worker/src/contracts/skills.js";
 import { parseSkillSource, skillSourceUrl } from "../../apps/worker/src/contracts/skill-source-values.js";
