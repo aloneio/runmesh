@@ -12,7 +12,7 @@ import type { WorkerEnv } from "../platform/env.js";
 import { fenceRunnerTransport, beginRunnerPolicyMutation, cancelRunnerPolicyMutation } from "../platform/runner-mutations.js";
 import { runnerTokenVerifier } from "../security.js";
 import { record } from "../values.js";
-import { json } from "../platform/control-plane.js";
+import { boundedJsonReceipt } from "../bounded-json.js";
 import type { ValidityWindow } from "../validity.js";
 import { runnerLifecyclePorts, runnerStatusReceipt } from "./runner-mutations.js";
 import { adminRunnerError } from "./responses.js";
@@ -67,11 +67,11 @@ export function regenerateEnrollmentFromControlPlane(env: WorkerEnv, runnerId: s
       lifecycleId: snapshot.lifecycleId
     }, input.ttlMs, input.window, mutation),
     release: async (id, mutation) => {
-      const response = await cancelRunnerPolicyMutation(env, id, mutation);
-      if (response.ok) return {
+      const response = await boundedJsonReceipt(() => cancelRunnerPolicyMutation(env, id, mutation), [409, 503]);
+      if (response?.status === 204) return {
         released: true
       };
-      const candidate = record(record(await json(response))?.error)?.code;
+      const candidate = record(record(response?.value)?.error)?.code;
       const safe = new Set(["mutation_state_changed", "mutation_mismatch", "mutation_committed", "mutation_uncertain", "no_active_mutation", "runner_unavailable", "registry_unavailable", "control_plane_unavailable"]);
       return {
         released: false,

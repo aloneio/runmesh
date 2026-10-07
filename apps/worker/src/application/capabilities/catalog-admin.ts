@@ -62,8 +62,8 @@ export function createCatalogManager(ports: CatalogAdminPorts) {
         const digest = requestedDigest ?? head.observed_digest, snapshot = ports.repository.readSnapshot(profileId, digest);
         if (snapshot === undefined) return { state: "missing" };
         if (!await verifiedCatalogSnapshot(snapshot, profile, digest, ports.digest)) return { state: "unavailable" };
-        const approved = head.approved_digest === null ? undefined : ports.repository.readSnapshot(profileId, head.approved_digest);
-        if (head.approved_digest !== null && (approved === undefined || !await verifiedCatalogSnapshot(approved, profile, head.approved_digest, ports.digest))) return { state: "unavailable" };
+        const approved = head.approved_digest === digest ? snapshot : head.approved_digest === null ? undefined : ports.repository.readSnapshot(profileId, head.approved_digest);
+        if (head.approved_digest !== null && (approved === undefined || (head.approved_digest !== digest && !await verifiedCatalogSnapshot(approved, profile, head.approved_digest, ports.digest)))) return { state: "unavailable" };
         if (signal.aborted || expired()) return { state: "unavailable" };
         const final = await ports.authorize(signal);
         if (signal.aborted || expired()) return { state: "unavailable" };

@@ -1,6 +1,8 @@
 import { RunnerUpdateResponseSchema, isTerminalRunnerUpdate } from "@aloneio/runmesh-protocol";
 import { isSafeIdentifier } from "../security.js";
 import type { RegistryRequestPort } from "../contracts/runner-transport.js";
+import { boundedJsonResponse } from "../bounded-json.js";
+import { record } from "../values.js";
 
 const MAINTENANCE_KEY = "runner-update-maintenance-v1";
 const UNCERTAIN_KEY = "runner-update-uncertain-rpc-v1";
@@ -93,9 +95,12 @@ export class RunnerUpdateMaintenance {
     if (input === null || typeof input !== "object" || Array.isArray(input) || typeof input.runner_id !== "string" || !isSafeIdentifier(input.runner_id) || typeof input.operation_id !== "string" || !isSafeIdentifier(input.operation_id) || typeof input.lifecycle_id !== "string" || !isSafeIdentifier(input.lifecycle_id) || typeof input.manager_id !== "string" || !isSafeIdentifier(input.manager_id) || !Number.isSafeInteger(input.credential_version)) return new Response("invalid update identity", { status: 400 });
     let response = new Response("update state unavailable", { status: 503 });
     const work = this.writes.then(async () => {
-      const receipt = await this.ports.registry(input.runner_id as string, `/update/evidence?lifecycle_id=${encodeURIComponent(input.lifecycle_id as string)}&credential_version=${input.credential_version}`, { method: "GET" });
-      if (!receipt.ok) { response = receipt; return; }
-      const evidence = await receipt.json() as { update?: unknown; claim_epoch?: unknown; connection_epoch?: unknown };
+      const receipt = await boundedJsonResponse(signal => this.ports.registry(input.runner_id as string, `/update/evidence?lifecycle_id=${encodeURIComponent(input.lifecycle_id as string)}&credential_version=${input.credential_version}`, { method: "GET", signal }));
+      if (receipt?.status !== 200) {
+        response = new Response("update state unavailable", { status: receipt !== undefined && receipt.status >= 400 ? receipt.status : 503 }); return;
+      }
+      const evidence = record(receipt.value);
+      if (evidence === undefined) return;
       const parsed = RunnerUpdateResponseSchema.safeParse(evidence.update);
       const operation = parsed.success ? parsed.data.operation : null;
       if (operation === null || operation.operation_id !== input.operation_id || operation.lifecycle_id !== input.lifecycle_id || operation.manager_id !== input.manager_id

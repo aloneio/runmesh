@@ -52,6 +52,8 @@ The Linux verification jobs on GitHub and GitLab execute `test:package:e2e` afte
 
 A passing run requires matching CI/checkout source identity, an unchanged archive digest, successful process completion and a consistent report with at least one passed test. Reports distinguish passed, failed, skipped and todo results. Each run replaces the previous report, including when it fails.
 
+Gate reports and package verification share the source observer. It resolves the tree from the observed commit and checks HEAD again after reading working-tree status. If the checkout changes during observation, it records an unknown source and package verification stops at preflight.
+
 The shareable summary is written to `.verification/package-e2e.json` and a JSON line in the CI log. It contains the commit/tree, clean/dirty state, artifact SHA256 and size, platform/architecture/Node, elapsed time and test counters. Detailed test logs are separate; review those for private data before sharing. Generated reports are Git-ignored local artifacts.
 
 The local report describes a test build with `signed: false`, `published: false` and its observed clean/dirty state. Release preparation adds independent signature and asset verification. Track dependencies and generated inputs with their build records, and run one build at a time in each checkout.

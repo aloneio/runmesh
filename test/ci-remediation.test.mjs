@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
@@ -338,6 +339,48 @@ for (const [name, body, phase, reason] of [
   const gate = JSON.parse(await readFile(join(f.root, "ci-results/installed_transport.json"), "utf8"));
   const supplement = JSON.parse(await readFile(join(f.root, "ci-results/package-e2e.json"), "utf8"));
   assert.equal(gate.state, "failed"); assert.equal(gate.exit_code, 1); assert.equal(supplement.state, "not_run");
+});
+
+for (const boundary of ["commit", "status"]) test(`CI08 source observation rejects a checkout changed after reading ${boundary}`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh-source-observation-"));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
+  const checkout = join(directory, "checkout"); await mkdir(checkout);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+  const git = (...args) => {
+    const result = spawnSync("git", ["-c", "user.name=Runmesh Test", "-c", "user.email=runmesh-test@example.test",
+      "-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + join(directory, "no-hooks"), ...args],
+    { cwd: checkout, env, encoding: "utf8", timeout: 15000, windowsHide: true });
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git("init", "--quiet");
+  await writeFile(join(checkout, "source.txt"), "first\n"); git("add", "."); git("commit", "--quiet", "-m", "first");
+  const first = git("rev-parse", "HEAD");
+  await writeFile(join(checkout, "source.txt"), "second\n"); git("add", "."); git("commit", "--quiet", "-m", "second");
+  const second = git("rev-parse", "HEAD"); git("checkout", "--quiet", first);
+  const preload = join(directory, "change-checkout.mjs");
+  // Instrument the public process boundary in an isolated child. Every Git
+  // operation is real and the checkout belongs only to this test.
+  await writeFile(preload, `
+    import childProcess from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    const original = childProcess.execFileSync; let changed = false;
+    childProcess.execFileSync = (file, args, options) => {
+      const output = original(file, args, options);
+      const boundary = ${JSON.stringify(boundary)};
+      if (!changed && file === "git" && (boundary === "commit" ? args.at(-1) === "HEAD" : args.includes("status"))) {
+        changed = true; original("git", ["checkout", "--quiet", ${JSON.stringify(second)}], options);
+      }
+      return output;
+    };
+    syncBuiltinESMExports();
+  `);
+  const moduleUrl = new URL("../scripts/ci-report.mjs", import.meta.url).href;
+  const result = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, "--input-type=module", "-e",
+    `import { sourceObservation } from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(sourceObservation(process.cwd())));`],
+  { cwd: checkout, env, encoding: "utf8", timeout: 15000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { commit: null, tree: null, state: "unknown" });
+  assert.equal(git("rev-parse", "HEAD"), second, "fixture must actually change the checkout");
 });
 
 for (const changed of ["tree", "state"]) test(`CI08 installed package evidence must match the observed source ${changed}`, async t => {
