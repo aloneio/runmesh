@@ -655,7 +655,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   it("AUTH-E2E-01 readonly client gets effective permissions and cannot edit, execute or cancel", async () => {
     const read = await mcpTool("read", { workspace_id: "workspace-1", path: "note.txt" }, clientB);
-    expect(read.isError).not.toBe(true);
+    expect(read.isError, mcpToolResultDiagnostic("other", read)).not.toBe(true);
     const listing = await mcpTool("workspace_list", {}, clientB);
     const workspaceView = (listing.structuredContent?.workspaces as { workspace_id: string; permissions: Record<string, boolean> }[]).find((w) => w.workspace_id === "workspace-1");
     expect(workspaceView?.permissions).toEqual({ read: true, edit: false, shell: false, job_control: false });
