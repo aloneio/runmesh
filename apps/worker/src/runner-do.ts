@@ -1,4 +1,4 @@
-import { type AdmissionState, type MutationPhase, type RunnerConnectionIdentity, FENCED_ADMISSION, RESTART_RECONCILE_MUTATION_ID, admitsProtectedRpc, conservativeAdmission, restoreAdmission, sameAdmissionState, sameRunnerConnection, validSessionId } from "./domain/runner-admission.js";
+import { type AdmissionState, type MutationPhase, type RunnerConnectionIdentity, FENCED_ADMISSION, RESTART_RECONCILE_MUTATION_ID, admitsProtectedRpc, conservativeAdmission, restoreAdmission, sameAdmissionState, sameRunnerConnection, validAdmissionState, validSessionId } from "./domain/runner-admission.js";
 import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
@@ -861,7 +861,16 @@ export class RunnerDO {
     const operation = this.admissionWriteQueue.then(async () => {
       const refreshed = await this.admission();
       if (requestedRunnerId !== undefined && refreshed.runnerId !== null && refreshed.runnerId !== requestedRunnerId) return;
-      if (refreshed.fenced && refreshed.mutationId === mutationId) { result = "idempotent"; return; }
+      if (refreshed.fenced && refreshed.mutationId === mutationId) {
+        // A failed begin write keeps the local owner fenced, but a retry must
+        // confirm that owner survives hibernation before authorizing Registry
+        // mutation. Reuse an already persisted fence without another write.
+        const stored = await this.ctx.storage.get(ADMISSION_STATE_KEY);
+        if (!validAdmissionState(stored) || !sameAdmissionState(stored, refreshed)) {
+          await this.ctx.storage.put(ADMISSION_STATE_KEY, refreshed);
+        }
+        result = "idempotent"; return;
+      }
       // A mutation which has not reached Registry is the only exclusive phase.
       // Once a desired immutable revision exists, a newer revision may supersede it
       // while the live admission fence remains closed.

@@ -113,7 +113,9 @@ export async function safeFileSize(path: string): Promise<number> {
     return info.isFile() && !info.isSymbolicLink() ? info.size : 0;
   } catch (error) {
     if (isErrno(error, "ENOENT")) return 0;
-    return 0;
+    // An unreadable retained log still occupies disk. Keep initialization
+    // retryable rather than admitting new output against an invented zero.
+    throw error;
   }
 }
 

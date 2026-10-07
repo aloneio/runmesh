@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateDevPlan } from "./policy.mjs";
 import { readEvidenceJson } from "../evidence-io.mjs";
+import { sourceObservation } from "../ci-report.mjs";
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const execute = promisify(execFile);
@@ -18,8 +19,9 @@ export async function readPlan(path) {
   return validateDevPlan(await readEvidenceJson(path, 4096));
 }
 export async function assertSource(plan) {
-  assert.equal(await git("rev-parse", "HEAD"), plan.source_sha);
-  assert.equal(await git("rev-parse", "HEAD^{tree}"), plan.source_tree);
-  assert.equal(await git("status", "--porcelain", "--untracked-files=all"), "", "release source is not clean");
+  const source = sourceObservation(root);
+  assert.equal(source.state, "clean", "release source is not clean or could not be observed");
+  assert.equal(source.commit, plan.source_sha);
+  assert.equal(source.tree, plan.source_tree);
 }
 export function mainModule(meta) { return process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(meta); }

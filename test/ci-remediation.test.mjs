@@ -341,10 +341,15 @@ for (const [name, body, phase, reason] of [
   assert.equal(gate.state, "failed"); assert.equal(gate.exit_code, 1); assert.equal(supplement.state, "not_run");
 });
 
-for (const boundary of ["commit", "status"]) test(`CI08 source observation rejects a checkout changed after reading ${boundary}`, async t => {
+for (const observer of ["gate", "release"]) for (const boundary of ["commit", "status"]) test(`CI08 ${observer} source observation rejects a checkout changed after reading ${boundary}`, async t => {
   const directory = await mkdtemp(join(tmpdir(), "runmesh-source-observation-"));
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   const checkout = join(directory, "checkout"); await mkdir(checkout);
+  if (observer === "release") {
+    await mkdir(join(checkout, "scripts/dev-release"), { recursive: true });
+    for (const file of ["dev-release/io.mjs", "dev-release/policy.mjs", "dev-release/baseline-policy.mjs", "ci-report.mjs", "evidence-io.mjs"])
+      await writeFile(join(checkout, "scripts", file), await readFile(new URL("../scripts/" + file, import.meta.url)));
+  }
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
   const git = (...args) => {
     const result = spawnSync("git", ["-c", "user.name=Runmesh Test", "-c", "user.email=runmesh-test@example.test",
@@ -354,8 +359,11 @@ for (const boundary of ["commit", "status"]) test(`CI08 source observation rejec
   };
   git("init", "--quiet");
   await writeFile(join(checkout, "source.txt"), "first\n"); git("add", "."); git("commit", "--quiet", "-m", "first");
-  const first = git("rev-parse", "HEAD");
-  await writeFile(join(checkout, "source.txt"), "second\n"); git("add", "."); git("commit", "--quiet", "-m", "second");
+  const first = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
+  // An empty commit preserves the tree and exposes release checks that compare
+  // commit/tree separately but never confirm the final checkout identity.
+  if (observer === "gate") await writeFile(join(checkout, "source.txt"), "second\n");
+  git("add", "."); git("commit", "--quiet", "--allow-empty", "-m", "second");
   const second = git("rev-parse", "HEAD"); git("checkout", "--quiet", first);
   const preload = join(directory, "change-checkout.mjs");
   // Instrument the public process boundary in an isolated child. Every Git
@@ -363,23 +371,40 @@ for (const boundary of ["commit", "status"]) test(`CI08 source observation rejec
   await writeFile(preload, `
     import childProcess from "node:child_process";
     import { syncBuiltinESMExports } from "node:module";
+    import { promisify } from "node:util";
     const original = childProcess.execFileSync; let changed = false;
-    childProcess.execFileSync = (file, args, options) => {
-      const output = original(file, args, options);
+    const afterRead = (file, args, options) => {
       const boundary = ${JSON.stringify(boundary)};
       if (!changed && file === "git" && (boundary === "commit" ? args.at(-1) === "HEAD" : args.includes("status"))) {
         changed = true; original("git", ["checkout", "--quiet", ${JSON.stringify(second)}], options);
       }
+    };
+    childProcess.execFileSync = (file, args, options) => {
+      const output = original(file, args, options); afterRead(file, args, options);
       return output;
+    };
+    const originalExecFile = childProcess.execFile, originalAsync = promisify(originalExecFile);
+    childProcess.execFile = (...args) => originalExecFile(...args);
+    childProcess.execFile[promisify.custom] = async (file, args, options) => {
+      const output = await originalAsync(file, args, options); afterRead(file, args, options); return output;
     };
     syncBuiltinESMExports();
   `);
-  const moduleUrl = new URL("../scripts/ci-report.mjs", import.meta.url).href;
+  const moduleUrl = observer === "gate" ? new URL("../scripts/ci-report.mjs", import.meta.url).href : pathToFileURL(join(checkout, "scripts/dev-release/io.mjs")).href;
+  const probe = observer === "gate"
+    ? `import { sourceObservation } from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(sourceObservation(process.cwd())));`
+    : `import { assertSource } from ${JSON.stringify(moduleUrl)}; const accepted = await assertSource(${JSON.stringify({ source_sha: first, source_tree: tree })}).then(()=>true,()=>false); console.log(JSON.stringify({accepted}));`;
+  if (observer === "release") {
+    const unchanged = spawnSync(process.execPath, ["--input-type=module", "-e", probe],
+      { cwd: checkout, env, encoding: "utf8", timeout: 15000, windowsHide: true });
+    assert.equal(unchanged.status, 0, unchanged.stderr);
+    assert.deepEqual(JSON.parse(unchanged.stdout), { accepted: true }, "matching clean release source remains accepted");
+  }
   const result = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, "--input-type=module", "-e",
-    `import { sourceObservation } from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(sourceObservation(process.cwd())));`],
+    probe],
   { cwd: checkout, env, encoding: "utf8", timeout: 15000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { commit: null, tree: null, state: "unknown" });
+  assert.deepEqual(JSON.parse(result.stdout), observer === "gate" ? { commit: null, tree: null, state: "unknown" } : { accepted: false });
   assert.equal(git("rev-parse", "HEAD"), second, "fixture must actually change the checkout");
 });
 
