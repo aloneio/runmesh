@@ -6,8 +6,6 @@ import type { ServiceMode } from "./contracts.js";
 import type { ServicePlatform } from "./contracts.js";
 import { win32 } from "node:path";
 
-export const MARKER = "runmesh-runner-managed";
-
 export const LINUX_SERVICE_NAME = "runmesh-runner.service";
 
 export const MACOS_LABEL = "io.alone.runmesh.runner";
@@ -29,7 +27,7 @@ export function serviceExecutionMode(options: Pick<ServiceAdapterOptions, "execu
   return mode;
 }
 
-export function hashContent(content: string): string { let hash = 2166136261; for (const byte of Buffer.from(content, "utf8")) { hash ^= byte; hash = Math.imul(hash, 16777619); } return (hash >>> 0).toString(16).padStart(8, "0"); }
+export { hashContent } from "./manifest-ownership.js";
 
 export function privilegedIdentity(platform: ServicePlatform): string { return platform === "win32" ? "SYSTEM" : "root"; }
 

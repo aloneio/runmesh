@@ -60,9 +60,13 @@ const browserDependencies = {
   "permission-controls.ts": [],
   "locale.ts": [], "clipboard.ts": [], "admin-pages.ts": ["fragment.ts"], "admin-navigation.ts": [], "fragment.ts": [],
   "runner-actions.ts": [],
-  "central/controller.ts": ["central/api.ts", "central/messages.ts", "central/view.ts", "central/services.ts", "central/skills.ts"],
-  "central/api.ts": [], "central/messages.ts": [], "central/view.ts": [],
-  "central/services.ts": [], "central/skills.ts": [],
+  "central/controller.ts": ["central/api.ts", "central/messages.ts", "central/view.ts", "central/services.ts", "central/skills.ts", "central/registry.ts", "central/operations.ts"],
+  "central/api.ts": ["central/skill-lifecycle-receipts.ts", "central/skill-source-receipts.ts", "central/service-receipts.ts", "central/failures.ts", "central/request-contract.ts"],
+  "central/failures.ts": [], "central/request-contract.ts": [], "central/operations.ts": [],
+  "central/messages.ts": [], "central/view.ts": [],
+  "central/services.ts": ["central/service-inspection.ts", "central/request-contract.ts"], "central/skills.ts": ["central/skill-history.ts", "central/skill-source.ts"],
+  "central/skill-history.ts": [], "central/skill-source.ts": [], "central/registry.ts": [], "central/service-inspection.ts": ["central/request-contract.ts"],
+  "central/skill-lifecycle-receipts.ts": [], "central/skill-source-receipts.ts": [], "central/service-receipts.ts": [],
 };
 const registryRoute = path => /^apps\/worker\/src\/registry\/route-(?:inputs|projections)\.ts$/u.test(canonicalSource(path));
 const registryRouteAdapter = path => canonicalSource(path).startsWith("apps/worker/src/registry/routes/");
@@ -81,9 +85,14 @@ export function boundaryNodeProblem(from, node) {
     return "Registry release cache admission must stay synchronous";
   if (source === "apps/worker/src/domain/runner-handshake.ts" && (node.type === "AwaitExpression" || node.async === true))
     return "Runner handshake parsing and projection must stay synchronous";
+  if (source === "apps/worker/src/domain/runner-admission.ts" && (node.type === "AwaitExpression" || node.async === true))
+    return "Runner admission rules use supplied snapshots and remain synchronous";
   if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
     return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if (source === "apps/worker/src/domain/runner-admission.ts"
+    && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "performance", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Runner admission rules must not own transport, storage, clocks or scheduling";
   if ((updateCore(source) || source === nativeServiceContracts || source === "apps/worker/src/async-deadline.ts")
     && (networkGlobals.has(node.name) || registryPlatformTypes.has(node.name) || ["Request", "Response", "crypto", "eval", "Function"].includes(node.name)))
     return "Update coordination and deadline scheduling receive I/O through ports, not platform globals";
@@ -109,6 +118,9 @@ export function boundaryNodeProblem(from, node) {
     return "Registry route adapters use synchronous ports and supplied values, not I/O or scheduling";
   if (registryRoute(source) && (networkGlobals.has(node.name) || ["Date", "eval", "Function"].includes(node.name)))
     return "Registry route parsing and projection must use supplied values, not I/O or ambient state";
+  if ([browserRoot + "central/failures.ts", browserRoot + "central/request-contract.ts"].includes(source)
+    && (networkGlobals.has(node.name) || ["document", "location", "history", "Date", "performance", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Central request and failure classification use supplied values, not DOM, I/O or scheduling";
   if (source.startsWith(browserRoot + "central/") && source !== browserRoot + "central/api.ts" && networkGlobals.has(node.name))
     return "Central browser workflows and presentation receive network operations through the API port";
   if ([browserRoot + "central/api.ts", browserRoot + "central/messages.ts"].includes(source) && ["document", "location", "history", "window", "globalThis", "self"].includes(node.name))
@@ -132,6 +144,8 @@ const cloudRoles = new Set(["entry", "platform", "transport_owner", "registry_fa
 const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain", "registry_route"]);
 export function specifierProblem(from, specifier, typeOnly) {
   const source = canonicalSource(from);
+  if (source === "apps/worker/src/domain/runner-admission.ts" && specifier !== "./runner-handshake.js")
+    return "Runner admission rules share pure identity validation, not imported adapters";
   const centralProblem = centralSpecifierProblem(source, specifier);
   if (centralProblem) return centralProblem;
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
@@ -159,7 +173,8 @@ export function specifierProblem(from, specifier, typeOnly) {
     if (cloudPlatform.test(specifier) && !cloudRoles.has(role)) return `Worker layer ${role} must not depend on Cloudflare platform packages, including types`;
     if (serverSdk.test(specifier) && !["entry", "http", "mcp"].includes(role)
       && !(role === "platform" && centralFeature(source) === "connectors")) return `Worker layer ${role} must not depend on server SDK packages, including types`;
-    if (pureWorkerRoles.has(role) && external && !purePackages.test(specifier)) return `Worker layer ${role} must not depend on unreviewed external packages`;
+    if (pureWorkerRoles.has(role) && external && !purePackages.test(specifier)
+      && !(source === "apps/worker/src/domain/skills/frontmatter.ts" && specifier === "yaml")) return `Worker layer ${role} must not depend on unreviewed external packages`;
   }
   return undefined;
 }
@@ -207,6 +222,8 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  if (from === "apps/worker/src/domain/runner-admission.ts" && to !== "apps/worker/src/domain/runner-handshake.ts")
+    return "Runner admission rules share pure identity validation, not imported adapters";
   if (from === nativeServiceContracts)
     return "Published native-service contracts are self-contained, without module imports";
   if (updateCore(from) && !to.startsWith("packages/protocol/src/")

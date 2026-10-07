@@ -18,6 +18,8 @@ The URL is the credential. Copy it exactly, including its secret path, and remov
 
 Active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory tools include `remote_profiles`, `remote_tools`, `skill_list` and `skill_read`.
 
+Use the digest from `skill_list` when reading a Skill. Reading `SKILL.md` includes the complete file manifest with paths, UTF-8 sizes and SHA-256 hashes; read its attachments as needed with that same digest. After the administrator updates or restores a version, refresh `skill_list` to use the current content.
+
 Runmesh manages these connections and content reads. Continue to the machine-selection steps when your connection also has computer access. Administrators connect MCPs and install Skills in the [MCP and Skill guide](central-administration.md).
 
 ## Choose a machine and workspace for computer access

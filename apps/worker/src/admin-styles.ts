@@ -122,10 +122,11 @@ body{
 /* Persistent product navigation; page shells also live inside the SPA viewport. */
 .app-header{position:sticky;top:0;z-index:100;min-height:var(--header-height);margin-left:calc(-1 * var(--rail-width));background:var(--panel);border-bottom:1px solid var(--line);view-transition-name:app-header}
 .header-inner{min-height:var(--header-height);padding:0 24px;display:flex;align-items:center;justify-content:space-between;gap:20px}
-.header-left{display:flex;align-items:center;min-width:0}
+.header-left{display:flex;align-items:center;gap:12px;min-width:0}
 .brand{display:inline-flex;align-items:center;flex-shrink:0;color:var(--ink-heading);text-decoration:none}
 .brand-copy{display:none}
 .header-mesh-mark{display:block;width:160px;height:40px;flex-shrink:0}
+.product-version{display:inline-flex;max-width:100%;padding:3px 7px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel-subtle);color:var(--muted-dark);font:500 11px/1.3 var(--font-mono);overflow-wrap:anywhere}
 .header-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
 .nav-rail{position:fixed;left:0;top:var(--header-height);bottom:0;width:var(--rail-width);padding:24px 14px;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto}
 .control-nav{display:flex;flex-direction:column;gap:6px;margin:0;padding:0}

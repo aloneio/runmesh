@@ -1,6 +1,6 @@
 # Call MCP tools and recover operations
 
-Read the current authenticated `tools/list` catalog before using Runmesh. Its ten native tools are `runner_list`, `runner_current`, `runner_select`, `workspace_list`, `inspect`, `read`, `edit`, `shell`, `job` and `context`. The MCP and Skill library also provides `remote_profiles`, `remote_tools`, `remote_call`, `remote_status`, `skill_list` and `skill_read`, alongside tools from connected MCPs. Shared library calls do not require a selected Runner. Compare `io.runmesh/catalog` when diagnosing a stale native catalog; refresh the connection if tools are missing or current parameters are rejected.
+Read the current authenticated `tools/list` catalog before using Runmesh. Its ten native tools are `runner_list`, `runner_current`, `runner_select`, `workspace_list`, `inspect`, `read`, `edit`, `shell`, `job` and `context`. The MCP and Skill library also provides `remote_profiles`, `remote_search`, `remote_tools`, `remote_call`, `remote_status`, `skill_list` and `skill_read`, alongside tools from connected MCPs. Shared library calls do not require a selected Runner. Compare `io.runmesh/catalog` when diagnosing a stale native catalog; refresh the connection if tools are missing or current parameters are rejected.
 
 ## Prepare the call
 

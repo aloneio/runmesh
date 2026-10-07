@@ -1,10 +1,11 @@
 import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { RunnerPolicySchema, policyWithoutChecksum, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { defaultRunnerStateDir } from "./state-path.js";
 import type { RunnerPolicy } from "./protocol-types.js";
+import type { PolicyStoreIdentity } from "./connection/ports.js";
 
 // RunnerPolicySchema bounds every field well below this limit.  The explicit
 // ceiling protects startup/activation from a tampered or concurrently grown
@@ -25,6 +26,7 @@ export class PolicyStore {
   public readonly directory: string;
   public readonly activePath: string;
   public readonly previousPath: string;
+  public readonly identityPath: string;
   /**
    * A Runner can receive policy updates on a replacement socket while an
    * earlier activation is still flushing its candidate.  Serialize the
@@ -39,10 +41,12 @@ export class PolicyStore {
     this.directory = join(stateDir, "policy");
     this.activePath = join(this.directory, "active-policy.json");
     this.previousPath = join(this.directory, "previous-policy.json");
+    this.identityPath = join(this.directory, "active-policy-identity.json");
   }
 
-  /** Returns no policy when none was ever committed; corrupt/tampered state fails closed. */
-  public async load(runnerId: string): Promise<RunnerPolicy | undefined> {
+  /** Missing or differently enrolled caches return no policy; corrupt/tampered state fails closed. */
+  public async load(runnerId: string, identity?: PolicyStoreIdentity): Promise<RunnerPolicy | undefined> {
+    if (identity !== undefined && identity.runnerId !== runnerId) throw new Error("policy identity does not match Runner");
     const state = await inspectDirectory(dirname(this.directory));
     if (state === "missing") return undefined;
     await assertStateDirectory(dirname(this.directory));
@@ -59,9 +63,24 @@ export class PolicyStore {
     try { parsed = JSON.parse(content) as unknown; }
     catch { throw new Error("active policy is corrupt"); }
     const policy = RunnerPolicySchema.safeParse(parsed);
-    if (!policy.success || policy.data.runner_id !== runnerId || policy.data.checksum !== runnerPolicyChecksum(policyWithoutChecksum(policy.data))) {
+    if (!policy.success || policy.data.checksum !== runnerPolicyChecksum(policyWithoutChecksum(policy.data))) {
       throw new Error("active policy is invalid");
     }
+    if (identity !== undefined) {
+      let binding: unknown;
+      try { binding = JSON.parse(await readPrivateFile(this.identityPath)) as unknown; }
+      catch (error) {
+        // Legacy caches have no enrollment identity. They remain available to
+        // older packages, but a new connection must obtain its own policy.
+        if (isErrno(error, "ENOENT")) return undefined;
+        throw new Error("active policy identity cannot be read");
+      }
+      if (!isPolicyIdentity(binding)) throw new Error("active policy identity is invalid");
+      // A different profile or an interrupted/interleaved two-file commit is
+      // a cache miss, never authority to restore another enrollment's policy.
+      if (binding.identity_sha256 !== policyIdentityHash(identity) || binding.policy_checksum !== policy.data.checksum) return undefined;
+    }
+    if (policy.data.runner_id !== runnerId) throw new Error("active policy is invalid");
     return policy.data;
   }
 
@@ -70,38 +89,62 @@ export class PolicyStore {
    * final rename leaves the previous active file untouched. previous-policy.json
    * is a durable rollback aid, not an authorization source.
    */
-  public async activate(policy: RunnerPolicy): Promise<void> {
+  public async activate(policy: RunnerPolicy, identity?: PolicyStoreIdentity): Promise<void> {
     const verified = RunnerPolicySchema.safeParse(policy);
     if (!verified.success || verified.data.checksum !== runnerPolicyChecksum(policyWithoutChecksum(verified.data))) {
       throw new Error("candidate policy checksum is invalid");
     }
+    if (identity !== undefined && verified.data.runner_id !== identity.runnerId) throw new Error("candidate policy identity does not match Runner");
+    const identityHash = identity === undefined ? undefined : policyIdentityHash(identity);
     const prior = this.activationQueue;
-    const next = prior.catch(() => undefined).then(() => this.activateVerified(verified.data));
+    const next = prior.catch(() => undefined).then(() => this.activateVerified(verified.data, identityHash));
     this.activationQueue = next.catch(() => undefined);
     return next;
   }
 
-  private async activateVerified(policy: RunnerPolicy): Promise<void> {
+  private async activateVerified(policy: RunnerPolicy, identityHash: string | undefined): Promise<void> {
     await ensurePolicyDirectory(this.directory);
 
     const candidate = join(this.directory, `candidate-policy.${randomUUID()}.tmp`);
     const previousCandidate = join(this.directory, `previous-policy.${randomUUID()}.tmp`);
+    const identityCandidate = join(this.directory, `candidate-identity.${randomUUID()}.tmp`);
     try {
       const prior = await readPrivateFile(this.activePath).catch((error: unknown) => isErrno(error, "ENOENT") ? undefined : Promise.reject(error));
       await writeAndSync(candidate, `${JSON.stringify(policy)}\n`);
+      if (identityHash !== undefined) {
+        await writeAndSync(identityCandidate, `${JSON.stringify({ schema_version: 1, identity_sha256: identityHash, policy_checksum: policy.checksum })}\n`);
+      }
       if (prior !== undefined) {
         await writeAndSync(previousCandidate, prior);
         await rename(previousCandidate, this.previousPath);
       }
       await this.options.failBeforeActivate?.();
+      // Keep RunnerPolicy JSON unchanged for rollback packages and purge's
+      // workspace protection. The checksum binds these separate atomic files:
+      // interruption or competing writers can only cause a safe cache miss.
+      if (identityHash === undefined) await rm(this.identityPath, { force: true });
+      else await rename(identityCandidate, this.identityPath);
       await rename(candidate, this.activePath);
       await syncDirectory(this.directory);
     } catch (error) {
       await rm(candidate, { force: true }).catch(() => undefined);
       await rm(previousCandidate, { force: true }).catch(() => undefined);
+      await rm(identityCandidate, { force: true }).catch(() => undefined);
       throw error;
     }
   }
+}
+
+function policyIdentityHash(identity: PolicyStoreIdentity): string {
+  return createHash("sha256").update(JSON.stringify([identity.server, identity.runnerId, identity.token])).digest("hex");
+}
+
+function isPolicyIdentity(value: unknown): value is { schema_version: 1; identity_sha256: string; policy_checksum: string } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).length === 3 && record.schema_version === 1
+    && typeof record.identity_sha256 === "string" && /^[a-f0-9]{64}$/.test(record.identity_sha256)
+    && typeof record.policy_checksum === "string" && /^[a-f0-9]{64}$/.test(record.policy_checksum);
 }
 
 async function writeAndSync(path: string, content: string | Uint8Array): Promise<void> {

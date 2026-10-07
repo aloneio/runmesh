@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath, rename, symlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { isExactUpdateVersion, UpdateFailure, type InstalledRelease, type InstallationPointerPort } from "./contracts.js";
+import { readMetadataJson } from "./metadata-file.js";
 
 const missing = (error: unknown): boolean => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 const samePath = (left: string, right: string): boolean => process.platform === "win32" ? resolve(left).toLowerCase() === resolve(right).toLowerCase() : resolve(left) === resolve(right);
@@ -34,19 +35,8 @@ export class ManagedInstallationPointer implements InstallationPointerPort {
         || (process.platform !== "win32" && ((info.mode & 0o022) !== 0 || info.uid !== process.getuid?.()))) throw new UpdateFailure("invalid_installation");
     }
     const path = join(checked, "package.json"); const info = await lstat(path);
-    if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > 64 * 1024
-      || (process.platform !== "win32" && ((info.mode & 0o022) !== 0 || info.uid !== process.getuid?.()))) throw new UpdateFailure("invalid_installation");
-    const handle = await open(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
-    let value: unknown;
-    try {
-      const opened = await handle.stat();
-      if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size !== info.size) throw new UpdateFailure("invalid_installation");
-      const bytes = Buffer.alloc(info.size + 1); let offset = 0;
-      while (offset < bytes.length) { const part = await handle.read(bytes, offset, bytes.length - offset, null); if (part.bytesRead === 0) break; offset += part.bytesRead; }
-      const after = await handle.stat(); const current = await lstat(path);
-      if (offset !== info.size || after.size !== info.size || after.mtimeMs !== opened.mtimeMs || current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino) throw new UpdateFailure("invalid_installation");
-      value = JSON.parse(bytes.subarray(0, offset).toString("utf8"));
-    } finally { await handle.close(); }
+    if (process.platform !== "win32" && ((info.mode & 0o022) !== 0 || info.uid !== process.getuid?.())) throw new UpdateFailure("invalid_installation");
+    const value = await readMetadataJson(path, info, { maxBytes: 64 * 1024, errorCode: "invalid_installation" });
     if (typeof value !== "object" || value === null || !("name" in value) || value.name !== "@aloneio/runmesh-runner" || !("version" in value) || typeof value.version !== "string" || !isExactUpdateVersion(value.version)) throw new UpdateFailure("invalid_installation");
     return { version: value.version, directory: target };
   }
@@ -77,7 +67,7 @@ export class ManagedInstallationPointer implements InstallationPointerPort {
 
   private async syncRoot(): Promise<void> {
     if (process.platform === "win32") return;
-    const handle = await open(this.installRoot, constants.O_RDONLY);
+    const handle = await open(this.installRoot, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NONBLOCK);
     try { await handle.sync(); } finally { await handle.close(); }
   }
 

@@ -102,7 +102,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     if (data.state === "unavailable") return adminClientError(503, "Client details could not be loaded. Try again.");
     if (data.state === "missing") return adminClientError(404, "MCP client was not found.");
     const { client, runners, overrides, notices } = data;
-    return html(adminDocument(`${client.label} · MCP Client`, clientDetailPage(client, runners, overrides, csrf), "clients", notices));
+    return html(adminDocument([{ data: client.label }, "MCP client"], clientDetailPage(client, runners, overrides, csrf), "clients", notices));
   }
 
   if (request.method === "GET" && runnerDetail !== null) {
@@ -120,7 +120,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     if (data.state === "missing") return adminRunnerError(404, "Runner was not found.");
     if (data.state === "unavailable") return adminRunnerError(503, "Runner details could not be loaded. Try again.");
     const { runner, workspaces, jobs, mcpCalls, policyVersions, enrollment, settings } = data;
-    return html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage({
+    return html(adminDocument([{ data: typeof runner.display_name === "string" ? runner.display_name : runnerId }, "Runner"], runnerDetailPage({
       presentation: { configuredMode: runnerConfiguredExecutionMode(runner), reportedMode: runnerReportedExecutionMode(runner), maxValidityDays: MAX_VALIDITY_DAYS, dayMs: DAY_MS },
       runner, workspaces, jobs, environment, csrf, release: releaseResponse, policyVersions, enrollment, mcpCalls, view, historySettings: settings,
     }), "runners", notices));

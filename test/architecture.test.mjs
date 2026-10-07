@@ -11,23 +11,90 @@ import { checkCommand } from "../scripts/ci-contract.mjs";
 import { bundleRunner } from "../scripts/build-runner-bundle.mjs";
 
 const project = fileURLToPath(new URL("../", import.meta.url));
+test("catalog readers expose snapshot reads while administration retains mutation ports", () => {
+  const result = spawnSync(process.execPath, [join(project, "node_modules/typescript/bin/tsc"),
+    "--noEmit", "--strict", "--skipLibCheck", "--target", "es2022", "--module", "nodenext", "--ignoreConfig",
+    join(project, "test/fixtures/catalog-read-ports.ts")], { cwd: project, encoding: "utf8", timeout: 60000, windowsHide: true });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test("admission and browser request rules share values without owning effects", async t => {
+  const source = await fixture(t, {
+    "apps/worker/src/domain/runner-admission.ts": 'import { validLifecycleId } from "./runner-handshake.js"; export const restore = value => validLifecycleId(value);',
+    "apps/worker/src/domain/runner-handshake.ts": 'export const validLifecycleId = value => typeof value === "string";',
+    "apps/worker/src/runner-do.ts": 'import "./domain/runner-admission.js";',
+    "apps/worker/browser/central/request-contract.js": 'export const serviceOperationScope = id => "mcp:" + id;',
+    "apps/worker/browser/central/services.js": 'import "./request-contract.js";',
+    "apps/worker/browser/central/service-inspection.js": 'import "./request-contract.js";',
+    "apps/worker/browser/central/api.js": 'import "./request-contract.js";',
+  });
+  const result = await source.run();
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
 async function fixture(t, sources) {
   const root = await mkdtemp(join(tmpdir(), "runmesh-architecture-"));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   for (const folder of ["apps/worker/src", "apps/worker/browser", "apps/runner/src", "packages/protocol/src", "scripts"])
     await mkdir(join(root, folder), { recursive: true });
-  for (const file of ["check-architecture.mjs", "architecture-graph.mjs", "architecture-policy.mjs", "central-architecture-policy.mjs"]) {
-    try { await cp(join(project, "scripts", file), join(root, "scripts", file)); }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
-  }
-  await symlink(join(project, "node_modules"), join(root, "node_modules"), process.platform === "win32" ? "junction" : "dir");
   for (const [file, text] of Object.entries(sources)) {
     await mkdir(dirname(join(root, file)), { recursive: true }); await writeFile(join(root, file), text);
   }
-  return { root, run: () => spawnSync(process.execPath, [join(root, "scripts/check-architecture.mjs")], { cwd: root, encoding: "utf8", timeout: 15000 }) };
+  return { root, run: async () => {
+    // Rule fixtures exercise the public scanner directly. Only command-level
+    // cases need a copied entrypoint and package resolution in their temp root.
+    for (const file of ["check-architecture.mjs", "architecture-graph.mjs", "architecture-policy.mjs", "central-architecture-policy.mjs"])
+      await cp(join(project, "scripts", file), join(root, "scripts", file));
+    await symlink(join(project, "node_modules"), join(root, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+    const result = spawnSync(process.execPath, [join(root, "scripts/check-architecture.mjs")], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true });
+    assert.ifError(result.error);
+    assert.equal(result.signal, null, "Architecture command must complete rather than be terminated");
+    assert.equal(typeof result.status, "number");
+    return result;
+  } };
 }
 
 const bad = [
+  ["Runner admission to transport types", { "apps/worker/src/domain/runner-admission.ts": 'import type { RunnerDO } from "../runner-do.js";', "apps/worker/src/runner-do.ts": 'export class RunnerDO {}' }],
+  ["Runner admission to adapter intermediary", { "apps/worker/src/domain/runner-admission.mts": 'import "./helper.js";', "apps/worker/src/domain/helper.ts": 'export {};' }],
+  ["Runner admission owns storage", { "apps/worker/src/domain/runner-admission.ts": 'export const restore = (storage: DurableObjectStorage) => storage.get("admission");' }],
+  ["Runner admission owns clock", { "apps/worker/src/domain/runner-admission.ts": 'export const restore = () => Date.now();' }],
+  ["Runner admission owns HTTP", { "apps/worker/src/domain/runner-admission.ts": 'export const restore = () => Response.json({});' }],
+  ["Runner admission yields while applying rules", { "apps/worker/src/domain/runner-admission.ts": 'export async function restore() {}' }],
+  ["Central request contract to DOM locks", { "apps/worker/browser/central/request-contract.js": 'import "./operations.js";', "apps/worker/browser/central/operations.js": 'export {};' }],
+  ["Central request contract owns DOM", { "apps/worker/browser/central/request-contract.js": 'export const classify = () => document.body.textContent;' }],
+  ["Central request contract owns network", { "apps/worker/browser/central/request-contract.js": 'export const classify = () => fetch("/admin/central");' }],
+  ["Central request contract owns scheduling", { "apps/worker/browser/central/request-contract.js": 'export const classify = () => setTimeout(() => {}, 1);' }],
+  ["Skill lifecycle receipts to domain rules", { "apps/worker/src/contracts/skill-lifecycle-receipts.ts": 'import "../domain/skills/lifecycle.js";', "apps/worker/src/domain/skills/lifecycle.ts": "export {};" }],
+  ["Skill lifecycle values to HTTP adapter", { "apps/worker/src/contracts/skill-lifecycle-values.ts": 'import "../http/central-skill-lifecycle.js";', "apps/worker/src/http/central-skill-lifecycle.ts": "export {};" }],
+  ["Skill lifecycle receipts to storage", { "apps/worker/src/contracts/skill-lifecycle-receipts.ts": 'import "../platform/skills/lifecycle-store.js";', "apps/worker/src/platform/skills/lifecycle-store.ts": "export {};" }],
+  ["Skill lifecycle receipts own network", { "apps/worker/src/contracts/skill-lifecycle-receipts.ts": 'export const project = () => fetch("https://example.invalid");' }],
+  ["central failure classification to controller", { "apps/worker/browser/central/failures.js": 'import "./controller.js";', "apps/worker/browser/central/controller.js": "export {};" }],
+  ["central failure classification owns DOM", { "apps/worker/browser/central/failures.js": 'export const classify = () => document.body.textContent;' }],
+  ["central failure classification owns network", { "apps/worker/browser/central/failures.js": 'export const classify = () => fetch("/admin/central");' }],
+  ["central failure classification owns scheduling", { "apps/worker/browser/central/failures.js": 'export const classify = () => setTimeout(() => {}, 1);' }],
+  ["central failure classification owns clock", { "apps/worker/browser/central/failures.js": 'export const classify = () => Date.now();' }],
+  ["Skill lifecycle contract to storage implementation", { "apps/worker/src/contracts/skill-lifecycle.ts": 'import "../platform/skills/lifecycle-store.js";', "apps/worker/src/platform/skills/lifecycle-store.ts": "export {};" }],
+  ["Skill source use case to GitHub adapter", { "apps/worker/src/application/skills/source.ts": 'import "../../platform/skills/github-source.js";', "apps/worker/src/platform/skills/github-source.ts": "export {};" }],
+  ["Skill source contracts to parser package", { "apps/worker/src/contracts/skill-source-values.ts": 'import "yaml";' }],
+  ["Skill source value contracts to domain parser", { "apps/worker/src/contracts/skill-source-values.ts": 'import "../domain/skills/frontmatter.js";', "apps/worker/src/domain/skills/frontmatter.ts": "export {};" }],
+  ["Skill source adapter to parser through a contract barrel", {
+    "apps/worker/src/platform/skills/github-source.ts": 'import "../../contracts/skill-source-values.js";',
+    "apps/worker/src/contracts/skill-source-values.ts": 'export * from "../domain/skills/frontmatter.js";',
+    "apps/worker/src/domain/skills/frontmatter.ts": "export {};",
+  }],
+  ["Skill YAML review does not permit use-case parser imports", { "apps/worker/src/application/skills/source.ts": 'import "yaml";' }],
+  ["Skill YAML review does not permit sibling parser imports", { "apps/worker/src/domain/skills/other-frontmatter.ts": 'import "yaml";' }],
+  ["Skill YAML review does not permit package subpaths", { "apps/worker/src/domain/skills/frontmatter.ts": 'import "yaml/browser";' }],
+  ["Skill YAML review does not permit network I/O", { "apps/worker/src/domain/skills/frontmatter.ts": 'import "yaml"; export const load = () => fetch("https://example.invalid");' }],
+  ["Skill source deadline exception does not permit other foundations", { "apps/worker/src/application/skills/source-deadline.ts": 'import "../../security.js";', "apps/worker/src/security.ts": "export {};" }],
+  ["Skill source deadline exception does not permit adapter types", { "apps/worker/src/application/skills/source-deadline.ts": 'import type { Adapter } from "../../platform/skills/github-source.js";', "apps/worker/src/platform/skills/github-source.ts": "export type Adapter = {};" }],
+  ["Skill source use case cannot bypass its deadline wrapper", { "apps/worker/src/application/skills/source.ts": 'import "../../async-deadline.js";', "apps/worker/src/async-deadline.ts": "export {};" }],
+  ["tool search to remote connector implementation", { "apps/worker/src/application/capabilities/search.ts": 'import "../../platform/connectors/remote-client.js";', "apps/worker/src/platform/connectors/remote-client.ts": "export {};" }],
+  ["connection inspection to Skill repository", { "apps/worker/src/application/connectors/inspection.ts": 'import "../../platform/skills/store.js";', "apps/worker/src/platform/skills/store.ts": "export {};" }],
+  ["Skill history browser workflow bypasses API port", { "apps/worker/browser/central/skill-history.js": 'export const load = () => fetch("/admin/central/skills");' }],
   ["update contracts through native-service contracts to adapter", {
     "apps/runner/src/updates/contracts.ts": 'export type { Snapshot } from "../services/contracts.js";',
     "apps/runner/src/services/contracts.ts": 'export type { Snapshot } from "../updates/native-service.js";',
@@ -52,7 +119,7 @@ const bad = [
   ["shared deadline to package", { "apps/worker/src/async-deadline.ts": 'import "zod";' }],
   ["shared deadline owns network", { "apps/worker/src/async-deadline.ts": 'export const execute = () => fetch("https://example.invalid");' }],
   ["central deadline exception does not expose other foundations", { "apps/worker/src/application/connectors/deadline.ts": 'import "../../security.js";', "apps/worker/src/security.ts": "export {};" }],
-  ["central deadline exception does not expose arbitrary callers", { "apps/worker/src/application/skills/service.ts": 'import "../../async-deadline.js";', "apps/worker/src/async-deadline.ts": "export {};" }],
+  ["central deadline exception does not expose arbitrary callers", { "apps/worker/src/application/skills/reader.ts": 'import "../../async-deadline.js";', "apps/worker/src/async-deadline.ts": "export {};" }],
   ["fragment utility to page lifecycle", { "apps/worker/browser/fragment.js": 'import "./admin-pages.js";', "apps/worker/browser/admin-pages.js": "export {};" }],
   ["maintenance entry to ordinary CLI", { "apps/runner/src/maintenance-entry.ts": 'import "./cli.js";', "apps/runner/src/cli.ts": "export {};" }],
   ["maintenance agent to Runner runtime", { "apps/runner/src/updates/agent.ts": 'import "../runtime.js";', "apps/runner/src/runtime.ts": "export {};" }],
@@ -252,10 +319,56 @@ test("feature deadline wrappers share scheduling without exposing peer implement
   const f = await fixture(t, {
     "apps/worker/src/application/connectors/deadline.ts": 'import "../../async-deadline.js";',
     "apps/worker/src/application/capabilities/remote-deadline.ts": 'import "../../async-deadline.js";',
+    "apps/worker/src/application/skills/source-deadline.ts": await readFile(join(project, "apps/worker/src/application/skills/source-deadline.ts"), "utf8"),
+    "apps/worker/src/contracts/skill-source.ts": 'export const SKILL_SOURCE_LIMITS = { operation_ms: 25000 };',
     "apps/worker/src/async-deadline.ts": 'export const delay = () => setTimeout(() => new AbortController().abort(), 100);',
     "apps/worker/browser/page-controls.js": 'import "./fragment.js";',
     "apps/worker/browser/admin-pages.js": 'import "./fragment.js";',
     "apps/worker/browser/fragment.js": 'export const target = (root, id) => root.querySelector(id);',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
+test("Skill source syntax contracts and the bounded YAML parser have independent reusable boundaries", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/contracts/skill-source-values.ts": await readFile(join(project, "apps/worker/src/contracts/skill-source-values.ts"), "utf8"),
+    "apps/worker/src/contracts/skill-values.ts": await readFile(join(project, "apps/worker/src/contracts/skill-values.ts"), "utf8"),
+    "apps/worker/src/contracts/capabilities.ts": await readFile(join(project, "apps/worker/src/contracts/capabilities.ts"), "utf8"),
+    "apps/worker/src/contracts/identity.ts": await readFile(join(project, "apps/worker/src/contracts/identity.ts"), "utf8"),
+    "apps/worker/src/contracts/skill-source.ts": 'export const SKILL_SOURCE_LIMITS = { directory_depth: 8 }; export interface SkillSource { repository: string; commit: string; path: string }',
+    "apps/worker/src/domain/skills/frontmatter.ts": await readFile(join(project, "apps/worker/src/domain/skills/frontmatter.ts"), "utf8"),
+    "apps/worker/src/domain/skills/bundle.ts": 'import { skillPath } from "../../contracts/skill-values.js"; import { skillFrontmatter } from "./frontmatter.js"; export const metadata = text => skillFrontmatter(text);',
+    "apps/worker/src/application/skills/source.ts": 'import { parseSkillSource } from "../../contracts/skill-source-values.js"; import { metadata } from "../../domain/skills/bundle.js";',
+    "apps/worker/src/platform/skills/github-source.ts": 'import { parseSkillSource } from "../../contracts/skill-source-values.js"; import { skillObject, skillPath } from "../../contracts/skill-values.js";',
+    "apps/worker/src/http/central-skill-source.ts": 'import { parseSkillSource } from "../contracts/skill-source-values.js";',
+  });
+  const report = await checkArchitecture(f.root);
+  assert.deepEqual(report.failures, []);
+  assert.ok(report.edges.some(edge => edge.from === "apps/worker/src/platform/skills/github-source.ts"
+    && edge.to === "apps/worker/src/contracts/skill-source-values.ts"));
+  assert.ok(report.edges.filter(edge => edge.from.startsWith("apps/worker/src/contracts/")).every(edge => edge.to.startsWith("apps/worker/src/contracts/")));
+});
+
+test("Skill lifecycle values and receipt projection are shared through pure contracts", async t => {
+  const sources = {};
+  for (const name of ["skill-lifecycle", "skill-lifecycle-values", "skill-lifecycle-receipts", "skill-values", "skills", "identity"])
+    sources[`apps/worker/src/contracts/${name}.ts`] = await readFile(join(project, `apps/worker/src/contracts/${name}.ts`), "utf8");
+  Object.assign(sources, {
+    "apps/worker/src/contracts/connectors.ts": 'export type AdminDecision = { state: "allowed" };',
+    "apps/worker/src/contracts/capabilities.ts": 'export type CapabilityTarget = { capability_id: string };',
+    "apps/worker/src/contracts/skill-manifest.ts": 'export type SkillFileManifest = { path: string };',
+    "apps/worker/src/http/central-skill-lifecycle.ts": 'import { projectSkillLifecycleReceipt } from "../contracts/skill-lifecycle-receipts.js";',
+    "apps/worker/src/application/skills/lifecycle.ts": 'import { lifecycleInput } from "../../contracts/skill-lifecycle-values.js";',
+    "apps/worker/src/platform/skills/lifecycle-store.ts": 'import { lifecycleRevision } from "../../contracts/skill-lifecycle-values.js";',
+  });
+  const f = await fixture(t, sources);
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
+test("central API owns recovery while failure classification receives response values", async t => {
+  const f = await fixture(t, {
+    "apps/worker/browser/central/api.js": 'import { classifyCentralFailure } from "./failures.js"; export const classify = (...args) => classifyCentralFailure(...args);',
+    "apps/worker/browser/central/failures.js": await readFile(join(project, "apps/worker/browser/central/failures.js"), "utf8"),
   });
   assert.deepEqual((await checkArchitecture(f.root)).failures, []);
 });
@@ -273,9 +386,18 @@ test("actual maintenance bundling rejects execution modules before emitting its 
   await assert.rejects(stat(output), { code: "ENOENT" });
 });
 for (const [name, sources] of bad) test(`AR01 rejects ${name}`, async t => {
-  const f = await fixture(t, sources), result = f.run();
-  assert.notEqual(result.status, 0, `${name} incorrectly passed: ${result.stdout}`);
+  const f = await fixture(t, sources), result = await checkArchitecture(f.root);
+  assert.ok(result.failures.length > 0, `${name} incorrectly passed`);
+});
+
+for (const [name, sources] of [
+  ["dependency violation", { "packages/protocol/src/index.ts": 'import "node:fs";' }],
+  ["source parse failure", { "apps/runner/src/a.ts": 'import {' }],
+]) test(`architecture command reports ${name} with a failed exit status`, async t => {
+  const f = await fixture(t, sources), result = await f.run();
+  assert.equal(result.status, 1);
   assert.match(result.stderr, /Architecture check failed/);
+  assert.equal(result.stdout, "");
 });
 
 test("request composition injects platform operations into application ports", async t => {
@@ -285,7 +407,7 @@ test("request composition injects platform operations into application ports", a
     "apps/worker/src/platform/source.ts": 'import type { Port } from "../contracts/receipts.js"; export const port: Port = { read: async () => ({ status: 200, value: {} }) };',
     "apps/worker/src/index.ts": 'import { check } from "./application/auth-source.mjs"; import { port } from "./platform/source.js"; export const result = () => check(port);',
   });
-  const result = f.run(); assert.equal(result.status, 0, result.stderr);
+  const result = await f.run(); assert.equal(result.status, 0, result.stderr);
 });
 
 test("Registry release admission shares only the reviewed pure release rules", async t => {
@@ -310,7 +432,7 @@ test("architecture rejects type-only cycles without confusing them with runtime 
   const report = await checkArchitecture(f.root);
   assert.equal(report.runtimeCycles.length, 0); assert.equal(report.typeCycles.length, 1);
   assert.ok(report.failures.some(value => value.includes("type-inclusive dependency cycle")));
-  assert.notEqual(f.run().status, 0);
+  assert.equal((await f.run()).status, 1);
 });
 
 test("W01 composition injects central public ports without widening native dependencies", async t => {
@@ -331,7 +453,7 @@ test("W01 composition injects central public ports without widening native depen
 
 test("AR01 side-effect imports are runtime edges, not type-only edges", async t => {
   const f = await fixture(t, { "apps/runner/src/a.ts": 'import {} from "./b.js";', "apps/runner/src/b.ts": 'export * from "./a.js";' });
-  assert.notEqual(f.run().status, 0);
+  assert.equal((await f.run()).status, 1);
 });
 
 test("AR01 build gates are required in both hosted CI definitions and parity checking", async () => {
@@ -344,7 +466,7 @@ test("AR01 source symlinks cannot silently bypass module discovery", async t => 
   const f = await fixture(t, { "outside.ts": "export {};" });
   try { await symlink(join(f.root, "outside.ts"), join(f.root, "packages/protocol/src/alias.ts")); }
   catch (error) { if (process.platform === "win32" && error.code === "EPERM") return t.skip("Host does not grant file symlink creation"); throw error; }
-  assert.notEqual(f.run().status, 0);
+  assert.equal((await f.run()).status, 1);
 });
 
 test("AR03 narrow contracts and platform types need no concrete adapter dependency", async t => {
@@ -355,7 +477,7 @@ test("AR03 narrow contracts and platform types need no concrete adapter dependen
     "apps/worker/src/runtime-config.ts": 'import { canonical } from "./public-origin.js"; export const value=canonical;',
     "apps/worker/src/mcp/server.ts": 'import type { Selection } from "../contracts/selection.js"; import type { Env } from "../platform/env.js"; export type Input = [Selection, Env];',
   });
-  const result = f.run(); assert.equal(result.status, 0, result.stderr);
+  const result = await f.run(); assert.equal(result.status, 0, result.stderr);
 });
 
 for (const extension of ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"]) {

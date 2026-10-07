@@ -43,6 +43,8 @@ Each Registry namespace / Runner / lifecycle keeps at most **500 recent metadata
 
 Every fifteen minutes, cloud cleanup processes at most **20 packed rows**, rewriting expired terminal metadata with revision checks. Explicitly enabled local cleanup continues through transport disconnection and stops with the Runner. Offline hosts, backlog and quota failures can delay physical deletion beyond the visible retention window.
 
+For deleted or replaced Runners, cleanup confirms the old lifecycle against the control plane and starts its retention window. Once that window ends, the old snapshot is reclaimed, including unfinished records and empty snapshots. Current and temporarily offline Runners keep their active records and retention settings. A control-plane outage postpones lifecycle retirement while ordinary terminal-history cleanup continues.
+
 A changing Runner on a five-minute cadence produces about `86400 / 300 = 288` ordinary archive opportunities per day. Unchanged acknowledged snapshots are suppressed, and D1 enforces an interval guard across reconnects. Initial setup, cleanup, settings, audit and authorization consume additional operations.
 
 D1 and Durable Objects are metered separately. Explicit daily row-quota errors pause the affected archive instance until the next UTC reset plus 30 seconds. That instance stays in cooldown; new instances and scheduled cleanup can make bounded probes. Monitor actual usage against [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) and [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).

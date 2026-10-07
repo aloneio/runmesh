@@ -93,7 +93,7 @@ export async function createProductFixture() {
     value=catalogs.get(id);if(!value)value={state:'empty'};
     else if(body)throw new Error('Manual approval is not part of the connection flow');
     else if(url.searchParams.get('snapshot')===value.approved?.digest){value={...value,snapshot:value.approved};}
-   }else if(kind==='skills'&&!id)value={state:'listed',skills:library.map(s=>({head:s.head,summary:{name:s.bundle.name,description:s.bundle.description}})),next_after:null};
+   }else if(kind==='skills'&&!id)value={state:'listed',skills:library.map(s=>{const selected=s.published?.digest===s.head.active_digest?s.published:s.bundle;return{head:s.head,summary:{name:selected.name,description:selected.description}};}),next_after:null};
    else if(kind==='skills'){
     const item=library.find(s=>s.head.skill_id===id);
     if(!body){if(item)value={state:'found',head:item.head,bundle:url.searchParams.get('digest')===item.published?.digest?item.published:item.bundle};else{code=404;value={state:'missing'};}}

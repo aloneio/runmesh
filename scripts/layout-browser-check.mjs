@@ -13,6 +13,9 @@ import { runnerDetailPage } from '../apps/worker/dist/admin/runner-detail-view.j
 import { centralPage } from '../apps/worker/dist/admin/central-view.js';
 import { enrollmentDocument } from '../apps/worker/dist/admin/enrollment-view.js';
 import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
+import { loadAdminJobPage } from '../apps/worker/dist/admin-jobs.js';
+import { isSafeIdentifier } from '../apps/worker/dist/security.js';
+import { PRODUCT_VERSION } from '../apps/worker/dist/generated-version.js';
 
 // Reuse public render fixtures; measurements exercise the shipped CSS and browser bundle.
 const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage, clientsPage, clientDetailPage, runnersPage, runnerDetailPage };
@@ -27,6 +30,7 @@ async function fixtureDocuments() {
     if (fixture.fn === 'runnerDetailPage') {
       const [runner, workspaces, jobs, environment, csrf, release] = args;
       runner.update_request_id = runnerUpdateOperation;
+      workspaces.push({ workspace_id: 'Settings', display_name: 'Project', root_path: '/project', validation_status: 'valid' });
       args.splice(0, args.length, { presentation: fixture.presentation,
         runner, workspaces, jobs: jobs ?? undefined, environment: environment ?? undefined, csrf, release });
     }
@@ -58,26 +62,42 @@ async function fixtureDocuments() {
     publicBase: 'https://fixture.example', runnerId: 'fixture-runner', code: 'fixture-example-code', csrf: 'fixture-csrf',
     reEnroll: false, bootstrap, executionMode, maxValidityDays: 3650, enrollment: undefined,
   }));
+  const jobPage = await loadAdminJobPage(new URL('https://fixture.example/admin/runners/runner/jobs/job'), 'runner', 'job',
+    async path => Response.json(path.endsWith('/jobs/job')
+      ? { runner_id: 'runner', job_id: 'job', workspace_id: 'work', status: 'succeeded', created_at_ms: 1000, updated_at_ms: 2000 }
+      : { runner_id: 'runner', state: 'online' }), async () => undefined);
+  assert.equal(jobPage.ok, true);
+  documents.set('/layout/job-details', adminDocument(jobPage.title, jobPage.body, 'runners'));
   return documents;
 }
 
 // The disposable Node server has no Worker HTMLRewriter. Apply the same text
 // translator to server-rendered text, leaving user content and dynamic cards alone.
-async function localizeFixture(page, locale) {
-  const texts = await page.evaluate(() => {
+export async function localizeFixture(page, locale) {
+  const excluded = 'script,style,pre,code,textarea,svg,[data-no-i18n],[translate="no" i],'
+    + '[data-service-list],[data-skill-list],[data-service-tools],[data-service-inspection],[data-skill-review],'
+    + '[data-skill-history],[data-skill-source-preview],[data-registry-results]';
+  const texts = await page.evaluate(excluded => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT), texts = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (!node.parentElement.closest('script,style,code,pre,[data-no-i18n]')) texts.push(node.textContent);
+      if (!node.parentElement.closest(excluded)) texts.push(node.textContent);
     }
+    for (const node of document.querySelectorAll('[aria-label],[alt],[placeholder],[title]')) if (!node.closest(excluded))
+      for (const name of ['aria-label', 'alt', 'placeholder', 'title']) if (node.hasAttribute(name)) texts.push(node.getAttribute(name));
     return texts;
-  });
+  }, excluded);
   const translations = Object.fromEntries(texts.map(text => [text, localizeUiText(text, locale)]));
-  await page.evaluate(translations => {
+  await page.evaluate(({ translations, excluded }) => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (!node.parentElement.closest('script,style,code,pre,[data-no-i18n]') && Object.hasOwn(translations, node.textContent)) node.textContent = translations[node.textContent];
+      if (!node.parentElement.closest(excluded) && Object.hasOwn(translations, node.textContent)) node.textContent = translations[node.textContent];
     }
-  }, translations);
+    for (const node of document.querySelectorAll('[aria-label],[alt],[placeholder],[title]')) if (!node.closest(excluded))
+      for (const name of ['aria-label', 'alt', 'placeholder', 'title']) {
+        const value = node.getAttribute(name);
+        if (value !== null && Object.hasOwn(translations, value)) node.setAttribute(name, translations[value]);
+      }
+  }, { translations, excluded });
 }
 
 async function layoutIssues(page) {
@@ -87,8 +107,13 @@ async function layoutIssues(page) {
     const inside = (a, b) => a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && a.bottom <= b.bottom + 1;
     if (document.documentElement.scrollWidth > innerWidth + 1) issues.push('page overflows horizontally');
     const header = document.querySelector('.app-header');
-    if (header) for (const node of header.querySelectorAll('.brand,.header-actions')) {
+    if (header) for (const node of header.querySelectorAll('.brand,.product-version,.header-actions')) {
+      if (!visible(node)) issues.push('header hides ' + node.className);
       if (!inside(rect(node), rect(header))) issues.push('header clips ' + node.className);
+    }
+    if (header) {
+      const branding = rect(header.querySelector('.header-left')), actions = rect(header.querySelector('.header-actions'));
+      if (branding.right > actions.left - 1) issues.push('product branding overlaps header actions');
     }
     const navigation = document.querySelector('.control-nav'), rail = document.querySelector('.nav-rail');
     if (navigation) {
@@ -234,7 +259,35 @@ async function checkRunnerVersionForm(page) {
   await desired.fill('0.1.6');
 }
 
-/** Geometry and text only: never capture screenshots or use a user's browser. */
+async function checkIdentifierInputs(page) {
+  const cases = ['runner-probe', 'A._:-9', 'a'.repeat(128), 'runner/name', ' space', '汉字', '!', '-first', '_first', 'a'.repeat(129)]
+    .map(value => ({ value, valid: isSafeIdentifier(value) }));
+  const inputs = page.locator('input[name="runner_id"],input[name="confirmation"][pattern]');
+  const results = await inputs.evaluateAll((nodes, cases) => nodes.map(input => {
+    const previous = input.value;
+    try {
+      const checks = cases.map(({ value, valid }) => {
+        input.value = value;
+        return { value, expected: valid, actual: input.checkValidity(), patternMismatch: input.validity.patternMismatch };
+      });
+      input.value = '';
+      return { name: input.name, checks, emptyValid: input.checkValidity(), required: input.required,
+        workspaceId: input.form.querySelector('input[type="hidden"][name="workspace_id"]')?.value, placeholder: input.placeholder };
+    } finally { input.value = previous; }
+  }), cases);
+  assert.ok(results.length > 0, 'Runner forms must expose identifier fields');
+  for (const input of results) {
+    for (const check of input.checks) {
+      assert.equal(check.actual, check.expected, input.name + ': ' + JSON.stringify(check.value));
+      assert.equal(check.patternMismatch, !check.expected, 'Native pattern validation: ' + JSON.stringify(check.value));
+    }
+    assert.equal(input.emptyValid, !input.required, 'Required confirmation and optional generated IDs keep their empty-value behavior');
+    if (input.workspaceId !== undefined) assert.equal(input.placeholder, input.workspaceId, 'Workspace confirmation preserves the submitted ID');
+  }
+  return results.length;
+}
+
+/** Local layout and native form validation; never capture screenshots or use a user's browser. */
 export async function checkAdminLayout(executable) {
   const documents = await fixtureDocuments(), errors = [], failures = [];
   const digest = 'a'.repeat(64);
@@ -253,7 +306,7 @@ export async function checkAdminLayout(executable) {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = 'http://127.0.0.1:' + server.address().port;
-  let browser, measurements = 0;
+  let browser, measurements = 0, identifierInputs = 0;
   try {
     browser = await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) });
     const page = await browser.newPage(); page.on('pageerror', error => errors.push(error.message));
@@ -262,6 +315,20 @@ export async function checkAdminLayout(executable) {
       await page.goto(origin + path + '?lang=' + locale);
       if (path.endsWith('/central')) await page.locator('[data-central-product][aria-busy="false"]').waitFor();
       await localizeFixture(page, locale);
+      if (await page.locator('[data-app-header]').count()) {
+        assert.equal(await page.locator('.brand').getAttribute('href'), 'https://github.com/aloneio/runmesh');
+        assert.equal(await page.locator('.brand').getAttribute('target'), '_blank');
+        assert.equal(await page.locator('.product-version').textContent(), 'v' + PRODUCT_VERSION);
+      }
+      if (width === 390 && (path === '/layout/runners-populated' || path === '/layout/runner-detail'))
+        identifierInputs += await checkIdentifierInputs(page);
+      if (path === '/layout/job-details') {
+        const form = page.locator('form.scope-editor-form');
+        const labels = locale === 'en' ? ['Log stream', 'Log bytes', 'Output position'] : ['日志流', '日志片段大小', '读取位置'];
+        for (const label of labels) assert.equal(await form.getByRole('combobox', { name: label, exact: true }).count(), 1);
+        assert.equal(await form.getByRole('combobox', { name: '', exact: true }).count(), 0);
+        assert.deepEqual(await form.evaluate(node => Object.fromEntries(new FormData(node))), { stream: 'stdout', bytes: '4096', view: 'tail' });
+      }
       const measure = async state => {
         measurements++;
         for (const issue of await layoutIssues(page)) failures.push({ locale, width, path, state, issue });
@@ -330,7 +397,7 @@ export async function checkAdminLayout(executable) {
     assert.deepEqual(failures, [], 'UI geometry regressions: ' + JSON.stringify(failures));
     return { state: 'passed', measurements, locales: ['en', 'zh-CN'], viewports, navigation_rail_contained: true,
       client_cell_content_contained: true, runner_cell_content_contained: true, runner_version_form_preserved: true,
-      recording_form_order_and_alignment: true, uninstall_command_copy_preserved: true, screenshots: 0 };
+      recording_form_order_and_alignment: true, uninstall_command_copy_preserved: true, identifier_inputs_validated: identifierInputs, screenshots: 0 };
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 }
 

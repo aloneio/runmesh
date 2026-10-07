@@ -5,7 +5,7 @@ export function connectionRuntime(overrides: Partial<ConnectionRuntimePort> = {}
   return {
     initialize: async () => {}, applyPolicy: () => {}, dispatch: async () => undefined,
     configureJobRetention: () => {}, cleanupJobs: async () => {}, needsHistoryReconciliation: () => false,
-    syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { list: () => [] },
+    syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { activeHistoryJobIds: () => [] },
     ...overrides,
   };
 }

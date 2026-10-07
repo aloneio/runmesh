@@ -63,6 +63,7 @@ const fixtureControlSecret = "test-existing-internal-control-secret";
 function oauthFixture(cimd = false, configuredOrigin: string | null = origin, protocol?: ManagedOAuthProtocol, secret: () => unknown = () => fixtureControlSecret) {
   let record: ManagedOAuthRecord | undefined, now = 1_800_000_000_000, allowed = true, live = { ...base, authentication: "oauth" as const };
   let failToken = false, revokeOnToken = false, privateToken = false, challengeMetadata: string | undefined;
+  let resource = endpoint;
   let tokenResponse: Record<string, unknown> = {};
   const posts: string[] = [], state = { registration: 0, exchanges: 0, refreshes: 0 };
   const cipher = createSecretStorage("managed-test", secret);
@@ -77,9 +78,9 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
         ? "Bearer resource_metadata=" + quote + challengeMetadata + quote + ", scope=" + quote + "read profile" + quote : "Bearer" } });
     }
     if ((init?.method ?? "GET") === "GET") {
-      if (challengeMetadata && address === challengeMetadata) return Response.json({ resource: endpoint, authorization_servers: [issuer], scopes_supported: ["read"] });
+      if (challengeMetadata && address === challengeMetadata) return Response.json({ resource, authorization_servers: [issuer], scopes_supported: ["read"] });
       if (challengeMetadata && address.includes("oauth-protected-resource")) return new Response(null, { status: 404 });
-      if (address.includes("oauth-protected-resource")) return Response.json({ resource: endpoint, authorization_servers: [issuer], scopes_supported: ["read"] });
+      if (address.includes("oauth-protected-resource")) return Response.json({ resource, authorization_servers: [issuer], scopes_supported: ["read"] });
       if (address.includes("oauth-authorization-server")) return Response.json({ issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: privateToken ? "https://127.0.0.1/token" : issuer + "/token",
         registration_endpoint: issuer + "/register", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"], authorization_response_iss_parameter_supported: true, client_id_metadata_document_supported: cimd });
       return new Response(null, { status: 404 });
@@ -98,8 +99,116 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
   return { service, begin, hash, selection, state, posts, send, repository, cipher, record: () => record, now: (elapsed = 40_000) => { now += elapsed; },
     callback: (value: string) => ({ state: value, code: "synthetic-one-use-code", iss: issuer }), fail: () => { failToken = true; }, revokeOnToken: () => { revokeOnToken = true; }, privateToken: () => { privateToken = true; }, pause: () => { live = { ...live, revision: 3, enabled: false }; },
     resume: () => { live = { ...live, revision: 4, enabled: true }; return live; },
-    challenge: (url: string) => { challengeMetadata = url; }, tokens: (value: Record<string, unknown>) => { tokenResponse = value; } };
+    challenge: (url: string) => { challengeMetadata = url; }, resource: (value: string) => { resource = value; },
+    tokens: (value: Record<string, unknown>) => { tokenResponse = value; } };
 }
+
+async function storedOAuthValue(f: ReturnType<typeof oauthFixture>, kind: "client" | "tokens") {
+  const record = f.record()!;
+  const context = `connection:${record.profile_id}:${record.state_hash}:${kind}`;
+  return { record, context, value: await f.cipher.open(context, record[kind]!) as Record<string, unknown> };
+}
+
+it.each([20, 30, 60])("OAuth without a refresh token remains usable until its actual %s-second expiry", async lifetime => {
+  const f = oauthFixture(); f.tokens({ refresh_token: undefined, expires_in: lifetime });
+  const state = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  const saved = f.record(), selected = { ...base, authentication: "oauth" as const };
+  const credential = () => f.service().credential(selected, new AbortController().signal, async () => undefined);
+  const first = await credential(); expect(first.current()).toBe(true);
+  f.now(lifetime * 1000 - 1);
+  const last = await credential(); expect(last.current()).toBe(true); expect(first.current()).toBe(true);
+  expect(f.record()).toEqual(saved); expect(f.state.refreshes).toBe(0);
+  f.now(1);
+  expect(first.current()).toBe(false); expect(last.current()).toBe(false);
+  await expect(credential()).rejects.toMatchObject({ code: "reauthorization_required" });
+  expect(f.record()).toEqual(saved); expect(f.state.exchanges).toBe(1); expect(f.state.refreshes).toBe(0);
+});
+
+it("OAuth still refreshes a short-lived token early when a refresh token is available", async () => {
+  const f = oauthFixture(); f.tokens({ expires_in: 20 });
+  const state = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  const lease = await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  expect(lease.current()).toBe(true); expect(f.state.exchanges).toBe(1); expect(f.state.refreshes).toBe(1);
+});
+
+it("OAuth rechecks actual expiry after awaited admission before returning a credential", async () => {
+  const f = oauthFixture(); f.tokens({ refresh_token: undefined, expires_in: 20 });
+  const state = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  let admissions = 0;
+  await expect(f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => {
+    if (++admissions === 2) f.now(20_000);
+  })).rejects.toMatchObject({ code: "reauthorization_required" });
+  expect(admissions).toBe(2); expect(f.state.refreshes).toBe(0);
+});
+
+it.each([false, true])("OAuth preserves the discovered issuer through encrypted storage and refresh (CIMD=%s)", async cimd => {
+  const f = oauthFixture(cimd);
+  f.tokens({ issuer: "https://other.provider.com" });
+  const state = await f.begin();
+  expect((await storedOAuthValue(f, "client")).value.issuer).toBe(issuer);
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  expect((await storedOAuthValue(f, "tokens")).value.issuer).toBe(issuer);
+  f.now();
+  await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  expect((await storedOAuthValue(f, "tokens")).value.issuer).toBe(issuer);
+  expect(f.state).toEqual({ registration: cimd ? 0 : 1, exchanges: 1, refreshes: 1 });
+});
+
+it.each(["https://other.provider.com", issuer + "/"])("OAuth rejects a saved client issuer mismatch before exchanging a code: %s", async changedIssuer => {
+  const f = oauthFixture(), state = await f.begin();
+  const { record, context, value } = await storedOAuthValue(f, "client");
+  const changed = { ...record, revision: record.revision + 1, client: await f.cipher.seal(context, { ...value, issuer: changedIssuer }) };
+  expect(f.repository.replace(changed, record.revision)).toBe(true);
+  f.send.mockClear();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "failed", code: "reauthorization_required", operation_state: "not_started" });
+  expect(f.send).not.toHaveBeenCalled(); expect(f.state.exchanges).toBe(0);
+  expect(f.record()).toMatchObject({ state: "pending", revision: changed.revision });
+});
+
+it.each(["client", "tokens"] as const)("OAuth checks the stored %s issuer before dispatching a refresh", async kind => {
+  const f = oauthFixture(), state = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  const { record, context, value } = await storedOAuthValue(f, kind);
+  const changed = { ...record, revision: record.revision + 1, [kind]: await f.cipher.seal(context, { ...value, issuer: "https://other.provider.com" }) };
+  expect(f.repository.replace(changed, record.revision)).toBe(true);
+  f.now(); f.send.mockClear();
+  await expect(f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined)).rejects.toMatchObject({ code: "reauthorization_required" });
+  expect(f.send).not.toHaveBeenCalled(); expect(f.state.refreshes).toBe(0);
+  expect(f.record()).toMatchObject({ state: "ready", revision: changed.revision });
+});
+
+it("OAuth refreshes unstamped stored credentials against their saved discovery after restart", async () => {
+  const f = oauthFixture(), state = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  for (const kind of ["client", "tokens"] as const) {
+    const { record, context, value } = await storedOAuthValue(f, kind);
+    const { issuer: _issuer, ...unstamped } = value;
+    expect(f.repository.replace({ ...record, revision: record.revision + 1, [kind]: await f.cipher.seal(context, unstamped) }, record.revision)).toBe(true);
+  }
+  f.now(); f.send.mockClear();
+  const lease = await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  expect(lease.current()).toBe(true);
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(String(f.send.mock.calls[0]![0])).toBe(issuer + "/token");
+  expect((await storedOAuthValue(f, "tokens")).value.issuer).toBe(issuer);
+  expect(f.state).toEqual({ registration: 1, exchanges: 1, refreshes: 1 });
+});
+
+it("OAuth code exchange and refresh preserve an exact pathless resource indicator", async () => {
+  const f = oauthFixture(), resource = "https://mcp.provider.com";
+  f.resource(resource);
+  const state = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  f.now();
+  await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  const requests = f.send.mock.calls.filter(([url]) => String(url) === issuer + "/token");
+  expect(requests).toHaveLength(2);
+  expect(requests.map(([, init]) => new URLSearchParams(String(init?.body)).get("resource"))).toEqual([resource, resource]);
+});
+
 it.each([false, true])("opaque Cloudflare-style tokens survive exchange, persistence and refresh (CIMD=%s)", async cimd => {
   const f = oauthFixture(cimd), token = "synthetic-user:synthetic-grant:opaque-secret_9-";
   f.tokens({ access_token: token, refresh_token: "synthetic-user:synthetic-grant:refresh-secret", scope: "read:".repeat(1500) });

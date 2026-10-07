@@ -1,24 +1,31 @@
+import { centralRequestContract } from './request-contract.js';
+import { validSkillLifecycleReceipt } from './skill-lifecycle-receipts.js';
+import { validSkillSourceReceipt } from './skill-source-receipts.js';
+import { validServiceInspection, validRegistryPreview } from './service-receipts.js';
+import { classifyCentralFailure } from './failures.js';
+
 /** Network and receipt handling. The controller owns write admission. */
 export function createCentralApi({
   csrf,
   t,
   isCurrent,
   refreshRequired,
-  requireRefresh
+  requireRefresh,
+  sourceTimeoutMs
 }) {
   function assertCurrent() {
     if (!isCurrent()) throw new DOMException('View is no longer active', 'AbortError');
   }
   async function api(path, body, missing) {
     assertCurrent();
-    if (body && body.action !== 'preview' && refreshRequired()) throw new Error(t('refreshTheLibraryBeforeMakingAnotherChange'));
-    const serviceInput = path.startsWith('profiles/') && body?.action === 'connect';
-    const skillInput = path === 'skill-installations' || path.startsWith('skills/') && body?.action === 'preview';
+    const request = centralRequestContract(path, body, missing);
+    const { lifecycle, sourceAction, inspection, registry, mutation, scope } = request;
+    if (mutation && refreshRequired(scope)) throw new Error(t('refreshTheLibraryBeforeMakingAnotherChange'));
     var confirmedRejection = false,
       ctl = new AbortController(),
       timer = setTimeout(function () {
         ctl.abort();
-      }, 25000);
+      }, sourceAction && Number.isSafeInteger(sourceTimeoutMs) && sourceTimeoutMs > 0 ? sourceTimeoutMs : 25000);
     try {
       var response = await fetch('/admin/central/' + path, {
         method: body === undefined ? 'GET' : 'POST',
@@ -43,41 +50,17 @@ export function createCentralApi({
       }
       assertCurrent();
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
-      if (missing && body === undefined && path.startsWith('catalogs/') && response.ok && value.state === 'empty') return null;
-      if (body && path.startsWith('discovery/') && response.ok && value.state === 'authorization_required') return value;
       if (!response.ok) {
-        var code = value.error && value.error.code;
-        // Confirmed input and capacity rejections leave the form ready to use.
-        // Conflicts, authorization failures and uncertain writes still require refresh.
-        confirmedRejection = response.status === 400 && value.error?.operation_state === 'not_started'
-          && (serviceInput && ['central_invalid_request', 'central_invalid'].includes(code)
-            || path === 'skill-installations' && ['central_invalid_request', 'skill_invalid_package', 'skill_invalid'].includes(code));
-        if (response.status === 413 && skillInput && code === 'central_request_too_large' && value.error?.operation_state === 'not_started') {
-          confirmedRejection = true;
-          throw new Error(t('skillUploadTooLarge'));
-        }
-        if (response.status === 429 && path === 'skill-installations' && code === 'skill_capacity' && value.error?.operation_state === 'not_started') {
-          confirmedRejection = true;
-          throw new Error(t('skillLibraryLimitReached'));
-        }
-        if (response.status === 409 && path === 'skill-installations' && value.state === 'conflict') {
-          var conflict = new Error('skill_exists');
-          conflict.skillId = value.skill_id;
-          conflict.revision = value.current_revision;
-          throw conflict;
-        }
-        if (response.status === 409) throw new Error(t('thisItemChangedRefreshAndReviewItAgainBefore'));
-        if (response.status === 403) throw new Error(t('accessWasDeniedSignInAgainOrCheckThe'));
-        if (response.status === 400) throw new Error(t(serviceInput ? 'checkServiceNameAndPublicMcpUrl' : skillInput ? 'checkSkillFilesRequireNameAndDescription' : 'invalidActionRefreshLibrary'));
-        if (code === 'oauth_provider_unsupported') throw new Error(t('thisServiceDoesNotSupportAutomaticOauthConnectionCheck'));
-        if (code === 'oauth_configuration_required') throw new Error(t('oauthConfigurationRequired'));
-        if (code === 'remote_authorization_required' || code === 'oauth_reauthorization_required') throw new Error(t('signInToThisServiceAgainUsingReconnect'));
-        if (code === 'oauth_unavailable') throw new Error(t('authorizationCouldNotBeCompletedRefreshAndReconnectIf'));
-        if (code === 'remote_egress_denied' || code === 'remote_endpoint_denied' || code === 'central_disabled') throw new Error(t('enterAPublicHttpsMcpUrlPrivateAddressesAnd'));
-        throw new Error(t('operationCouldNotBeConfirmedRefreshTheCurrentState'));
+        const failure = classifyCentralFailure(request, response.status, value);
+        confirmedRejection = failure.confirmedNotStarted;
+        throw Object.assign(new Error(failure.message ?? t(failure.messageKey)), failure.details);
       }
-      var expected = body === undefined ? (['profiles', 'skills'].includes(path.split('?')[0]) ? 'listed' : 'found') : path === 'skill-installations' ? 'installed' : path === 'connections/begin' ? 'started' : path === 'connections/revoke' ? 'revoked' : body.action === 'preview' ? 'previewed' : 'written';
-      if (value.state !== expected) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      if (!request.states.includes(value.state)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      if (request.optionalCatalog && value.state === 'empty') return null;
+      if (lifecycle && !validSkillLifecycleReceipt(lifecycle, body, value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      if (sourceAction && !validSkillSourceReceipt(sourceAction, body, value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      if (inspection && !validServiceInspection(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      if (registry && !validRegistryPreview(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       // A successful state alone cannot supply the identity/revision needed by
       // the next workflow step. An incomplete write still requires reconciliation.
       if (body && path.startsWith('profiles/') && (value.profile?.profile_id !== decodeURIComponent(path.slice('profiles/'.length))
@@ -95,7 +78,7 @@ export function createCentralApi({
       }
       return value;
     } catch (error) {
-      if (body && body.action !== 'preview' && !confirmedRejection) requireRefresh();
+      if (mutation && !confirmedRejection) requireRefresh(scope);
       assertCurrent();
       if (error.name === 'AbortError') throw new Error(t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'));
       throw error;

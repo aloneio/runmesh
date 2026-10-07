@@ -91,7 +91,7 @@ for (const entry of ["initial", "mounted"]) test("OAuth return cleanup preserves
   t.after(() => { for (const [key, descriptor] of originalGlobals) descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete globalThis[key]; });
   const status = element(), create = element(), refresh = element(), draft = { value: "" };
   const list = { replaceChildren() {}, append() {} }, replacements = [], replacementLoading = [];
-  const app = { isConnected: true, setAttribute() {},
+  const app = { isConnected: true, setAttribute() {}, addEventListener() {},
     getAttribute: name => name === "data-skills" ? "false" : "fixture-csrf",
     querySelector: selector => ({ "[data-product-status]": status, "[data-service-list]": list,
       "[data-product-refresh]": refresh, "[data-service-create]": create })[selector] ?? null,

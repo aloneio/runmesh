@@ -1,12 +1,14 @@
 import type { WorkerEnv } from "../platform/env.js";
 import { SKILL_LIMITS, type CentralSkills } from "../contracts/skills.js";
 import { admitCentralAdmin, centralFailure, centralHeaders, cancelCentralBody } from "./central-boundary.js";
-import { parseSkillBundle, skillDigest, skillObject } from "../domain/skills/bundle.js";
+import { verifySkillBundle } from "../domain/skills/bundle.js";
+import { skillDigest, skillObject } from "../contracts/skill-values.js";
+import { sha256Hex } from "../security.js";
 import { isCapabilityIdentifier } from "../contracts/capabilities.js";
 import { listSkillLibraryResponse } from "./central-skill-library.js";
 import { matchIdentifierPath } from "./path-identifiers.js";
 
-function safeSkillResponse(raw: unknown, id: string): Record<string, unknown> | undefined {
+async function safeSkillResponse(raw: unknown, id: string): Promise<Record<string, unknown> | undefined> {
   const value = skillObject(raw); if (!value) return undefined;
   if (value.state === 'conflict') return Number.isSafeInteger(value.current_revision) && (value.current_revision as number) >= 0 ? { state: 'conflict', current_revision: value.current_revision } : undefined;
   if (['invalid', 'missing', 'denied', 'unavailable', 'capacity', 'unknown'].includes(String(value.state))) return { state: value.state };
@@ -19,7 +21,7 @@ function safeSkillResponse(raw: unknown, id: string): Record<string, unknown> | 
     result.head = { skill_id: id, revision: head.revision, staged_digest: head.staged_digest, active_digest: head.active_digest, enabled: head.enabled };
   }
   if (value.state !== 'written') {
-    const bundle = parseSkillBundle(value.bundle), digest = skillObject(value.bundle)?.digest;
+    const bundle = await verifySkillBundle(value.bundle, sha256Hex), digest = skillObject(value.bundle)?.digest;
     if (!bundle || bundle.skill_id !== id || !skillDigest(digest)) return undefined;
     result.bundle = { ...bundle, digest };
   }
@@ -53,7 +55,7 @@ export async function handleCentralSkills(request: Request, env: WorkerEnv, url:
       ? owner.inspectSkill(admission.session_hash, id, url.searchParams.get("digest") ?? undefined)
       : owner.mutateSkill(admission.session_hash, { ...admission.body, skill_id: id }),
     new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), SKILL_LIMITS.operation_ms + 1_000); })]);
-    const safe = safeSkillResponse(result, id);
+    const safe = await safeSkillResponse(result, id);
     if (!result || !safe) return centralFailure("central_result_unconfirmed", 503, "unknown");
     const status = ["found", "written", "previewed"].includes(result.state) ? 200 : result.state === "conflict" ? 409
       : result.state === "invalid" ? 400 : result.state === "denied" ? 403 : result.state === "missing" ? 404 : result.state === "capacity" ? 429 : 503;

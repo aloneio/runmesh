@@ -187,8 +187,15 @@ export class RunnerConnection {
     // `stop()` may be called while local state/policy is loading. Do not
     // blindly clear that stop request after the await and open a socket anyway.
     if (this.stopped || generation !== this.lifecycleGeneration) return;
-    const persisted = await this.policyStore.load(this.config.runnerId);
+    const persisted = await this.policyStore.load(this.config.runnerId, this.config);
     if (this.stopped || generation !== this.lifecycleGeneration) return;
+    // Re-enrollment (including a credential refresh with the same ID) must
+    // never inherit the previous connection's policy or revision floor.
+    this.appliedPolicyRevision = null;
+    this.appliedPolicyChecksum = null;
+    this.desiredPolicyRevision = 0;
+    this.desiredPolicyChecksum = "";
+    if (persisted === undefined) this.runtime.applyPolicy([]);
     if (persisted !== undefined) {
       try {
         const restored = await candidateWorkspaces(persisted, this.metadata.execution_mode, this.metadata.service_identity);
@@ -575,7 +582,7 @@ export class RunnerConnection {
     }
     try {
       const effective = effectivePolicyWorkspaces(policy, validation.workspaces);
-      await this.policyStore.activate(policy);
+      await this.policyStore.activate(policy, this.config);
       if (generation !== this.policyApplyGeneration || this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
       // Disk activation is complete before changing the live authorization policy.
       this.runtime.applyPolicy(effective);
@@ -618,7 +625,7 @@ export class RunnerConnection {
         protocol_version: PROTOCOL_CURRENT_VERSION,
         runner_id: this.config.runnerId,
         sent_at_ms: Date.now(),
-        active_job_ids: this.runtime.jobs.list().filter((job) => job.record_history !== false && ["queued", "running", "cancelling"].includes(job.status)).map((job) => job.job_id),
+        active_job_ids: this.runtime.jobs.activeHistoryJobIds(),
       }));
     } catch { /* close handler drives reconnect */ }
   }

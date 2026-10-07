@@ -4,6 +4,7 @@ import { RunnerUpdateMaintenance, type MaintenanceConnection } from "../src/plat
 import type { RunnerUpdateOperation } from "@aloneio/runmesh-protocol";
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, decodeWireFrame, encodeWireFrame } from "@aloneio/runmesh-protocol";
 import { RunnerDO } from "../src/runner-do.js";
+import { BridgeReplies } from "../src/platform/bridge-replies.js";
 import { internalHeaders } from "../src/security.js";
 
 const owner = { runner_id: "upgrade-test", operation_id: "operation-1", lifecycle_id: "a".repeat(64), manager_id: "manager-1", credential_version: 1 };
@@ -27,6 +28,142 @@ function scoped() { return env.RUNNER.get(env.RUNNER.idFromName(`update-maintena
 const active = (pending = 1): MaintenanceConnection => ({ lifecycle_id: owner.lifecycle_id, epoch: 4, session_id: "old-session", pending, open: true });
 
 describe("Runner update maintenance fencing", () => {
+  it("retains the newest disconnect while retrying an earlier failed uncertainty write", async () => {
+    await runInDurableObject(scoped(), async (_instance, state) => {
+      const f = fixture(state.storage); await call(f.maintenance, "begin");
+      const put = vi.spyOn(state.storage, "put").mockRejectedValue(new Error("uncertainty storage unavailable"));
+      try {
+        await expect(f.maintenance.disconnected({ ...active(), open: false })).rejects.toThrow("unavailable");
+        await expect(f.maintenance.disconnected({ ...active(), epoch: 5, session_id: "newer-session", open: false })).rejects.toThrow("unavailable");
+        put.mockRestore(); await f.maintenance.load();
+        expect(await state.storage.get("runner-update-uncertain-rpc-v1")).toEqual({
+          [owner.lifecycle_id]: { lifecycle_id: owner.lifecycle_id, epoch: 5, session_id: "newer-session" },
+        });
+        expect(await (await call(f.maintenance, "read")).json()).toEqual({ cloud_drained: false, cloud_uncertain: true });
+        expect((await call(f.maintenance, "drain-proof", { ...owner, old_process_stopped: true })).status).toBe(409);
+      } finally { put.mockRestore(); }
+    });
+  });
+
+  it("does not revive a proved disconnect before the restarted maintenance state loads", async () => {
+    await runInDurableObject(scoped(), async (_instance, state) => {
+      const f = fixture(state.storage); await call(f.maintenance, "begin");
+      const closed = { ...active(), open: false };
+      await f.maintenance.disconnected(closed);
+      expect((await call(f.maintenance, "drain-proof", { ...owner, old_process_stopped: true })).status).toBe(200);
+      const restarted = new RunnerUpdateMaintenance(f.ports);
+      const put = vi.spyOn(state.storage, "put");
+      try {
+        await restarted.disconnected(closed);
+        expect(await (await call(restarted, "read")).json()).toEqual({ cloud_drained: true, cloud_uncertain: false });
+        expect(put).not.toHaveBeenCalled();
+      } finally { put.mockRestore(); }
+    });
+  });
+
+  for (const key of ["runner-update-maintenance-v1", "runner-update-uncertain-rpc-v1"]) {
+    it(`retains disconnected work across a failed initial ${key} read and recovery without the socket`, async () => {
+      await runInDurableObject(scoped(), async (_existing, state) => {
+        await call(fixture(state.storage).maintenance, "begin");
+        const attachment = { runnerId: owner.runner_id, lifecycleId: owner.lifecycle_id, sessionId: "read-failure-session", epoch: 4,
+          credentialVersion: 1, protocolVersion: PROTOCOL_CURRENT_VERSION, authenticated: true,
+          helloDeadlineMs: Date.now() + 60_000, pendingUpdateRpcIds: ["pending-rpc"] };
+        const socket = { readyState: WebSocket.CLOSED, deserializeAttachment: () => attachment } as unknown as WebSocket;
+        let sockets = [socket];
+        const statePort = new Proxy(state, { get(target, key) {
+          if (key === "getWebSockets") return () => sockets;
+          const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+        } });
+        const replies = new BridgeReplies(), resolve = vi.fn(), registry = vi.fn(async () => new Response(null, { status: 204 }));
+        const timer = setTimeout(() => undefined, 60_000);
+        replies.register("pending-rpc", { socket, timer, resolve });
+        const instance = new RunnerDO(statePort, env, { replies, registryRequest: registry });
+        const originalGet = state.storage.get.bind(state.storage);
+        const get = vi.spyOn(state.storage, "get").mockImplementation(((...args: unknown[]) => {
+          if (args[0] === key) return Promise.reject(new Error("initial maintenance read unavailable"));
+          return (originalGet as (...values: unknown[]) => Promise<unknown>)(...args);
+        }) as typeof state.storage.get);
+        try {
+          await expect(instance.webSocketClose(socket)).rejects.toThrow("initial maintenance read unavailable");
+          expect(replies.size).toBe(0); expect(resolve).toHaveBeenCalledTimes(1); expect(registry).toHaveBeenCalledTimes(1);
+          sockets = []; get.mockRestore();
+          const path = `/update-maintenance/read?operation_id=${owner.operation_id}&lifecycle_id=${owner.lifecycle_id}`;
+          const read = async (target: RunnerDO) => target.fetch(new Request(`https://runner.internal${path}`, {
+            headers: await internalHeaders("test-internal-control-secret-not-for-production", "GET", path, ""),
+          }));
+          expect(await (await read(instance)).json()).toEqual({ cloud_drained: false, cloud_uncertain: true });
+          const restarted = new RunnerDO(statePort, env, { registryRequest: registry });
+          expect(await (await read(restarted)).json()).toEqual({ cloud_drained: false, cloud_uncertain: true });
+        } finally { get.mockRestore(); clearTimeout(timer); replies.forget("pending-rpc"); }
+      });
+    });
+  }
+
+  for (const event of ["close", "error"] as const) for (const fault of ["none", "uncertainty", "reply", "registry", "alarm", "combined"] as const) {
+    it(`${event} independently cleans up transport and retains maintenance evidence when ${fault} fails`, async () => {
+      await runInDurableObject(scoped(), async (_existing, state) => {
+        await call(fixture(state.storage).maintenance, "begin");
+        const alarmAt = Date.now() + 60_000;
+        await state.storage.setAlarm(alarmAt);
+        const attachment = { runnerId: owner.runner_id, lifecycleId: owner.lifecycle_id, sessionId: "closed-session", epoch: 4,
+          credentialVersion: 1, protocolVersion: PROTOCOL_CURRENT_VERSION, authenticated: true,
+          helloDeadlineMs: alarmAt, pendingUpdateRpcIds: ["pending-rpc"] };
+        const socket = { readyState: WebSocket.CLOSED, deserializeAttachment: () => attachment } as unknown as WebSocket;
+        const statePort = new Proxy(state, { get(target, key) {
+          if (key === "getWebSockets") return () => [socket];
+          const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+        } });
+        const replies = new BridgeReplies(), resolve = vi.fn();
+        if (fault === "reply" || fault === "combined") resolve.mockImplementation(() => { throw new Error("reply unavailable"); });
+        const timer = setTimeout(() => undefined, 60_000);
+        replies.register("pending-rpc", { socket, timer, resolve });
+        const registry = vi.fn(async (_id: string, path: string, init?: RequestInit) => {
+          if (path !== "/disconnect") throw new Error(`unexpected registry route: ${path}`);
+          expect(JSON.parse(String(init?.body))).toMatchObject({ epoch: 4, state: event === "close" ? "offline" : "stale" });
+          if (fault === "registry" || fault === "combined") throw new Error("registry unavailable");
+          return new Response(null, { status: 204 });
+        });
+        const instance = new RunnerDO(statePort, env, { replies, registryRequest: registry });
+        const originalPut = state.storage.put.bind(state.storage);
+        const put = vi.spyOn(state.storage, "put").mockImplementation(((...args: unknown[]) => {
+          if (args[0] === "runner-update-uncertain-rpc-v1" && (fault === "uncertainty" || fault === "combined")) throw new Error("uncertainty write unavailable");
+          return (originalPut as (...values: unknown[]) => Promise<void>)(...args);
+        }) as typeof state.storage.put);
+        const removeAlarm = vi.spyOn(state.storage, "deleteAlarm");
+        if (fault === "alarm" || fault === "combined") removeAlarm.mockRejectedValue(new Error("alarm unavailable"));
+        try {
+          const closed = event === "close" ? instance.webSocketClose(socket) : instance.webSocketError(socket);
+          if (fault === "none") await closed;
+          else if (fault === "combined") await expect(closed).rejects.toBeInstanceOf(AggregateError);
+          else await expect(closed).rejects.toThrow("unavailable");
+          expect(replies.size).toBe(0);
+          expect(resolve).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: "rpc.error", request_id: "pending-rpc",
+            error: expect.objectContaining({ code: "runner_offline" }) }));
+          expect(registry).toHaveBeenCalledTimes(1);
+          expect(removeAlarm).toHaveBeenCalledTimes(1);
+          expect(await state.storage.getAlarm()).toBe(fault === "alarm" || fault === "combined" ? alarmAt : null);
+          expect(attachment.pendingUpdateRpcIds).toEqual(["pending-rpc"]);
+          const path = `/update-maintenance/read?operation_id=${owner.operation_id}&lifecycle_id=${owner.lifecycle_id}`;
+          if (fault === "uncertainty" || fault === "combined") {
+            const unavailable = await instance.fetch(new Request(`https://runner.internal${path}`, { headers: await internalHeaders("test-internal-control-secret-not-for-production", "GET", path, "") }));
+            expect(unavailable.status).toBe(503);
+          }
+          put.mockRestore();
+          const response = await instance.fetch(new Request(`https://runner.internal${path}`, { headers: await internalHeaders("test-internal-control-secret-not-for-production", "GET", path, "") }));
+          expect(await response.json()).toEqual({ cloud_drained: false, cloud_uncertain: true });
+          if (fault === "uncertainty") {
+            if (event === "close") await instance.webSocketClose(socket);
+            else await instance.webSocketError(socket);
+            expect(await state.storage.get("runner-update-uncertain-rpc-v1")).toEqual({ [owner.lifecycle_id]: { lifecycle_id: owner.lifecycle_id, epoch: 4, session_id: "closed-session" } });
+            expect(resolve).toHaveBeenCalledTimes(1);
+          }
+        } finally {
+          put.mockRestore(); removeAlarm.mockRestore(); clearTimeout(timer); replies.forget("pending-rpc"); await state.storage.deleteAlarm();
+        }
+      });
+    });
+  }
+
   it("retries a failed initial storage read and recovers the persisted fence without writing", async () => {
     await runInDurableObject(scoped(), async (_instance, state) => {
       const f = fixture(state.storage); await call(f.maintenance, "begin");

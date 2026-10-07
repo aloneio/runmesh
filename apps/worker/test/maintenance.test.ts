@@ -45,7 +45,7 @@ describe("maintenance bootstrap", () => {
     const html = await response.text();
     expect(html).toContain("/runner/uninstall.sh"); expect(html).toContain("/runner/uninstall.ps1");
     for (const command of [...html.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)].map((m) => m[1]!)) {
-      if (command.includes("uninstall.")) { expect(command).not.toContain(code); expect(command).toContain("--purge --yes"); expect(command).not.toContain("\n"); }
+      if (command.includes("uninstall.")) { expect(command).not.toContain(code); expect(command.replaceAll("&#039;", "")).toContain("--purge --yes"); expect(command).not.toContain("\n"); }
     }
   });
 });

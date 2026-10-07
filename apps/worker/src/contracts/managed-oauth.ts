@@ -45,7 +45,7 @@ export interface ManagedOAuthProtocol {
   complete(input: TokenOperation & { readonly discovery: ManagedOAuthDocument; readonly client: unknown;
     readonly verifier: unknown; readonly code: string; readonly issuer?: string }): Promise<ManagedOAuthTokens>;
   refresh(input: TokenOperation & { readonly discovery: ManagedOAuthDocument; readonly client: unknown;
-    readonly refresh_token: string }): Promise<ManagedOAuthTokens>;
+    readonly refresh_token: string; readonly issuer?: string }): Promise<ManagedOAuthTokens>;
 }
 export interface ManagedOAuthPorts {
   readonly repository: ManagedOAuthRepository; readonly cipher: SecretStorage; readonly protocol: ManagedOAuthProtocol;

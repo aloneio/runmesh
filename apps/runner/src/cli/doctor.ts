@@ -74,8 +74,8 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
   const safeProfileFile = ownerOnlyProfile ? permissions.file_mode === 0o600 : permissions.file_mode === 0o600 || permissions.file_mode === 0o640;
   const expectedDirectoryModes = ownerOnlyProfile ? "0700" : "0700 or 0750";
   const expectedFileModes = ownerOnlyProfile ? "0600" : "0600 or 0640";
-  add("profile_directory_permissions", true, enrolled && (!posix || safeProfileDirectory), !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.directory_mode)} (expected ${expectedDirectoryModes})` : "ACL permissions not inspected");
-  add("profile_file_permissions", true, enrolled && (!posix || safeProfileFile), !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.file_mode)} (expected ${expectedFileModes})` : "ACL permissions not inspected");
+  add("profile_directory_permissions", posix, enrolled && posix && safeProfileDirectory, !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.directory_mode)} (expected ${expectedDirectoryModes})` : "Windows ACLs have not been checked");
+  add("profile_file_permissions", posix, enrolled && posix && safeProfileFile, !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.file_mode)} (expected ${expectedFileModes})` : "Windows ACLs have not been checked");
   // Mode bits alone do not establish who controls a privileged profile: a
   // hostile account can create an apparently private 0600 file and a root
   // process would otherwise accept it.  Check the canonical POSIX owner/group
@@ -176,7 +176,8 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
     else {
       const desired = revision.desired; const applied = revision.applied;
       const valid = (desired === undefined || Number.isSafeInteger(desired) && desired >= 0) && (applied === undefined || Number.isSafeInteger(applied) && applied >= 0);
-      add("policy_revision", false, valid, valid ? `desired=${desired ?? "unknown"}, applied=${applied ?? "unknown"}` : "invalid revision");
+      const aligned = valid && desired !== undefined && applied !== undefined && desired === applied;
+      add("policy_revision", false, aligned, valid ? `desired=${desired ?? "unknown"}, applied=${applied ?? "unknown"}` : "invalid revision");
     }
   } catch (error) { add("policy_revision", false, false, errorMessage(error)); }
   return {

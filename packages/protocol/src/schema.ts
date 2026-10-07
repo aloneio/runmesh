@@ -24,7 +24,7 @@ export const IdentifierSchema = z
   .max(128)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe identifier");
 const ShortTextSchema = z.string().min(1).max(4_096);
-const TimestampSchema = z.number().int().nonnegative();
+const TimestampSchema = z.number().int().nonnegative().max(8_640_000_000_000_000);
 
 export type JsonValue =
   | null

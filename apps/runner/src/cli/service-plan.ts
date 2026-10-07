@@ -1,6 +1,7 @@
-import type { CliDependencies } from "./contracts.js";
+import type { ServiceCliDependencies } from "./contracts.js";
 import type { ExecutionMode } from "../service.js";
 import { ensureManagedUserLaunch } from "../services/user-launch.js";
+import { ensureManagedServiceDefinition } from "../services/manifest.js";
 import { hostServiceManifestFilesystem } from "../service.js";
 import { isManagedService } from "../service.js";
 import { managedServiceManifestFromContent } from "../service.js";
@@ -99,7 +100,7 @@ export async function serviceManifestFor(parsed: ParsedCommand, store: ProfileSt
       return rewriteManagedServiceExecutionMode(desired, existing, desired.executionMode);
     }
     const preserved = managedServiceManifestFromContent(desired, existing, desired.executionMode);
-    return parsed.command === "install" ? ensureManagedUserLaunch(preserved) : preserved;
+    return needsExplicitMode ? ensureManagedServiceDefinition(parsed.command === "install" ? ensureManagedUserLaunch(preserved) : preserved) : preserved;
   }
 
   // An explicit executable path is an intentional service-definition update,
@@ -113,7 +114,7 @@ export async function serviceManifestFor(parsed: ParsedCommand, store: ProfileSt
   return manifest;
 }
 
-export function assertSystemInstallationPrivilege(manifest: ServiceManifest, dependencies: CliDependencies): void {
+export function assertSystemInstallationPrivilege(manifest: ServiceManifest, dependencies: ServiceCliDependencies): void {
   if (manifest.mode !== "system") return;
   const elevated = dependencies.isAdministrator ?? (() => {
     if (manifest.platform !== "win32") return process.getuid?.() === 0;

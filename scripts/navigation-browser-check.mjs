@@ -114,9 +114,22 @@ export async function checkAdminNavigation(executable) {
         assert.equal(await label.inputValue(), 'Unsaved connection label', 'Native Back after a same-page fragment keeps the draft');
         assert.equal(requests.filter(request => request.path === '/admin/clients').length, reads, 'Native Back after a same-page fragment does not reload');
       }
+      await page.context().route('https://github.com/aloneio/runmesh', route => route.fulfill({ contentType: 'text/html', body: '<title>Repository fixture</title>' }));
+      const consoleUrl = page.url();
+      const opened = page.waitForEvent('popup');
+      await page.locator('.brand').focus();
+      await page.keyboard.press('Enter');
+      const repository = await opened;
+      try {
+        await repository.waitForURL('https://github.com/aloneio/runmesh');
+        assert.equal(await repository.evaluate(() => window.opener), null, 'Repository opens without access to the console window');
+        assert.equal(page.url(), consoleUrl, 'Opening the repository keeps the console on its current page');
+        assert.equal(await label.inputValue(), 'Unsaved connection label', 'Opening the repository preserves unsaved form values');
+        assert.equal(requests.filter(request => request.path === '/admin/clients').length, reads, 'The repository link bypasses internal navigation');
+      } finally { await repository.close(); }
     } finally { await page.close(); }
     assert.deepEqual(errors, []);
-    return { state: 'passed', scenarios: scenarios.length + 7, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, fragment_focus_and_scroll_restored: true, resized_same_page_fragments_visible: true, same_page_forms_preserved: true, screenshots: 0 };
+    return { state: 'passed', scenarios: scenarios.length + 8, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, fragment_focus_and_scroll_restored: true, resized_same_page_fragments_visible: true, same_page_forms_preserved: true, repository_link_preserves_console: true, screenshots: 0 };
   } finally {
     await browser?.close();
     server.closeAllConnections();

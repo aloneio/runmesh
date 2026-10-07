@@ -94,8 +94,8 @@ describe("hosted installer origin and template safety", () => {
     const commands = [...hostedHtml.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)].map((match) => match[1]);
     expect(commands.length).toBeGreaterThanOrEqual(3);
     for (const command of commands.slice(0, 3)) expect(command).toContain(code);
-    expect(commands[0]).toContain(`sudo sh -s -- &#039;${code}&#039;`);
-    expect(commands[1]).toContain(`sudo sh -s -- &#039;${code}&#039;`);
+    expect(commands[0]).toContain(`sudo sh &quot;$runmesh_script&quot; &#039;${code}&#039;`);
+    expect(commands[1]).toContain(`sudo sh &quot;$runmesh_script&quot; &#039;${code}&#039;`);
     expect(commands[2]).toContain(`.Content)) &#039;${code}&#039;&quot;`);
     expect(hostedHtml).toContain("-NonInteractive");
     expect(hostedHtml).toContain("Run the command for your operating system to install and start the Runner.");

@@ -1,6 +1,7 @@
 {
   "baseline": "88b119782d26316d68eeaa98a47d71dbe4382193",
   "clock_ms": 1900000000000,
+  "product_version": "0.1.7",
   "baseline_file_sha256": "a9f2a3653c0de403a83fb7fe1fc1da92501ddd7dd11b697e57fd551c71673ed2",
   "cases": [
     {
@@ -10,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "96682c11209a14126997d4f96af86ea1f8d675555cac7627145568f05da5e709",
-      "bytes": 132674,
+      "sha256": "d0ef13ea1e53df1c50ace8aa3c758519faba3f680e95bb490b9c7720a86599a0",
+      "bytes": 180216,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +33,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "fae96851c5bb443e06abf512f127497f64f30658ac8820beb26a6bd4e93b2303",
-      "bytes": 133262,
+      "sha256": "ea70e9360e8ee05e21b6635b2689c12140b3968b92b1fc69862bd8b57d70c971",
+      "bytes": 180804,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +52,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "11bbff975827aca2a9d49f829e80d1b646eea53c253426cbb86ea7f3f9b0901a",
-      "bytes": 135624,
+      "sha256": "a4918eb31c77e567a4e23d17b6d0e020131a717e981df54924af664a2ffc5cdd",
+      "bytes": 183279,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -295,8 +296,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "b14cdb9d3d33608deca974bbfd99f71e7bfda34b57f2c8cdf0e0c336a664de72",
-      "bytes": 3615,
+      "sha256": "eb7a0de4d6766c12291872adfd0584f85b479a0a157e95342cf5d8733e73880b",
+      "bytes": 3622,
       "presentation": {
         "configuredModes": {},
         "maxValidityDays": 3650
@@ -350,8 +351,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "5804285d2503ba0f7bcfa14a96a27fed7066c74a4c56e7f2bd82a26146d4f4b4",
-      "bytes": 7830,
+      "sha256": "90105c7dea0185abfa03c754d9b0a9b7d9be16eaa4ae4cfb937eb8e7886c9203",
+      "bytes": 7844,
       "presentation": {
         "configuredModes": {
           "runner-fixture": null
@@ -395,8 +396,8 @@
           "distributable": true
         }
       ],
-      "sha256": "c5f62420ef4d8d42437700bec9427b4b82315515d7e4fa3d7dce8b7e68956b40",
-      "bytes": 14727,
+      "sha256": "748d2f9e8c0b7db7356b6bcf50f1584ae39a32cc5f2700957c6e0a51f18f2531",
+      "bytes": 14903,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
@@ -422,8 +423,8 @@
           }
         ]
       ],
-      "sha256": "fd57bc0bdc9d4a7fcff1e0d6d4a43973fe6c513f39b10e300385f5bd2ccec00d",
-      "bytes": 135973,
+      "sha256": "94f3b27fff7ec033412e28681e291ea25c14f65c2b463491e822a72d69c68e91",
+      "bytes": 183628,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -864,6 +865,341 @@
         "name": "admin-document",
         "bytes": 137608,
         "sha256": "d5e78511d5a3e3e5b5cfa6c986d7f10c2a15ce59dac1212c0b055705b13dd479"
+      }
+    ]
+  },
+  "implementation_plan_review": {
+    "source_base": "97561adf8faeaebd1d68d14bfd09a853da37dade",
+    "reviewed_change": "Reviewed modular Skill lifecycle controls for version history, comparison, rollback, retention and cleanup; pinned GitHub source preview and installation; MCP connection inspection; and Registry server.json preview that fills the connection form. Frontend receipt validation, state invalidation and source deadlines remain in their dedicated modules. Independently rebuilt the starting browser source and verified every renderer against its previous hash and byte count by replacing only the owned inline script; all non-script markup remains unchanged.",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "96682c11209a14126997d4f96af86ea1f8d675555cac7627145568f05da5e709",
+        "bytes": 132674
+      },
+      {
+        "name": "setup",
+        "sha256": "fae96851c5bb443e06abf512f127497f64f30658ac8820beb26a6bd4e93b2303",
+        "bytes": 133262
+      },
+      {
+        "name": "secret",
+        "sha256": "11bbff975827aca2a9d49f829e80d1b646eea53c253426cbb86ea7f3f9b0901a",
+        "bytes": 135624
+      },
+      {
+        "name": "admin-document",
+        "sha256": "fd57bc0bdc9d4a7fcff1e0d6d4a43973fe6c513f39b10e300385f5bd2ccec00d",
+        "bytes": 135973
+      }
+    ]
+  },
+  "module_review": {
+    "source_baseline": "79780c1b99ef7b519c89bf14c3af00f070d4b9b7e2562b906964d06cbdbd95b5",
+    "reviewed_change": "Disable connection inspection for paused MCP profiles; describe unpinning independently of cleanup eligibility; preserve the selected Skill version for file viewing and re-enabling, with an explicit latest-upload entry. Rebuilt the prior browser bundle from the verified Linux source copy and restored all prior renderer hashes by replacing only the inline bundle.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "89458bd6f44aa45b3cf21e2efe214d3364824638e214b47258cce27265b71ac5",
+        "bytes": 169710
+      },
+      {
+        "name": "setup",
+        "sha256": "f7adf6dcce1fd502b9ba000878387bc8be5c2c020a50a0f3c321ad0b179938e3",
+        "bytes": 170298
+      },
+      {
+        "name": "secret",
+        "sha256": "669f39cf0ac7c288bab1f137fbfc4fa4a83141b688099aec8d32d63640bffd20",
+        "bytes": 172660
+      },
+      {
+        "name": "admin-document",
+        "sha256": "a4bae31b9d22e77f8de186ff0aec8ecb17508ccb43c1e3fb4487c788f745d057",
+        "bytes": 173009
+      }
+    ]
+  },
+  "decoupling_review": {
+    "source_baseline": "d02df6adc8899e8ebf1251c16eade42df925142105e7ed504f348f869db72c8a",
+    "reviewed_change": "Extract Central error classification into a pure module while preserving message keys, error metadata, refresh admission and branch order. Rebuilt the previously verified browser source archive and restored every prior renderer hash and byte count by replacing only the inline bundle.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "c7fee5f2a5fa08fdbd35a87d733cfabf020ad0b859315a84362661bd77957c62",
+        "bytes": 170094
+      },
+      {
+        "name": "setup",
+        "sha256": "3932d1c026f655d80014b72e16a0f4e5f291e95657995d08833744d8605f61e3",
+        "bytes": 170682
+      },
+      {
+        "name": "secret",
+        "sha256": "d969667406b7e8447794c42afa5c1c1c1d610b345764dd74bc6bce5142b77496",
+        "bytes": 173044
+      },
+      {
+        "name": "admin-document",
+        "sha256": "22b7a2b2c222e557f174bc92042ebdbfeb460ffb35828f2dc28c68d2ed1b378d",
+        "bytes": 173393
+      }
+    ]
+  },
+  "decoupling_followup_review": {
+    "source_baseline": "e3ac58ebf278464bc5e787fd7ec21affb3fac6fa7c66b5559e6a8ee9c14a7d1a",
+    "reviewed_change": "Move feature panel cleanup to its owning workflow; view invalidation only broadcasts. Preserve markup, labels and request behavior. Rebuilt the prior verified browser source and restored every renderer hash and byte count by replacing only the inline bundle.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "1ea820db835178dfaed9ae5f0e0b2fbbef5fb1bcbd9ac446038abbabe2217baf",
+        "bytes": 170129
+      },
+      {
+        "name": "setup",
+        "sha256": "2b748889bda4fb353dc19d244b46458d8770bd9e031b49f35a20c7fe0156b9d8",
+        "bytes": 170717
+      },
+      {
+        "name": "secret",
+        "sha256": "4b19d824a777efb3ff137929dec0c72461cb8ec15d6dc5f94635431de48b2769",
+        "bytes": 173079
+      },
+      {
+        "name": "admin-document",
+        "sha256": "123113569b24b7a8c1c9c3b8f3f74263b34213053d245a46f0af94aca72e5cce",
+        "bytes": 173428
+      }
+    ]
+  },
+  "scoped_central_recovery_review": {
+    "reviewed_change": "Scope central operations and uncertain-write reconciliation by MCP connection and Skill workflow; background recovery preserves independent operations. Native log selectors gain localized labels, outside these render cases.",
+    "renderer_source_matches_frozen_manifest": true,
+    "bundle_bytes": 108196,
+    "delta_bytes": 8648,
+    "changed": [
+      {
+        "name": "login",
+        "previous": {
+          "bytes": 170189,
+          "sha256": "c980b54cb7f23c3352d4130495e9b15351624e4d72ac3083fd194dd9d4fcc7ea"
+        },
+        "next": {
+          "bytes": 178837,
+          "sha256": "d2b16dbb9baaabe60f0302648b3ea6471e5745d07a66fb6d3e650ccdc98513b7"
+        }
+      },
+      {
+        "name": "setup",
+        "previous": {
+          "bytes": 170777,
+          "sha256": "21e9ddd97e6fd48247a199c21e15c0949ec1208f6fabe6f8302328deff171115"
+        },
+        "next": {
+          "bytes": 179425,
+          "sha256": "1c51024eb2b08d7094314f2121a1bff938a78d249b2f6eb0370108c842954538"
+        }
+      },
+      {
+        "name": "secret",
+        "previous": {
+          "bytes": 173139,
+          "sha256": "2731609f602619e8a275561a9bd4fd59ae93b7409ac33180d0d12964853521a6"
+        },
+        "next": {
+          "bytes": 181787,
+          "sha256": "f1e2285821a686db8305201d1b2e2960fdcf195f88c86d3cc974aa37c05e5c7f"
+        }
+      },
+      {
+        "name": "admin-document",
+        "previous": {
+          "bytes": 173488,
+          "sha256": "422ed7aac0c3c134b805457dd44e36ce4eb2e1b6dcf302bb0af5a30f6c9171e9"
+        },
+        "next": {
+          "bytes": 182136,
+          "sha256": "eda04e1107e7d83c65affaca2ddba645a8e14c541c0a498152947e06438ca28e"
+        }
+      }
+    ]
+  },
+  "oauth_and_raw_data_review": {
+    "reviewed_change": "OAuth handoff is owned by the latest foreground authorization intent. Runner machine values receive data-no-i18n annotations; labels and layout retain their prior content. Every previous fixture is independently reproduced from the frozen R2 source archive.",
+    "prior_manifest": ".audit/r2-fixes-final-source-20261007.json",
+    "changes": [
+      {
+        "name": "login",
+        "previous": {
+          "bytes": 178837,
+          "sha256": "d2b16dbb9baaabe60f0302648b3ea6471e5745d07a66fb6d3e650ccdc98513b7"
+        },
+        "next": {
+          "bytes": 179730,
+          "sha256": "e5fc59a84d30b2dd49237352979dc0badc520b58c30f97c73493a70cdfbe39a3"
+        },
+        "script_only": true
+      },
+      {
+        "name": "setup",
+        "previous": {
+          "bytes": 179425,
+          "sha256": "1c51024eb2b08d7094314f2121a1bff938a78d249b2f6eb0370108c842954538"
+        },
+        "next": {
+          "bytes": 180318,
+          "sha256": "4347ec8136c0fb813706015499ea9bddb4d0a787ab7d9d3a69afce3199c35e66"
+        },
+        "script_only": true
+      },
+      {
+        "name": "secret",
+        "previous": {
+          "bytes": 181787,
+          "sha256": "f1e2285821a686db8305201d1b2e2960fdcf195f88c86d3cc974aa37c05e5c7f"
+        },
+        "next": {
+          "bytes": 182680,
+          "sha256": "f2e46ab0b08f2a59dbbb36ed6c0e9ababa9c7e3d6227ecf6b906a6dbfb31ce47"
+        },
+        "script_only": true
+      },
+      {
+        "name": "runner-detail",
+        "previous": {
+          "bytes": 14727,
+          "sha256": "c5f62420ef4d8d42437700bec9427b4b82315515d7e4fa3d7dce8b7e68956b40"
+        },
+        "next": {
+          "bytes": 14896,
+          "sha256": "9cc1345006b38095e9c9d014334d9e6ffbdb2cb111a7362f988e1b0e4949dea4"
+        },
+        "script_only": false
+      },
+      {
+        "name": "admin-document",
+        "previous": {
+          "bytes": 182136,
+          "sha256": "eda04e1107e7d83c65affaca2ddba645a8e14c541c0a498152947e06438ca28e"
+        },
+        "next": {
+          "bytes": 183029,
+          "sha256": "20046c702d17de0a052e2419477b5915991996d69020742ae02a713fb6a09f7d"
+        },
+        "script_only": true
+      }
+    ],
+    "scriptChanges": [
+      {
+        "nonce": null,
+        "previous_sha256": "b7b81932b55e63de76b9787272863291a39da97bf5b888da3bb8b65f1045e2c6",
+        "sha256": "c6abdc0271999f48636f216d9636d0a4ebde87c8e196b23fd175378a2ea4e976"
+      },
+      {
+        "nonce": "test-nonce",
+        "previous_sha256": "17bb71802b057065fd4b0a0457591de4e4a0c95012ac435c4e005cb05e1235b1",
+        "sha256": "370064df3f0f08f531cb4b5fe7af366ca4314a9de32e04eb375fe3e64fbda90f"
+      }
+    ]
+  },
+  "identifier_input_review": {
+    "reviewed_change": "Use one Unicode-sets-compatible identifier input pattern matching the server length bound; preserve raw workspace IDs in deletion placeholders. Reversing only these changes reproduces each prior byte count and hash.",
+    "changes": [
+      {
+        "name": "runners-empty",
+        "previous": {
+          "bytes": 3615,
+          "sha256": "b14cdb9d3d33608deca974bbfd99f71e7bfda34b57f2c8cdf0e0c336a664de72"
+        },
+        "next": {
+          "bytes": 3622,
+          "sha256": "eb7a0de4d6766c12291872adfd0584f85b479a0a157e95342cf5d8733e73880b"
+        }
+      },
+      {
+        "name": "runners-populated",
+        "previous": {
+          "bytes": 7830,
+          "sha256": "5804285d2503ba0f7bcfa14a96a27fed7066c74a4c56e7f2bd82a26146d4f4b4"
+        },
+        "next": {
+          "bytes": 7844,
+          "sha256": "90105c7dea0185abfa03c754d9b0a9b7d9be16eaa4ae4cfb937eb8e7886c9203"
+        }
+      },
+      {
+        "name": "runner-detail",
+        "previous": {
+          "bytes": 14896,
+          "sha256": "9cc1345006b38095e9c9d014334d9e6ffbdb2cb111a7362f988e1b0e4949dea4"
+        },
+        "next": {
+          "bytes": 14903,
+          "sha256": "748d2f9e8c0b7db7356b6bcf50f1584ae39a32cc5f2700957c6e0a51f18f2531"
+        }
+      }
+    ]
+  },
+  "request_contract_review": {
+    "source_baseline": "74d4ca566f2cc1ab18be170859dc1360800cdf7bd33d615b29b1649e66a0ea88",
+    "reviewed_change": "Centralize request recovery scopes, read/write classification and successful receipt states in a pure browser contract. Workflows no longer import DOM operation admission for scope values; controller API callbacks receive only resource scopes. Binding ownership uses a module WeakSet. Independently rebuilding the accepted source archive and substituting only its browser bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "e5fc59a84d30b2dd49237352979dc0badc520b58c30f97c73493a70cdfbe39a3",
+        "bytes": 179730
+      },
+      {
+        "name": "setup",
+        "sha256": "4347ec8136c0fb813706015499ea9bddb4d0a787ab7d9d3a69afce3199c35e66",
+        "bytes": 180318
+      },
+      {
+        "name": "secret",
+        "sha256": "f2e46ab0b08f2a59dbbb36ed6c0e9ababa9c7e3d6227ecf6b906a6dbfb31ce47",
+        "bytes": 182680
+      },
+      {
+        "name": "admin-document",
+        "sha256": "20046c702d17de0a052e2419477b5915991996d69020742ae02a713fb6a09f7d",
+        "bytes": 183029
+      }
+    ]
+  },
+  "header_brand_review": {
+    "reviewed_change": "The shared control-panel logo opens the project repository in a separate tab, preserving the current console form. A visible product-version badge reads the generated product version and stacks below the logo on small screens. Changes are limited to the header and its shared CSS; all other markup and the browser bundle are byte-for-byte unchanged.",
+    "unrelated_markup_and_browser_bundle_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "975fc2586a5e33a82788ae100bed0cc8b8525be5a53655a70f488c22c83aa11c",
+        "bytes": 179884
+      },
+      {
+        "name": "setup",
+        "sha256": "85698f63ff3c652bffb2c93416b3754bde9b4263ef173747634a05af50cb7328",
+        "bytes": 180472
+      },
+      {
+        "name": "secret",
+        "sha256": "fb36583d06fa5cb4dad94b1da82a41a68375527e1e29c99386b08e67eb5f45ec",
+        "bytes": 182834
+      },
+      {
+        "name": "admin-document",
+        "sha256": "a0b0bafcc156abae25e5203bc9d8d83acf05847eb0395f93682290e31870c920",
+        "bytes": 183183
       }
     ]
   }

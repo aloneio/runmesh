@@ -3,6 +3,7 @@ import { catalogDigest, catalogJson, catalogRevision } from "../../contracts/cat
 import { parseCatalogHead, parseCatalogSnapshot, parseToolNames } from "../../contracts/catalog-values.js";
 import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
 import { newCatalogCursorKey } from "./catalog-crypto.js";
+import { catalogEvictions } from "./catalog-store-retention.js";
 
 type Storage = Pick<DurableObjectStorage, "sql" | "transactionSync">;
 
@@ -89,9 +90,9 @@ export class CatalogState implements CatalogRepository {
       const previous = this.readSnapshot(snapshot.profile_id, snapshot.digest);
       if (previous !== undefined && catalogJson(previous, CATALOG_LIMITS.snapshot_bytes) !== canonical) throw new Error("catalog_digest_conflict");
       if (previous === undefined) {
-        const budget = this.storage.sql.exec<{ n: number; bytes: number }>("SELECT COUNT(*) AS n,COALESCE(SUM(bytes),0) AS bytes FROM catalog_snapshots_v1").one();
-        const versions = this.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_snapshots_v1 WHERE profile_id=?", snapshot.profile_id).one().n;
-        if (budget.n >= CATALOG_LIMITS.snapshots || budget.bytes + bytes > CATALOG_LIMITS.storage_bytes || versions >= CATALOG_LIMITS.versions_per_profile) return { state: "capacity" };
+        const evictions = catalogEvictions(this.storage.sql, snapshot.profile_id, bytes, id => this.readHead(id));
+        if (evictions === undefined) return { state: "capacity" };
+        for (const item of evictions) this.storage.sql.exec("DELETE FROM catalog_snapshots_v1 WHERE profile_id=? AND digest=?", item.profile_id, item.digest);
         this.storage.sql.exec("INSERT INTO catalog_snapshots_v1 VALUES (?,?,?,?)", snapshot.profile_id, snapshot.digest, bytes, canonical);
       }
       return this.writeHead({ schema_version: 1, profile_id: snapshot.profile_id, revision: revision + 1, observed_digest: snapshot.digest,

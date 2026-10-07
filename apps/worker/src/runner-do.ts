@@ -1,3 +1,4 @@
+import { type AdmissionState, type MutationPhase, type RunnerConnectionIdentity, FENCED_ADMISSION, RESTART_RECONCILE_MUTATION_ID, admitsProtectedRpc, conservativeAdmission, restoreAdmission, sameAdmissionState, sameRunnerConnection, validSessionId } from "./domain/runner-admission.js";
 import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
@@ -29,13 +30,9 @@ import { PRODUCT_VERSION } from "./generated-version.js";
 import { cancelBody, readCappedText } from "./body.js";
 
 
-interface ConnectionAttachment {
-  runnerId: string;
-  sessionId: string;
+interface ConnectionAttachment extends RunnerConnectionIdentity {
+  /** Filled after Registry accepts this socket's hello. */
   epoch: number;
-  credentialVersion: number;
-  /** Registry lifecycle authenticated with the credential before hello. */
-  readonly lifecycleId: string;
   protocolVersion: number;
   authenticated: boolean;
   readonly helloDeadlineMs: number;
@@ -47,6 +44,7 @@ interface ConnectionAttachment {
   pendingUpdateRpcIds?: string[];
 }
 
+const ADMISSION_STATE_KEY = "policy-admission-v1";
 const HELLO_DEADLINE_MS = 10_000;
 const BRIDGE_TIMEOUT_MS = WORKER_BRIDGE_TIMEOUT_MS;
 const MAX_BRIDGE_IN_FLIGHT = 32;
@@ -55,54 +53,6 @@ const MAX_BRIDGE_BODY_BYTES = 2 * 1024 * 1024;
 /** Only use before socket dispatch. A missing reply uses unknown instead. */
 function preDispatchError(code: string, message: string, status: number, headers?: Headers): Response {
   return Response.json({ error: { code, message, ...failureMetadata(code, "not_started") } }, { status, ...(headers === undefined ? {} : { headers }) });
-}
-
-type MutationPhase = "idle" | "precommit" | "committed_pending" | "offline_pending" | "invalid" | "restart_reconcile";
-
-interface AdmissionState {
-  readonly fenced: boolean;
-  readonly reconciled: boolean;
-  readonly runnerId: string | null;
-  readonly activeRevision: number | null;
-  readonly activeChecksum: string | null;
-  readonly desiredRevision: number | null;
-  readonly desiredChecksum: string | null;
-  readonly connectionEpoch: number | null;
-  readonly credentialVersion: number | null;
-  /** Opaque Registry identity for the runner_id lifecycle. */
-  readonly lifecycleId: string | null;
-  readonly sessionId: string | null;
-  readonly mutationId: string | null;
-  readonly mutationPhase: MutationPhase;
-  readonly preMutationActiveRevision: number | null;
-  readonly preMutationActiveChecksum: string | null;
-  readonly preMutationDesiredRevision: number | null;
-  readonly preMutationDesiredChecksum: string | null;
-  readonly lastReconciledAtMs: number | null;
-}
-const ADMISSION_STATE_KEY = "policy-admission-v1";
-const RESTART_RECONCILE_MUTATION_ID = "restart-reconcile";
-const FENCED_ADMISSION: AdmissionState = {
-  fenced: true, reconciled: false, runnerId: null, activeRevision: null, activeChecksum: null,
-  desiredRevision: null, desiredChecksum: null, connectionEpoch: null, credentialVersion: null, lifecycleId: null,
-  sessionId: null, mutationId: null, mutationPhase: "restart_reconcile", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
-};
-
-/** Conservative in-memory state after an uncertain admission-state write. */
-function conservativeAdmission(next: AdmissionState): AdmissionState {
-  return {
-    ...next,
-    fenced: true,
-    reconciled: false,
-    activeRevision: null,
-    activeChecksum: null,
-    lastReconciledAtMs: null,
-    // Preserve an in-flight mutation owner when present so recovery/cancel
-    // cannot be raced by a second mutation. An ordinary policy state gets the
-    // restart marker and must be reconciled from Registry before admission.
-    mutationId: next.mutationId ?? RESTART_RECONCILE_MUTATION_ID,
-    mutationPhase: next.mutationId === null ? "restart_reconcile" : next.mutationPhase,
-  };
 }
 
 export class RunnerDO {
@@ -469,7 +419,7 @@ export class RunnerDO {
       // No await after the final local session/policy fence. A grant never
       // authorizes by itself, and this decision never executes a command.
       allowed = allowed && grant !== undefined && this.admissionState !== undefined
-        && this.admitsProtectedRpc(this.admissionState,attachment,grant.policy_revision,grant.policy_checksum)
+        && admitsProtectedRpc(this.admissionState,attachment,grant.policy_revision,grant.policy_checksum)
         && this.ctx.getWebSockets("runner").includes(ws);
       ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed,...(attachment.historyProtocol === 2 ? {record_history:allowed && recordHistory} : {})}}));
       return;
@@ -550,17 +500,26 @@ export class RunnerDO {
   }
 
   public async webSocketClose(ws: WebSocket): Promise<void> {
-    const connection = this.updateConnection(ws);
-    if (connection !== undefined) await this.updateMaintenance.disconnected(connection);
-    this.rejectBridgeWaiters(ws, "runner connection closed");
-    try { await this.markSocket(ws, "offline"); }
-    finally { await this.scheduleHelloDeadline(); }
+    return this.disconnectSocket(ws, "offline", "runner connection closed");
   }
   public async webSocketError(ws: WebSocket): Promise<void> {
-    const connection = this.updateConnection(ws);
-    if (connection !== undefined) await this.updateMaintenance.disconnected(connection);
-    this.rejectBridgeWaiters(ws, "runner connection error");
-    return this.markSocket(ws, "stale");
+    return this.disconnectSocket(ws, "stale", "runner connection error");
+  }
+
+  private async disconnectSocket(ws: WebSocket, state: "offline" | "stale", message: string): Promise<void> {
+    const failures: unknown[] = [];
+    try {
+      const connection = this.updateConnection(ws);
+      if (connection !== undefined) await this.updateMaintenance.disconnected(connection);
+    } catch (error) { failures.push(error); }
+    // Preserve unresolved execution evidence before removing HTTP waiters.
+    // A failed maintenance write must not prevent independent transport cleanup.
+    try { this.rejectBridgeWaiters(ws, message); }
+    catch (error) { failures.push(error); }
+    const cleanup = await Promise.allSettled([this.markSocket(ws, state), this.scheduleHelloDeadline()]);
+    for (const result of cleanup) if (result.status === "rejected") failures.push(result.reason);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Runner disconnect cleanup failed");
   }
 
   private async forwardInternalRpc(request: Request): Promise<Response> {
@@ -656,7 +615,7 @@ export class RunnerDO {
     // Otherwise a policy mutation can win while Registry authorization awaits.
     if (this.updateMaintenance.blocksLifecycle(attachment.lifecycleId)) return preDispatchError("runner_updating", "Runner is preparing a version change", 409);
     if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined
-      && (this.admissionState === undefined || !this.admitsProtectedRpc(this.admissionState, attachment, requestPolicyRevision, expectedPolicyChecksum))) {
+      && (this.admissionState === undefined || !admitsProtectedRpc(this.admissionState, attachment, requestPolicyRevision, expectedPolicyChecksum))) {
       return preDispatchError("stale_policy", "Runner policy changed before dispatch", 409);
     }
     const requestId = `bridge-${crypto.randomUUID()}`;
@@ -713,7 +672,7 @@ export class RunnerDO {
 
   private async admitOrReconcileProtectedRpc(attachment: ConnectionAttachment, revision: number, checksum: string): Promise<boolean> {
     const admission = await this.admission();
-    if (!admission.fenced && admission.reconciled) return this.admitsProtectedRpc(admission, attachment, revision, checksum);
+    if (!admission.fenced && admission.reconciled) return admitsProtectedRpc(admission, attachment, revision, checksum);
     if (admission.mutationId === RESTART_RECONCILE_MUTATION_ID) {
       if (this.restartReconcilePromise === undefined) {
         this.restartReconcilePromise = this.reconcileAdmissionAfterRestart(attachment).finally(() => { this.restartReconcilePromise = undefined; });
@@ -739,7 +698,7 @@ export class RunnerDO {
       return false;
     }
     const final = await this.admission();
-    return final.activeRevision !== null && final.activeChecksum !== null && this.admitsProtectedRpc(final, attachment, revision, checksum);
+    return final.activeRevision !== null && final.activeChecksum !== null && admitsProtectedRpc(final, attachment, revision, checksum);
   }
 
   private async reconcileAdmissionAfterRestart(attachment: ConnectionAttachment): Promise<boolean> {
@@ -798,21 +757,10 @@ export class RunnerDO {
     // while this read was pending. Never replace their fence owner with an
     // older cold-start snapshot.
     if (this.admissionState !== undefined) return this.admissionState;
-    // A restart/hibernation is an authorization boundary. Even a previously
-    // reconciled value must be fenced until this session has rechecked the
-    // Registry identity against its current socket epoch and credential.
-    const validStored = validAdmissionState(stored);
-    // A restart invalidates permission admission, not ownership of an in-flight
-    // operation. Erasing the owner makes its finalizer fail and can allow a
-    // competing mutation to overtake an unresolved Registry write.
-    const ownedMutation = validStored && stored.fenced && stored.mutationId !== null
-      && stored.mutationId !== RESTART_RECONCILE_MUTATION_ID;
-    this.admissionState = ownedMutation ? conservativeAdmission(stored)
-      : validStored
-        ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: RESTART_RECONCILE_MUTATION_ID, mutationPhase: "restart_reconcile", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null }
-        : { ...FENCED_ADMISSION };
+    const recovered = restoreAdmission(stored);
+    this.admissionState = recovered.state;
     // Reconstructing an already-conservative fence must not write it again.
-    if (!validStored || !sameAdmissionState(stored, this.admissionState)) await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
+    if (recovered.changed) await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
     return this.admissionState;
   }
 
@@ -1200,17 +1148,6 @@ export class RunnerDO {
     await this.persistAdmissionIfCurrent(before, next);
   }
 
-  private admitsProtectedRpc(state: AdmissionState, attachment: ConnectionAttachment, revision: number, checksum: string): boolean {
-    return !state.fenced && state.reconciled
-      && state.runnerId === attachment.runnerId
-      && (state.lifecycleId ?? null) === (attachment.lifecycleId ?? null)
-      && state.connectionEpoch === attachment.epoch
-      && state.credentialVersion === attachment.credentialVersion
-      && state.sessionId === attachment.sessionId
-      && state.activeRevision === revision && state.activeChecksum === checksum
-      && state.desiredRevision === revision && state.desiredChecksum === checksum;
-  }
-
   private async currentRunnerSocket(): Promise<WebSocket | undefined> {
     const admission = await this.admission();
     for (const socket of this.ctx.getWebSockets("runner")) {
@@ -1341,44 +1278,6 @@ function isCurrentPolicyReadiness(value: Record<string, unknown>, attachment: Co
 }
 function validPolicyIdentity(revision: number | null, checksum: string | null): boolean { return revision !== null && Number.isSafeInteger(revision) && revision > 0 && checksum !== null && /^[a-f0-9]{64}$/.test(checksum); }
 
-function sameRunnerConnection(state: AdmissionState, attachment: ConnectionAttachment): boolean {
-  return state.runnerId === attachment.runnerId && state.lifecycleId === attachment.lifecycleId
-    && state.connectionEpoch === attachment.epoch && state.credentialVersion === attachment.credentialVersion && state.sessionId === attachment.sessionId;
-}
-
-function sameAdmissionState(left: AdmissionState, right: AdmissionState): boolean {
-  return left.fenced === right.fenced && left.reconciled === right.reconciled && left.runnerId === right.runnerId
-    && left.activeRevision === right.activeRevision && left.activeChecksum === right.activeChecksum
-    && left.desiredRevision === right.desiredRevision && left.desiredChecksum === right.desiredChecksum
-    && left.connectionEpoch === right.connectionEpoch && left.credentialVersion === right.credentialVersion
-    && left.lifecycleId === right.lifecycleId
-    && left.sessionId === right.sessionId && left.mutationId === right.mutationId && left.mutationPhase === right.mutationPhase && left.preMutationActiveRevision === right.preMutationActiveRevision && left.preMutationActiveChecksum === right.preMutationActiveChecksum && left.preMutationDesiredRevision === right.preMutationDesiredRevision && left.preMutationDesiredChecksum === right.preMutationDesiredChecksum && left.lastReconciledAtMs === right.lastReconciledAtMs;
-}
-
-function validAdmissionState(value: unknown): value is AdmissionState {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const state = value as Record<string, unknown>;
-  return typeof state.fenced === "boolean" && typeof state.reconciled === "boolean"
-    && (state.runnerId === null || typeof state.runnerId === "string")
-    && (state.activeRevision === null || Number.isSafeInteger(state.activeRevision))
-    && (state.activeChecksum === null || typeof state.activeChecksum === "string")
-    && (state.desiredRevision === null || Number.isSafeInteger(state.desiredRevision))
-    && (state.desiredChecksum === null || typeof state.desiredChecksum === "string")
-    && (state.connectionEpoch === null || Number.isSafeInteger(state.connectionEpoch))
-    && (state.credentialVersion === null || Number.isSafeInteger(state.credentialVersion))
-    && (state.lifecycleId === null || validLifecycleId(state.lifecycleId))
-    && (state.sessionId === null || validSessionId(state.sessionId))
-    && (state.mutationId === null || typeof state.mutationId === "string")
-    && (state.mutationPhase === "idle" || state.mutationPhase === "precommit" || state.mutationPhase === "committed_pending" || state.mutationPhase === "offline_pending" || state.mutationPhase === "invalid" || state.mutationPhase === "restart_reconcile")
-    && (state.preMutationActiveRevision === null || Number.isSafeInteger(state.preMutationActiveRevision))
-    && (state.preMutationActiveChecksum === null || typeof state.preMutationActiveChecksum === "string")
-    && (state.preMutationDesiredRevision === null || Number.isSafeInteger(state.preMutationDesiredRevision))
-    && (state.preMutationDesiredChecksum === null || typeof state.preMutationDesiredChecksum === "string")
-    && (state.lastReconciledAtMs === null || Number.isSafeInteger(state.lastReconciledAtMs));
-}
-function validSessionId(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
-}
 function parseRunnerPath(pathname: string): string | undefined {
   const value = pathname.split("/").filter(Boolean).pop();
   if (value === undefined) return undefined;

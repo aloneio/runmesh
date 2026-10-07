@@ -655,6 +655,10 @@ export class RegistryDO {
       if (delegatedNonce && response.status === 204) await this.scheduleMaintenanceAlarm(now);
       return response;
     }
+    if (request.method === "GET" && segments.length === 2 && segments[0] === "history" && segments[1] === "lifecycles") {
+      const snapshot = this.lifecycle.historyLifecycles(url.searchParams.getAll("runner_id"));
+      return snapshot === undefined ? new Response("invalid history lifecycle batch", { status: 400 }) : Response.json(snapshot);
+    }
     if (request.method === "GET" && segments.length === 1 && segments[0] === "runners") return Response.json({ runners: this.listRunners() });
     if (request.method === "GET" && segments.length === 1 && segments[0] === "dashboard") return Response.json(this.dashboardSnapshot());
     if (request.method === "GET" && segments.length === 2 && segments[0] === "status" && segments[1] === "features") return Response.json({ features: this.featureHealthSnapshot(now) });

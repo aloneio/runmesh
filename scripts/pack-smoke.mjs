@@ -52,7 +52,7 @@ try {
     'import { JobManager, RunnerConnection, RunnerRuntime, type HostPlatform, type RunnerConfig, type ConnectionRuntimePort, type ConnectionPolicyStorePort } from "@aloneio/runmesh-runner";',
     'import { parseRunnerArgs } from "@aloneio/runmesh-runner/config";',
     "declare const config: RunnerConfig;",
-    "const connectionRuntime: ConnectionRuntimePort = { initialize: async () => {}, applyPolicy: () => {}, dispatch: async () => undefined, configureJobRetention: () => {}, cleanupJobs: async () => {}, needsHistoryReconciliation: () => false, syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { list: () => [] } };",
+    "const connectionRuntime: ConnectionRuntimePort = { initialize: async () => {}, applyPolicy: () => {}, dispatch: async () => undefined, configureJobRetention: () => {}, cleanupJobs: async () => {}, needsHistoryReconciliation: () => false, syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { activeHistoryJobIds: () => [] } };",
     "const connectionStore: ConnectionPolicyStorePort = { load: async () => undefined, activate: async () => {} };",
     "void new RunnerConnection({ config, runtime: connectionRuntime, policyStore: connectionStore });",
     "// @ts-expect-error Internal transport/runtime factories are not package options.",

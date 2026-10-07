@@ -9,6 +9,20 @@ const settings={...DEFAULT_JOB_HISTORY,mode:"immediate" as const};
 const make=(id:string,t=Date.now(),status="succeeded") => ({job_id:id,runner_id:"r",workspace_id:"w",status,created_at_ms:t,updated_at_ms:t}) as any;
 const recordAll = (jobs: readonly { job_id: string }[]) => new Set(jobs.map(job => job.job_id));
 
+it("reads and preserves old out-of-range timestamps without losing adjacent Jobs", async () => {
+  const namespace = `old-timestamps-${crypto.randomUUID()}`, store = new PackedJobHistory(db, namespace), now = Date.now();
+  const valid = make("valid", now), old = { ...make("old", now), created_at_ms: 8_640_000_000_000_001, updated_at_ms: Number.MAX_SAFE_INTEGER };
+  await store.merge("r", "life", [valid], () => settings, recordAll, now);
+  // Seed the persisted shape written before the wire timestamp range changed.
+  await db.prepare("UPDATE runmesh_job_snapshots_v1 SET jobs_json=? WHERE namespace=?").bind(JSON.stringify([old, valid]), namespace).run();
+  expect((await store.list("r", "life", settings)).jobs).toEqual([old, valid]);
+  expect(await store.get("r", "life", "old", settings)).toEqual(old);
+  await store.merge("r", "life", [make("new", now + 1)], () => settings, recordAll, now + 1);
+  expect((await store.list("r", "life", settings)).jobs.map(job => job.job_id)).toEqual(["old", "new", "valid"]);
+  await store.cleanup();
+  expect(await store.get("r", "life", "old", settings)).toEqual(old);
+});
+
 it.each([
   ["cancelling", "running"],
   ["unknown", "cancelling"],

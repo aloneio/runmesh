@@ -18,13 +18,15 @@ import { trustedGitCwd } from "./trust.js";
 import { utimes } from "node:fs/promises";
 import { writeFile } from "node:fs/promises";
 import { gitMetadataValue, isGitRefName, symbolicGitRef } from "./ref-name.js";
+import { isolatedGitConfig } from "./config.js";
+import { sharedIndexName, validateSharedIndex, validateShallowBoundary } from "./metadata-format.js";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 
 /**
  * Build a throw-away Git directory containing only the current HEAD and
- * index.  A repository's own `.git/config`, hooks, filters, and fsmonitor
- * settings are intentionally not copied.  Git has no command-line switch to
+ * index, local excludes and allowlisted non-executing config values. The
+ * source config, hooks, filters and fsmonitor are never loaded by Git. It has no command-line switch to
  * ignore only local config, so running against this sanitized directory is
  * the reliable way to keep read-only status/diff from executing repository
  * supplied clean/smudge/process helpers.
@@ -46,6 +48,19 @@ export async function createIsolatedGitContext(worktree: string, deadline?: numb
       mkdir(join(directory, "refs", "tags"), { recursive: true }),
       mkdir(join(directory, "objects", "info"), { recursive: true }),
     ]);
+
+    const exclude = await readGitMetadata(commonDirectory, ["info", "exclude"], MAX_GIT_METADATA_BYTES);
+    if (exclude !== undefined) await writeFile(join(directory, "info", "exclude"), exclude, { mode: 0o600 });
+    const rawConfig = await readGitMetadata(commonDirectory, ["config"], MAX_GIT_METADATA_BYTES);
+    const config = isolatedGitConfig(rawConfig === undefined ? "" : new TextDecoder("utf-8", { fatal: true }).decode(rawConfig), process.platform === "win32");
+    await writeFile(join(directory, "config"), config, { mode: 0o600 });
+    // The projected config has a canonical spelling and contains only data.
+    const hashBytes = config.includes("\tobjectFormat = sha256\n") ? 32 : 20;
+    const shallow = await readGitMetadata(commonDirectory, ["shallow"], MAX_GIT_METADATA_BYTES);
+    if (shallow !== undefined) {
+      validateShallowBoundary(shallow, hashBytes);
+      await writeFile(join(directory, "shallow"), shallow, { mode: 0o600 });
+    }
 
     const head = gitMetadataValue(await readRefText(join(gitDirectory, "HEAD"), 4_096));
     const ref = symbolicGitRef(head);
@@ -71,7 +86,16 @@ export async function createIsolatedGitContext(worktree: string, deadline?: numb
       // Read through an identity-checked descriptor; copyFile(index, ...)
       // would follow a replacement symlink after the lstat above.
       const isolatedIndex = join(directory, "index");
-      await writeFile(isolatedIndex, await readRegularBytes(index, MAX_GIT_METADATA_BYTES), { mode: 0o600 });
+      const indexBytes = await readGitMetadata(gitDirectory, ["index"], MAX_GIT_METADATA_BYTES);
+      if (indexBytes === undefined) throw new Error("Git index disappeared during inspection");
+      const sharedName = sharedIndexName(indexBytes, hashBytes);
+      if (sharedName !== undefined) {
+        const shared = await readGitMetadata(gitDirectory, [sharedName], MAX_GIT_METADATA_BYTES);
+        if (shared === undefined) throw new Error("Git shared index is missing");
+        validateSharedIndex(shared, sharedName, hashBytes);
+        await writeFile(join(directory, sharedName), shared, { mode: 0o600 });
+      }
+      await writeFile(isolatedIndex, indexBytes, { mode: 0o600 });
       // The copied index is created after the worktree is inspected, so its
       // fresh filesystem mtime can be newer than the files it describes. Git
       // would then trust stale stat entries (especially on Windows' coarse
@@ -93,10 +117,6 @@ export async function createIsolatedGitContext(worktree: string, deadline?: numb
       if (alternateText.trim() !== "") throw new Error("Git object alternates are not supported for isolated inspection");
     }
     await snapshotGitObjects(objectDirectory, join(directory, "objects"), Math.min(deadline ?? Infinity, performance.now() + 5000));
-
-    const objectFormat = await gitObjectFormat(gitDirectory, commonDirectory);
-    const config = `[core]\n\trepositoryformatversion = ${objectFormat === "sha256" ? 1 : 0}\n\tfilemode = ${process.platform === "win32" ? "false" : "true"}\n\tbare = false\n\tignorecase = ${process.platform === "win32" ? "true" : "false"}\n` + (objectFormat === "sha256" ? "[extensions]\n\tobjectFormat = sha256\n" : "");
-    await writeFile(join(directory, "config"), config, { mode: 0o600 });
 
     const environment = isolatedGitEnvironment(directory, worktree);
     return { directory, commandCwd: trustedGitCwd(), environment, cleanup: () => rm(directory!, { recursive: true, force: true }) };
@@ -160,8 +180,14 @@ async function resolveGitRef(gitDirectory: string, commonDirectory: string, ref:
 }
 
 async function readLooseGitRef(root: string, ref: string): Promise<string | undefined> {
+  const value = await readGitMetadata(root, ref.split("/"), 4_096);
+  return value === undefined ? undefined : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(value);
+}
+
+/** Pin every metadata parent as well as the leaf. Excludes and config are
+ * ordinary data, but neither may be selected through a link or changed inode. */
+async function readGitMetadata(root: string, parts: readonly string[], maxBytes: number): Promise<Buffer | undefined> {
   const directories: { path: string; info: Stats; handle?: FileHandle }[] = [];
-  const parts = ref.split("/");
   let parent = root;
   try {
     // A regular leaf can still be reached through an outside symlink/junction.
@@ -183,7 +209,7 @@ async function readLooseGitRef(root: string, ref: string): Promise<string | unde
       }
       parent = handle === undefined ? path : `/proc/self/fd/${handle.fd}`;
     }
-    const value = await readRefText(join(parent, parts.at(-1)!), 4_096).catch((error: NodeJS.ErrnoException) => {
+    const value = await readRegularBytes(join(parent, parts.at(-1)!), maxBytes).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return undefined;
       throw error;
     });
@@ -197,19 +223,6 @@ async function readLooseGitRef(root: string, ref: string): Promise<string | unde
   } finally {
     await Promise.all(directories.map(({ handle }) => handle?.close()));
   }
-}
-
-async function gitObjectFormat(gitDirectory: string, commonDirectory: string): Promise<"sha1" | "sha256"> {
-  for (const path of [join(gitDirectory, "config"), join(commonDirectory, "config")]) {
-    const info = await lstat(path).catch(() => undefined);
-    if (info === undefined) continue;
-    if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_GIT_METADATA_BYTES) throw new Error("Git config is not a safe regular file");
-    const text = await readRegularText(path, MAX_GIT_METADATA_BYTES);
-    const match = /^\s*objectformat\s*=\s*(sha1|sha256)\s*$/imu.exec(text);
-    if (match?.[1]?.toLowerCase() === "sha256") return "sha256";
-    if (match?.[1]?.toLowerCase() === "sha1") return "sha1";
-  }
-  return "sha1";
 }
 
 async function readRegularBytes(path: string, maxBytes: number): Promise<Buffer> {
@@ -232,8 +245,10 @@ async function readRegularBytes(path: string, maxBytes: number): Promise<Buffer>
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    const final = await handle.stat();
-    if (!final.isFile() || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size || offset !== opened.size) {
+    const final = await handle.stat(), after = await lstat(path);
+    if (!final.isFile() || !after.isFile() || after.isSymbolicLink() || after.dev !== opened.dev || after.ino !== opened.ino
+      || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size || offset !== opened.size
+      || final.mtimeMs !== opened.mtimeMs || final.ctimeMs !== opened.ctimeMs) {
       throw new Error(`Git metadata file changed while being read: ${path}`);
     }
     return buffer.subarray(0, offset);

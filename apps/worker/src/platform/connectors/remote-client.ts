@@ -12,6 +12,7 @@ import { BoundedRemoteValidator } from "./remote-validation.js";
 import { createRemoteSessionState } from "./remote-session.js";
 
 export interface HttpRemotePorts {
+  readonly inspection?: boolean;
   readonly rules: (profile: ConnectionProfile) => readonly RemoteEgressRule[] | undefined;
   readonly credential: (profile: ConnectionProfile, signal: AbortSignal, authorize: () => Promise<void>) => Promise<CredentialInput | CredentialLease | null>;
   readonly fetch?: FetchLike;
@@ -157,9 +158,17 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
       };
       try {
         await client.connect(transport, { signal, timeout: REMOTE_LIMITS.operation_ms });
-        if (signal.aborted || client.getServerCapabilities()?.tools === undefined) throw new RemoteFault("upstream_protocol_error");
+        if (signal.aborted || (!ports.inspection && client.getServerCapabilities()?.tools === undefined)) throw new RemoteFault("upstream_protocol_error");
       } catch (error) { await close(); throw lastFault ?? (error instanceof RemoteFault ? error : new RemoteFault("upstream_protocol_error")); }
       return {
+        describe() {
+          const capabilities = client.getServerCapabilities();
+          const extensions = catalogObject(capabilities?.extensions);
+          return { protocol_version: client.getNegotiatedProtocolVersion() ?? protocol,
+            capabilities: { tools: capabilities?.tools !== undefined, resources: capabilities?.resources !== undefined,
+              prompts: capabilities?.prompts !== undefined, tasks: capabilities?.tasks !== undefined,
+              apps: extensions?.["io.modelcontextprotocol/ui"] !== undefined } };
+        },
         current: () => !parent.aborted && credentialCurrent() && egressCurrent(),
         async listTools() {
           try {

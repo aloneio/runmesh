@@ -12,6 +12,9 @@ import { localizeHtmlResponse } from "../src/i18n/html.js";
 import { permissionForm, managedWorkspaceForm, workspaceProfile } from "../src/admin/forms.js";
 import { workspacePermissionPreset } from "../src/contracts/permission-profiles.js";
 import type { AdminData } from "../src/contracts/admin-views.js";
+import { timestamp, timeMarkup } from "../src/admin/format.js";
+import { jobTable, mcpCallTable } from "../src/admin/tables.js";
+import { PRODUCT_VERSION } from "../src/generated-version.js";
 
 // Hashes were captured by evaluating the pre-refactor renderers at the fixed
 // baseline. Reviewed i18n annotations and login copy changes retain their
@@ -21,6 +24,21 @@ const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage
 describe("AR04 rendering compatibility", () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(fixtures.clock_ms); });
   afterEach(() => vi.useRealTimers());
+  it("keeps malformed stored dates from interrupting task and audit lists", () => {
+    for (const value of [8_640_000_000_000_001, Number.MAX_SAFE_INTEGER, NaN, Infinity, -1, 1.5]) {
+      expect(timestamp(value)).toBe("—");
+      expect(timeMarkup(value)).toBe("—");
+      const jobs = jobTable([{ job_id: "old-job", workspace_id: "workspace", status: "succeeded", updated_at_ms: value },
+        { job_id: "valid-job", workspace_id: "workspace", status: "succeeded", updated_at_ms: 1000 }], "runner");
+      expect(jobs).toContain("old-job"); expect(jobs).toContain("valid-job");
+      expect(jobs).toContain('<td class="time-cell">—</td>');
+      expect(mcpCallTable([{ method: "remote.call", completed_at_ms: value }])).toContain('<td class="time-cell">—</td>');
+    }
+    expect(timestamp(0)).toBe("1970-01-01T00:00:00.000Z");
+    expect(timeMarkup(null)).toBe("Never"); expect(timeMarkup(0)).toBe("Never");
+    expect(timestamp(8_640_000_000_000_000)).toBe("+275760-09-13T00:00:00.000Z");
+    expect(timeMarkup(8_640_000_000_000_000)).toContain('datetime="+275760-09-13T00:00:00.000Z"');
+  });
   for (const fixture of fixtures.cases) it(`preserves reviewed ${fixture.name} markup (origin ${fixtures.baseline.slice(0, 7)})`, () => {
     const args: unknown[] = [...fixture.args];
     if (fixture.fn === "runnersPage") {
@@ -35,7 +53,13 @@ describe("AR04 rendering compatibility", () => {
       });
     }
     const render = views[fixture.fn as keyof typeof views] as (...args: unknown[]) => string;
-    const value = render(...args);
+    let value = render(...args);
+    if (value.includes('class="product-version"')) {
+      const versionMarkup = `<span class="product-version" data-no-i18n>v${PRODUCT_VERSION}</span>`;
+      expect(value).toContain(versionMarkup);
+      // Releases change the displayed version without changing this layout baseline.
+      value = value.replace(versionMarkup, `<span class="product-version" data-no-i18n>v${fixtures.product_version}</span>`);
+    }
     expect(new TextEncoder().encode(value).byteLength).toBe(fixture.bytes);
     expect(sha256Hex(value)).toBe(fixture.sha256);
   });
@@ -62,6 +86,48 @@ describe("AR04 rendering compatibility", () => {
     expect(typeof content).toBe("string");
     expect(content).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(content).not.toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it.each(["en", "zh-CN"] as const)("keeps machine values distinct from translated Runner labels in %s", async locale => {
+    for (const value of ["Source", "read", "Write", "Unknown", "<b>Source</b>"]) {
+      const content = runnerDetailPage({
+        presentation: { configuredMode: "dedicated_user", reportedMode: "dedicated_user", maxValidityDays: 3650, dayMs: 86400000 },
+        runner: { runner_id: "Source", display_name: value, state: "online", public_info: { hostname: value, service_identity: value, platform: value, architecture: value, runner_version: value } },
+        workspaces: [{ workspace_id: "read", display_name: value, root_path: "/fixture", validation_status: "valid" }],
+        environment: { tools: { Source: { available: true, version: value } } }, csrf: "fixture-csrf", release: { latest_version: "0.1.7", distributable: true },
+      });
+      const output = await localizeHtmlResponse(new Request(`https://worker.test/admin?lang=${locale}`),
+        new Response(`<html><body>${content}</body></html>`, { headers: { "content-type": "text/html" } })).text();
+      const escaped = value.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+      const field = locale === "en" ? "Hostname" : "主机名";
+      expect(output).toContain(`<dt>${field}</dt>\n        <dd class="mono"><span data-no-i18n>${escaped}</span></dd>`);
+      expect(output).toContain(`<li><span class="mono" data-no-i18n>read</span><span class="validation-tag`);
+      expect(output).toContain('value="read"');
+      expect(output).toContain('data-no-i18n placeholder="Source"');
+      expect(output).toContain('<strong class="tool-name" data-no-i18n>Source</strong>');
+      expect(output).toContain(`<span class="tool-version mono" data-no-i18n>${escaped}</span>`);
+      expect(output).not.toContain("<b>Source</b>");
+      expect(output).toContain(locale === "en" ? "online" : "在线");
+    }
+    const empty = runnerDetailPage({ presentation: { configuredMode: null, reportedMode: "unknown", maxValidityDays: 3650, dayMs: 86400000 },
+      runner: { runner_id: "runner" }, workspaces: [], csrf: "fixture-csrf", release: { latest_version: "0.1.7", distributable: false } });
+    const output = await localizeHtmlResponse(new Request(`https://worker.test/admin?lang=${locale}`),
+      new Response(`<html><body>${empty}</body></html>`, { headers: { "content-type": "text/html" } })).text();
+    expect(output).toContain(`<dd class="mono">${locale === "en" ? "Unknown" : "未知"}</dd>`);
+    expect(output).toContain(locale === "en" ? "Not configured" : "未配置");
+  });
+
+  it.each(["en", "zh-CN"] as const)("keeps workspace deletion confirmation IDs unchanged in %s", async locale => {
+    for (const workspaceId of ["Settings", "missing", "running", "work-probe", "A._:-9"]) {
+      const content = managedWorkspaceForm("runner", { workspace_id: workspaceId, display_name: "Project", root_path: "/project" }, "fixture-csrf");
+      const output = await localizeHtmlResponse(new Request(`https://worker.test/admin?lang=${locale}`),
+        new Response(`<html><body>${content}</body></html>`, { headers: { "content-type": "text/html" } })).text();
+      const confirmation = output.match(/<input name="confirmation"[^>]*>/u)?.[0];
+      expect(confirmation).toContain(`data-no-i18n placeholder="${workspaceId}"`);
+      expect(output).toContain(`<input type="hidden" name="workspace_id" value="${workspaceId}">`);
+      expect(output).toContain(locale === "en" ? "Type Workspace ID to confirm" : "输入工作区 ID 以确认");
+      expect(output).toContain(locale === "en" ? ">Delete workspace</button>" : ">删除工作区</button>");
+    }
   });
 
   it.each(["en", "zh-CN"] as const)("uses one translated heading for desktop and mobile inventory cells in %s", async locale => {

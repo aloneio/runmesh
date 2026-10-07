@@ -1,7 +1,14 @@
 import { WebSocketServer, type WebSocket } from "ws";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PROTOCOL_CURRENT_VERSION, decodeWireFrame, encodeWireFrame, type RunnerSync, type RunnerWelcome, type WireMessage } from "@aloneio/runmesh-protocol";
+import { PROTOCOL_CURRENT_VERSION, decodeWireFrame, encodeWireFrame, runnerPolicyChecksum, type RunnerSync, type RunnerWelcome, type WireMessage } from "@aloneio/runmesh-protocol";
 import { RunnerConnection } from "../src/connection.js";
+import { enrollRunner } from "../src/enrollment.js";
+import { ProfileStore } from "../src/profile.js";
+import { PolicyStore } from "../src/policy-store.js";
+import type { WorkspaceConfig } from "../src/config.js";
 import type { ConnectionRuntimePort } from "../src/connection/ports.js";
 import type { JobEvent } from "../src/jobs/records.js";
 import { connectionPolicyStore, connectionRuntime } from "./helpers/connection-runtime.js";
@@ -24,7 +31,7 @@ function welcomeFrame(requestId: string): RunnerWelcome {
     } },
   };
 }
-async function transport(options: { autoWelcome?: boolean; history?: "batched" | "off"; runtime?: Partial<ConnectionRuntimePort> } = {}) {
+async function transport(options: { autoWelcome?: boolean; history?: "batched" | "off"; heartbeatMs?: number; runtime?: Partial<ConnectionRuntimePort> } = {}) {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>(resolve => server.once("listening", resolve));
   const address = server.address();
@@ -50,7 +57,7 @@ async function transport(options: { autoWelcome?: boolean; history?: "batched" |
   });
   const connection = new RunnerConnection({
     config: { runnerId: "handshake-runner", server: "ws://127.0.0.1:" + address.port, token: "synthetic-token", workspaces: [] },
-    policyStore: connectionPolicyStore(), heartbeatMs: 86_400_000,
+    policyStore: connectionPolicyStore(), heartbeatMs: options.heartbeatMs ?? 86_400_000,
     onStateChange: state => states.push(state), sleep: async () => { connection.stop(); },
   }, { createRuntime: sink => { emitJobEvent = sink; return runtime; } });
   const running = connection.start().catch(error => { failure = error; });
@@ -77,6 +84,102 @@ async function transport(options: { autoWelcome?: boolean; history?: "batched" |
   };
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+it.each([
+  { cached: "legacy", change: "runner", injected: false },
+  { cached: "legacy", change: "runner", injected: true },
+  { cached: "bound", change: "runner", injected: false },
+  { cached: "bound", change: "credential", injected: true },
+  { cached: "bound", change: "server", injected: false },
+])("accepts fresh policy after successful re-enrollment ($cached cache, $change change, injected=$injected)", async scenario => {
+  const root = await mkdtemp(join(tmpdir(), "runner-reenroll-handshake-"));
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("missing test port");
+  const endpoint = `http://127.0.0.1:${address.port}/runner/enroll`;
+  const serverUrl = `ws://127.0.0.1:${address.port}/runner/connect`;
+  const stateDir = join(root, "state"), workspace = join(root, "new-workspace");
+  const profiles = new ProfileStore({ filePath: join(root, "profile", "profile.json") });
+  const policies = new PolicyStore(stateDir);
+  const original = { version: 1 as const, server_url: scenario.change === "server" ? "ws://127.0.0.1:1/runner/connect" : serverUrl,
+    runner_id: "runner-original", token: "synthetic-original-token", insecure_local: true,
+    management_mode: "central" as const, execution_mode: "dedicated_user" as const, workspaces: [] };
+  const oldIdentity = { server: original.server_url, runnerId: original.runner_id, token: original.token };
+  const permissions = { read: true, edit: false, shell: false, job_control: false };
+  const oldFields = { schema_version: 1 as const, runner_id: original.runner_id, revision: 99, runner_permissions: permissions,
+    workspaces: [{ workspace_id: "old-workspace", root_path: workspace, enabled: true, permissions }] };
+  const oldPolicy = { ...oldFields, checksum: runnerPolicyChecksum(oldFields) };
+  const preserved = ["jobs/old-job/meta.json", "jobs/old-job/output.log", "context/old-record.json", "updates/journal.json"];
+  const frames: WireMessage[] = [];
+  let peer: WebSocket | undefined, failure: unknown, connection: RunnerConnection | undefined, running: Promise<void> | undefined;
+  let livePolicy: readonly WorkspaceConfig[] = [];
+  const applied: string[][] = [];
+  server.on("connection", socket => { peer = socket; socket.on("message", bytes => frames.push(decodeWireFrame(String(bytes)))); });
+  try {
+    await mkdir(workspace);
+    await profiles.save(original);
+    await policies.activate(oldPolicy, scenario.cached === "bound" ? oldIdentity : undefined);
+    for (const name of preserved) { const path = join(stateDir, name); await mkdir(dirname(path), { recursive: true }); await writeFile(path, `preserve:${name}`); }
+    const enrolled = await enrollRunner({ server: endpoint, code: "x".repeat(43), reEnroll: true, insecureLocal: true, store: profiles,
+      fetch: async () => new Response(JSON.stringify({ runner_id: scenario.change === "runner" ? "runner-replaced" : original.runner_id,
+        server_url: serverUrl, token: scenario.change === "server" ? original.token : "synthetic-replacement-token" }), { status: 200 }),
+    });
+    const saved = await profiles.load(); expect(saved).toEqual(enrolled.profile);
+    const config = { runnerId: enrolled.profile.runner_id, server: enrolled.profile.server_url, token: enrolled.profile.token, workspaces: [], stateDir };
+    const fields = { ...oldFields, runner_id: config.runnerId, revision: 1,
+      workspaces: [{ workspace_id: "new-workspace", root_path: workspace, enabled: true, permissions }] };
+    const desired = { ...fields, checksum: runnerPolicyChecksum(fields) };
+    const runtime = connectionRuntime({ applyPolicy: workspaces => { livePolicy = workspaces; applied.push(workspaces.map(item => item.workspaceId)); } });
+    connection = new RunnerConnection({ config, runtime, ...(scenario.injected ? { policyStore: policies } : {}),
+      heartbeatMs: 86_400_000, sleep: async () => { connection?.stop(); },
+    });
+    running = connection.start().catch(error => { failure = error; });
+    await waitFor(() => frames.some(frame => frame.type === "runner.hello") || failure !== undefined);
+    expect(failure).toBeUndefined(); expect(peer).toBeDefined();
+    expect(livePolicy).toEqual([]);
+    expect(applied.flat()).not.toContain("old-workspace");
+    const hello = frames.find(frame => frame.type === "runner.hello")!;
+    expect(hello).toMatchObject({ runner: { runner_id: config.runnerId } });
+    peer!.send(encodeWireFrame({ ...welcomeFrame(hello.request_id), desired_policy: desired }));
+    await waitFor(() => frames.some(frame => frame.type === "runner.policy_ack" && frame.status === "applied"));
+    expect(livePolicy.map(item => item.workspaceId)).toEqual(["new-workspace"]);
+    expect(frames).toContainEqual(expect.objectContaining({ type: "runner.policy_ack", desired_revision: 1, applied_revision: 1, applied_checksum: desired.checksum }));
+    await expect(policies.load(config.runnerId, config)).resolves.toEqual(desired);
+    await expect(policies.load(oldIdentity.runnerId, oldIdentity)).resolves.toBeUndefined();
+    // A normal restart can restore the authenticated cache before welcome.
+    connection.stop(); await running; frames.length = 0; applied.length = 0; livePolicy = [];
+    connection = new RunnerConnection({ config, runtime, heartbeatMs: 86_400_000, sleep: async () => { connection?.stop(); } });
+    running = connection.start().catch(error => { failure = error; });
+    await waitFor(() => frames.some(frame => frame.type === "runner.hello") || failure !== undefined);
+    expect(failure).toBeUndefined(); expect(applied).toEqual([["new-workspace"]]);
+    for (const name of preserved) expect(await readFile(join(stateDir, name), "utf8")).toBe(`preserve:${name}`);
+  } finally {
+    connection?.stop(); await running;
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("heartbeat reads current active history IDs through the job projection port", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let ids = ["long-running-job"];
+  const activeHistoryJobIds = vi.fn(() => [...ids]);
+  const f = await transport({ history: "off", heartbeatMs: 50, runtime: { jobs: { activeHistoryJobIds } } });
+  try {
+    await waitFor(() => f.states.includes("online"));
+    await vi.advanceTimersByTimeAsync(50);
+    await waitFor(() => f.frames.some(frame => frame.type === "runner.heartbeat"));
+    expect(f.frames.findLast(frame => frame.type === "runner.heartbeat")).toMatchObject({ active_job_ids: ids });
+    const before = f.frames.filter(frame => frame.type === "runner.heartbeat").length;
+    ids = [];
+    await vi.advanceTimersByTimeAsync(50);
+    await waitFor(() => f.frames.filter(frame => frame.type === "runner.heartbeat").length > before);
+    expect(f.frames.findLast(frame => frame.type === "runner.heartbeat")).toMatchObject({ active_job_ids: [] });
+    expect(activeHistoryJobIds).toHaveBeenCalledTimes(2);
+  } finally { await f.close(); }
+});
 
 describe("runner welcome handshake fencing", () => {
   it("withholds job lifecycle frames until the welcome handshake completes", async () => {

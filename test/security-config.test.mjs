@@ -106,7 +106,7 @@ test("audit transport cannot regain generic tool arguments or response payloads"
 
 test("hosted installer commands retain the convenience credential handoff", async () => {
   const source = await readFile(new URL("../apps/worker/src/admin/enrollment-view.ts", import.meta.url), "utf8");
-  assert.ok(source.includes("sudo sh -s -- ${shellCode}"));
+  assert.ok(source.includes('downloadedShellCommand(new URL(`/runner/install.sh${installerQuery}`, publicBase).toString(), [code])'));
   assert.ok(source.includes(".Content)) ${powerShellCode}"));
   const entrypoint = await readFile(new URL("../apps/worker/src/http/admin-presentation.ts", import.meta.url), "utf8");
   assert.ok(entrypoint.includes('from "../admin/enrollment-view.js"'));

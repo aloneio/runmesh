@@ -27,6 +27,17 @@ export function localizeHtmlResponse(request: Request, response: Response): Resp
       if(!excluded && !skip)for(const name of ["aria-label","alt","placeholder","title"]){const old=element.getAttribute(name);if(old!==null){const next=localizeUiText(decodeText(old),locale);if(next!==old)element.setAttribute(name,next);}}
       if(element.tagName === "html")element.setAttribute("lang",locale);
     }
+  }).on("title[data-i18n-title]", {
+    element(element) {
+      const encoded = element.getAttribute("data-i18n-title");
+      element.removeAttribute("data-i18n-title");
+      if (encoded === null || encoded.length > 8192) return;
+      let parts: unknown;
+      try { parts = JSON.parse(decodeText(encoded)); } catch { return; }
+      if (!Array.isArray(parts) || parts.length > 8 || !parts.every(part => typeof part === "string"
+        || typeof part === "object" && part !== null && !Array.isArray(part) && typeof part.data === "string")) return;
+      element.setInnerContent(parts.map(part => typeof part === "string" ? localizeUiText(part, locale) : part.data).join(" · "));
+    }
   }).on("html",{
     text(chunk){
       if(excluded)return;

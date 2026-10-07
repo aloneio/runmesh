@@ -2,6 +2,14 @@ import type { UiLocale } from "../contracts/locale.js";
 
 /** Stable identifiers are source-owned. Do not derive or rename keys when editing copy. */
 const definitions = {
+  "mcp.inspection.check": { en: "Check connection", "zh-CN": "检查连接" },
+  "mcp.registry.import": { en: "Import server.json", "zh-CN": "导入 server.json" },
+  "mcp.registry.entry": { en: "Registry entry", "zh-CN": "Registry 条目" },
+  "mcp.registry.preview": { en: "Preview connections", "zh-CN": "预览连接" },
+  "skill.source.import": { en: "Import from GitHub", "zh-CN": "从 GitHub 导入" },
+  "skill.source.repository": { en: "GitHub repository", "zh-CN": "GitHub 仓库" },
+  "skill.source.commit": { en: "Commit SHA", "zh-CN": "提交 SHA" },
+  "skill.source.path": { en: "Skill folder path (optional)", "zh-CN": "Skill 文件夹路径（可选）" },
   "runner.update.latest.environment": { en: "Latest for this environment", "zh-CN": "当前环境最新版本" },
   "runner.update.queued": { en: "Waiting for the host manager", "zh-CN": "等待主机管理器领取" },
   "runner.update.verifying": { en: "Verifying the release", "zh-CN": "正在验证版本" },
@@ -469,6 +477,8 @@ const definitions = {
   "text.running": { en: "running", "zh-CN": "运行中" },
   "text.cancelling": { en: "cancelling", "zh-CN": "取消中" },
   "text.succeeded": { en: "succeeded", "zh-CN": "成功" },
+  "text.runner.state": { en: "Runner state", "zh-CN": "Runner 状态" },
+  "text.created": { en: "Created", "zh-CN": "创建时间" },
   "text.completed": { en: "completed", "zh-CN": "已完成" },
   "text.failed": { en: "failed", "zh-CN": "失败" },
   "text.unknown.2": { en: "unknown", "zh-CN": "未知" },
@@ -635,6 +645,8 @@ const definitions = {
   "text.running.queued.cancelling.and.uncertain.recovered.processes.are.never.deleted.local.cleanu": { en: "Cleanup applies to expired tasks confirmed as finished. Local cleanup is off by default; enable it to apply these settings when the Runner reconnects. Cloud history keeps up to 500 recent tasks within the selected retention period.", "zh-CN": "清理范围为已确认结束且过期的任务。本地清理默认关闭，启用后将在 Runner 重新连接时应用设置。云端最多保留所选期限内最近 500 个任务。" },
   "text.previous.log.chunk": { en: "Previous log chunk", "zh-CN": "上一页日志" },
   "text.log.bytes": { en: "Log bytes", "zh-CN": "日志片段大小" },
+  "text.log.stream": { en: "Log stream", "zh-CN": "日志流" },
+  "text.log.position": { en: "Output position", "zh-CN": "读取位置" },
   "text.latest.tail": { en: "Latest output", "zh-CN": "最新日志" },
   "text.beginning": { en: "Beginning", "zh-CN": "开头" },
   "text.read.refresh": { en: "Read / Refresh", "zh-CN": "读取 / 刷新" },

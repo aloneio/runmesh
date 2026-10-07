@@ -39,6 +39,17 @@ and finalization. Each entrypoint authenticates its request before calling the u
 case. Keep refusal, dependency failure and unknown effects distinct, and observe
 an uncertain mutation before deciding whether to retry.
 
+`domain/runner-admission.ts` owns admission snapshot validation, restart recovery,
+session comparison and policy matching. RunnerDO retains storage ordering,
+concurrent-state checks and WebSocket effects. Pure rule tests and Worker integration
+tests cover these decisions and their persistence order separately.
+
+Central's `browser/central/request-contract.js` owns request classification, operation
+scopes and success states. The API uses it to interpret responses; `operations.js`
+owns UI locks. Catalog queries, remote calls, tool search and Skill dependency
+inspection share read-only snapshot ports. Administration supplies mutation ports;
+compiled type fixtures and runtime regressions verify the distinction.
+
 Registry owns HMAC routing and synchronous transactions; RunnerDO owns session
 dispatch. `contracts/admin-views.ts` defines display shapes, and
 `application/admin-projections.ts` selects permitted fields after authorization.
@@ -114,6 +125,11 @@ An existing manager keeps its installed runtime and bundle during Runner changes
 and repeated `install` commands. Manager fixes therefore need their own deployment
 and host verification. Shipping a new Runner package alone leaves existing manager
 code in place; record Runner and manager delivery separately.
+
+`updates/metadata-file.ts` owns bounded reads and file-identity checks for maintenance
+journals, installation records and Job drain metadata. Callers own directory checks,
+permissions, byte limits and missing-file semantics. Windows and Linux regressions
+exercise file replacement, size changes and platform-specific file types.
 
 `apps/runner/src/maintenance-contract.ts` defines the local fields consumed across
 versions. Credential loading reuses the protected profile reader and projects the
@@ -403,3 +419,9 @@ responses and never retries an uncertain write. Distribution still owns
 descriptor validation, verification timestamps and the original hard expiry;
 no I/O promise crosses requests. Regressions cover delayed recovery, recovery
 timeout and successful discovery despite stalled Registry reads or writes.
+
+Native Git semantic fixtures call the shared baseline observer with an explicit
+fixture deadline and assert exact commits, clean/dirty state and unchanged source
+metadata. Separate service-boundary tests use a controlled clock to verify the
+1.5-second cap, shorter caller budgets and path-resolution time within that same
+budget. This gives data semantics and scheduling policy independent failure evidence.

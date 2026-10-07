@@ -7,6 +7,7 @@ import { handleRunnerUpdate } from "../src/http/runner-update.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import { RunnerUpdateMaintenance } from "../src/platform/runner-update-maintenance.js";
 import { maintenanceV1Response } from "./fixtures/maintenance-v1-client.js";
+import { ensureRunnerUpdatesSchema } from "../src/registry/runner-updates.js";
 
 const secret = "test-internal-control-secret-not-for-production";
 const token = "remote-manager-test-token-0123456789abcdef";
@@ -27,6 +28,49 @@ function createInput(lifecycleId: string, operationId = crypto.randomUUID()) {
 const scoped = () => env.REGISTRY.get(env.REGISTRY.idFromName(`upgrade-tests-${crypto.randomUUID()}`));
 
 describe("independent Runner update control", () => {
+  it("migrates existing update history to bounded latest reads without changing replay or same-millisecond ordering", async () => {
+    await runInDurableObject(scoped(), async (instance, state) => {
+      const { runnerId, lifecycleId, credential } = await setup(instance), create = createInput(lifecycleId);
+      const created = await instance.fetch(await signed(`/auth/runners/${runnerId}/update`, create));
+      const original = (await created.json() as RunnerUpdateResponse).operation!;
+      // Recreate the prior schema state: rows exist, but the new index does not.
+      state.storage.sql.exec("DROP INDEX idx_runner_updates_latest");
+      state.storage.transactionSync(() => {
+        for (let index = 0; index < 1000; index++) {
+          const timestamp = original.created_at_ms + Math.floor(index / 2) + 1;
+          const operation = { ...original, operation_id: `history-${index}`, manager_id: "manager-history", state: "failed", error_code: "verification_failed",
+            created_at_ms: timestamp, updated_at_ms: timestamp };
+          state.storage.sql.exec("INSERT INTO runner_updates VALUES (?,?,?,?,?,?,?)", runnerId, lifecycleId, operation.operation_id, JSON.stringify(operation), null, "history", timestamp);
+        }
+        ensureRunnerUpdatesSchema(state.storage.sql);
+      });
+      const exec = state.storage.sql.exec.bind(state.storage.sql); let written = 0; const reads: { readonly rowsRead: number }[] = [];
+      const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+        const cursor = exec(query, ...args);
+        written += cursor.rowsWritten;
+        if (query.includes("FROM runner_updates") && query.includes("ORDER BY")) reads.push(cursor);
+        return cursor;
+      });
+      try {
+        ensureRunnerUpdatesSchema(state.storage.sql);
+        ensureRunnerUpdatesSchema(state.storage.sql);
+        for (let n = 0; n < 5; n++) {
+          const response = await instance.fetch(await signed(`/runners/${runnerId}/update?lifecycle_id=${lifecycleId}&credential_version=${credential}`));
+          expect(response.status).toBe(200);
+          expect((await response.json() as RunnerUpdateResponse).operation?.operation_id).toBe("history-999");
+        }
+        expect(reads).toHaveLength(5);
+        expect(reads.map(cursor => cursor.rowsRead)).toEqual([1, 1, 1, 1, 1]);
+        expect(written).toBe(0);
+      } finally { spy.mockRestore(); }
+      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM runner_updates WHERE runner_id=?", runnerId).one().n).toBe(1001);
+      expect((await instance.fetch(await signed(`/auth/runners/${runnerId}/update`, create))).status).toBe(409);
+      const nextLifecycle = "f".repeat(64);
+      state.storage.sql.exec("UPDATE runners SET lifecycle_id = ?, credential_version = credential_version + 1 WHERE runner_id = ?", nextLifecycle, runnerId);
+      expect((await instance.fetch(await signed(`/auth/runners/${runnerId}/update`, { ...create, expected_lifecycle_id: nextLifecycle }))).status).toBe(409);
+    });
+  });
+
   it("performs zero SQL writes for idle authentication and polling", async () => {
     await runInDurableObject(scoped(), async (instance, state) => {
       const { runnerId } = await setup(instance);

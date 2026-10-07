@@ -1,4 +1,4 @@
-import { chmod, chown, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, chown, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +9,12 @@ import { enrollRunner } from "../src/enrollment.js";
 import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
 import { createServiceManager, createServiceProvisioner, hashContent, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceLayout, serviceProfilePath, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
+
+vi.mock("node:fs/promises", async importOriginal => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...original, rename: vi.fn(original.rename) };
+});
+const originalFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 
 async function fixture(): Promise<{ root: string; store: ProfileStore; cleanup: () => Promise<void> }> {
   const root = await mkdtemp(join(tmpdir(), "runner-product-"));
@@ -22,6 +28,101 @@ const runnerPolicy = (runnerId: string, revision: number) => {
 };
 
 describe("runner product profile and enrollment", () => {
+  it("recovers policy only for the enrolled server, Runner and credential while preserving rollback JSON", async () => {
+    const test = await fixture();
+    const store = new PolicyStore(join(test.root, "state"));
+    const identity = { server: "wss://one.example/runner/connect", runnerId: "runner-1", token: "synthetic-credential-one" };
+    const policy = runnerPolicy(identity.runnerId, 7);
+    try {
+      await store.activate(policy);
+      await expect(store.load(identity.runnerId, identity)).resolves.toBeUndefined();
+      await store.activate(policy, identity);
+      await expect(new PolicyStore(join(test.root, "state")).load(identity.runnerId, identity)).resolves.toEqual(policy);
+      for (const other of [{ ...identity, runnerId: "runner-2" }, { ...identity, server: "wss://two.example/runner/connect" }, { ...identity, token: "synthetic-credential-two" }]) {
+        await expect(store.load(other.runnerId, other)).resolves.toBeUndefined();
+      }
+      await expect(store.activate(runnerPolicy("runner-2", 1), identity)).rejects.toThrow("identity");
+      expect(JSON.parse(await readFile(store.activePath, "utf8"))).toEqual(policy);
+      expect(JSON.parse(await readFile(store.previousPath, "utf8"))).toEqual(policy);
+      await expect(store.load(identity.runnerId)).resolves.toEqual(policy);
+      expect(await readFile(store.identityPath, "utf8")).not.toContain(identity.token);
+      if (process.platform !== "win32") expect((await stat(store.identityPath)).mode & 0o777).toBe(0o600);
+    } finally { await test.cleanup(); }
+  });
+  it("rejects corrupt policies and identity records instead of treating corruption as re-enrollment", async () => {
+    const test = await fixture();
+    const store = new PolicyStore(join(test.root, "state"));
+    const identity = { server: "wss://one.example/runner/connect", runnerId: "runner-1", token: "synthetic-credential-one" };
+    try {
+      const policy = runnerPolicy(identity.runnerId, 7);
+      await store.activate(policy, identity);
+      await writeFile(store.identityPath, "{}");
+      await expect(store.load(identity.runnerId, identity)).rejects.toThrow("identity is invalid");
+      await rm(store.identityPath);
+      await writeFile(store.activePath, JSON.stringify({ ...policy, checksum: "0".repeat(64) }));
+      await expect(store.load("runner-2", { ...identity, runnerId: "runner-2" })).rejects.toThrow("active policy is invalid");
+    } finally { await test.cleanup(); }
+  });
+  it("makes an interrupted policy/identity commit a cache miss without granting the old policy to the new enrollment", async () => {
+    const test = await fixture();
+    const store = new PolicyStore(join(test.root, "state"));
+    const oldIdentity = { server: "wss://one.example/runner/connect", runnerId: "runner-1", token: "synthetic-credential-one" };
+    const newIdentity = { ...oldIdentity, token: "synthetic-credential-two" };
+    const oldPolicy = runnerPolicy(oldIdentity.runnerId, 7);
+    try {
+      await store.activate(oldPolicy, oldIdentity);
+      vi.mocked(rename).mockImplementation(async (from, to) => {
+        if (String(to) === store.activePath) throw new Error("simulated final rename failure");
+        await originalFs.rename(from, to);
+      });
+      await expect(store.activate(runnerPolicy(newIdentity.runnerId, 1), newIdentity)).rejects.toThrow("simulated");
+      expect(JSON.parse(await readFile(store.activePath, "utf8"))).toEqual(oldPolicy);
+      await expect(store.load(oldIdentity.runnerId, oldIdentity)).resolves.toBeUndefined();
+      await expect(store.load(newIdentity.runnerId, newIdentity)).resolves.toBeUndefined();
+      vi.mocked(rename).mockImplementation(originalFs.rename);
+      await store.activate(runnerPolicy(newIdentity.runnerId, 1), newIdentity);
+      await expect(store.load(newIdentity.runnerId, newIdentity)).resolves.toMatchObject({ revision: 1 });
+    } finally { vi.mocked(rename).mockImplementation(originalFs.rename); await test.cleanup(); }
+  });
+  it("never combines crossed commits from two enrollment identities into recovered authority", async () => {
+    const test = await fixture();
+    const storeA = new PolicyStore(join(test.root, "state")), storeB = new PolicyStore(join(test.root, "state"));
+    const identityA = { server: "wss://one.example/runner/connect", runnerId: "runner-1", token: "synthetic-credential-one" };
+    const identityB = { ...identityA, token: "synthetic-credential-two" };
+    let entered!: () => void, release!: () => void;
+    const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let first: Promise<void> | undefined;
+    let gated = false;
+    try {
+      vi.mocked(rename).mockImplementation(async (from, to) => {
+        if (String(to) === storeA.activePath && !gated) { gated = true; entered(); await gate; }
+        await originalFs.rename(from, to);
+      });
+      first = storeA.activate(runnerPolicy(identityA.runnerId, 7), identityA);
+      await enteredPromise;
+      await storeB.activate(runnerPolicy(identityB.runnerId, 1), identityB);
+      await expect(storeB.load(identityB.runnerId, identityB)).resolves.toMatchObject({ revision: 1 });
+      await expect(storeA.load(identityA.runnerId, identityA)).resolves.toBeUndefined();
+      release(); await first;
+      await expect(storeA.load(identityA.runnerId, identityA)).resolves.toBeUndefined();
+      await expect(storeB.load(identityB.runnerId, identityB)).resolves.toBeUndefined();
+    } finally { release(); await first; vi.mocked(rename).mockImplementation(originalFs.rename); await test.cleanup(); }
+  });
+  it.each([400, 409, 503])("failed re-enrollment HTTP %s leaves the existing policy cache intact", async status => {
+    const test = await fixture();
+    const original = profile();
+    const identity = { server: original.server_url, runnerId: original.runner_id, token: original.token };
+    const policies = new PolicyStore(join(test.root, "state"));
+    try {
+      await test.store.save(original);
+      await policies.activate(runnerPolicy(original.runner_id, 7), identity);
+      const before = await readFile(policies.identityPath, "utf8");
+      await expect(enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), reEnroll: true, store: test.store, fetch: async () => new Response(null, { status }) })).rejects.toThrow();
+      expect(await readFile(policies.identityPath, "utf8")).toBe(before);
+      await expect(policies.load(identity.runnerId, identity)).resolves.toMatchObject({ revision: 7 });
+    } finally { await test.cleanup(); }
+  });
   it("serializes concurrent policy activation and keeps previous policy aligned", async () => {
     const test = await fixture();
     let holdConcurrent = false;
@@ -1105,6 +1206,10 @@ describe("runner product CLI and service safety", () => {
       expect(result.ok).toBe(true);
       expect(result.checks.map((check) => check.name)).toEqual(expect.arrayContaining(["profile_directory_permissions", "profile_file_permissions", "service_manifest", "service_installed", "service_active", "shell_runtime", "execution_mode", "policy_revision", "tool:python", "tool:docker"]));
       expect(result.checks.filter((check) => check.name === "tool:python" || check.name === "tool:docker").map((check) => ({ name: check.name, status: check.status }))).toEqual([{ name: "tool:python", status: "warning" }, { name: "tool:docker", status: "warning" }]);
+      expect(result.checks.filter(check => ["profile_directory_permissions", "profile_file_permissions"].includes(check.name))).toEqual([
+        expect.objectContaining({ name: "profile_directory_permissions", required: process.platform !== "win32", ok: process.platform !== "win32", status: process.platform === "win32" ? "warning" : "ok" }),
+        expect.objectContaining({ name: "profile_file_permissions", required: process.platform !== "win32", ok: process.platform !== "win32", status: process.platform === "win32" ? "warning" : "ok" }),
+      ]);
       expect(exitCodes).toEqual([]);
       const failingExitCodes: number[] = [];
       // Keep the exit-code seam check independent of host process discovery.
@@ -1119,6 +1224,37 @@ describe("runner product CLI and service safety", () => {
         setExitCode: (code) => failingExitCodes.push(code),
       });
       expect(failingExitCodes).toEqual([1]);
+    } finally { await test.cleanup(); }
+  });
+  it.each([
+    { revision: { desired: 3, applied: 3 }, aligned: true },
+    { revision: { desired: 3, applied: 2 }, aligned: false },
+    { revision: { desired: 3 }, aligned: false },
+    { revision: { applied: 3 }, aligned: false },
+    { revision: {}, aligned: false },
+    { revision: undefined, aligned: false },
+    { revision: { desired: -1, applied: -1 }, aligned: false },
+    { revision: { desired: 1.5, applied: 1.5 }, aligned: false },
+  ])("doctor only confirms observed matching policy revisions: $revision", async ({ revision, aligned }) => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile());
+      const doctorPlatform = process.platform === "win32" ? "win32" : "linux";
+      const manifest = renderService({ platform: doctorPlatform, mode: "system", profilePath: test.store.filePath, executionMode: "dedicated_user" });
+      const lines: string[] = [], exitCodes: number[] = [];
+      await runCli(["doctor", "--json", "--shareable"], {
+        store: test.store, stdout: line => lines.push(line), servicePlatform: doctorPlatform,
+        serviceFilesystem: { read: async () => manifest.content, write: async () => undefined, remove: async () => undefined },
+        serviceManager: { platform: doctorPlatform, mode: "system", install: async () => undefined, stop: async () => undefined,
+          restart: async () => undefined, uninstall: async () => undefined,
+          status: async () => ({ installed: true, active: true, identity: doctorPlatform === "win32" ? "NT AUTHORITY\\LOCAL SERVICE" : "runmesh" }) },
+        discoverShellRuntime: async () => undefined,
+        environment: { get: async () => ({ tools: { node: { available: true } } }) },
+        policyRevision: async () => revision, setExitCode: code => exitCodes.push(code),
+      });
+      const result = JSON.parse(lines[0] ?? "{}");
+      expect(result.checks.find((check: { name: string }) => check.name === "policy_revision")).toEqual({ name: "policy_revision", required: false, ok: aligned, status: aligned ? "ok" : "warning" });
+      expect(result.ok).toBe(true); expect(exitCodes).toEqual([]);
     } finally { await test.cleanup(); }
   });
   it("emits a strict allow-listed shareable doctor report", async () => {
@@ -1147,6 +1283,11 @@ describe("runner product CLI and service safety", () => {
       const result = JSON.parse(text) as { schema_version: number; configured: boolean; checks: Array<{ name: string }>; service: Record<string, unknown> };
       expect(result).toMatchObject({ schema_version: 1, configured: true, service: { mode: "system", execution_mode: "dedicated_user" } });
       expect(result.checks.some((check) => check.name.startsWith("workspace:"))).toBe(false);
+      expect(result.checks.find(check => check.name === "policy_revision")).toEqual({ name: "policy_revision", required: false, ok: false, status: "warning" });
+      if (process.platform === "win32") expect(result.checks.filter(check => ["profile_directory_permissions", "profile_file_permissions"].includes(check.name))).toEqual([
+        { name: "profile_directory_permissions", required: false, ok: false, status: "warning" },
+        { name: "profile_file_permissions", required: false, ok: false, status: "warning" },
+      ]);
       expect(text).not.toContain(secretServer);
       expect(text).not.toContain("secret-token-value");
       expect(text).not.toContain(workspacePath);

@@ -7,6 +7,7 @@ import {
   PROTOCOL_CURRENT_VERSION,
   ProtocolFrameError,
   JsonValueSchema,
+  JobMetadataSchema,
   RpcRequestSchema,
   runnerPolicyChecksum,
   decodeWireFrame,
@@ -45,6 +46,20 @@ const job: JobMetadata = {
   updated_at_ms: 1_700_000_000_001,
   runner_id: "runner-1",
 };
+
+describe("wire timestamp range", () => {
+  it.each([0, 1_700_000_000_000, 8_640_000_000_000_000])("accepts representable timestamp %s", timestamp => {
+    expect(JobMetadataSchema.safeParse({ ...job, created_at_ms: timestamp, updated_at_ms: timestamp }).success).toBe(true);
+  });
+  it.each([8_640_000_000_000_001, Number.MAX_SAFE_INTEGER, -1, 1.5])("rejects timestamp %s before a Runner sync is accepted", timestamp => {
+    for (const field of ["created_at_ms", "updated_at_ms"]) {
+      expect(JobMetadataSchema.safeParse({ ...job, [field]: timestamp }).success).toBe(false);
+      const frame = { protocol_version: PROTOCOL_CURRENT_VERSION, type: "runner.sync", runner_id: "runner-1", sync_sequence: 1,
+        sent_at_ms: 1_700_000_000_000, workspaces: [workspace], jobs: [{ ...job, [field]: timestamp }] };
+      expect(() => decodeWireFrame(JSON.stringify(frame))).toThrow(ProtocolFrameError);
+    }
+  });
+});
 
 const messages: readonly WireMessage[] = [
   {

@@ -1,4 +1,4 @@
-import { CATALOG_LIMITS, type CatalogCommand, type CatalogHead, type CatalogQuery, type CatalogSnapshot,
+import { CATALOG_LIMITS, type CatalogCommand, type CatalogHead, type CatalogQuery, type CatalogSnapshot, type CatalogTool,
   type CatalogCursor, type RemoteToolDefinition } from "./catalog.js";
 import { isCapabilityIdentifier } from "./capabilities.js";
 import { catalogDigest, catalogJson, catalogKeys, catalogObject, catalogRevision, toolName } from "./catalog-json.js";
@@ -63,6 +63,15 @@ export function catalogPublicName(profileId: string, name: string, idDigest: str
   return `rm_${profileId.replace(/[^A-Za-z0-9_.-]/gu, "_").slice(0, 12)}_${name.slice(0, 32)}_${idDigest}`;
 }
 
+/** Project a published entry; containers own field, ordering and aggregate budgets. */
+export function parseCatalogTool(profileId: unknown, value: unknown): CatalogTool | undefined {
+  if (!isCapabilityIdentifier(profileId)) return undefined;
+  const item = catalogObject(value), definition = parseRemoteTool(item?.definition);
+  if (item === undefined || definition === undefined || typeof item.tool_id !== "string" || !/^mcp\.[a-f0-9]{64}$/u.test(item.tool_id)
+    || !catalogDigest(item.version) || item.public_name !== catalogPublicName(profileId, definition.name, item.tool_id.slice(4))) return undefined;
+  return { tool_id: item.tool_id, public_name: item.public_name, version: item.version, definition };
+}
+
 export function parseCatalogSnapshot(value: unknown): CatalogSnapshot | undefined {
   const encoded = catalogJson(value, CATALOG_LIMITS.snapshot_bytes);
   if (encoded === undefined) return undefined;
@@ -73,12 +82,10 @@ export function parseCatalogSnapshot(value: unknown): CatalogSnapshot | undefine
     || !Array.isArray(item.tools) || item.tools.length > CATALOG_LIMITS.tools) return undefined;
   const seen = new Set<string>(); let previous = "";
   for (const entry of item.tools) {
-    const tool = catalogObject(entry), definition = parseRemoteTool(tool?.definition);
-    if (tool === undefined || !catalogKeys(tool, ["tool_id", "public_name", "version", "definition"]) || definition === undefined
-      || typeof tool.tool_id !== "string" || !/^mcp\.[a-f0-9]{64}$/u.test(tool.tool_id) || !catalogDigest(tool.version)
-      || tool.public_name !== catalogPublicName(item.profile_id, definition.name, tool.tool_id.slice(4))
-      || seen.has(tool.tool_id) || definition.name <= previous) return undefined;
-    previous = definition.name; seen.add(tool.tool_id);
+    const raw = catalogObject(entry), tool = parseCatalogTool(item.profile_id, raw);
+    if (raw === undefined || !catalogKeys(raw, ["tool_id", "public_name", "version", "definition"]) || tool === undefined
+      || seen.has(tool.tool_id) || tool.definition.name <= previous) return undefined;
+    previous = tool.definition.name; seen.add(tool.tool_id);
   }
   return item as unknown as CatalogSnapshot;
 }

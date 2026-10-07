@@ -1,7 +1,7 @@
 import type { WorkerEnv } from "../platform/env.js";
 import { SKILL_LIMITS, type CentralSkills } from "../contracts/skills.js";
 import { skillInstallation } from "../domain/skills/install.js";
-import { skillDigest, skillObject } from "../domain/skills/bundle.js";
+import { skillDigest, skillObject } from "../contracts/skill-values.js";
 import { admitCentralAdmin, cancelCentralBody, centralFailure, centralHeaders } from "./central-boundary.js";
 
 export async function handleSkillInstallation(request: Request, env: WorkerEnv, url: URL): Promise<Response> {

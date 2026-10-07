@@ -1,29 +1,24 @@
 import type { EnvironmentReader, ShellRuntime } from "../environment-contracts.js";
 import type { ExecutionMode } from "../service.js";
-import { ProfileStore } from "../profile.js";
-import { purgeInstallation } from "../purge.js";
+import type { ProfileStore } from "../profile.js";
+import type { purgeInstallation } from "../purge.js";
 import type { ServiceManagerAdapter } from "../service.js";
 import type { ServiceManifestFilesystem } from "../service.js";
 import type { ServicePlatform } from "../service.js";
 import type { ServicePrivilegeState } from "../service.js";
 import type { ServiceProvisioner } from "../service.js";
-import { validateRunnerConfig } from "../config.js";
+import type { validateRunnerConfig } from "../config.js";
 import type { MaintenanceManagerInstaller } from "../updates/manager-install.js";
 import type { MaintenanceAgentOptions } from "../updates/agent.js";
 
-export interface CliDependencies {
+/** Host lifecycle ports shared by the product CLI and independent manager. */
+export interface ServiceCliDependencies {
   /** Injected cleanup executor; tests must never purge a host installation. */
   readonly purgeInstallation?: typeof purgeInstallation;
-  readonly store?: ProfileStore;
-  readonly stdout?: (line: string) => void;
-  readonly stderr?: (line: string) => void;
-  readonly fetch?: typeof globalThis.fetch;
-  readonly startRunner?: (config: Awaited<ReturnType<typeof validateRunnerConfig>>) => Promise<void>;
   /** Injectable host adapter; production uses the platform service manager. */
   readonly serviceManager?: ServiceManagerAdapter;
   /** Independent manager installation is injectable alongside native services. */
   readonly maintenanceManager?: MaintenanceManagerInstaller;
-  readonly startMaintenanceAgent?: (options: MaintenanceAgentOptions) => Promise<void>;
   /** Injectable service-account and Runmesh-owned directory/ACL setup. */
   readonly serviceProvisioner?: ServiceProvisioner;
   /** Injectable manifest I/O keeps service tests off the host filesystem. */
@@ -31,11 +26,24 @@ export interface CliDependencies {
   readonly servicePlatform?: ServicePlatform;
   /** Test hook for elevated system installation checks. */
   readonly isAdministrator?: () => boolean;
+  readonly confirmPrivilegedHost?: boolean;
+}
+
+/** Maintenance has no execution, enrollment or diagnostic ports. */
+export interface MaintenanceCliDependencies extends ServiceCliDependencies {
+  readonly store?: ProfileStore;
+  readonly stdout?: (line: string) => void;
+  readonly stderr?: (line: string) => void;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly startMaintenanceAgent?: (options: MaintenanceAgentOptions) => Promise<void>;
+}
+
+export interface CliDependencies extends MaintenanceCliDependencies {
+  readonly startRunner?: (config: Awaited<ReturnType<typeof validateRunnerConfig>>) => Promise<void>;
   /** Injectable local discovery keeps doctor diagnostics deterministic in tests. */
   readonly environment?: EnvironmentReader;
   readonly discoverShellRuntime?: () => Promise<ShellRuntime | undefined>;
   readonly executionMode?: ExecutionMode;
-  readonly confirmPrivilegedHost?: boolean;
   /** Optional local policy revision source; normal profiles do not persist central policy state. */
   readonly policyRevision?: () => Promise<{ readonly desired?: number; readonly applied?: number } | undefined>;
   /** Injectable exit-code seam for doctor failures; production sets process.exitCode. */

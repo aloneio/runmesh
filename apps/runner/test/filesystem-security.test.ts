@@ -95,6 +95,64 @@ describe.sequential("filesystem security regressions", () => {
     } finally { await test.cleanup(); }
   });
 
+  it.each(["literal", "filename"])("inherits ancestor rules and child negation when searching a subtree in %s mode", async mode => {
+    const test = await fixture();
+    try {
+      await fs.mkdir(join(test.root, "src", "nested"), { recursive: true });
+      await fs.writeFile(join(test.root, ".gitignore"), "*.secret\n/src/*.log\n");
+      await fs.writeFile(join(test.root, "src", ".gitignore"), "nested/*.log\n");
+      await fs.writeFile(join(test.root, "src", "nested", ".gitignore"), "!needle-keep.log\n");
+      for (const name of ["needle-private.secret", "needle-drop.log", "needle-public.txt", "needle-keep.log"]) {
+        await fs.writeFile(join(test.root, "src", "nested", name), "needle\n");
+      }
+      const input = { workspace_id: "test", query: "needle", mode, include_globs: ["needle-*"] };
+      const root = await test.service.search(input), subtree = await test.service.search({ ...input, path: "src/nested" });
+      expect(subtree.results).toEqual(root.results);
+      expect((subtree.results as { path: string }[]).map(result => result.path).sort()).toEqual(["src/nested/needle-keep.log", "src/nested/needle-public.txt"]);
+      expect(subtree.scanned).toMatchObject({ directories: 3 });
+    } finally { await test.cleanup(); }
+  });
+
+  it("keeps an ignored ancestor pruned when its subtree is selected directly", async () => {
+    const test = await fixture();
+    try {
+      await fs.mkdir(join(test.root, "ignored", "nested"), { recursive: true });
+      await fs.writeFile(join(test.root, ".gitignore"), "ignored/\n");
+      await fs.writeFile(join(test.root, "ignored", "nested", ".gitignore"), "!needle.txt\n");
+      await fs.writeFile(join(test.root, "ignored", "nested", "needle.txt"), "needle\n");
+      for (const path of [".", "ignored", "ignored/nested"]) {
+        expect((await test.service.search({ workspace_id: "test", path, query: "needle" })).results).toEqual([]);
+      }
+    } finally { await test.cleanup(); }
+  });
+
+  it("invalidates subtree cursors when ancestor rules change", async () => {
+    const test = await fixture();
+    try {
+      await fs.mkdir(join(test.root, "src"));
+      await fs.writeFile(join(test.root, ".gitignore"), "# initial rules\n");
+      await fs.writeFile(join(test.root, "src", "public.txt"), "needle one\nneedle two\n");
+      const input = { workspace_id: "test", path: "src", query: "needle", max_results: 1 };
+      const first = await test.service.search(input);
+      await fs.writeFile(join(test.root, ".gitignore"), "src/public.txt\n");
+      await expect(test.service.search({ ...input, cursor: first.next_snapshot_cursor })).rejects.toMatchObject({ code: "search_snapshot_changed" });
+    } finally { await test.cleanup(); }
+  });
+
+  it("keeps both ignore-rule and result observations in a search snapshot", async () => {
+    const test = await fixture();
+    try {
+      await fs.writeFile(join(test.root, ".gitignore"), "# needle A-one\n# needle A-two\n");
+      const input = { workspace_id: "test", query: "needle", max_results: 1 };
+      const first = await test.service.search(input);
+      expect(first.next_snapshot_cursor).toMatch(/^s1:/);
+      expect((await test.service.search({ ...input, cursor: first.next_snapshot_cursor })).results).toEqual([expect.objectContaining({ text: "# needle A-two" })]);
+      await fs.writeFile(join(test.root, ".gitignore"), "# needle B-one\n# needle B-two\n");
+      await expect(test.service.search({ ...input, cursor: first.next_snapshot_cursor })).rejects.toMatchObject({ code: "search_snapshot_changed" });
+      expect((await test.service.search(input)).results).toEqual([expect.objectContaining({ text: "# needle B-one" })]);
+    } finally { await test.cleanup(); }
+  });
+
   it.skipIf(process.platform !== "linux")("reads the pinned directory when its pathname is swapped away and restored around opendir", async () => {
     const test = await fixture();
     const path = join(test.root, "listing"); const held = join(test.root, "held");

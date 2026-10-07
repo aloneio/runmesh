@@ -36,6 +36,7 @@ import { runnerInstallScript } from "./http/distribution.js";
 import { runnerRelease } from "./http/distribution.js";
 import { runnerUninstallScript } from "./http/distribution.js";
 import type { WorkerEnv } from "./platform/env.js";
+import { historyLifecycleReader } from "./platform/history-lifecycle.js";
 
 // must never be opened or migrated in place.
 export { RegistryDO, RegistryDOv2, RunnerDO };
@@ -50,7 +51,7 @@ export default {
     // Deriving an ID does not instantiate a DO or touch its SQLite storage.
     const history = new ExternalAuditHistory(env.HISTORY_DB, env.REGISTRY.idFromName("registry").toString());
     if (env.RUNMESH_AUDIT_BACKEND === "d1") await history.cleanup();
-    if (env.RUNMESH_JOB_HISTORY_BACKEND === "d1") await new PackedJobHistory(env.HISTORY_DB,env.REGISTRY.idFromName("registry").toString()).cleanup();
+    if (env.RUNMESH_JOB_HISTORY_BACKEND === "d1") await new PackedJobHistory(env.HISTORY_DB,env.REGISTRY.idFromName("registry").toString()).cleanup(historyLifecycleReader(env));
   },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     env = resolveRuntimeConfiguration(env, request);

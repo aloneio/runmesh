@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { adminJobUrl, loadAdminJobPage } from "../src/admin-jobs.js";
+import { localizeHtmlResponse } from "../src/i18n/html.js";
+import { adminDocument } from "../src/admin/layout.js";
 
 const origin = "https://worker.test";
 const path = "/admin/runners/test-runner/jobs/test-job";
@@ -12,6 +14,41 @@ function fixture(state = "online") {
 }
 
 describe("on-demand administrator job detail", () => {
+  it.each(["en", "zh-CN"])("preserves identifiers that also name UI labels in %s", async locale => {
+    const labels = locale === "en" ? ["Job", "Workspace", "MCP client", "Status", "Runner state"] : ["任务", "工作区", "MCP 客户端", "状态", "Runner 状态"];
+    for (const identifier of ["read", "Write", "Source"]) {
+      const job = { job_id: identifier, runner_id: "runner", workspace_id: identifier, created_by_client_id: identifier, status: "succeeded" };
+      const page = await loadAdminJobPage(new URL(`${origin}/admin/runners/runner/jobs/${identifier}`), "runner", identifier,
+        async url => Response.json(url.includes("/jobs/") ? job : { runner_id: "runner", state: "online" }), async () => undefined);
+      expect(page.ok).toBe(true); if (!page.ok) continue;
+      const output = await localizeHtmlResponse(new Request(`${origin}/admin?lang=${locale}`),
+        new Response(adminDocument(page.title, page.body, "runners"), { headers: { "content-type": "text/html" } })).text();
+      expect(output).toContain(`<title data-no-i18n>${locale === "en" ? "Job details" : "任务详情"} · ${identifier} · Runmesh · ${locale === "en" ? "Agent Control Plane" : "智能体控制平面"}</title>`);
+      for (const label of labels.slice(0, 3)) expect(output).toContain(`<tr><th>${label}</th><td class="mono" data-no-i18n>${identifier}</td></tr>`);
+      expect(output).toContain(`<tr><th>${labels[3]}</th><td class="mono">${locale === "en" ? "succeeded" : "成功"}</td></tr>`);
+      expect(output).toContain(`<tr><th>${labels[4]}</th><td class="mono">${locale === "en" ? "online" : "在线"}</td></tr>`);
+    }
+  });
+  it.each(["en", "zh-CN"])("labels all log selectors in %s without changing their request values", async locale => {
+    const f = fixture(), page = await f.open("?stream=stderr&view=head&bytes=1024");
+    expect(page.ok).toBe(true); if (!page.ok) return;
+    const localized = await localizeHtmlResponse(new Request(origin + path + '?lang=' + locale),
+      new Response('<html><body>' + page.body + '</body></html>', { headers: { 'content-type': 'text/html' } })).text();
+    const labels = locale === 'en' ? ['Log stream', 'Log bytes', 'Output position'] : ['日志流', '日志片段大小', '读取位置'];
+    for (const [index, field] of ['stream', 'bytes', 'view'].entries()) expect(localized).toContain(`<label>${labels[index]}<select name="${field}">`);
+    expect(localized).toContain('<option value="stderr" selected>stderr</option>');
+    expect(localized).toContain('<option value="head" selected>');
+    expect(localized).toContain('<option value="1024" selected>1 KiB</option>');
+    expect(f.logs).toHaveBeenCalledExactlyOnceWith({ job_id: 'test-job', expected_workspace_id: 'work', stream: 'stderr', limit: 1024 });
+  });
+  it("preserves task details when stored timestamps exceed the Date range", async () => {
+    const f = fixture();
+    f.job.created_at_ms = 8_640_000_000_000_001; f.job.updated_at_ms = Number.MAX_SAFE_INTEGER;
+    const page = await f.open();
+    expect(page.ok).toBe(true);
+    if (page.ok) { expect(page.body).toContain('test-job'); expect(page.body.match(/<td class="mono" data-no-i18n>—<\/td>/gu)).toHaveLength(2); }
+    expect(f.logs).not.toHaveBeenCalled();
+  });
   it("opens persisted metadata without fetching any live logs or command details", async () => {
     const f = fixture(); const page = await f.open();
     expect(page.ok).toBe(true); if (!page.ok) return;

@@ -1,5 +1,8 @@
 /** Additional feature boundaries; native layer and cycle gates still apply. */
 export function centralFeature(path) {
+  if (/^apps\/worker\/src\/contracts\/skill-(?:source(?:-values)?|lifecycle(?:-(?:values|receipts))?|manifest|values)\.[cm]?[jt]sx?$/u.test(path)) return "skills";
+  if (/^apps\/worker\/src\/contracts\/(?:connector-inspection|mcp-registry)\.[cm]?[jt]sx?$/u.test(path)) return "connectors";
+  if (/^apps\/worker\/src\/contracts\/(?:tool-search|remote-server)\.[cm]?[jt]sx?$/u.test(path)) return "capabilities";
   if (path.startsWith('apps/worker/src/contracts/') && /managed-(oauth|connections)[.][cm]?[jt]sx?$/u.test(path)) return 'connectors';
   if (/^apps\/worker\/src\/contracts\/oauth(?:-values)?\.[cm]?[jt]sx?$/u.test(path)) return "connectors";
   if (/^apps\/worker\/src\/contracts\/remote(?:-values)?\.[cm]?[jt]sx?$/u.test(path)) return "capabilities";
@@ -21,7 +24,7 @@ const storageDependencies = new Set([...storageContracts, "apps/worker/src/contr
 const sharedProvider = path => path === "apps/worker/src/mcp/providers/schema-publication.ts";
 
 export function centralDependencyProblem(from, to) {
-  if (["apps/worker/src/application/connectors/deadline.ts", "apps/worker/src/application/capabilities/remote-deadline.ts"].includes(from)
+  if (["apps/worker/src/application/connectors/deadline.ts", "apps/worker/src/application/capabilities/remote-deadline.ts", "apps/worker/src/application/skills/source-deadline.ts"].includes(from)
     && to === "apps/worker/src/async-deadline.ts") return undefined;
   if (sharedProvider(from) && !to.startsWith("apps/worker/src/contracts/"))
     return "Shared schema publication must not import feature, request or platform implementations";
@@ -60,6 +63,9 @@ export function centralDependencyProblem(from, to) {
 }
 
 export function centralSpecifierProblem(from, specifier) {
+  // Bounded YAML data parsing is owned by this one pure adapter, never by
+  // application services or transport handlers.
+  if (from === "apps/worker/src/domain/skills/frontmatter.ts" && specifier === "yaml") return undefined;
   if ((storageContracts.has(from) || from === "apps/worker/src/platform/secret-storage.ts") && !specifier.startsWith("."))
     return "Shared encryption and serialization use local foundation contracts, not external feature SDKs";
   if (unreviewed(from)) return "Central modules require a reviewed feature role";

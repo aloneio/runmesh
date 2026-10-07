@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { runCli } from "../src/cli.js";
 import { ProfileStore } from "../src/profile.js";
-import { createServiceManager, createServiceProvisioner, hashContent, isManagedService, renderService, serviceCommands, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
+import { createServiceManager, createServiceProvisioner, hashContent, isManagedService, renderService, serviceCommands, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform } from "../src/service.js";
 import { ensureManagedUserLaunch } from "../src/services/user-launch.js";
 
 const connection = vi.hoisted(() => ({ constructed: vi.fn(), started: vi.fn(async () => undefined) }));
@@ -81,7 +81,7 @@ it("stops and resumes a macOS KeepAlive service through the public CLI", async (
 
 it("keeps the public user install command and generated service execution mode aligned", async () => {
   const test = await fixture();
-  const platform = process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
+  const platform: ServicePlatform = process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
   const contents = new Map<string, string>();
   const filesystem: ServiceManifestFilesystem = {
     read: async path => contents.get(path),
@@ -134,8 +134,10 @@ it.each(["linux", "darwin", "win32"] as const)("refreshes an existing %s user la
     command: `${executable} start --json --max-concurrent-jobs 2` });
   // Model the exact earlier renderer's missing flag with an intact ownership
   // marker, rather than inventing a malformed/unmanaged service definition.
-  const originalBody = original.content.slice(original.content.indexOf("\n") + 1)
+  let originalBody = original.content.slice(original.content.indexOf("\n") + 1)
     .replace("<string>--user</string>", "").replace(" --user", "");
+  if (platform !== "linux") originalBody = `<?xml version="1.0" encoding="UTF-8"?>\n${originalBody}`;
+  if (platform === "win32") originalBody = originalBody.replace(/<(ExecutionTimeLimit|DisallowStartIfOnBatteries|StopIfGoingOnBatteries)>[^<]*<\/\1>/gu, "");
   const marker = platform === "linux" ? `# runmesh-runner-managed:${hashContent(originalBody)}\n` : `<!-- runmesh-runner-managed:${hashContent(originalBody)} -->\n`;
   const previous = `${marker}${originalBody}`;
   expect(isManagedService(previous)).toBe(true);

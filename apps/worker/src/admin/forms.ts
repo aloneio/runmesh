@@ -5,6 +5,9 @@ import { isFullHostPath } from "./host-path-label.js";
 import { LOCKED_PERMISSION_SET, PERMISSION_BITS, normalizeUiPermissionSet } from "@aloneio/runmesh-protocol";
 import { workspacePermissionPreset } from "../contracts/permission-profiles.js";
 
+// HTML pattern uses Unicode sets (v): literal hyphens must be escaped.
+export const IDENTIFIER_INPUT_PATTERN = String.raw`[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}`;
+
 export function passwordToggle(): string {
   return `<button type="button" class="pwd-toggle-btn" aria-label="Show password">
     <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
@@ -125,7 +128,7 @@ export function managedWorkspaceForm(runnerId: string, workspace: Record<string,
         <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
         <input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}">
         <label>Type Workspace ID to confirm
-          <input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required placeholder="${escapeHtml(workspaceId)}">
+          <input name="confirmation" pattern="${IDENTIFIER_INPUT_PATTERN}" required data-no-i18n placeholder="${escapeHtml(workspaceId)}">
         </label>
         <button class="small danger">${message("text.delete.workspace", "en")}</button>
       </form>

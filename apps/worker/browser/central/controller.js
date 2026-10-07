@@ -3,102 +3,110 @@ import { createCentralApi } from "./api.js";
 import { createCentralView } from "./view.js";
 import { createServiceWorkflow } from "./services.js";
 import { createSkillWorkflow } from "./skills.js";
+import { bindRegistryImport } from "./registry.js";
+import { createCentralOperations } from './operations.js';
 
-/** One owner for refresh admission, snapshots and busy state across both workflows. */
+const bound = new WeakSet();
+
+/** Own collection snapshots and admission without coupling Skill work to remote MCP recovery. */
 export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, replaceCurrentUrl }) {
-  var app = root.querySelector('[data-central-product]');
-  if (!app || app.__productBound) return;
-  app.__productBound = true;
-  var t = createCentralTranslator(document.documentElement.lang),
-    profiles = [],
-    skills = [],
-    busy = false,
-    mustRefresh = false;
-  const lockedControls = new Map();
-  var view = createCentralView(app, t, run),
-    say = view.say;
-  var client = createCentralApi({
+  const app = root.querySelector('[data-central-product]');
+  if (!app || bound.has(app)) return;
+  bound.add(app);
+  const t = createCentralTranslator(document.documentElement.lang), uncertain = new Map();
+  let profiles = [], skills = [], profileReads = Promise.resolve(), skillReads = Promise.resolve();
+  let profilesReady = false, skillsReady = false;
+  const runService = (action, scope = 'mcp-create', options) => operations.run(action, scope, options);
+  const runSkill = action => operations.run(action, 'skills');
+  const view = createCentralView(app, t, runService), skillView = createCentralView(app, t, runSkill);
+  const operations = createCentralOperations({ app, isCurrent,
+    working: () => view.say(t('working')),
+    reportError: error => view.say(error instanceof Error && error.name !== 'AbortError'
+      ? error.message : t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'), true) });
+  const client = createCentralApi({
     csrf: app.getAttribute('data-csrf'),
-    t,
-    isCurrent,
-    refreshRequired: () => mustRefresh,
-    requireRefresh: () => {
-      mustRefresh = true;
+    sourceTimeoutMs: Number(app.getAttribute('data-source-timeout-ms')),
+    t, isCurrent,
+    refreshRequired: scope => {
+      return uncertain.has(scope) || !(scope === 'skills' ? skillsReady : profilesReady);
+    },
+    requireRefresh: scope => {
+      uncertain.set(scope, {});
+      (scope === 'skills' ? skillView : view).invalidate(scope);
     }
   });
-  var services = createServiceWorkflow({
-    app,
-    api: client.request,
-    view,
-    t,
-    refresh,
-    run,
-    navigate: url => {
-      if (isCurrent()) navigate(url);
-    }
-  });
-  var skillWorkflow = createSkillWorkflow({
-    app,
-    api: client.request,
-    view,
-    t,
-    refresh,
-    run,
-    getSkills: () => skills
-  });
-  function isCurrent() {
-    return app.isConnected && pageIsCurrent();
+  const services = createServiceWorkflow({ app, api: client.request, view, t, refresh: refreshProfiles,
+    run: runService, getProfiles: () => profiles,
+    navigate: url => { if (isCurrent()) navigate(url); } });
+  const skillWorkflow = createSkillWorkflow({ app, api: client.request, view: skillView, t,
+    refresh: refreshSkills, run: runSkill, getSkills: () => skills });
+  bindRegistryImport({ app, api: client.request, view, t, run: runService });
+  app.querySelector('[data-service-create]')?.setAttribute('data-operation-scope', 'mcp-create');
+  app.querySelector('[data-registry-import]')?.setAttribute('data-operation-scope', 'mcp-create');
+  app.querySelector('[data-central-panel="skills"]')?.setAttribute('data-operation-scope', 'skills');
+  const refreshButton = app.querySelector('[data-product-refresh]');
+  refreshButton.setAttribute('data-operation-scope', 'library');
+  function isCurrent() { return app.isConnected && pageIsCurrent(); }
+  function reconciliation(scope) {
+    const observed = [...uncertain].filter(([key]) => scope === 'skills' ? key === scope : key !== 'skills');
+    return () => { for (const [key, marker] of observed) if (uncertain.get(key) === marker) uncertain.delete(key); };
   }
-  function lockControls() {
-    app.querySelectorAll('button,input,select').forEach(function (control) {
-      if (!lockedControls.has(control)) lockedControls.set(control, control.disabled);
-      control.disabled = true;
-    });
+  function refreshProfiles({ silent = false, background = false } = {}) {
+    const read = async () => {
+      const reconciled = reconciliation('mcp');
+      let listed;
+      try { listed = await client.list('profiles', 'profiles'); }
+      catch (error) { profilesReady = false; throw error; }
+      profiles = listed;
+      services.render(profiles);
+      operations.sync();
+      reconciled();
+      profilesReady = true;
+      if (!silent && !background) view.say(t('libraryIsUpToDate'));
+      return profiles;
+    };
+    const result = profileReads.then(read);
+    profileReads = result.catch(() => {});
+    return result;
   }
-  async function run(action) {
-    if (busy || !isCurrent()) return;
-    busy = true;
-    app.setAttribute('aria-busy', 'true');
-    lockControls();
-    say(t('working'));
-    try {
-      await action();
-    } catch (error) {
-      if (isCurrent()) say(error instanceof Error && error.name !== 'AbortError' ? error.message : t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'), true);
-    } finally {
-      busy = false;
-      app.setAttribute('aria-busy', 'false');
-      lockedControls.forEach(function (disabled, control) {
-        if (control.isConnected) control.disabled = disabled;
-      });
-      lockedControls.clear();
-    }
+  function refreshSkills({ silent = false } = {}) {
+    const read = async () => {
+      const reconciled = reconciliation('skills');
+      skillView.invalidate();
+      try { skills = app.getAttribute('data-skills') === 'true' ? await client.list('skills', 'skills') : []; }
+      catch (error) { skillsReady = false; throw error; }
+      skillWorkflow.render(skills);
+      operations.sync();
+      reconciled();
+      skillsReady = true;
+      if (!silent) skillView.say(t('libraryIsUpToDate'));
+      return skills;
+    };
+    const result = skillReads.then(read);
+    skillReads = result.catch(() => {});
+    return result;
   }
-  async function refresh({ silent = false } = {}) {
-    mustRefresh = true;
+  async function refresh() {
     view.invalidate();
-    profiles = await client.list('profiles', 'profiles');
-    skills = app.getAttribute('data-skills') === 'true' ? await client.list('skills', 'skills') : [];
-    services.render(profiles);
-    skillWorkflow.render(skills);
-    if (busy) lockControls();
-    mustRefresh = false;
-    if (!silent) say(t('libraryIsUpToDate'));
-    return profiles;
+    await Promise.all([refreshProfiles({ silent: true }), refreshSkills({ silent: true })]);
+    view.say(t('libraryIsUpToDate'));
   }
-  app.querySelector('[data-product-refresh]').addEventListener('click', function () {
-    run(refresh);
+  refreshButton.addEventListener('click', () => operations.run(refresh, 'library'));
+  app.addEventListener('input', () => operations.interacted());
+  app.addEventListener('change', () => operations.interacted());
+  app.querySelectorAll('[data-central-tab]').forEach(tab => {
+    tab.addEventListener('click', () => { operations.interacted(); view.showTab(tab.getAttribute('data-central-tab')); });
   });
-  app.querySelectorAll('[data-central-tab]').forEach(function (tab) {
-    tab.addEventListener('click', function () {
-      view.showTab(tab.getAttribute('data-central-tab'));
-    });
-  });
-  run(async function () {
+  operations.run(async () => {
     await refresh();
     if (!isCurrent()) return;
-    var connected = new URL(location.href).searchParams.get('connected');
+    const connected = new URL(location.href).searchParams.get('connected');
     if (connected) replaceCurrentUrl('/admin/central');
-    await services.resumePending(profiles, connected);
+    // Start after the initial collection lock is released; recovery owns each MCP separately.
+    return { connected };
+  }, 'library').then(result => {
+    const activity = operations.activity();
+    if (result && isCurrent()) void services.resumePending(profiles, result.connected,
+      () => isCurrent() && operations.activity() === activity);
   });
 }

@@ -1,6 +1,7 @@
-/** DOM primitives and presentation; writes are serialized by the controller. */
+/** DOM primitives and presentation; the controller supplies operation admission. */
 export function createCentralView(app, t, run) {
   var status = app.querySelector("[data-product-status]");
+  const invalidationListeners = new Set();
   function el(tag, text, className) {
     var n = document.createElement(tag);
     if (text !== undefined) n.textContent = text;
@@ -11,11 +12,12 @@ export function createCentralView(app, t, run) {
     status.textContent = text;
     status.setAttribute('data-error', String(!!error));
   }
-  function button(parent, label, action) {
+  function button(parent, label, action, scope) {
     var b = el('button', label, 'button small secondary');
     b.type = 'button';
+    if (scope) b.setAttribute('data-operation-scope', scope);
     b.addEventListener('click', function () {
-      run(action);
+      run(action, scope);
     });
     parent.appendChild(b);
     return b;
@@ -30,11 +32,8 @@ export function createCentralView(app, t, run) {
     d.append(s, p);
     parent.appendChild(d);
   }
-  function invalidate() {
-    app.querySelectorAll('[data-service-tools],[data-skill-review]').forEach(function (n) {
-      clear(n);
-      n.hidden = true;
-    });
+  function invalidate(scope) {
+    invalidationListeners.forEach(listener => listener(scope));
   }
   function showTab(name) {
     app.querySelectorAll('[data-central-tab]').forEach(function (b) {
@@ -53,6 +52,7 @@ export function createCentralView(app, t, run) {
     clear,
     details,
     invalidate,
+    onInvalidate(listener) { invalidationListeners.add(listener); },
     showTab
   };
 }

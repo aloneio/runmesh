@@ -8,13 +8,21 @@ import { handleCentralSkills } from "./central-skills.js";
 import { handleCentralManagement } from "./central-management.js";
 import { handleCentralReceipts } from "./central-receipts.js";
 import { handleSkillInstallation } from "./central-skill-install.js";
+import { handleSkillSource } from "./central-skill-source.js";
+import { handleSkillLifecycleAdmin } from "./central-skill-lifecycle.js";
+import { handleConnectorInspection } from "./central-inspection.js";
+import { handleRegistryPreview } from "./central-registry.js";
 import { handleConnections } from "./central-connections.js";
 import { matchIdentifierPath } from "./path-identifiers.js";
 
 /** Optional browser-admin JSON entry. No bearer-token fallback, plaintext read or MCP tool. */
 export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   if (url.pathname.startsWith("/admin/central/connections/")) return handleConnections(request, env, url);
+  if (url.pathname === "/admin/central/connection-check") return handleConnectorInspection(request, env, url);
+  if (url.pathname === "/admin/central/registry-preview") return handleRegistryPreview(request, env, url);
   if (url.pathname === "/admin/central/skill-installations") return handleSkillInstallation(request, env, url);
+  if (url.pathname.startsWith("/admin/central/skill-source/")) return handleSkillSource(request, env, url);
+  if (/^\/admin\/central\/skills\/[^/]+\/(?:versions|compare|retention|cleanup-preview|cleanup)$/u.test(url.pathname)) return handleSkillLifecycleAdmin(request, env, url);
   if (url.pathname === "/admin/central/receipts") return handleCentralReceipts(request, env, url);
   if (url.pathname === "/admin/central/profiles") return handleCentralManagement(request, env, url);
   if (url.pathname === "/admin/central/skills" || url.pathname.startsWith("/admin/central/skills/")) return handleCentralSkills(request, env, url);

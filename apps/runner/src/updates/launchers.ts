@@ -1,7 +1,7 @@
 import type { ServicePlatform } from "../service.js";
+import { MAINTENANCE_SERVICE_COMMANDS } from "../maintenance-contract.js";
 import { posix, win32 } from "node:path";
 
-const managementCommands = ["install", "migrate", "stop", "restart", "uninstall"] as const;
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 /** These local shims are outside the signed package contents. Only service
@@ -11,11 +11,11 @@ export function renderManagedLauncher(platform: ServicePlatform, installRoot: st
   if (!path.isAbsolute(installRoot) || /[\0\r\n"]/u.test(installRoot)) throw new Error("invalid managed launcher root");
   const manager = path.join(installRoot, "manager");
   if (platform !== "win32") {
-    return `#!/bin/sh\ncase "\${1-}" in\n  ${managementCommands.join("|")}) exec ${shellQuote(path.join(manager, "runtime", "node"))} ${shellQuote(path.join(manager, "runmesh.cjs"))} "$@" ;;\nesac\nROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$ROOT/../runtime/node" "$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/runmesh.cjs" "$@"\n`;
+    return `#!/bin/sh\ncase "\${1-}" in\n  ${MAINTENANCE_SERVICE_COMMANDS.join("|")}) exec ${shellQuote(path.join(manager, "runtime", "node"))} ${shellQuote(path.join(manager, "runmesh.cjs"))} "$@" ;;\nesac\nROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$ROOT/../runtime/node" "$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/runmesh.cjs" "$@"\n`;
   }
   const quoted = (value: string) => `"${value.replaceAll("%", "%%")}"`;
   return ["@echo off", "setlocal DisableDelayedExpansion", 'if "%~1"=="uninstall" goto maintenance_uninstall',
-    ...managementCommands.filter(command => command !== "uninstall").map(command => `if "%~1"=="${command}" goto maintenance`),
+    ...MAINTENANCE_SERVICE_COMMANDS.filter(command => command !== "uninstall").map(command => `if "%~1"=="${command}" goto maintenance`),
     '"%~dp0runtime\\node.exe" "%~dp0runmesh.cjs" %*', "exit /b %errorlevel%", ":maintenance",
     `${quoted(path.join(manager, "runtime", "node.exe"))} ${quoted(path.join(manager, "runmesh.cjs"))} %*`, "exit /b %errorlevel%", ":maintenance_uninstall",
     // Unload this batch before purge deletes it. CMD still runs the parsed

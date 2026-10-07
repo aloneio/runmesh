@@ -14,11 +14,20 @@ import { READ_ONLY_PERMISSIONS, DEFAULT_RUNNER_ENROLLMENT_TTL_MS } from './recor
 import { validRunnerVersion, validLifecycleId, validSessionId, validTransportIdentity, matchesTransportIdentity, validUpdateChannel, validExecutionMode, validOptionalExecutionMode, validExpectedExecutionMode, validRunnerEnrollmentTtl, protocolCompatibility, updateStatus, emptyMutationState, decodeRunner, safeNonnegativeInteger, validVerifier, validMutationId, validOptionalMutationId, validLabel, validRunnerPublicInfo, expectedRegistryConflict } from './values.js';
 import type { RegistryStorage } from './storage.js';
 import type { LifecyclePorts } from './ports.js';
+import { validHistoryRunnerIds } from "../contracts/history-lifecycle.js";
 
 /** Lifecycle operations over a single Registry database. Construction has no I/O.
  * SQL text, arguments, transaction callbacks and await positions are retained. */
 export class RegistryLifecycle {
   public constructor(private readonly storage: RegistryStorage, private readonly ports: LifecyclePorts, private readonly runnerTokenPepper: string | undefined) {}
+  public historyLifecycles(runnerIds: readonly string[]): readonly { runner_id: string; lifecycle_id: string | null }[] | undefined {
+    if (!validHistoryRunnerIds(runnerIds)) return undefined;
+    const rows = this.storage.sql.exec<{ runner_id: string; lifecycle_id: string }>(
+      `SELECT runner_id,lifecycle_id FROM runners WHERE runner_id IN (${runnerIds.map(() => "?").join(",")})`, ...runnerIds).toArray();
+    if (rows.some(row => !validLifecycleId(row.lifecycle_id))) return undefined;
+    const current = new Map(rows.map(row => [row.runner_id, row.lifecycle_id]));
+    return runnerIds.map(runner_id => ({ runner_id, lifecycle_id: current.get(runner_id) ?? null }));
+  }
   public getRunnerMutationState(runnerId: string, mutationId: string): RunnerMutationState {
     if (!isSafeIdentifier(runnerId) || !validMutationId(mutationId)) return emptyMutationState();
     const runner = this.runnerRow(runnerId);

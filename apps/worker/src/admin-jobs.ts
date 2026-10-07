@@ -2,10 +2,12 @@ import { adminJobUrl } from "./admin/job-views.js";
 import { isSafeIdentifier } from "./security.js";
 import { JOBS_EXPLANATION } from "./admin/job-views.js";
 import { jobSnapshotNote } from "./admin/job-views.js";
+import { timestamp } from "./admin/format.js";
+import type { UiTitlePart } from "./contracts/locale.js";
 
 const LOG_LIMIT = 16 * 1024;
 
-type JobPage = { readonly ok: true; readonly title: string; readonly body: string }
+type JobPage = { readonly ok: true; readonly title: readonly UiTitlePart[]; readonly body: string }
   | { readonly ok: false; readonly status: 400 | 404 | 503; readonly message: string };
 
 type ReadRegistry = (path: string) => Promise<Response>;
@@ -72,22 +74,22 @@ export async function loadAdminJobPage(url: URL, runnerId: string, jobId: string
   }
   // Do not render the raw record: future producer changes must not expose
   // commands, host paths or unapproved fields through this metadata view.
-  const fields: readonly (readonly [string, unknown])[] = [
+  const fields: readonly (readonly [label: string, value: unknown, translate?: boolean])[] = [
     ["Job", jobId], ["Workspace", job.workspace_id], ["MCP client", job.created_by_client_id ?? "—"],
-    ["Status", job.status], ["Created", timestamp(job.created_at_ms)], ["Updated", timestamp(job.updated_at_ms)],
-    ["Runner state", runner.state],
+    ["Status", job.status, true], ["Created", timestamp(job.created_at_ms)], ["Updated", timestamp(job.updated_at_ms)],
+    ["Runner state", runner.state, true],
   ];
   const refresh = stream === null ? `${path}${workspaceId === null ? "" : `?workspace_id=${encodeURIComponent(workspaceId)}`}` : link(`stream=${stream}&bytes=${limit}${cursor === null ? `&view=${view}` : `&cursor=${cursor}`}`);
   const logControls = `<form method="get" action="${path}" class="scope-editor-form">
     ${workspaceId === null ? "" : `<input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}">`}
-    <select name="stream"><option value="stdout">stdout</option><option value="stderr"${stream === "stderr" ? " selected" : ""}>stderr</option></select>
+    <label>Log stream<select name="stream"><option value="stdout">stdout</option><option value="stderr"${stream === "stderr" ? " selected" : ""}>stderr</option></select></label>
     <label>Log bytes<select name="bytes">${[1024,4096,16384].map((n) => `<option value="${n}"${n === limit ? " selected" : ""}>${n/1024} KiB</option>`).join("")}</select></label>
-    <select name="view"><option value="tail">Latest output</option><option value="head"${view === "head" ? " selected" : ""}>Beginning</option></select>
+    <label>Output position<select name="view"><option value="tail">Latest output</option><option value="head"${view === "head" ? " selected" : ""}>Beginning</option></select></label>
     <button class="button secondary">Read / Refresh</button></form>`;
   return {
     ok: true,
-    title: `Job details · ${jobId}`,
-    body: `<section class="page-heading"><div><h1>Job details</h1><p class="lede">${JOBS_EXPLANATION}</p></div><a class="button secondary" href="${escapeHtml(refresh)}">Refresh</a></section><p><a href="/admin/runners/${encodeURIComponent(runnerId)}">Back to Runner</a></p><section class="panel">${workspaceId === null ? jobSnapshotNote() : '<p class="muted">Live Runner metadata, loaded on request.</p>'}<div class="table-wrap"><table class="data-table"><tbody>${fields.map(([label, value]) => `<tr><th>${label}</th><td class="mono">${escapeHtml(value)}</td></tr>`).join("")}</tbody></table></div></section><section class="panel"><h2>Job logs</h2><p><a class="button secondary" href="${escapeHtml(link("stream=stdout"))}">Read stdout</a> <a class="button secondary" href="${escapeHtml(link("stream=stderr"))}">Read stderr</a></p>${logControls}${logPanel}</section>`,
+    title: ["Job details", { data: jobId }],
+    body: `<section class="page-heading"><div><h1>Job details</h1><p class="lede">${JOBS_EXPLANATION}</p></div><a class="button secondary" href="${escapeHtml(refresh)}">Refresh</a></section><p><a href="/admin/runners/${encodeURIComponent(runnerId)}">Back to Runner</a></p><section class="panel">${workspaceId === null ? jobSnapshotNote() : '<p class="muted">Live Runner metadata, loaded on request.</p>'}<div class="table-wrap"><table class="data-table"><tbody>${fields.map(([label, value, translate]) => `<tr><th>${label}</th><td class="mono"${translate ? "" : " data-no-i18n"}>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table></div></section><section class="panel"><h2>Job logs</h2><p><a class="button secondary" href="${escapeHtml(link("stream=stdout"))}">Read stdout</a> <a class="button secondary" href="${escapeHtml(link("stream=stderr"))}">Read stderr</a></p>${logControls}${logPanel}</section>`,
   };
 }
 
@@ -96,8 +98,6 @@ function validCursor(value: string): boolean { return /^\d{1,16}$/.test(value) &
 function record(value: unknown): Record<string, unknown> | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 
 async function responseRecord(response: Response): Promise<Record<string, unknown> | undefined> { try { return record(await response.json()); } catch { return undefined; } }
-
-function timestamp(value: unknown): string { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15 ? new Date(value).toISOString() : "—"; }
 
 function escapeHtml(value: unknown): string { return String(value ?? "—").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }
 

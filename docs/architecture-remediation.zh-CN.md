@@ -10,6 +10,10 @@ Runner 的 Git 基线判断位于 `git/baseline.ts`；`git-service.ts` 负责解
 标志共用一个隔离上下文，最后的 HEAD 查询重新创建上下文。不跨请求缓存快照
 或 I/O Promise。基线回归通过操作边界验证并发索引变化和预算耗尽。
 
+真实 Git 语义夹具使用共享基线观察函数和明确的测试期限，精确断言提交、clean/dirty 状态
+及原始元数据。服务入口测试通过可控时钟单独验证 1.5 秒上限、调用者给出的更短预算，
+以及路径解析耗时计入同一预算，使数据语义与调度策略分别提供故障证据。
+
 | 层 | 职责 | 应放在其他层的依赖 |
 | --- | --- | --- |
 | Worker 入口 | fetch／scheduled 装配、顶层分发 | 重复的业务决策 |
@@ -34,6 +38,14 @@ Runner 的 Git 基线判断位于 `git/baseline.ts`；`git-service.ts` 负责解
 再调用用例。保留拒绝、依赖故障和结果未知的区别；决定重试前先核对结果不明的变更。
 
 Registry 管理 HMAC 路由与同步事务，RunnerDO 管理会话派发。
+`domain/runner-admission.ts` 管理准入快照校验、重启恢复、会话比较和策略匹配，
+RunnerDO 保留存储写入队列、并发复核和 WebSocket 副作用。纯规则回归与 Worker
+集成测试分别验证状态决策及持久化顺序，新增字段时可直接检查过期写入是否被拒绝。
+
+Central 的 `browser/central/request-contract.js` 统一接口读写分类、操作范围和成功回执状态；
+API 使用该契约解释响应，`operations.js` 管理页面操作锁。目录查询、远程调用、工具搜索
+和 Skill 依赖检查共用只读快照端口，写入权限由管理端口提供，类型回归与运行时回归共同验证边界。
+
 `contracts/admin-views.ts` 定义展示类型，`application/admin-projections.ts`
 在授权后选择字段。凭据校验值由权限层保管。MCP 工作区元数据省略配置的绝对根路径；
 请求的文件内容和命令输出仍可能带有路径。
@@ -91,6 +103,10 @@ systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、�
 已有管理器仍使用原代码；交付记录应分别确认 Runner 和管理器的实际部署结果。
 
 `apps/runner/src/maintenance-contract.ts` 定义跨版本读取的本地字段。
+`updates/metadata-file.ts` 统一维护日志、安装记录和任务排空记录的有界读取及文件身份复核。
+各调用方继续管理目录所有权、权限、字节上限和文件缺失的含义；Windows 与 Linux
+回归验证文件替换、长度变化和平台文件类型差异。
+
 凭据加载复用受保护的配置文件读取器，只取得服务地址、Runner ID、令牌和本地开发标记。
 工作区与执行设置由 Runner 的完整配置校验处理。任务排空通过同一份小契约读取持久化
 Job ID、时间戳和状态；写入端与读取端共用 ID 规则、状态分类和元数据字节上限。

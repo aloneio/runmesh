@@ -24,13 +24,13 @@ async function fixture() {
   const session: RemoteSession = { current: () => true, listTools, callTool, close: closed };
   const repository: CatalogRepository = { readHead: () => head, readSnapshot: () => snapshot,
     stage: vi.fn(() => ({ state: "written", head })), publish: vi.fn(() => ({ state: "written", head })), approve: () => ({ state: "invalid" }), disable: () => ({ state: "invalid" }) };
-  const ports: RemoteCallPorts = { repository, profile: vi.fn(() => profile), identity,
+  const ports: RemoteCallPorts = { repository: { readHead: repository.readHead, readSnapshot: repository.readSnapshot }, profile: vi.fn(() => profile), identity,
     digest: fixtureDigest, connector: { validate: vi.fn(() => true), open: vi.fn(async (_profile, _signal, dispatched, authorize) => {
       await authorize(); mark = dispatched; return session;
     }) } };
   const command = { profile_id: profile.profile_id, tool_id: tool.tool_id, version: tool.version, arguments: { query: "fixture" } };
   const call = () => createRemoteCaller(ports)(principal, command, new AbortController().signal);
-  return { profile, head, identity, ports, command, tool, call, invoked, closed, callTool, listTools,
+  return { profile, head, identity, ports, repository, command, tool, call, invoked, closed, callTool, listTools,
     revoke: () => { allowed = false; }, after: (action: () => void) => { afterCall = action; } };
 }
 
@@ -135,20 +135,20 @@ it("W05 a stalled identity has a bounded deadline and no surviving timeout", asy
 
 it("W05 failed discovery does not publish a partial or empty successful replacement", async () => {
   const f = await fixture(); f.listTools.mockRejectedValue(new RemoteFault("upstream_protocol_error"));
-  const discover = createRemoteDiscovery({ repository: f.ports.repository, profile: f.ports.profile,
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "failed", operation_state: "not_started" });
-  expect(f.ports.repository.stage).not.toHaveBeenCalled(); expect(f.ports.repository.publish).not.toHaveBeenCalled();
+  expect(f.repository.stage).not.toHaveBeenCalled(); expect(f.repository.publish).not.toHaveBeenCalled();
 });
 
 it("W05 successful discovery publishes complete tool definitions without a separate approval", async () => {
   const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
-  f.ports.repository.publish = publish;
+  f.repository.publish = publish;
   f.listTools.mockResolvedValue([catalogDefinition()]);
-  const discover = createRemoteDiscovery({ repository: f.ports.repository, profile: f.ports.profile,
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
-  expect(publish).toHaveBeenCalledOnce(); expect(f.ports.repository.stage).not.toHaveBeenCalled(); expect(f.invoked).not.toHaveBeenCalled();
+  expect(publish).toHaveBeenCalledOnce(); expect(f.repository.stage).not.toHaveBeenCalled(); expect(f.invoked).not.toHaveBeenCalled();
 });
 
 it.each(["session", "profile", "catalog"])("discovery cannot publish after the %s changes while listing tools", async changed => {
@@ -160,8 +160,8 @@ it.each(["session", "profile", "catalog"])("discovery cannot publish after the %
     if (changed === "catalog") f.head.revision++;
     return [f.tool.definition];
   });
-  const discover = createRemoteDiscovery({ repository: f.ports.repository, profile: f.ports.profile,
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => allowed ? "allowed" : "denied", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "failed", operation_state: "not_started" });
-  expect(f.ports.repository.publish).not.toHaveBeenCalled();
+  expect(f.repository.publish).not.toHaveBeenCalled();
 });
