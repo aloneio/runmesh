@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
-import { parseClientIdentity, parseNativeScopes, parseStoredNativeScopes } from "../../apps/worker/src/contracts/identity.js";
+import { capturedIdentityState, parseClientIdentity, parseNativeScopes, parseStoredNativeScopes, type IdentityDecision } from "../../apps/worker/src/contracts/identity.js";
 
-const identity = { schema_version: 2, client_id: "client-test", label: "Central only", secret_version: 1, native_scopes: [] };
+const identity = { schema_version: 2 as const, client_id: "client-test", label: "Central only", secret_version: 1, native_scopes: [] };
 
 it("W02 distinguishes a valid central-only identity from malformed legacy scopes", () => {
   expect(parseNativeScopes([])).toBeUndefined();
@@ -30,4 +30,21 @@ it("W02 identity projection omits arbitrary fields and does not alias input scop
   const parsed = parseClientIdentity({ ...identity, native_scopes, credential: "test-only", central_grants: ["all"] });
   native_scopes.push("coding:exec");
   expect(parsed).toEqual({ ...identity, native_scopes: ["coding:read"] });
+});
+
+const capturedCases: readonly [IdentityDecision, ReturnType<typeof capturedIdentityState>][] = [
+  [{ state: "allowed", identity }, "allowed"],
+  [{ state: "allowed", identity: { ...identity, client_id: "another-client" } }, "denied"],
+  [{ state: "allowed", identity: { ...identity, secret_version: 2 } }, "denied"],
+  // @ts-expect-error Unknown-version receipt intentionally violates the declared identity contract.
+  [{ state: "allowed", identity: { ...identity, schema_version: 3 } }, "unavailable"],
+  [{ state: "allowed", identity: { ...identity, secret_version: 0 } }, "unavailable"],
+  // @ts-expect-error Empty receipt intentionally violates the declared identity contract.
+  [{ state: "allowed", identity: null }, "unavailable"],
+  [{ state: "malformed" }, "unavailable"],
+  [{ state: "unavailable" }, "unavailable"],
+  [{ state: "denied" }, "denied"],
+];
+it.each(capturedCases)("W02 captured identity distinguishes rejection from an unreadable observation: %j", (decision, state) => {
+  expect(capturedIdentityState(identity, decision)).toBe(state);
 });

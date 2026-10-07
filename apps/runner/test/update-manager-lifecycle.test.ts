@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
 import { serviceCommand, uninstall } from "../src/cli/lifecycle.js";
 import { runMaintenanceCli } from "../src/maintenance-cli.js";
-import type { CliDependencies, ParsedCommand } from "../src/cli/contracts.js";
-import { ProfileStore, type RunnerProfile } from "../src/profile.js";
+import type { MaintenanceCliDependencies, ParsedCommand, ServiceProfilePort } from "../src/cli/contracts.js";
+import type { RunnerProfile } from "../src/profile.js";
 import { renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
 import type { MaintenanceManagerOptions } from "../src/updates/manager-install.js";
 
@@ -10,12 +10,12 @@ function fixture() {
   const layout = serviceLayout({ platform: "linux", mode: "system" });
   const profile: RunnerProfile = { version: 1, server_url: "wss://runner.example.test/runner/connect", runner_id: "update-fixture", token: "update-fixture-token", management_mode: "central", execution_mode: "dedicated_user", workspaces: [] };
   const store = { filePath: serviceProfilePath(layout), load: async () => profile, save: async () => undefined,
-    assertServiceOwnership: async () => undefined, remove: async () => undefined } as unknown as ProfileStore;
+    assertServiceOwnership: async () => undefined, remove: async () => undefined } satisfies ServiceProfilePort;
   const manifest = renderService({ platform: "linux", mode: "system", profilePath: store.filePath });
   const contents = new Map([[manifest.path, manifest.content]]);
   const calls: string[] = [];
   const maintenanceCalls: MaintenanceManagerOptions[] = [];
-  const dependencies: CliDependencies = {
+  const dependencies: MaintenanceCliDependencies = {
     isAdministrator: () => true,
     servicePlatform: "linux",
     serviceFilesystem: { read: async path => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async path => { calls.push("remove-runner-manifest"); contents.delete(path); } },

@@ -1,6 +1,6 @@
 import type { EnvironmentReader, ShellRuntime } from "../environment-contracts.js";
 import type { ExecutionMode } from "../service.js";
-import type { ProfileStore } from "../profile.js";
+import type { ProfileSaveOptions, ProfileStore, RunnerProfile } from "../profile.js";
 import type { purgeInstallation } from "../purge.js";
 import type { ServiceManagerAdapter } from "../service.js";
 import type { ServiceManifestFilesystem } from "../service.js";
@@ -10,6 +10,16 @@ import type { ServiceProvisioner } from "../service.js";
 import type { validateRunnerConfig } from "../config.js";
 import type { MaintenanceManagerInstaller } from "../updates/manager-install.js";
 import type { MaintenanceAgentOptions } from "../updates/agent.js";
+
+/** Profile capabilities used by service lifecycle transactions. The installed
+ * manager does not need execution, diagnostic or concrete storage internals. */
+export interface ServiceProfilePort {
+  readonly filePath: string;
+  load(): Promise<RunnerProfile | undefined>;
+  save(profile: RunnerProfile, options?: ProfileSaveOptions): Promise<void>;
+  remove(): Promise<void>;
+  assertServiceOwnership(executionMode: ExecutionMode, serviceGroup?: string): Promise<void>;
+}
 
 /** Host lifecycle ports shared by the product CLI and independent manager. */
 export interface ServiceCliDependencies {
@@ -31,7 +41,7 @@ export interface ServiceCliDependencies {
 
 /** Maintenance has no execution, enrollment or diagnostic ports. */
 export interface MaintenanceCliDependencies extends ServiceCliDependencies {
-  readonly store?: ProfileStore;
+  readonly store?: ServiceProfilePort;
   readonly stdout?: (line: string) => void;
   readonly stderr?: (line: string) => void;
   readonly fetch?: typeof globalThis.fetch;
@@ -39,6 +49,7 @@ export interface MaintenanceCliDependencies extends ServiceCliDependencies {
 }
 
 export interface CliDependencies extends MaintenanceCliDependencies {
+  readonly store?: ProfileStore;
   readonly startRunner?: (config: Awaited<ReturnType<typeof validateRunnerConfig>>) => Promise<void>;
   /** Injectable local discovery keeps doctor diagnostics deterministic in tests. */
   readonly environment?: EnvironmentReader;

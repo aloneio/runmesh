@@ -1,5 +1,5 @@
 import type { CapturedIdentity } from "../../contracts/identity.js";
-import { parseClientIdentity } from "../../contracts/identity.js";
+import { capturedIdentityState } from "../../contracts/identity.js";
 import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
 import { SKILL_LIMITS, type SkillReadPorts, type SkillPage, type SkillContent, type SkillSummary, type SkillDependency } from "../../contracts/skills.js";
 import { verifySkillBundle } from "../../domain/skills/bundle.js";
@@ -11,12 +11,10 @@ export function createSkillReader(ports: SkillReadPorts) {
   async function authorization(principal: CapturedIdentity, signal: AbortSignal) {
     if (!isCapabilityIdentifier(principal?.client_id) || !Number.isSafeInteger(principal.secret_version) || principal.secret_version < 1) return undefined;
     const result = await ports.identity(principal, signal);
-    if (signal.aborted || result.state === "unavailable" || result.state === "malformed") throw new Error("skill_identity_unavailable");
-    if (result.state !== "allowed") return undefined;
-    const identity = parseClientIdentity(result.identity);
-    if (!identity) throw new Error("skill_identity_invalid");
-    if (identity.client_id !== principal.client_id || identity.secret_version !== principal.secret_version) return undefined;
-    return identity;
+    if (signal.aborted) throw new Error("skill_identity_unavailable");
+    const state = capturedIdentityState(principal, result);
+    if (state === "unavailable") throw new Error("skill_identity_unavailable");
+    return state === "allowed";
   }
   return {
     async list(principal: CapturedIdentity, query: unknown, signal: AbortSignal): Promise<SkillPage> {

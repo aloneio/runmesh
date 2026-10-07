@@ -1,7 +1,7 @@
 import { parseCatalogHead } from "../../contracts/catalog-values.js";
 import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
 import { catalogRevision } from "../../contracts/catalog-json.js";
-import { parseClientIdentity, type CapturedIdentity } from "../../contracts/identity.js";
+import { capturedIdentityState, type CapturedIdentity } from "../../contracts/identity.js";
 import { TOOL_SEARCH_LIMITS, parseToolSearchQuery, type ToolSearchPorts, type ToolSearchResult } from "../../contracts/tool-search.js";
 import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
 import { createToolSearchRanking, createToolSearchScorer, toolSearchDescription } from "../../domain/capabilities/tool-search.js";
@@ -19,10 +19,7 @@ export function createToolSearcher(ports: ToolSearchPorts) {
       if (stopped()) return "unavailable";
       const decision = await ports.identity(principal, signal);
       if (stopped()) return "unavailable";
-      if (decision.state !== "allowed") return decision.state === "denied" ? "denied" : "unavailable";
-      const identity = parseClientIdentity(decision.identity);
-      if (!identity) return "unavailable";
-      return identity.client_id === principal.client_id && identity.secret_version === principal.secret_version ? "allowed" : "denied";
+      return capturedIdentityState(principal, decision);
     };
     try {
       const first = await authorize();

@@ -1,4 +1,4 @@
-import type { ServiceCliDependencies } from "./contracts.js";
+import type { ServiceCliDependencies, ServiceProfilePort } from "./contracts.js";
 import type { ExecutionMode } from "../service.js";
 import { ensureManagedUserLaunch } from "../services/user-launch.js";
 import { ensureManagedServiceDefinition } from "../services/manifest.js";
@@ -8,7 +8,6 @@ import { managedServiceManifestFromContent } from "../service.js";
 import type { ParsedCommand } from "./contracts.js";
 import type { ProbedServiceStatus } from "./contracts.js";
 import { profileExecutionMode } from "../profile.js";
-import { ProfileStore } from "../profile.js";
 import { renderService } from "../service.js";
 import { resolveTrustedWindowsTool } from "../windows-tools.js";
 import { rewriteManagedServiceExecutionMode } from "../service.js";
@@ -53,7 +52,7 @@ export async function restoreManifestSnapshot(filesystem: ServiceManifestFilesys
   else await filesystem.remove(manifest.path).catch(() => undefined);
 }
 
-export async function serviceManifestFor(parsed: ParsedCommand, store: ProfileStore, platform?: ServicePlatform, filesystem: ServiceManifestFilesystem | undefined = undefined): Promise<ServiceManifest> {
+export async function serviceManifestFor(parsed: ParsedCommand, store: Pick<ServiceProfilePort, "filePath" | "load">, platform?: ServicePlatform, filesystem: ServiceManifestFilesystem | undefined = undefined): Promise<ServiceManifest> {
   const profile = await store.load();
   const requestedMode = parsed.values.executionMode;
   if (requestedMode !== undefined && requestedMode !== "dedicated_user" && requestedMode !== "privileged_host") throw new Error("--execution-mode must be dedicated_user or privileged_host");

@@ -56,3 +56,13 @@ export function parseClientIdentity(value: unknown): ClientIdentity | undefined 
   return { schema_version: 2, client_id: record.client_id, label: record.label,
     secret_version: record.secret_version as number, native_scopes: scopes };
 }
+
+/** Match a fresh observation to the identity captured at request admission.
+ * Malformed observations are unavailable; only rejection or a different valid
+ * client/credential generation establishes denial. Callers own I/O and deadlines. */
+export function capturedIdentityState(principal: CapturedIdentity, decision: IdentityDecision): "allowed" | "denied" | "unavailable" {
+  if (decision.state !== "allowed") return decision.state === "denied" ? "denied" : "unavailable";
+  const identity = parseClientIdentity(decision.identity);
+  if (identity === undefined) return "unavailable";
+  return identity.client_id === principal.client_id && identity.secret_version === principal.secret_version ? "allowed" : "denied";
+}

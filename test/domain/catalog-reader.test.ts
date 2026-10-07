@@ -69,8 +69,14 @@ it("W04 schema/hash/deadline failures cannot turn into successful empty catalogs
   expect(await f.run()).toEqual({ state: "unavailable" });
 });
 
-it("W04 malformed final identities are rejected", async () => {
+it.each([
+  [{ state: "malformed" }, "unavailable"],
+  [{ state: "allowed", identity: { ...identity, label: " " } }, "unavailable"],
+  [{ state: "allowed", identity: { ...identity, client_id: "another-client" } }, "denied"],
+  [{ state: "allowed", identity: { ...identity, secret_version: 2 } }, "denied"],
+] as const)("W04 final identity failures preserve their classification: %j", async (decision, expected) => {
   const f = await fixture();
-  f.ports.identity.mockResolvedValueOnce({ state: "allowed", identity }).mockResolvedValueOnce({ state: "malformed" });
-  expect(await f.run()).toEqual({ state: "unavailable" });
+  f.ports.identity.mockResolvedValueOnce({ state: "allowed", identity }).mockResolvedValueOnce(decision);
+  expect(await f.run()).toEqual({ state: expected });
+  expect(f.ports.identity).toHaveBeenCalledTimes(2);
 });

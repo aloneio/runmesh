@@ -6,24 +6,45 @@ import { execFileSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
 import { RunnerRuntime } from "../src/runtime.js";
 import { GitService } from "../src/git-service.js";
+import { observeGitBaseline } from "../src/git/baseline.js";
+import { resolveGitPath } from "../src/git/values.js";
+import type { GitServiceOptions } from "../src/git/public-contracts.js";
 const full = { read: true, edit: true, shell: true, job_control: true };
 const ro = { read: true, edit: false, shell: false, job_control: false };
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "auth-runner-"))); await mkdir(join(root, "workspace"));
   const workspace = { workspaceId: "w", rootPath: join(root, "workspace"), readonly: false, shell: true, permissions: full };
   const runtime = new RunnerRuntime({ config: { runnerId: "r", server: "wss://unused.invalid", token: "synthetic", workspaces: [workspace] }, stateDir: join(root, "state") });
+  let gitOptions: GitServiceOptions = {};
   // Developer hosts can have only portable Git. Native fixtures explicitly
   // select that binary through the existing test seam; production inspection
   // still refuses to execute an untrusted PATH entry.
   if (process.platform === "win32") {
     const executable = (process.env.Path ?? process.env.PATH ?? "").split(delimiter).map(dir => join(dir, "git.exe")).find(path => existsSync(path));
     if (executable !== undefined) {
-      const inspector = new GitService(runtime.policy, { executable });
+      gitOptions = { executable };
+      const inspector = new GitService(runtime.policy, gitOptions);
       vi.spyOn(runtime.git, "observeBaseline").mockImplementation(input => inspector.observeBaseline(input));
     }
   }
   await runtime.jobs.initialize();
-  return { root, workspace, runtime, cleanup: async () => { for (const j of runtime.jobs.list()) { if (["queued", "running", "cancelling"].includes(j.status)) await runtime.jobs.cancel(j.job_id); } await runtime.jobs.flushPersistence(); await new Promise((resolve) => setTimeout(resolve, 60)); await runtime.jobs.flushPersistence(); await rm(root, { recursive: true, force: true }); } };
+  return { root, workspace, runtime, gitOptions, cleanup: async () => { for (const j of runtime.jobs.list()) { if (["queued", "running", "cancelling"].includes(j.status)) await runtime.jobs.cancel(j.job_id); } await runtime.jobs.flushPersistence(); await new Promise((resolve) => setTimeout(resolve, 60)); await runtime.jobs.flushPersistence(); await rm(root, { recursive: true, force: true }); } };
+}
+function semanticBaseline(f: Awaited<ReturnType<typeof fixture>>) {
+  // Exercise real Git and policy resolution with an integration-test budget.
+  // Freezing performance.now does not freeze the native process timeout; the
+  // public 1.5-second budget is verified independently in baseline-budget.
+  const budgetMs = 10_000;
+  const observations: { observed: Awaited<ReturnType<typeof observeGitBaseline>>; elapsedMs: number; budgetMs: number }[] = [];
+  const spy = vi.spyOn(f.runtime.git, "observeBaseline").mockImplementation(async input => {
+    expect(input).toEqual({ workspace_id: f.workspace.workspaceId });
+    const started = performance.now();
+    const scope = await resolveGitPath(f.runtime.policy, f.workspace.workspaceId, ".");
+    const observed = await observeGitBaseline(scope.rootPath, f.gitOptions, started + budgetMs);
+    observations.push({ observed, elapsedMs: performance.now() - started, budgetMs });
+    return observed;
+  });
+  return { diagnostics: () => JSON.stringify(observations), restore: () => spy.mockRestore() };
 }
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -50,10 +71,7 @@ it("RUN-AUTH-02 a stale resolved file cannot be read after workspace read access
 });
 it("RUN-CONTEXT-01 observes the Git baseline and marks old handoff evidence stale after HEAD changes", async () => {
   const f = await fixture();
-  // This case tests evidence propagation through real Git and the runtime.
-  // Baseline budget/observation tests own deadline behavior; host scheduling
-  // must not turn their allowed unknown fallback into a semantic failure here.
-  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+  const baseline = semanticBaseline(f);
   try {
     git(f.workspace.rootPath, ["init"]);
     git(f.workspace.rootPath, ["config", "user.email", "test@example.test"]);
@@ -70,7 +88,7 @@ it("RUN-CONTEXT-01 observes the Git baseline and marks old handoff evidence stal
       goal: "verify the current source baseline",
       missing_checks: [],
     }) as { context: { context_id: string; base_commit: string; base_commit_status: string; baseline_state: string; current_commit: string } };
-    expect(checkpoint.context).toMatchObject({ base_commit: firstCommit, base_commit_status: "observed", baseline_state: "current", current_commit: firstCommit });
+    expect(checkpoint.context, baseline.diagnostics()).toMatchObject({ base_commit: firstCommit, base_commit_status: "observed", baseline_state: "current", current_commit: firstCommit });
 
     await writeFile(join(f.workspace.rootPath, "note.txt"), "two\n");
     git(f.workspace.rootPath, ["add", "note.txt"]);
@@ -79,24 +97,24 @@ it("RUN-CONTEXT-01 observes the Git baseline and marks old handoff evidence stal
     expect(secondCommit).not.toBe(firstCommit);
 
     const read = await f.runtime.dispatch("context.read", { workspace_id: "w", context_id: checkpoint.context.context_id }) as { context: { base_commit: string; base_commit_status: string; baseline_state: string; current_commit: string } };
-    expect(read.context).toMatchObject({ base_commit: firstCommit, base_commit_status: "observed", baseline_state: "stale", current_commit: secondCommit });
-  } finally { clock.mockRestore(); await f.cleanup(); }
+    expect(read.context, baseline.diagnostics()).toMatchObject({ base_commit: firstCommit, base_commit_status: "observed", baseline_state: "stale", current_commit: secondCommit });
+  } finally { baseline.restore(); await f.cleanup(); }
 });
 
 
 it.each(["tracked", "untracked"])("R05 does not claim evidence is current after an uncommitted %s change", async (kind) => {
   const f=await fixture();
-  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+  const baseline = semanticBaseline(f);
   try {
     git(f.workspace.rootPath,["init"]);git(f.workspace.rootPath,["config","user.name","Fixture"]);git(f.workspace.rootPath,["config","user.email","fixture@example.invalid"]);
     await writeFile(join(f.workspace.rootPath,"tracked.txt"),"one\n");git(f.workspace.rootPath,["add","tracked.txt"]);git(f.workspace.rootPath,["commit","-m","baseline"]);
     const first=await f.runtime.dispatch("context.checkpoint",{workspace_id:"w",turn_id:"dirty",goal:"verify baseline"}) as any;
-    expect(first.context.baseline_state).toBe("current");
+    expect(first.context.baseline_state, baseline.diagnostics()).toBe("current");
     await writeFile(join(f.workspace.rootPath,kind==="tracked"?"tracked.txt":"new.txt"),"changed\n");
     const next=await f.runtime.dispatch("context.read",{workspace_id:"w",context_id:first.context.context_id}) as any;
-    expect(next.context.current_commit).toBe(first.context.base_commit);
-    expect(next.context.baseline_state).toBe("stale");
-  } finally {clock.mockRestore(); await f.cleanup();}
+    expect(next.context.current_commit, baseline.diagnostics()).toBe(first.context.base_commit);
+    expect(next.context.baseline_state, baseline.diagnostics()).toBe("stale");
+  } finally {baseline.restore(); await f.cleanup();}
 });
 
 

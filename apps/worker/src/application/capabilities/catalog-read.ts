@@ -2,7 +2,7 @@ import { CATALOG_LIMITS, type CatalogPage, type CatalogReadPorts, type CatalogTo
 import { parseCatalogQuery } from "../../contracts/catalog-values.js";
 import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
 import { parseProfile } from "../../contracts/connector-values.js";
-import { parseClientIdentity, type CapturedIdentity } from "../../contracts/identity.js";
+import { capturedIdentityState, type CapturedIdentity } from "../../contracts/identity.js";
 import { catalogRevision } from "../../contracts/catalog-json.js";
 import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
 
@@ -15,10 +15,8 @@ export function createCatalogReader(ports: CatalogReadPorts) {
     try {
       const first = await ports.identity(principal, signal);
       if (expired() || signal.aborted) return { state: "unavailable" };
-      if (first.state !== "allowed") return { state: first.state === "denied" ? "denied" : "unavailable" };
-      const identity = parseClientIdentity(first.identity);
-      if (identity === undefined) return { state: "unavailable" };
-      if (identity.client_id !== principal.client_id || identity.secret_version !== principal.secret_version) return { state: "denied" };
+      const firstState = capturedIdentityState(principal, first);
+      if (firstState !== "allowed") return { state: firstState };
       // Authenticated instance clients share the published catalog.
       const rawProfile = ports.profile(query.profile_id);
       if (rawProfile === undefined) return { state: "denied" };
@@ -55,10 +53,8 @@ export function createCatalogReader(ports: CatalogReadPorts) {
       if (expired() || signal.aborted) return { state: "unavailable" };
       const final = await ports.identity(principal, signal);
       if (expired() || signal.aborted) return { state: "unavailable" };
-      if (final.state !== "allowed") return { state: final.state === "denied" ? "denied" : "unavailable" };
-      const latestIdentity = parseClientIdentity(final.identity);
-      if (latestIdentity === undefined) return { state: "unavailable" };
-      if (latestIdentity.client_id !== principal.client_id || latestIdentity.secret_version !== principal.secret_version) return { state: "denied" };
+      const finalState = capturedIdentityState(principal, final);
+      if (finalState !== "allowed") return { state: finalState };
       const profileRecord = ports.profile(profile.profile_id);
       if (profileRecord === undefined) return { state: "denied" };
       const latestProfile = parseProfile(profileRecord);

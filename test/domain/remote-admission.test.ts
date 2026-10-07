@@ -74,6 +74,17 @@ it("W05 revoked identity denies before probing a profile or upstream", async () 
   expect(f.ports.profile).not.toHaveBeenCalled(); expect(f.ports.connector.open).not.toHaveBeenCalled();
 });
 
+it.each(["malformed", "changed"] as const)("W05 %s identity observations preserve call admission and completed-effect semantics", async change => {
+  const failure: IdentityDecision = change === "malformed" ? { state: "malformed" }
+    : { state: "allowed", identity: { schema_version: 2, client_id: "client-test", secret_version: 2, label: "Rotated", native_scopes: [] } };
+  const initial = await fixture(); initial.identity.mockResolvedValue(failure);
+  expect(await initial.call()).toEqual({ state: "failed", code: change === "malformed" ? "dependency_unavailable" : "permission_denied", operation_state: "not_started" });
+  expect(initial.ports.profile).not.toHaveBeenCalled(); expect(initial.ports.connector.open).not.toHaveBeenCalled();
+  const completed = await fixture(); completed.after(() => completed.identity.mockResolvedValue(failure));
+  expect(await completed.call()).toEqual({ state: "failed", code: "result_withheld", operation_state: "completed" });
+  expect(completed.invoked).toHaveBeenCalledOnce(); expect(completed.closed).toHaveBeenCalledOnce();
+});
+
 it("W05 invalid arguments are rejected before decrypting or connecting", async () => {
   const f = await fixture(); f.ports.connector.validate = vi.fn(() => false);
   expect(await f.call()).toEqual({ state: "failed", code: "invalid_arguments", operation_state: "not_started" });

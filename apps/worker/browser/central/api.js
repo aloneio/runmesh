@@ -56,6 +56,10 @@ export function createCentralApi({
         throw Object.assign(new Error(failure.message ?? t(failure.messageKey)), failure.details);
       }
       if (!request.states.includes(value.state)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      if (request.collection && (!Array.isArray(value[request.collection])
+        || !(value.next_after === null || typeof value.next_after === 'string' && value.next_after.length > 0))) {
+        throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      }
       if (request.optionalCatalog && value.state === 'empty') return null;
       if (lifecycle && !validSkillLifecycleReceipt(lifecycle, body, value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       if (sourceAction && !validSkillSourceReceipt(sourceAction, body, value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
@@ -86,15 +90,17 @@ export function createCentralApi({
       clearTimeout(timer);
     }
   }
-  async function pages(path, key) {
+  async function pages(path) {
+    const { collection } = centralRequestContract(path);
+    if (!collection || collection !== path) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
     var all = [],
       after = null,
       seen = new Set();
     do {
       var value = await api(path + (after ? '?after=' + encodeURIComponent(after) : ''));
-      all = all.concat(value[key]);
+      all = all.concat(value[collection]);
       after = value.next_after;
-      if (after && seen.has(after)) throw new Error(t('couldNotLoadTheCompleteLibraryRefreshBeforeChanging'));
+      if (after && (seen.has(after) || value[collection].length === 0)) throw new Error(t('couldNotLoadTheCompleteLibraryRefreshBeforeChanging'));
       seen.add(after);
       if (all.length > 1000) throw new Error(t('libraryIsTooLargeToDisplay'));
     } while (after);

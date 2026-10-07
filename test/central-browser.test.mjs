@@ -22,8 +22,8 @@ function deferred() {
 
 test("central request contracts keep recovery scopes and read-only POST receipts aligned", () => {
   const cases = [
-    ['profiles?after=page-1', undefined, false, 'mcp-list', false, ['listed']],
-    ['skills?after=page-1', undefined, false, 'skills', false, ['listed']],
+    ['profiles?after=page-1', undefined, false, 'mcp-list', false, ['listed'], 'profiles'],
+    ['skills?after=page-1', undefined, false, 'skills', false, ['listed'], 'skills'],
     ['profiles/service', { action: 'connect' }, false, 'mcp-create', true, ['written']],
     ['profiles/cloud%2Fdocs', { action: 'enable' }, false, 'mcp:cloud/docs', true, ['written']],
     ['catalogs/cloud%2Fdocs', undefined, false, 'mcp:cloud/docs', false, ['found']],
@@ -47,10 +47,11 @@ test("central request contracts keep recovery scopes and read-only POST receipts
     ['skill-source/preview', { source: {} }, false, 'skills', false, ['previewed']],
     ['skill-source/install', { source: {} }, false, 'skills', true, ['written']],
   ];
-  for (const [path, body, missing, scope, mutation, states] of cases) {
+  for (const [path, body, missing, scope, mutation, states, collection = null] of cases) {
     Object.freeze(body);
     const contract = centralRequestContract(path, body, missing);
     assert.deepEqual({ scope: contract.scope, mutation: contract.mutation, states: contract.states }, { scope, mutation, states }, path);
+    assert.equal(contract.collection, collection, path);
   }
   const encoded = centralRequestContract('skills/research%2Fnotes/versions');
   assert.deepEqual(encoded.lifecycle, { id: 'research/notes', operation: 'versions', readOnly: true, state: 'listed' });
@@ -109,6 +110,8 @@ const unexpected = /unexpectedResponseRefreshBeforeMakingAnotherChange/u;
 const writtenProfile = { state: "written", profile: { profile_id: "service", revision: 2, enabled: true, authentication: "none" } };
 const installedSkill = { state: "installed", skill_id: "research", name: "Research", digest: "a".repeat(64) };
 function successReceipt(path, state) {
+  const collection = path.split('?')[0];
+  if (state === 'listed' && ['profiles', 'skills'].includes(collection)) return { state, [collection]: [], next_after: null };
   if (state === "written" && path.startsWith("profiles/")) return writtenProfile;
   if (state === "installed") return installedSkill;
   if (state === "started") return { state, authorization_url: "https://provider.example/authorize" };
@@ -158,7 +161,10 @@ test("a committed create with an incomplete receipt cannot create a duplicate fr
   let creates = 0, reads = 0;
   const profiles = [];
   t.mock.method(globalThis, "fetch", async (path, options) => {
-    if (options.method === "GET") { reads++; return Response.json({ state: "listed", profiles, next_after: null }); }
+    if (options.method === "GET") {
+      reads++;
+      return Response.json({ state: "listed", profiles, ...(reads === 2 ? {} : { next_after: null }) });
+    }
     const body = JSON.parse(options.body);
     assert.equal(body.action, "connect"); creates++;
     profiles.push({ profile_id: path.split("/").at(-1), connector_id: body.connector_id, display_name: body.display_name,
@@ -176,7 +182,13 @@ test("a committed create with an incomplete receipt cannot create a duplicate fr
   assert.equal(fields.name.value, "Unsaved service");
   assert.equal(status.textContent, "Refresh before making another change.");
   refresh.dispatch("click"); await new Promise(setImmediate);
-  assert.equal(reads, 2, "The existing explicit refresh remains available to reconcile the committed create");
+  assert.equal(reads, 2);
+  assert.equal(status.textContent, "Unexpected response. Refresh before making another change.");
+  await submit();
+  assert.equal(creates, 1, "An incomplete collection cannot release the uncertain create for another write");
+  assert.equal(status.textContent, "Refresh before making another change.");
+  refresh.dispatch("click"); await new Promise(setImmediate);
+  assert.equal(reads, 3, "A complete explicit refresh remains available to reconcile the committed create");
   assert.equal(creates, 1, "Refresh never automatically repeats the creation");
   const labels = node => [node.textContent, ...node.children.flatMap(labels)];
   assert.ok(labels(list).includes("Unsaved service"), "Refresh renders the already-created service for recovery");
@@ -255,8 +267,49 @@ for (const value of [null, [], "written"]) test("malformed browser receipt is re
 
 test("a single-item receipt cannot masquerade as a complete collection", async t => {
   const api = client(t, () => Response.json({ state: "found", profiles: [], next_after: null }));
-  await assert.rejects(api.list("profiles", "profiles"), unexpected);
+  await assert.rejects(api.list("profiles"), unexpected);
 });
+
+for (const collection of ["profiles", "skills"]) {
+  for (const [name, fields] of [
+    ["missing items", { next_after: null }],
+    ["non-array items", { [collection]: {}, next_after: null }],
+    ["missing cursor", { [collection]: [] }],
+    ["empty cursor", { [collection]: [], next_after: "" }],
+    ["non-string cursor", { [collection]: [], next_after: 0 }],
+  ]) test(`collection receipts reject ${collection} with ${name}`, async t => {
+    const api = client(t, () => Response.json({ state: "listed", ...fields }));
+    await assert.rejects(api.list(collection), unexpected);
+    assert.equal(api.requests.length, 1);
+    assert.equal(api.refreshRequired(), false, "An invalid read never becomes an uncertain mutation");
+  });
+  test(`collection pagination gathers complete ${collection} pages in order`, async t => {
+    const items = [{ id: "first" }, { id: "second" }];
+    let page = 0;
+    const api = client(t, () => Response.json({ state: "listed", [collection]: [items[page]], next_after: page++ ? null : "page/2" }));
+    assert.deepEqual(await api.list(collection), items);
+    assert.deepEqual(api.requests.map(([url]) => url), [`/admin/central/${collection}`, `/admin/central/${collection}?after=page%2F2`]);
+    assert.equal(api.refreshRequired(), false);
+  });
+  test(`collection pagination terminates an empty ${collection} page without following its cursor`, async t => {
+    const api = client(t, () => Response.json({ state: "listed", [collection]: [], next_after: "page-2" }));
+    await assert.rejects(api.list(collection), /couldNotLoadTheCompleteLibraryRefreshBeforeChanging/u);
+    assert.equal(api.requests.length, 1);
+  });
+  test(`collection pagination terminates a repeated ${collection} cursor`, async t => {
+    const api = client(t, () => Response.json({ state: "listed", [collection]: [{ id: "item" }], next_after: "page-2" }));
+    await assert.rejects(api.list(collection), /couldNotLoadTheCompleteLibraryRefreshBeforeChanging/u);
+    assert.equal(api.requests.length, 2);
+  });
+  for (const size of [1000, 1001]) test(`collection pagination applies the ${collection} size boundary at ${size} entries`, async t => {
+    const items = Array.from({ length: size }, (_, id) => ({ id }));
+    let page = 0;
+    const api = client(t, () => Response.json({ state: "listed", [collection]: page++ ? items.slice(500) : items.slice(0, 500), next_after: page === 1 ? "page-2" : null }));
+    if (size === 1000) assert.deepEqual(await api.list(collection), items);
+    else await assert.rejects(api.list(collection), /libraryIsTooLargeToDisplay/u);
+    assert.equal(api.requests.length, 2);
+  });
+}
 
 test("empty catalog remains an explicit successful optional read", async t => {
   const api = client(t, () => Response.json({ state: "empty" }));
@@ -453,7 +506,7 @@ test("detaching while a response body is pending prevents consuming the receipt"
 test("collection pagination remains bounded to the current view", async t => {
   const response = deferred();
   const api = client(t, () => response.promise);
-  const pending = api.list("profiles", "profiles");
+  const pending = api.list("profiles");
   const rejected = assert.rejects(pending, { name: "AbortError" });
   api.detach(); response.resolve(Response.json({ state: "listed", profiles: [], next_after: "page-2" }));
   await rejected;

@@ -1,5 +1,5 @@
 import { publishedProfiles } from "./published-profiles.js";
-import { parseClientIdentity } from "../../contracts/identity.js";
+import { capturedIdentityState } from "../../contracts/identity.js";
 import type { CapturedIdentity } from "../../contracts/identity.js";
 import { type DirectoryReadPorts, type CentralDirectory, type CatalogTool } from "../../contracts/catalog.js";
 import { catalogJson } from "../../contracts/catalog-json.js";
@@ -12,9 +12,8 @@ export function createDirectoryReader(ports: DirectoryReadPorts) {
     try {
       const identity = await ports.identity(principal, signal);
       if (expired() || signal.aborted) return { state: "unavailable" };
-      if (identity.state !== "allowed") return { state: identity.state === "denied" ? "denied" : "unavailable" };
-      if (!parseClientIdentity(identity.identity)) return { state: "unavailable" };
-      if (identity.identity.client_id !== principal.client_id || identity.identity.secret_version !== principal.secret_version) return { state: "denied" };
+      const firstState = capturedIdentityState(principal, identity);
+      if (firstState !== "allowed") return { state: firstState };
       const snapshot = publishedProfiles(ports), profiles = snapshot.map(entry => entry.profile.profile_id);
       if (profiles.length > 8) return { state: "capacity" };
       const tools: (CatalogTool & { profile_id: string })[] = [], revisions = new Map<string, [number, number]>(), read = createCatalogReader(ports);
@@ -37,8 +36,8 @@ export function createDirectoryReader(ports: DirectoryReadPorts) {
       const view_version = await ports.digest(body);
       const final = await ports.identity(principal, signal);
       if (expired() || signal.aborted) return { state: "unavailable" };
-      if (final.state === "allowed" && !parseClientIdentity(final.identity)) return { state: "unavailable" };
-      if (final.state !== "allowed" || final.identity.client_id !== principal.client_id || final.identity.secret_version !== principal.secret_version) return { state: final.state === "unavailable" ? "unavailable" : "denied" };
+      const finalState = capturedIdentityState(principal, final);
+      if (finalState !== "allowed") return { state: finalState };
       if (JSON.stringify(publishedProfiles(ports)) !== JSON.stringify(snapshot)) return { state: "unavailable" };
       for (const [id, [profile, catalog]] of revisions) if (ports.profile(id)?.revision !== profile || (ports.repository.readHead(id)?.revision ?? 0) !== catalog) return { state: "unavailable" };
       return { state: "listed", tools, view_version };
