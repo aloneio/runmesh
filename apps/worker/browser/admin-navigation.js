@@ -67,6 +67,17 @@ export function createAdminNavigation({
         signal: controller.signal
       });
       if (leaving) return;
+      if (response.redirected) {
+        const redirected = new URL(response.url);
+        const sameOrigin = redirected.origin === url.origin;
+        if (!sameOrigin || ['/', '/login'].includes(redirected.pathname)) {
+          // Login owns a complete document. Preserve the newest destination,
+          // and never mount a redirected external document into the admin shell.
+          void response.body?.cancel().catch(() => undefined);
+          navigateFully(sameOrigin ? redirected : url);
+          return;
+        }
+      }
       if (!response.ok) throw new Error("HTTP " + response.status);
       const markup = await response.text();
       controller.signal.throwIfAborted();

@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "60487e7741abdc3e3b1e76d8e7c4a59123da83047a2085bbf0cfeda7aa8d03b2",
-      "bytes": 184996,
+      "sha256": "fdf32a5a21d7da42eec63f46f5f93c29d59d05aa0ef8084e936bc5c88fb67490",
+      "bytes": 185386,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -33,8 +33,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "44cdcfcea07202a2ae0ef21c52726e019eacbfc260836e4e534f9a954b8de9e2",
-      "bytes": 185656,
+      "sha256": "8e61cc1f1eee4be623ef17392dec28e9850dd1689c5edbfcf45a2cf7fdf6532a",
+      "bytes": 186046,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -52,8 +52,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "4076051038c3b444ee9dfa3bc15ddba44fc68f79b33c7314ae6faaab1992b924",
-      "bytes": 187953,
+      "sha256": "52229615b8541493ed0073d7ff012adf4f311c224794ce55bf2c6ec6b65e0f6d",
+      "bytes": 188343,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -423,8 +423,8 @@
           }
         ]
       ],
-      "sha256": "f92f5b5a74aa0bf0eba713222b49a406f3c442b8fcb92da0ac350e1f5af852dc",
-      "bytes": 188302,
+      "sha256": "9867c038a4ca91708d0e239a2a4a2ae0615d79ecf05fae2cdb85f0b1a3dbb82f",
+      "bytes": 188692,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -1420,6 +1420,33 @@
         "name": "admin-document",
         "sha256": "53320d2734cab5ef2c308692e226f634cf0daf34d72dd348bb544a45a2e458ca",
         "bytes": 188167
+      }
+    ]
+  },
+  "login_navigation_handoff_review": {
+    "source_baseline": "4f3e84a1288b3e96100817629ae5fdbbdc58363f",
+    "reviewed_change": "Navigation hands redirected login documents to full navigation without treating normal session expiry as a missing admin root. The latest queued destination remains authoritative, redirected external documents stay outside the admin DOM, and ordinary same-origin admin redirects retain soft mounting. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "60487e7741abdc3e3b1e76d8e7c4a59123da83047a2085bbf0cfeda7aa8d03b2",
+        "bytes": 184996
+      },
+      {
+        "name": "setup",
+        "sha256": "44cdcfcea07202a2ae0ef21c52726e019eacbfc260836e4e534f9a954b8de9e2",
+        "bytes": 185656
+      },
+      {
+        "name": "secret",
+        "sha256": "4076051038c3b444ee9dfa3bc15ddba44fc68f79b33c7314ae6faaab1992b924",
+        "bytes": 187953
+      },
+      {
+        "name": "admin-document",
+        "sha256": "f92f5b5a74aa0bf0eba713222b49a406f3c442b8fcb92da0ac350e1f5af852dc",
+        "bytes": 188302
       }
     ]
   }

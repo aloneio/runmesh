@@ -34,7 +34,7 @@ async function fixture(t) {
       testResults: [{ status: 'passed', name: '/private/path', assertionResults: [
         { status: 'passed', fullName: 'synthetic', failureMessages: ['private-text'] }, { status: 'pending' } ] }] };
     console.log('private-stdout-credential'); console.error('private-stderr-credential');
-    if (['test_failure', 'many_test_failures', 'suite_failure'].includes(mode)) {
+    if (['test_failure', 'many_test_failures', 'suite_failure', 'test_failure_cleanup'].includes(mode)) {
       result.success = false; result.numFailedTestSuites = 1;
       const file = result.testResults[0];
       file.status = 'failed'; file.name = '/private-credential/test/e2e/mcp-runner.e2e.test.ts';
@@ -68,7 +68,15 @@ async function fixture(t) {
     import { basename } from 'node:path';
     import { syncBuiltinESMExports } from 'node:module';
     import { execFileSync } from 'node:child_process';
-    const original = fs.promises.lstat, originalOpen = fs.promises.open, seen = new Set();
+    const original = fs.promises.lstat, originalOpen = fs.promises.open, originalRm = fs.promises.rm, seen = new Set();
+    fs.promises.rm = async (file, ...args) => {
+      const result = await originalRm(file, ...args);
+      // Remove this fixture's data, then inject the terminal public I/O error.
+      // The test owns no locked file or abandoned temporary directory.
+      if (basename(String(file)).startsWith('runmesh-ar08-package-') && ['cleanup_failure', 'test_failure_cleanup'].includes(process.env.AR08_FIXTURE_MODE))
+        throw Object.assign(new Error('PRIVATE_CLEANUP_PATH'), { code: 'EACCES' });
+      return result;
+    };
     fs.promises.lstat = async (file, ...args) => {
       const info = await original(file, ...args);
       const name = basename(String(file)), mode = process.env.AR08_FIXTURE_MODE;
@@ -134,6 +142,25 @@ test("AR08 failed rerun replaces previous success instead of leaving stale evide
   assert.notEqual(f.invoke("exit_failure").status, 0);
   assert.deepEqual(await f.report(), { schema_version: 1, evidence: "local_packaged_runner_e2e", state: "failed", phase: "installed_package_e2e",
     diagnostics: { step: "test_process", kind: "process_exit", exit_code: 4, test_report: { state: "missing" } } });
+});
+
+for (const mode of ["cleanup_failure", "test_failure_cleanup"]) test(`AR08 ${mode} never leaves passed package evidence`, async t => {
+  const f = await fixture(t);
+  assert.equal(f.invoke().status, 0);
+  const result = f.invoke(mode), report = await f.report();
+  const archived = JSON.parse(await readFile(join(f.directory, "ci-results/package-e2e.json"), "utf8"));
+  assert.equal(result.status, 1); assert.equal(result.error, undefined);
+  assert.equal(report.state, "failed"); assert.equal(archived.state, "failed");
+  assert.equal(report.phase, mode === "cleanup_failure" ? "cleanup" : "installed_package_e2e");
+  assert.equal(report.diagnostics.step, mode === "cleanup_failure" ? "temporary_cleanup" : "test_process");
+  assert.equal(report.diagnostics.kind, mode === "cleanup_failure" ? "permission_denied" : "process_exit");
+  if (mode === "test_failure_cleanup") {
+    assert.equal(report.diagnostics.exit_code, 4);
+    assert.equal(report.diagnostics.test_report.failed_tests, 1);
+  }
+  assert.match(result.stderr, /"phase":"cleanup"/u);
+  assert.doesNotMatch(result.stdout + result.stderr, /PRIVATE_CLEANUP_PATH|private-stdout|private-stderr|AR08_PACKAGED_E2E_VERIFIED/u);
+  assert.ok(!result.stderr.includes(f.directory));
 });
 test("AR08 failed package tests retain bounded locations and classes without copying credential-bearing reporter fields or logs", async t => {
   const f = await fixture(t), result = f.invoke("test_failure"), report = await f.report();

@@ -73,7 +73,14 @@ export async function ensurePrivateDirectory(path: string, privateMode = true): 
   for (const component of components) {
     current = join(current, component);
     let info = await lstat(current).catch((error: unknown) => isErrno(error, "ENOENT") ? undefined : Promise.reject(error));
-    if (info === undefined) { await mkdir(current, { mode: 0o700 }); info = await lstat(current); }
+    if (info === undefined) {
+      // Different workspace queues share these parent directories. A peer may
+      // create one after our lstat; validate the winner with the same boundary
+      // checks instead of treating that normal race as a failed checkpoint.
+      try { await mkdir(current, { mode: 0o700 }); }
+      catch (error) { if (!isErrno(error, "EEXIST")) throw error; }
+      info = await lstat(current);
+    }
     if (!info.isDirectory() || info.isSymbolicLink()) throw new RpcRuntimeError("context_storage_unsafe", "context state directory is not a regular directory");
     if (current === normalized && process.platform !== "win32") {
       if (!privateMode && (info.mode & 0o022) !== 0) throw new RpcRuntimeError("context_storage_unsafe", "Runner state directory is writable by group or others");
