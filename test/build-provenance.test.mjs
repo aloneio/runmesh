@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { captureBuildProvenance, writeBuildProvenance } from "../scripts/build-provenance.mjs";
 import { sourceDirectoryIdentity, sameDirectoryIdentity } from "../scripts/source-git.mjs";
+import { sourceObservation } from "../scripts/ci-report.mjs";
 
 const gitEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
 function git(root, ...args) {
@@ -65,6 +66,20 @@ test("R01 assume-unchanged and skip-worktree cannot hide source edits", async t 
     assert.equal(captureBuildProvenance(f.root, {}).state, "unavailable");
     git(f.root, "update-index", `--no-${flag}`, "source.txt");
   }
+});
+
+for (const flag of ["assume-unchanged", "skip-worktree"]) test(`CI and build source identities reject edits hidden by ${flag}`, async t => {
+  const f = await fixture(t);
+  assert.deepEqual(sourceObservation(f.root), { commit: f.commit, tree: f.tree, state: "clean" });
+  git(f.root, "update-index", `--${flag}`, "source.txt");
+  await writeFile(join(f.root, "source.txt"), "source differs from the recorded commit\n");
+  assert.equal(git(f.root, "status", "--porcelain"), "", "the fixture must actually hide its edit from Git status");
+  const index = await readFile(join(f.root, ".git/index"));
+  assert.equal(captureBuildProvenance(f.root, {}).reason, "hidden_index_flags");
+  assert.deepEqual(sourceObservation(f.root), { commit: null, tree: null, state: "unknown" });
+  assert.deepEqual(await readFile(join(f.root, ".git/index")), index, "observation must leave index flags intact");
+  git(f.root, "update-index", `--no-${flag}`, "source.txt");
+  assert.deepEqual(sourceObservation(f.root), { commit: f.commit, tree: f.tree, state: "dirty" });
 });
 
 test("R01 source archives do not manufacture provenance from CI environment strings", async t => {

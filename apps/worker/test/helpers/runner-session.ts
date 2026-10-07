@@ -7,7 +7,7 @@ import { runnerRegistryFaults } from "./runner-registry-faults.js";
 /** Exercise the real handshake, signed routes and policy reconciliation on DO storage.
  * Only the socket transport and the existing Registry request port are simulated. */
 export async function runnerSession(state: DurableObjectState, env: WorkerEnv, options: {
-  history?: boolean; credentialVersion?: number; lifecycleId?: string;
+  history?: boolean; queue?: boolean; credentialVersion?: number; lifecycleId?: string;
   runnerId?: string; sessionId?: string; connectionEpoch?: number; policy?: RunnerPolicy;
 } = {}) {
   const runnerId = options.runnerId ?? "r", sessionId = options.sessionId ?? "session-test", connectionEpoch = options.connectionEpoch ?? 1;
@@ -58,7 +58,7 @@ export async function runnerSession(state: DurableObjectState, env: WorkerEnv, o
     runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: {
       filesystem: true, process_execution: true, workspace_sync: true, pty: false, network_access: false,
       max_concurrent_jobs: 2, supported_rpc_methods: ["exec.start", "exec.run"], labels: {
-        job_queue_protocol: "1", ...(options.history ? { job_reporting_protocol: "2" } : {}),
+        ...(options.queue === false ? {} : { job_queue_protocol: "1" }), ...(options.history ? { job_reporting_protocol: "2" } : {}),
       } } } }));
   expect(socket.close).not.toHaveBeenCalled();
   expect(frames.map(frame => frame.type)).toEqual(["runner.welcome"]);

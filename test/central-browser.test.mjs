@@ -294,6 +294,39 @@ for (const locale of ["en", "zh-CN"]) test("OAuth deployment configuration failu
   assert.equal(api.requests.length, 1);
 });
 
+for (const locale of ["en", "zh-CN"]) for (const path of ["connection-check", "discovery/service"])
+for (const state of ["not_started", "unknown"]) for (const [code, key] of [
+  ["remote_upstream_unavailable", "mcpServiceUnavailable"],
+  ["remote_upstream_protocol_error", "mcpResponseInvalid"],
+  ["remote_result_invalid", "mcpResponseInvalid"],
+  ["remote_dependency_unavailable", "mcpConnectionUnavailable"],
+]) test(`${path} reports ${code} with ${state} recovery in ${locale}`, async t => {
+  const translate = createCentralTranslator(locale);
+  const api = client(t, () => Response.json({ error: { code, operation_state: state, message: "PRIVATE_UPSTREAM_DETAIL" } }, { status: 503 }), translate);
+  const messageKey = key + (state === "unknown" ? "Unconfirmed" : "");
+  await assert.rejects(api.request(path, { expected_revision: 1 }), { message: translate(messageKey) });
+  assert.equal(api.refreshRequired(), path.startsWith("discovery/"), "Specific guidance must preserve mutation reconciliation");
+  assert.equal(api.requests.length, 1);
+});
+
+test("connection inspection retains endpoint rejection guidance", async t => {
+  const api = client(t, () => Response.json({ error: { code: "remote_egress_denied", operation_state: "not_started" } }, { status: 503 }));
+  await assert.rejects(api.request("connection-check", { endpoint: "https://private.example/mcp" }), { message: "enterAPublicHttpsMcpUrlPrivateAddressesAnd" });
+  assert.equal(api.refreshRequired(), false);
+});
+
+test("MCP cause guidance requires its matching status and operation-state receipt", () => {
+  for (const [status, code, operation_state] of [
+    [400, "remote_upstream_unavailable", "not_started"],
+    [503, "remote_upstream_protocol_error", "completed"],
+    [503, "remote_dependency_unavailable", undefined],
+    [503, "__proto__", "not_started"],
+  ]) {
+    const result = classifyCentralFailure(centralRequestContract("discovery/service", {}), status, { error: { code, operation_state } });
+    assert.deepEqual(result, { messageKey: status === 400 ? "invalidActionRefreshLibrary" : "operationCouldNotBeConfirmedRefreshTheCurrentState", confirmedNotStarted: false });
+  }
+});
+
 for (const locale of ["en", "zh-CN"]) for (const failure of ["network", "json", "body_abort"])
 test("native " + failure + " failures use " + locale + " UI guidance and never replay a write", async t => {
   const translate = createCentralTranslator(locale);

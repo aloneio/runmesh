@@ -8,20 +8,31 @@ import { runnerArchiveFiles } from "./release-archive.js";
 import { renderManagedLauncher } from "./launchers.js";
 import type { ReleaseTarget, VerifiedStagedRelease } from "./contracts.js";
 
-export interface RunnerReleaseStageContext { readonly installRoot: string; readonly operationId: string; readonly runtimePath: string; readonly fetch?: typeof fetch; }
+export interface RunnerReleaseStageContext { readonly installRoot: string; readonly operationId: string; readonly runtimePath: string; readonly fetch?: typeof fetch; readonly signal?: AbortSignal; }
 const origins = new Set<string>(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS);
 function digest(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 
 /** No authorization headers or cookies are sent to release hosts. */
-export async function downloadRunnerReleaseAsset(url: string, limit: number, fetchImpl: typeof fetch = fetch): Promise<Uint8Array> {
+export async function downloadRunnerReleaseAsset(url: string, limit: number, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<Uint8Array> {
+  signal?.throwIfAborted();
   const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("Runner release download timed out.")); }, 30000); });
-  try { return await Promise.race([timeout, (async () => {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const stop = () => controller.abort(signal?.reason);
+  const interrupted = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener("abort", () => {
+      reject(controller.signal.reason);
+      void reader?.cancel().catch(() => undefined);
+    }, { once: true });
+  });
+  signal?.addEventListener("abort", stop, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error("Runner release download timed out.")), 30000);
+  try { return await Promise.race([interrupted, (async () => {
     let current = new URL(url);
     for (let redirects = 0; redirects <= 4; redirects++) {
+      controller.signal.throwIfAborted();
       if (current.protocol !== "https:" || current.username || current.password || !origins.has(current.origin)) throw new Error("Runner release download origin is invalid.");
       const response = await fetchImpl(current.toString(), { method: "GET", signal: controller.signal, redirect: "manual", credentials: "omit", headers: { accept: "application/octet-stream" } });
+      if (controller.signal.aborted) { void response.body?.cancel().catch(() => undefined); controller.signal.throwIfAborted(); }
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location"); void response.body?.cancel().catch(() => undefined);
         if (location === null || redirects === 4) throw new Error("Runner release redirect is invalid.");
@@ -30,21 +41,22 @@ export async function downloadRunnerReleaseAsset(url: string, limit: number, fet
       if (!response.ok || response.body === null) { void response.body?.cancel().catch(() => undefined); throw new Error(`Runner release download returned HTTP ${response.status}.`); }
       const declared = response.headers.get("content-length");
       if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit)) { void response.body.cancel().catch(() => undefined); throw new Error("Runner release download exceeds its size limit."); }
-      const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+      reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
       try {
         for (let parts = 0; ; parts++) {
+          controller.signal.throwIfAborted();
           if (parts > 32768) throw new Error("Runner release response is too fragmented.");
-          const part = await reader.read(); if (part.done) break;
+          const part = await reader.read(); controller.signal.throwIfAborted(); if (part.done) break;
           size += part.value.length;
           if (size > limit) throw new Error("Runner release download exceeds its size limit.");
           chunks.push(part.value);
         }
-      } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
+      } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); reader = undefined; }
       if (size === 0) throw new Error("Runner release download is empty.");
       return Buffer.concat(chunks, size);
     }
     throw new Error("Runner release redirect limit exceeded.");
-  })()]); } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
+  })()]); } finally { clearTimeout(timer); signal?.removeEventListener("abort", stop); controller.abort(); }
 }
 
 async function ensureDirectory(path: string): Promise<void> {
@@ -63,15 +75,17 @@ async function validateInstallRoot(path: string): Promise<string> {
 
 /** A fresh, immutable directory per operation preserves old binaries for rollback. */
 export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerReleaseStageContext, dependencies: { readonly trust?: ReleaseTrust } = {}): Promise<VerifiedStagedRelease> {
+  context.signal?.throwIfAborted();
   const release = exactRunnerRelease(target.version);
   if (release.channel !== target.channel || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(context.operationId)) throw new Error("Runner update target is invalid.");
   for (const value of [target.manifest_sha256, target.artifact_sha256]) if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) throw new Error("Runner release requires both selected digests.");
   const root = await validateInstallRoot(context.installRoot);
   const fetchImpl = context.fetch ?? fetch;
-  const manifestBytes = await downloadRunnerReleaseAsset(release.manifest_url, 65536, fetchImpl);
-  const signature = await downloadRunnerReleaseAsset(release.signature_url, 1024, fetchImpl);
-  const descriptor = await downloadRunnerReleaseAsset(release.signature_descriptor_url, 16384, fetchImpl);
+  const manifestBytes = await downloadRunnerReleaseAsset(release.manifest_url, 65536, fetchImpl, context.signal);
+  const signature = await downloadRunnerReleaseAsset(release.signature_url, 1024, fetchImpl, context.signal);
+  const descriptor = await downloadRunnerReleaseAsset(release.signature_descriptor_url, 16384, fetchImpl, context.signal);
   const manifest = await verifyRunnerReleaseSignature(manifestBytes, signature, descriptor, dependencies.trust);
+  context.signal?.throwIfAborted();
   // The Worker authorizes wire compatibility when it fixes the release digests.
   // This independent manager validates the signed range without inheriting the
   // wire version of the Runner package from which it was originally installed.
@@ -83,7 +97,8 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
   const artifact = (manifest as { artifacts: [{ size: number; sha256: string }] }).artifacts[0];
   const manifestSha256 = digest(manifestBytes);
   if ((target.manifest_sha256 !== undefined && target.manifest_sha256 !== manifestSha256) || (target.artifact_sha256 !== undefined && target.artifact_sha256 !== artifact.sha256)) throw new Error("Runner release changed after the update was requested.");
-  const archive = await downloadRunnerReleaseAsset(release.artifact_url, MAX_RELEASE_ASSET_BYTES, fetchImpl);
+  const archive = await downloadRunnerReleaseAsset(release.artifact_url, MAX_RELEASE_ASSET_BYTES, fetchImpl, context.signal);
+  context.signal?.throwIfAborted();
   if (archive.byteLength !== artifact.size || digest(archive) !== artifact.sha256) throw new Error("Runner package checksum does not match its signed release.");
   const files = runnerArchiveFiles(archive);
   const packageFile = files.find(file => file.path === "package.json");
@@ -93,6 +108,7 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
   if (packageJson.name !== "@aloneio/runmesh-runner" || packageJson.version !== target.version
     || (packageJson.dependencies !== undefined && (typeof packageJson.dependencies !== "object" || packageJson.dependencies === null || Object.keys(packageJson.dependencies).length !== 0))) throw new Error("Runner package identity or dependencies differ from its portable release contract.");
   const versions = join(root, "versions"); await ensureDirectory(versions);
+  context.signal?.throwIfAborted();
   // A random suffix also avoids reusing partially installed directories after a crash.
   const versionDirectory = join(versions, `${target.version}-${context.operationId}-${randomUUID().slice(0, 8)}`);
   const temporary = `${versionDirectory}.staging`;
@@ -100,15 +116,19 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
   try {
     const packageRoot = process.platform === "win32" ? join(temporary, "node_modules", "@aloneio", "runmesh-runner") : join(temporary, "lib", "node_modules", "@aloneio", "runmesh-runner");
     for (const file of files) {
+      context.signal?.throwIfAborted();
       const destination = join(packageRoot, ...file.path.split("/"));
       await mkdir(dirname(destination), { recursive: true, mode: 0o755 });
+      context.signal?.throwIfAborted();
       await writeFile(destination, file.bytes, { flag: "wx", mode: 0o644 });
     }
+    context.signal?.throwIfAborted();
     await mkdir(join(temporary, "runtime"), { mode: 0o755 });
     const runtime = join(temporary, "runtime", process.platform === "win32" ? "node.exe" : "node");
     const sourceStat = await lstat(context.runtimePath);
     if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) throw new Error("Runner private Node runtime must be a regular file.");
-    await copyFile(context.runtimePath, runtime); await chmod(runtime, 0o755);
+    context.signal?.throwIfAborted();
+    await copyFile(context.runtimePath, runtime); context.signal?.throwIfAborted(); await chmod(runtime, 0o755);
     if (process.platform === "win32") {
       await writeFile(join(temporary, "runmesh.cjs"), bundleFile.bytes, { flag: "wx" });
       const wrapper = renderManagedLauncher("win32", root);
@@ -120,10 +140,29 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
       await writeFile(join(temporary, "bin", "runmesh"), wrapper, { flag: "wx", mode: 0o755 });
       await writeFile(join(temporary, "bin", "runmesh-runner"), wrapper, { flag: "wx", mode: 0o755 });
     }
-    const probe = await promisify(execFile)(runtime, [join(packageRoot, "dist", "runmesh.cjs"), "--version"], { timeout: 15000, maxBuffer: 65536, windowsHide: true });
+    context.signal?.throwIfAborted();
+    const probing = promisify(execFile)(runtime, [join(packageRoot, "dist", "runmesh.cjs"), "--version"], { timeout: 15000, maxBuffer: 65536, windowsHide: true, killSignal: "SIGKILL", ...(context.signal === undefined ? {} : { signal: context.signal }) });
+    // execFile rejects on abort before the process exits. Keep its runtime in
+    // place until close, especially while Windows still holds the executable.
+    // This isolated version probe has no work to drain; force termination also
+    // bounds old releases whose CLI happens to install a SIGTERM handler.
+    const closed = new Promise<void>(resolve => probing.child.once("close", () => resolve()));
+    const probe = await probing.catch(error => {
+      // Node 22's AbortSignal path sends SIGTERM even when execFile's timeout
+      // uses killSignal. Its rejection also clears the timeout, so explicitly
+      // stop a still-running probe before waiting for close.
+      if (probing.child.pid !== undefined && probing.child.exitCode === null && probing.child.signalCode === null) probing.child.kill("SIGKILL");
+      throw error;
+    }).finally(() => closed);
+    context.signal?.throwIfAborted();
     if (probe.stdout.trim() !== target.version) throw new Error("Runner package reported a different version.");
     await writeFile(join(temporary, ".runmesh-release.json"), JSON.stringify({ version: target.version, manifest_sha256: manifestSha256, artifact_sha256: artifact.sha256 }), { flag: "wx", mode: 0o644 });
+    context.signal?.throwIfAborted();
     await rename(temporary, versionDirectory);
     return { version: target.version, versionDirectory, manifestSha256, artifactSha256: artifact.sha256 };
-  } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error; }
+  } catch (error) {
+    try { await rm(temporary, { recursive: true, force: true }); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], "Runner release staging and temporary installation cleanup failed.", { cause: error }); }
+    throw error;
+  }
 }

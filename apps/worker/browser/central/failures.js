@@ -1,3 +1,7 @@
+const remoteMessages = Object.freeze({ remote_upstream_unavailable: 'mcpServiceUnavailable',
+  remote_upstream_protocol_error: 'mcpResponseInvalid', remote_result_invalid: 'mcpResponseInvalid',
+  remote_dependency_unavailable: 'mcpConnectionUnavailable' });
+
 /** Classify failure receipts into guidance and recovery metadata; the API owns refresh admission. */
 export function classifyCentralFailure({ serviceInput, skillInput, skillInstallation, sourceAction, inspection, registry }, status, value) {
   const code = value.error && value.error.code;
@@ -12,6 +16,11 @@ export function classifyCentralFailure({ serviceInput, skillInput, skillInstalla
   if (notStarted && status === 429 && code === 'remote_busy') return failure('mcpBusy');
   if (notStarted && status === 503 && code === 'central_authority_unavailable') return failure('sessionVerificationUnavailable');
   if (status === 503 && code === 'remote_operation_timed_out') return failure(notStarted ? 'mcpTimedOut' : 'mcpTimeoutUnconfirmed');
+  const remoteMessage = typeof code === 'string' && Object.hasOwn(remoteMessages, code) ? remoteMessages[code] : undefined;
+  if (status === 503 && remoteMessage && (notStarted || value.error?.operation_state === 'unknown'))
+    return failure(remoteMessage + (notStarted ? '' : 'Unconfirmed'));
+  if (status === 503 && code === 'remote_egress_denied' && notStarted)
+    return failure('enterAPublicHttpsMcpUrlPrivateAddressesAnd');
 
   // Only an explicit, recognized not-started receipt leaves a write ready for correction.
   if (status === 413 && skillInput && code === 'central_request_too_large' && notStarted)

@@ -4,7 +4,7 @@ import { lstat, mkdir, writeFile, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sourceGitEnvironment, sourceDirectoryIdentity, sameDirectoryIdentity } from "./source-git.mjs";
+import { sourceGitEnvironment, sourceIndexProblem, sourceDirectoryIdentity, sameDirectoryIdentity } from "./source-git.mjs";
 
 export const ROOT = fileURLToPath(new URL("../", import.meta.url));
 export function sourceObservation(root = ROOT) {
@@ -14,6 +14,7 @@ export function sourceObservation(root = ROOT) {
     assert.ok(sameDirectoryIdentity(identity, sourceDirectoryIdentity(git("rev-parse", "--show-toplevel"))), "source root differs from checkout");
     const commit = git("rev-parse", "HEAD"); assert.match(commit, /^[a-f0-9]{40}$/u);
     const tree = git("rev-parse", `${commit}^{tree}`); assert.match(tree, /^[a-f0-9]{40}$/u);
+    assert.equal(sourceIndexProblem(git), undefined, "source index cannot establish a visible checkout");
     const state = git("status", "--porcelain", "--untracked-files=all") === "" ? "clean" : "dirty";
     // A checkout change must not combine one commit with another tree/status.
     assert.equal(git("rev-parse", "HEAD"), commit, "source changed during observation");

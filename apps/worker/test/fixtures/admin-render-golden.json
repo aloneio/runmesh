@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "d00ca57d27fb5a14a4aed65d8169173ba09b041c8611a378b614d69b4d05175d",
-      "bytes": 182634,
+      "sha256": "1d9d63e2e5d7c5ea136fc3f6135aa8d334a353a840cf0ea0af251d3bc0036e25",
+      "bytes": 184861,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -33,8 +33,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "9a724a50dff6c90c0c983daa3ffbcbd5166694ba58426591371e1a0f39d5a0df",
-      "bytes": 183294,
+      "sha256": "6c8f00df200ac2aaef01ae742ee1d7cb30bad6f74f6e9e9b02dd1aeaae0ad07d",
+      "bytes": 185521,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -52,8 +52,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "5f1119c49be42e727252f3e11a55c4c38b8434375d58cfd80eb9532102f11bdd",
-      "bytes": 185591,
+      "sha256": "27965bbfa57089f61471c64510aec69a98bfe4ba9d03b96bca892ffa780b19a4",
+      "bytes": 187818,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -423,8 +423,8 @@
           }
         ]
       ],
-      "sha256": "36b2c07d6b1fadcd21674bb368d894058c451e2bd119d8709d53500348a30321",
-      "bytes": 185940,
+      "sha256": "53320d2734cab5ef2c308692e226f634cf0daf34d72dd348bb544a45a2e458ca",
+      "bytes": 188167,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -1366,6 +1366,33 @@
         "name": "admin-document",
         "sha256": "d79e0480cdf4719e02f6c471ca9920f903f00e6c17f4d063d531a26a6e23f7fa",
         "bytes": 185815
+      }
+    ]
+  },
+  "navigation_failure_review": {
+    "source_baseline": "7df59a11fa34635f21332cd6dd4e9e9987c0a603",
+    "reviewed_change": "Pending navigation reuses one request for the latest identical destination and preserves history intent. MCP failure receipts retain specific localized guidance without changing write reconciliation. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "d00ca57d27fb5a14a4aed65d8169173ba09b041c8611a378b614d69b4d05175d",
+        "bytes": 182634
+      },
+      {
+        "name": "setup",
+        "sha256": "9a724a50dff6c90c0c983daa3ffbcbd5166694ba58426591371e1a0f39d5a0df",
+        "bytes": 183294
+      },
+      {
+        "name": "secret",
+        "sha256": "5f1119c49be42e727252f3e11a55c4c38b8434375d58cfd80eb9532102f11bdd",
+        "bytes": 185591
+      },
+      {
+        "name": "admin-document",
+        "sha256": "36b2c07d6b1fadcd21674bb368d894058c451e2bd119d8709d53500348a30321",
+        "bytes": 185940
       }
     ]
   }
