@@ -53,7 +53,7 @@ export class SkillLifecycleState implements SkillLifecycleRepository {
       const history = this.history(id); if (!history) return { state: "missing" };
       if (history.head.revision !== revision) return { state: "conflict", current_revision: history.head.revision };
       if (!history.versions.some(version => version.digest === digest)) return { state: "missing" };
-      this.storage.sql.exec("INSERT INTO skill_version_metadata_v1 (skill_id,digest,created_at_ms,pinned) VALUES (?,?,NULL,?) ON CONFLICT(skill_id,digest) DO UPDATE SET pinned=excluded.pinned", id, digest, pinned ? 1 : 0);
+      this.storage.sql.exec("INSERT INTO skill_version_metadata_v1 (skill_id,digest,created_at_ms,pinned) VALUES (?,?,NULL,?) ON CONFLICT(skill_id,digest) DO UPDATE SET pinned=excluded.pinned WHERE pinned<>excluded.pinned", id, digest, pinned ? 1 : 0);
       const head = this.advance(history.head);
       return { state: "retained", head, digest, pinned };
     });

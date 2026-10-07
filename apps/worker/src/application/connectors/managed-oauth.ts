@@ -83,7 +83,7 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     record = await commit(record, { state: 'pending', discovery: result.discovery, client, verifier }, authorize);
     return { state: 'started', authorization_url: result.authorization_url, profile_id: record.profile_id };
   }
-  async function complete(hash: string, input: Record<string, unknown>, signal: AbortSignal, requestOrigin?: string): Promise<ManagedConnectionResult> {
+  async function complete(hash: string, input: Record<string, unknown>, signal: AbortSignal, tokenClaimed: () => void, requestOrigin?: string): Promise<ManagedConnectionResult> {
     if (!catalogKeys(input, ["state", "code", "iss", "error"]) || typeof input.state !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(input.state)
       || (input.iss !== undefined && (typeof input.iss !== "string" || input.iss.length > 2048))
       || (input.code !== undefined && (typeof input.code !== "string" || !input.code || input.code.length > 4096))
@@ -104,6 +104,7 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
       beforeTokenRequest: () => {
         if (record!.state !== "pending" || record!.expires_at <= ports.now()) return fault("invalid_callback");
         record = replace(record!, { state: "exchanging" });
+        tokenClaimed();
       } });
     const value = tokenValues(result), tokens = await ports.cipher.seal(context(record, 'tokens'), value.tokens);
     await commit(record, { state: "ready", tokens, token_expires_at: value.expires, verifier: undefined }, authorize);
@@ -114,9 +115,10 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
       const input = catalogObject(raw); if (!input) return { state: "failed", code: "invalid_request", operation_state: "not_started" };
       if (active.has(hash) || active.size >= 4) return { state: "failed", code: "conflict", operation_state: "not_started" };
       active.add(hash); const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 20_000);
+      let exchangeClaimed = false;
       try {
         if (action === "begin") return await begin(hash, input, controller.signal, requestOrigin);
-        if (action === "complete") return await complete(hash, input, controller.signal, requestOrigin);
+        if (action === "complete") return await complete(hash, input, controller.signal, () => { exchangeClaimed = true; }, requestOrigin);
         if (!catalogKeys(input, ["profile_id", "expected_revision"]) || !isCapabilityIdentifier(input.profile_id) || !Number.isSafeInteger(input.expected_revision)) return fault("invalid_request");
         await admin(hash, controller.signal); profile(input.profile_id, input.expected_revision as number, true);
         const old = ports.repository.read(input.profile_id);
@@ -124,7 +126,10 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
         return { state: "revoked", profile_id: input.profile_id };
       } catch (error) {
         const code = error instanceof OAuthFault && ["invalid_request", "denied", "conflict", "invalid_callback", "provider_unsupported", "reauthorization_required", "configuration_required"].includes(error.code) ? error.code : "unavailable";
-        return { state: "failed", code, operation_state: code === "unavailable" ? "unknown" : "not_started" } as ManagedConnectionResult;
+        // A failure category cannot establish whether the one-use code was
+        // consumed. Keep the protocol's dispatch boundary in the receipt.
+        const uncertain = action === "complete" ? exchangeClaimed : code === "unavailable";
+        return { state: "failed", code, operation_state: uncertain ? "unknown" : "not_started" } as ManagedConnectionResult;
       } finally { clearTimeout(timer); controller.abort(); active.delete(hash); }
     },
     async credential(selected: ConnectionProfile, signal: AbortSignal, admit: () => Promise<void>): Promise<CredentialLease> {

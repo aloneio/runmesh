@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import { CI_CHECKS, CHECK_IDS } from "./ci-contract.mjs";
 import { ROOT, gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
@@ -38,7 +39,7 @@ if (id === "installed_transport") await writeSupplement("package-e2e", { schema_
 const [program, ...args] = CI_CHECKS[id].split(" ");
 const executable = program === "node" ? process.execPath : program === "npm" && process.platform === "win32" ? "npm.cmd" : program;
 const child = spawn(executable, args, { cwd: ROOT, stdio: "inherit", detached: process.platform !== "win32", shell: program === "npm" && process.platform === "win32", windowsHide: true });
-let reason, killTimer;
+let reason, termination;
 const kill = async () => {
   if (!child.pid) return;
   if (process.platform === "win32") {
@@ -46,17 +47,22 @@ const kill = async () => {
     if (path) await promisify(execFile)(path, ["/PID", String(child.pid), "/T", "/F"], { timeout: 5000, windowsHide: true }).catch(() => undefined);
   } else {
     try { process.kill(-child.pid, "SIGTERM"); } catch { /* already closed */ }
-    killTimer = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already closed */ } }, 1000);
+    // The direct child may exit before descendants that ignore SIGTERM.
+    // Finish group cleanup before publishing cancellation or leaving the gate.
+    await delay(1000);
+    try { process.kill(-child.pid, "SIGKILL"); } catch { /* already closed */ }
   }
 };
-const interrupted = () => { reason = "cancelled"; void kill(); };
+const terminate = () => { termination ??= kill(); };
+const interrupted = () => { reason = "cancelled"; terminate(); };
 process.once("SIGINT", interrupted); process.once("SIGTERM", interrupted);
-const timer = setTimeout(() => { reason = "timed_out"; void kill(); }, id === "installed_transport" ? 480000 : 600000);
+const timer = setTimeout(() => { reason = "timed_out"; terminate(); }, id === "installed_transport" ? 480000 : 600000);
 let code;
 try {
   code = await new Promise(resolve => { child.once("error", error => { reportFailure("process_start", error); resolve(1); }); child.once("close", value => resolve(value ?? 1)); });
 } finally {
-  clearTimeout(timer); clearTimeout(killTimer);
+  clearTimeout(timer);
+  await termination;
   process.removeListener("SIGINT", interrupted); process.removeListener("SIGTERM", interrupted);
 }
 let evidencePhase = "package_evidence_read";

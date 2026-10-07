@@ -110,6 +110,31 @@ it("cleanup protects active, staged and pinned content including paused active c
   });
 });
 
+it("retaining an unchanged Skill pin advances its revision without rewriting metadata", async () => {
+  const first = await bundle(0);
+  await runInDurableObject(owner(), (_instance, state) => {
+    const f = fixture(state); f.store.install(first, 0); f.repository.history("lifecycle");
+    let metadataWrites = 0, totalWrites = 0;
+    const exec = state.storage.sql.exec.bind(state.storage.sql);
+    const sql = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+      const cursor = exec(query, ...args); totalWrites += cursor.rowsWritten;
+      if (query.includes("skill_version_metadata_v1")) metadataWrites += cursor.rowsWritten;
+      return cursor;
+    });
+    try {
+      for (const [index, pinned] of [false, true, true, false, false].entries()) {
+        metadataWrites = 0; totalWrites = 0;
+        expect(f.repository.retain("lifecycle", first.digest, pinned, index + 1)).toMatchObject({ state: "retained", head: { revision: index + 2 }, pinned });
+        const changed = index === 1 || index === 3;
+        expect(metadataWrites).toBe(changed ? 1 : 0);
+        expect(totalWrites).toBe(changed ? 2 : 1);
+      }
+      expect(f.repository.retain("lifecycle", first.digest, true, 1)).toEqual({ state: "conflict", current_revision: 6 });
+      expect(f.repository.history("lifecycle")!.versions[0]!.pinned).toBe(false);
+    } finally { sql.mockRestore(); }
+  });
+});
+
 it.each(["activate", "pin", "install"] as const)("a concurrent %s invalidates the exact cleanup preview", async change => {
   const [first, second, third] = await Promise.all([bundle(0), bundle(1), bundle(2)]);
   await runInDurableObject(owner(), async (_instance, state) => {

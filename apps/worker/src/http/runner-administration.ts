@@ -14,16 +14,17 @@ import { runnerTokenVerifier } from "../security.js";
 import { record } from "../values.js";
 import { json } from "../platform/control-plane.js";
 import type { ValidityWindow } from "../validity.js";
-import { runnerLifecyclePorts } from "./runner-mutations.js";
+import { runnerLifecyclePorts, runnerStatusReceipt } from "./runner-mutations.js";
 import { adminRunnerError } from "./responses.js";
 export function runnerWriteOutcome(response: Response): RunnerWriteOutcome {
-  return response.ok ? "accepted" : response.status === 400 ? "invalid" : response.status === 403 ? "denied" : response.status === 404 ? "missing" : response.status === 409 ? "conflict" : "unknown";
+  const receipt = runnerStatusReceipt(response);
+  return receipt.ok ? "accepted" : receipt.status === 400 ? "invalid" : receipt.status === 403 ? "denied" : receipt.status === 404 ? "missing" : receipt.status === 409 ? "conflict" : "unknown";
 }
 function actionPorts(env: WorkerEnv, prefix: string): RunnerActionPorts {
   return {
     ...runnerLifecyclePorts(env),
     mutationId: () => prefix + crypto.randomUUID(),
-    fence: async (id, mutation) => (await fenceRunnerTransport(env, id, mutation)).ok
+    fence: async (id, mutation) => runnerStatusReceipt(await fenceRunnerTransport(env, id, mutation)).ok
   };
 }
 type EnrollmentOptions = {
@@ -35,8 +36,8 @@ export function registerRunnerFromControlPlane(env: WorkerEnv, runnerId: string,
   return registerRunner({
     ...actionPorts(env, "credential-rotated-"),
     read: async id => {
-      const response = await runnerRegistryRequest(env, id, "", "GET", "");
-      return response.ok ? "available" : response.status === 404 ? "missing" : "unavailable";
+      const receipt = runnerStatusReceipt(await runnerRegistryRequest(env, id, "", "GET", ""));
+      return receipt.ok ? "available" : receipt.status === 404 ? "missing" : "unavailable";
     },
     write: async (id, mutation) => runnerWriteOutcome(await runnerRegistryRequest(env, id, "", "PUT", JSON.stringify({
       token_verifier: await runnerTokenVerifier(token, pepper),
@@ -50,7 +51,7 @@ export function registerRunnerFromControlPlane(env: WorkerEnv, runnerId: string,
 export function regenerateEnrollmentFromControlPlane(env: WorkerEnv, runnerId: string, initial: RunnerExecutionSnapshot, input: EnrollmentOptions) {
   return regenerateRunnerEnrollment({
     mutationId: () => "runner-enrollment-" + crypto.randomUUID(),
-    fence: async (id, mutation) => (await beginRunnerPolicyMutation(env, id, mutation)).ok,
+    fence: async (id, mutation) => runnerStatusReceipt(await beginRunnerPolicyMutation(env, id, mutation)).ok,
     cancel: runnerLifecyclePorts(env).cancel,
     snapshot: async id => {
       const result = await runnerExecutionSnapshot(runnerQueryPorts(env), id);
@@ -86,8 +87,8 @@ export function createRunnerFromControlPlane(env: WorkerEnv, runnerId: string, i
   return createRunner({
     ...actionPorts(env, "runner-create-"),
     canRead: async id => {
-      const response = await runnerRegistryRequest(env, id, "", "GET", "");
-      return response.ok || response.status === 404;
+      const receipt = runnerStatusReceipt(await runnerRegistryRequest(env, id, "", "GET", ""));
+      return receipt.ok || receipt.status === 404;
     },
     create: async (id, mutation) => runnerWriteOutcome(await runnerRegistryRequest(env, id, "/add", "POST", JSON.stringify({
       display_name: input.displayName,

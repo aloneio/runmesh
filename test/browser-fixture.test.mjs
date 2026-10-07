@@ -122,18 +122,13 @@ test("Shared Worker launch owns an IPC-discovered port and shuts down its proces
   await assert.rejects(fetch(origin + "/health", { signal: AbortSignal.timeout(1_000) }));
 });
 
-test("Fixture command timeout stops a descendant holding a local server", async () => {
-  const descendant = "const s=require('node:http').createServer((q,r)=>r.end('alive'));s.listen(0,'127.0.0.1',()=>process.send(s.address().port))";
-  const parent = `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});c.on('message',p=>console.log(p))`;
-  let port;
-  await assert.rejects(runFixtureCommand(process.execPath, ["-e", parent], { timeout: 3_000, maxBuffer: 4_096 }), error => {
+test("Fixture command timeout terminates a command before readiness", async () => {
+  await assert.rejects(runFixtureCommand(process.execPath, ["-e", "setInterval(()=>{},1000)"], { timeout: 3_000, maxBuffer: 4_096 }), error => {
     assert.equal(error.killed, true);
     assert.equal(error.termination_reason, "timeout");
-    port = Number(error.stdout.trim());
-    assert.ok(Number.isInteger(port) && port > 0 && port <= 65_535);
+    assert.equal(error.stdout, "");
     return true;
   });
-  await assert.rejects(fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1_000) }));
 });
 
 test("Fixture command preserves a failed child's bounded private report for safe projection", async () => {
@@ -145,15 +140,24 @@ test("Fixture command preserves a failed child's bounded private report for safe
   });
 });
 
-test("Fixture command bounds private output and classifies the initiating output limit", async () => {
+test("Fixture command bounds private output and stops a descendant holding a local server", async () => {
   const before = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
-  await assert.rejects(runFixtureCommand(process.execPath, ["-e", "process.stdout.write('x'.repeat(65536));setInterval(()=>{},1000)"], { timeout: 5_000, maxBuffer: 1_024 }), error => {
+  const descendant = "const s=require('node:http').createServer((q,r)=>r.end('alive'));s.listen(0,'127.0.0.1',()=>process.send(s.address().port))";
+  // Trigger cleanup only after the descendant owns its port; startup is not the timeout assertion.
+  const parent = `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});c.on('message',p=>process.stdout.write(String(p)+'\\n'+'x'.repeat(65536)))`;
+  let port;
+  await assert.rejects(runFixtureCommand(process.execPath, ["-e", parent], { timeout: 10_000, maxBuffer: 1_024 }), error => {
     assert.equal(error.termination_reason, "output_limit");
     assert.equal(error.code, "ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
-    assert.equal(error.stdout, "x".repeat(1_024));
+    const [portText, output] = error.stdout.split("\n");
+    port = Number(portText);
+    assert.ok(Number.isInteger(port) && port > 0 && port <= 65_535);
+    assert.equal(error.stdout.length, 1_024);
+    assert.equal(output, "x".repeat(1_024 - portText.length - 1));
     assert.equal(error.killed, true);
     return true;
   });
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1_000) }));
   assert.deepEqual([process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")], before);
 });
 

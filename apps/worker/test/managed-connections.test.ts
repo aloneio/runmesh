@@ -259,7 +259,7 @@ it("OAuth callback can resume after a temporary cipher failure before token exch
   const f = oauthFixture(false, origin, undefined, () => secret), state = await f.begin();
   const pending = f.record(), requests = f.send.mock.calls.length;
   secret = undefined;
-  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "failed" });
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "failed", code: "unavailable", operation_state: "not_started" });
   expect(f.record()).toEqual(pending); expect(f.send.mock.calls).toHaveLength(requests);
   secret = fixtureControlSecret;
   expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
@@ -478,7 +478,8 @@ it("concurrent OAuth callbacks claim the authorization code once at token dispat
 });
 it("OAuth does not persist tokens after browser authorization is revoked during exchange", async () => {
   const f = oauthFixture(), state = await f.begin(); f.revokeOnToken();
-  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "failed" }); expect(f.record()?.tokens).toBeUndefined();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "failed", code: "denied", operation_state: "unknown" });
+  expect(f.state.exchanges).toBe(1); expect(f.record()?.state).toBe("exchanging"); expect(f.record()?.tokens).toBeUndefined();
 });
 it("OAuth rejects a private discovered token endpoint before registration or token exchange", async () => {
   const f = oauthFixture(); f.privateToken(); expect(await f.service().run(f.hash, "begin", f.selection)).toMatchObject({ state: "failed", code: "provider_unsupported" }); expect(f.posts).toHaveLength(0);
