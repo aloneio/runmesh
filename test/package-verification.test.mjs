@@ -12,7 +12,7 @@ async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "ar08-package-wrapper-"));
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   await mkdir(join(directory, "scripts"));
-  for (const file of ["run-package-e2e.mjs", "test-evidence.mjs", "evidence-io.mjs", "ci-report.mjs", "ci-supplement.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"]) await writeFile(join(directory, "scripts", file), await readFile(join(root, "scripts", file)));
+  for (const file of ["run-package-e2e.mjs", "test-evidence.mjs", "evidence-io.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"]) await writeFile(join(directory, "scripts", file), await readFile(join(root, "scripts", file)));
   await writeFile(join(directory, "package.json"), '{"name":"synthetic-test","version":"1.0.0","private":true}\n');
   await writeFile(join(directory, ".gitignore"), '.verification/\nci-results/\n');
   await writeFile(join(directory, "source.txt"), "original\n");

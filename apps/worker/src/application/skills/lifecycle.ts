@@ -22,10 +22,16 @@ export function createSkillLifecycle(ports: SkillLifecyclePorts) {
       if (action === "compare") {
         const input = lifecycleInput(raw, ["before", "after"]);
         if (!input || !skillDigest(input.before) || !skillDigest(input.after)) return { state: "invalid" };
-        const old = ports.repository.bundle(id, input.before), next = ports.repository.bundle(id, input.after);
-        if (!old || !next) return { state: "missing" };
-        const before = await verifySkillBundle(old, ports.digest), after = await verifySkillBundle(next, ports.digest);
-        if (!before || !after || before.skill_id !== id || after.skill_id !== id || before.digest !== input.before || after.digest !== input.after) return { state: "unavailable" };
+        const old = ports.repository.bundle(id, input.before);
+        if (!old) return { state: "missing" };
+        const before = await verifySkillBundle(old, ports.digest);
+        if (!before || before.skill_id !== id || before.digest !== input.before || signal.aborted) return { state: "unavailable" };
+        // Immutable requested digests identify reusable verification. Read a
+        // second body only when needed and while the comparison remains live.
+        const next = input.after === input.before ? before : ports.repository.bundle(id, input.after);
+        if (!next) return { state: "missing" };
+        const after = input.after === input.before ? before : await verifySkillBundle(next, ports.digest);
+        if (!after || after.skill_id !== id || after.digest !== input.after || signal.aborted) return { state: "unavailable" };
         const result = compareSkillVersions(before, after, history.head.revision);
         const final = await authorize(); if (final !== "allowed") return { state: final };
         if (ports.repository.history(id)?.head.revision !== history.head.revision) return { state: "conflict" };

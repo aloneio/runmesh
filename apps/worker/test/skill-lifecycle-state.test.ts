@@ -35,6 +35,43 @@ function preview(value: Awaited<ReturnType<ReturnType<typeof createSkillLifecycl
   expect(value.state).toBe("previewed"); if (value.state !== "previewed") throw new Error("expected preview"); return value.plan;
 }
 
+it.each(["same", "different", "aborted", "invalid-before", "aliased-after", "denied", "revision"] as const)("compares only verified requested Skill bodies with bounded repeated work: %s", async mode => {
+  const first = await bundle(0), second = await bundle(1);
+  await runInDurableObject(owner(), async (_instance, state) => {
+    const f = fixture(state); f.store.install(first, 0); f.store.install(second, 1);
+    const controller = new AbortController(), read = vi.spyOn(f.repository, "bundle");
+    if (mode === "invalid-before") read.mockReturnValueOnce({ ...first, source: "Modified without updating the digest" });
+    if (mode === "aliased-after") read.mockReturnValue(first);
+    const digest = vi.fn(async (value: string) => {
+      const result = await catalogSha256(value);
+      if (mode === "aborted") controller.abort();
+      return result;
+    });
+    const admin = vi.fn(async () => {
+      if (admin.mock.calls.length === 2) {
+        if (mode === "denied") return "denied" as const;
+        if (mode === "revision") f.repository.retain("lifecycle", first.digest, true, 2);
+      }
+      return "allowed" as const;
+    });
+    const compare = createSkillLifecycle({ repository: f.repository, digest, admin, now: () => 1000 });
+    const same = ["same", "denied", "revision"].includes(mode);
+    try {
+      const result = await compare(session, "lifecycle", "compare", { before: first.digest, after: same ? first.digest : second.digest }, controller.signal);
+      expect(result.state).toBe(mode === "denied" ? "denied" : mode === "revision" ? "conflict"
+        : ["aborted", "invalid-before", "aliased-after"].includes(mode) ? "unavailable" : "compared");
+      if (result.state === "compared") {
+        expect(result).toMatchObject({ skill_id: "lifecycle", before: first.digest, after: same ? first.digest : second.digest, revision: 2 });
+        expect(result.files).toHaveLength(same ? 0 : 2);
+      }
+      const stopsEarly = mode === "aborted" || mode === "invalid-before";
+      expect(read).toHaveBeenCalledTimes(same || stopsEarly ? 1 : 2);
+      expect(digest).toHaveBeenCalledTimes(same || stopsEarly ? 1 : 2);
+      expect(admin).toHaveBeenCalledTimes(stopsEarly || mode === "aliased-after" ? 1 : 2);
+    } finally { read.mockRestore(); }
+  });
+});
+
 it("version history reads metadata only, preserves old unknown times, and leaves schema-2 readers compatible", async () => {
   const first = await bundle(0), second = await bundle(1);
   await runInDurableObject(owner(), (_instance, state) => {

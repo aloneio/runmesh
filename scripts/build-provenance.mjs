@@ -1,35 +1,19 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { sourceGitEnvironment, sourceDirectoryIdentity, sameDirectoryIdentity } from "./source-git.mjs";
 
 const sha = /^[a-f0-9]{40}$/u;
 const branch = value => value === "main" || value === "dev" ? value : null;
 const absent = (state, reason) => ({ schema_version: 1, state, commit: null, tree: null, branch: null, reason });
-
-/** A directory can have multiple Windows case/8.3 spellings. Compare the
- * actual directory object, never case-fold arbitrary paths or trust a prefix.
- * BigInt prevents distinct 64-bit file IDs from collapsing through rounding. */
-export function sourceDirectoryIdentity(path) {
-  try {
-    const info = statSync(path, { bigint: true });
-    if (!info.isDirectory() || typeof info.dev !== "bigint" || info.dev < 0n || typeof info.ino !== "bigint" || info.ino <= 0n) return undefined;
-    return { device: info.dev, inode: info.ino };
-  } catch { return undefined; }
-}
-export function sameDirectoryIdentity(left, right) {
-  return left !== undefined && right !== undefined && left !== null && right !== null
-    && typeof left.device === "bigint" && left.device >= 0n && typeof left.inode === "bigint" && left.inode > 0n
-    && left.device === right.device && left.inode === right.inode;
-}
 
 /** Build-time only. Read Git metadata; never consult remotes, author identity,
  * credentials, database state, replace refs, executable diff or fsmonitor.
  * A clean Git tree identifies tracked source, not a signed binary attestation.
  */
 export function captureBuildProvenance(root, metadata = process.env) {
-  const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+  const environment = sourceGitEnvironment();
   const git = (...args) => spawnSync("git", ["--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", ...args], {
     cwd: root, env: environment, encoding: "utf8", timeout: 8000, maxBuffer: 2 * 1024 * 1024, windowsHide: true,
   });

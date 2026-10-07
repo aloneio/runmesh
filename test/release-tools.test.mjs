@@ -297,7 +297,7 @@ test("E2E wrapper exits promptly when its test process cannot spawn", async () =
   try {
     const scripts = join(f.root, "scripts");
     await mkdir(scripts);
-    for (const name of ["run-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+    for (const name of ["run-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
       await writeFile(join(scripts, name), await readFile(join(repositoryRoot, "scripts", name)));
     // Isolate provenance generation; the real wrapper and OS spawn failure
     // still run in a separate Node process.

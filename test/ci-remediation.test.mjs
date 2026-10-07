@@ -230,7 +230,7 @@ test("CI08 failed attempts replace successful reports atomically", async t => {
 test("CI08 Windows initialization creates and resets only transport evidence before dependency installation", async t => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-ci-initialize-")); t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "scripts"));
-  for (const name of ["ci-check.mjs", "ci-contract.mjs", "ci-report.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const name of ["ci-check.mjs", "ci-contract.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, "scripts", name));
   const initialize = () => {
     const result = spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), "--initialize", "transport"], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true });
@@ -254,7 +254,7 @@ async function ciFailureFixture(t, id, command, stop = async () => {}) {
   const root = await mkdtemp(join(tmpdir(), "runmesh-ci-failure-"));
   t.after(async () => { try { await stop(); } finally { await rm(root, { recursive: true, force: true }); } });
   await mkdir(join(root, "scripts"));
-  for (const name of ["ci-check.mjs", "ci-report.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const name of ["ci-check.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, "scripts", name));
   await writeFile(join(root, "scripts/ci-contract.mjs"), `export const CI_CHECKS=${JSON.stringify({ [id]: command })}; export const CHECK_IDS=Object.keys(CI_CHECKS);\n`);
   await writeFile(join(root, "scripts/fixture-pass.mjs"), "process.exitCode = 0;\n");
@@ -347,7 +347,7 @@ for (const observer of ["gate", "release"]) for (const boundary of ["commit", "s
   const checkout = join(directory, "checkout"); await mkdir(checkout);
   if (observer === "release") {
     await mkdir(join(checkout, "scripts/dev-release"), { recursive: true });
-    for (const file of ["dev-release/io.mjs", "dev-release/policy.mjs", "dev-release/baseline-policy.mjs", "ci-report.mjs", "evidence-io.mjs"])
+    for (const file of ["dev-release/io.mjs", "dev-release/policy.mjs", "dev-release/baseline-policy.mjs", "ci-report.mjs", "source-git.mjs", "evidence-io.mjs"])
       await writeFile(join(checkout, "scripts", file), await readFile(new URL("../scripts/" + file, import.meta.url)));
   }
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
@@ -406,6 +406,37 @@ for (const observer of ["gate", "release"]) for (const boundary of ["commit", "s
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), observer === "gate" ? { commit: null, tree: null, state: "unknown" } : { accepted: false });
   assert.equal(git("rev-parse", "HEAD"), second, "fixture must actually change the checkout");
+});
+
+test("CI08 source observation binds to the requested checkout despite inherited Git routing", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh-source-routing-"));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")));
+  const create = async name => {
+    const root = join(directory, name); await mkdir(root);
+    const git = (...args) => {
+      const result = spawnSync("git", ["-c", "user.name=Runmesh Test", "-c", "user.email=runmesh-test@example.test",
+        "-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + join(directory, "no-hooks"), ...args],
+      { cwd: root, env, encoding: "utf8", timeout: 15000, windowsHide: true });
+      assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+    };
+    git("init", "--quiet"); await writeFile(join(root, "source.txt"), name); git("add", "."); git("commit", "--quiet", "-m", name);
+    return { root, source: { commit: git("rev-parse", "HEAD"), tree: git("rev-parse", "HEAD^{tree}"), state: "clean" } };
+  };
+  const requested = await create("requested"), other = await create("other");
+  assert.notEqual(requested.source.commit, other.source.commit);
+  const observe = (root, environment = env) => {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e",
+      `import { sourceObservation } from ${JSON.stringify(new URL("../scripts/ci-report.mjs", import.meta.url).href)}; console.log(JSON.stringify(sourceObservation(process.cwd())));`],
+    { cwd: root, env: environment, encoding: "utf8", timeout: 15000, windowsHide: true });
+    assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
+  };
+  assert.deepEqual(observe(requested.root), requested.source);
+  await writeFile(join(requested.root, "source.txt"), "uncommitted source");
+  const routed = { ...env, GIT_DIR: join(other.root, ".git"), GIT_WORK_TREE: other.root, GIT_INDEX_FILE: join(other.root, ".git/index") };
+  assert.deepEqual(observe(requested.root, routed), { ...requested.source, state: "dirty" });
+  const nested = join(requested.root, "nested"); await mkdir(nested);
+  assert.deepEqual(observe(nested), { commit: null, tree: null, state: "unknown" });
 });
 
 for (const changed of ["tree", "state"]) test(`CI08 installed package evidence must match the observed source ${changed}`, async t => {

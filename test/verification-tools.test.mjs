@@ -28,7 +28,7 @@ async function transportFixture(t) {
   });
   await mkdir(join(directory, "scripts"));
   await mkdir(join(directory, "node_modules/vitest"), { recursive: true });
-  for (const file of ["run-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const file of ["run-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await writeFile(join(directory, "scripts", file), await readFile(join(root, "scripts", file)));
   await writeFile(join(directory, "scripts/build-provenance.mjs"), "export async function writeBuildProvenance() {}\n");
   await writeFile(join(directory, "node_modules/vitest/vitest.mjs"), `

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -15,6 +15,55 @@ async function fixture() {
   return { stateDir, repository, store: new ContextStore({ stateDir }, { repository }), directory: join(stateDir, "contexts", "w") };
 }
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+
+it.each(["context_link", "context_file", "context_file_uppercase", "revision_directory"])("rebuild preserves the existing index when stored history contains a %s", async kind => {
+  const f = await fixture(), input = { workspace_id: "w", turn_id: "retained", goal: "first revision" };
+  const first = await f.store.checkpoint(input), id = (first.context as { context_id: string }).context_id;
+  await f.store.checkpoint({ ...input, context_id: id, expected_revision: 1, goal: "latest revision" });
+  const contextDirectory = join(f.directory, id), indexPath = join(f.directory, "index.json");
+  const before = await readFile(indexPath);
+  const original = kind === "revision_directory" ? join(contextDirectory, "2.json") : contextDirectory;
+  const replaced = kind === "context_file_uppercase" ? join(f.directory, id.toUpperCase()) : original;
+  const saved = join(f.stateDir, kind === "revision_directory" ? "saved-revision.json" : "saved-context");
+  await rename(original, saved);
+  if (kind === "context_link") await symlink(saved, replaced, process.platform === "win32" ? "junction" : "dir");
+  else if (kind === "context_file" || kind === "context_file_uppercase") await writeFile(replaced, "substituted context directory");
+  else await mkdir(replaced, { mode: 0o700 });
+  await expect(f.store.rebuild({ workspace_id: "w" })).rejects.toMatchObject({ code: kind === "revision_directory" ? "context_record_corrupt" : "context_storage_unsafe" });
+  expect(await readFile(indexPath)).toEqual(before);
+  // Repair the synthetic substitution and retry without regenerating history.
+  await rm(replaced, { recursive: true, force: true });
+  await rename(saved, original);
+  expect(await f.store.rebuild({ workspace_id: "w" })).toMatchObject({ rebuilt: true, records: 1, scanned_files: 2 });
+  expect(await f.store.read({ workspace_id: "w", context_id: id })).toMatchObject({ state: "ready", context: { revision: 2, goal: "latest revision" } });
+});
+
+it("rebuild ignores unrelated files and temporary names without hiding valid revisions", async () => {
+  const f = await fixture();
+  const saved = await f.store.checkpoint({ workspace_id: "w", turn_id: "kept", goal: "retained history" });
+  const id = (saved.context as { context_id: string }).context_id, contextDirectory = join(f.directory, id);
+  const unrelated = [join(f.directory, ".DS_Store"), join(f.directory, "notes.txt"), join(f.directory, "ctx-not-uuid"), join(f.directory, "index.json.interrupted.tmp"),
+    join(contextDirectory, "notes.json"), join(contextDirectory, "2.json.interrupted.tmp")];
+  for (const path of unrelated) await writeFile(path, "unrelated content");
+  await mkdir(join(f.directory, "foreign directory"));
+  await mkdir(join(contextDirectory, "archive"));
+  expect(await f.store.rebuild({ workspace_id: "w" })).toMatchObject({ rebuilt: true, records: 1, scanned_files: 1 });
+  expect(await f.store.read({ workspace_id: "w", context_id: id })).toMatchObject({ state: "ready", context: { revision: 1, goal: "retained history" } });
+  for (const path of unrelated) expect(await readFile(path, "utf8")).toBe("unrelated content");
+});
+
+it("rebuild reports malformed revision content before replacing its existing index", async () => {
+  const f = await fixture();
+  const saved = await f.store.checkpoint({ workspace_id: "w", turn_id: "kept", goal: "retained history" });
+  const id = (saved.context as { context_id: string }).context_id;
+  const recordPath = join(f.directory, id, "1.json"), indexPath = join(f.directory, "index.json");
+  const before = await readFile(indexPath), record = await readFile(recordPath);
+  await writeFile(recordPath, "{truncated");
+  await expect(f.store.rebuild({ workspace_id: "w" })).rejects.toMatchObject({ code: "context_record_corrupt" });
+  expect(await readFile(indexPath)).toEqual(before);
+  await writeFile(recordPath, record);
+  expect(await f.store.rebuild({ workspace_id: "w" })).toMatchObject({ rebuilt: true, records: 1 });
+});
 
 it("R04 new-turn index failure cannot create repeated orphan records when another context already exists", async () => {
   const f = await fixture();

@@ -18,7 +18,7 @@ async function fixture(t, state = { version: "0.1.3", state: "released", release
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   git(root, "init", "--initial-branch=main");
   for (const directory of ["scripts", "release", "apps/worker/src", "apps/worker/browser", "node_modules/wrangler/bin"]) await mkdir(join(root, directory), { recursive: true });
-  for (const script of ["deploy-worker.mjs", "deployment-policy.mjs", "build-provenance.mjs", "generate-build-provenance.mjs", "prepare-worker-build.mjs", "generate-browser-assets.mjs", "architecture-graph.mjs", "architecture-policy.mjs", "central-architecture-policy.mjs"]) await copyFile(new URL(`../scripts/${script}`, import.meta.url), join(root, "scripts", script));
+  for (const script of ["deploy-worker.mjs", "deployment-policy.mjs", "build-provenance.mjs", "source-git.mjs", "generate-build-provenance.mjs", "prepare-worker-build.mjs", "generate-browser-assets.mjs", "architecture-graph.mjs", "architecture-policy.mjs", "central-architecture-policy.mjs"]) await copyFile(new URL(`../scripts/${script}`, import.meta.url), join(root, "scripts", script));
   // Exercise the real bounded bundler; only the deployment uploader is fake.
   for (const dependency of ["esbuild", "@babel"])
     await symlink(join(project, "node_modules", dependency), join(root, "node_modules", dependency), process.platform === "win32" ? "junction" : "dir");
