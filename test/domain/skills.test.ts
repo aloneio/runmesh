@@ -10,6 +10,7 @@ import { SKILL_LIMITS } from "../../apps/worker/src/contracts/skills.js";
 import type { SkillHead, SkillAdminPorts, SkillReadPorts } from "../../apps/worker/src/contracts/skills.js";
 import { createSkillAdministration } from "../../apps/worker/src/application/skills/admin.js";
 import { createSkillReader } from "../../apps/worker/src/application/skills/reader.js";
+import type { IdentityDecision } from "../../apps/worker/src/contracts/identity.js";
 
 const input = () => ({ skill_id: "research", source: "Local reviewed document", license: "MIT",
   files: [{ path: "SKILL.md", text: ['---', 'name: research', 'description: Read documentation safely', 'allowed-tools: shell', '---', 'Read first.'].join(String.fromCharCode(10)) },
@@ -162,4 +163,30 @@ it("Skill clients list and read through a repository with no publication methods
   expect(await service.list(principal, {}, signal)).toMatchObject({ state: "listed", skills: [{ digest: bundle.digest }] });
   expect(await service.read(principal, { skill_id: bundle.skill_id, digest: bundle.digest, path: "SKILL.md" }, signal)).toMatchObject({ state: "read", files: [{ path: "SKILL.md" }, { path: "references/check.md" }] });
   expect(identityReads).toBe(4);
+});
+
+it.each(["list", "read"] as const)("Skill %s revalidates the captured credential generation before returning content", async operation => {
+  const bundle = await makeSkillBundle(input(), fixtureDigest);
+  if (!bundle) throw new Error("invalid fixture");
+  const head: SkillHead = { skill_id: bundle.skill_id, revision: 1, staged_digest: bundle.digest, active_digest: bundle.digest, enabled: true };
+  const { files: _files, schema_version: _schema, ...summary } = bundle;
+  const principal = { client_id: "reader-client", secret_version: 1 }, identity = { schema_version: 2 as const, ...principal, label: "Fixture", native_scopes: [] };
+  const failures: readonly [IdentityDecision, "denied" | "unavailable"][] = [
+    [{ state: "malformed" }, "unavailable"],
+    [{ state: "allowed", identity: { ...identity, label: " " } }, "unavailable"],
+    [{ state: "allowed", identity: { ...identity, client_id: "another-client" } }, "denied"],
+    [{ state: "allowed", identity: { ...identity, secret_version: 2 } }, "denied"],
+  ];
+  for (const phase of ["initial", "final"]) for (const [decision, expected] of failures) {
+    const observe = vi.fn(async (): Promise<IdentityDecision> => decision);
+    if (phase === "final") observe.mockResolvedValueOnce({ state: "allowed", identity });
+    const repository: SkillReadPorts["repository"] = { heads: vi.fn(() => [head]), head: vi.fn(() => head),
+      approved: vi.fn(() => true), summary: vi.fn(() => summary), bundle: vi.fn(() => bundle) };
+    const service = createSkillReader({ repository, digest: fixtureDigest, identity: observe }), signal = new AbortController().signal;
+    const result = operation === "list" ? await service.list(principal, {}, signal)
+      : await service.read(principal, { skill_id: bundle.skill_id, digest: bundle.digest, path: "SKILL.md" }, signal);
+    expect(result).toEqual({ state: expected });
+    expect(observe).toHaveBeenCalledTimes(phase === "initial" ? 1 : 2);
+    if (phase === "initial") for (const read of Object.values(repository)) expect(read).not.toHaveBeenCalled();
+  }
 });

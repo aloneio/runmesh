@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "bc20af74d168d64614e96787729ea5d4f8729ebae3f67e9b5d9a72e005a3c30d",
+      "sha256": "6988683c40cfd41b84fb93bac20246f46ceb48b0b3eca4d53b458f76b75b2d13",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "a384d883a9a70ee88257ac3b353e172538b02973169fba66b550074682c9279e",
+      "sha256": "0bf1d15c39d930de9f763092077fcc89145555b2b39969b29506ef7da6e5c60b",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -432,6 +432,21 @@
         "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
         "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
         "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
+      }
+    ]
+  },
+  "collection_contract_review": {
+    "source_baseline": "d7ada633823a72665d3dd1b2d766f3913cef4df9",
+    "reviewed_change": "The existing request contract owns collection response keys. Paginated reads require array items and explicit null or nonempty string cursors, and stop on empty pages with continuation cursors. The controller cannot reconcile an uncertain write from an incomplete collection. Independently rebuilding the committed browser modules and substituting only their bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "bc20af74d168d64614e96787729ea5d4f8729ebae3f67e9b5d9a72e005a3c30d"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "a384d883a9a70ee88257ac3b353e172538b02973169fba66b550074682c9279e"
       }
     ]
   }

@@ -1,12 +1,13 @@
 import { expect, it, vi } from "vitest";
 import { runMaintenanceCli } from "../src/maintenance-cli.js";
 import { RUNNER_VERSION } from "../src/version.js";
-import type { ProfileStore } from "../src/profile.js";
-import type { CliDependencies } from "../src/cli/contracts.js";
+import type { CliDependencies, ServiceProfilePort } from "../src/cli/contracts.js";
 
 it("exposes the maintenance package identity and only its dedicated command surface", async () => {
   const output: string[] = [];
-  const store = { load: async () => { throw new Error("help and version must not read a Runner profile"); } } as unknown as ProfileStore;
+  const unexpectedProfileAccess = () => { throw new Error("help and version must not access a Runner profile"); };
+  const store: ServiceProfilePort = { get filePath() { return unexpectedProfileAccess(); }, load: unexpectedProfileAccess,
+    save: unexpectedProfileAccess, remove: unexpectedProfileAccess, assertServiceOwnership: unexpectedProfileAccess };
   await runMaintenanceCli(["--help"], { store, stdout: line => output.push(line) });
   expect(output[0]).toContain("Runmesh maintenance");
   expect(output[0]).toContain("maintenance-agent|install|migrate|stop|restart|uninstall");

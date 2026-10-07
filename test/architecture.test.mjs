@@ -11,10 +11,11 @@ import { checkCommand } from "../scripts/ci-contract.mjs";
 import { bundleRunner } from "../scripts/build-runner-bundle.mjs";
 
 const project = fileURLToPath(new URL("../", import.meta.url));
-test("catalog readers expose snapshot reads while administration retains mutation ports", () => {
+test("catalog and maintenance consumers retain their scoped structural ports", () => {
   const result = spawnSync(process.execPath, [join(project, "node_modules/typescript/bin/tsc"),
-    "--noEmit", "--strict", "--skipLibCheck", "--target", "es2022", "--module", "nodenext", "--ignoreConfig",
-    join(project, "test/fixtures/catalog-read-ports.ts")], { cwd: project, encoding: "utf8", timeout: 60000, windowsHide: true });
+    "--noEmit", "--strict", "--skipLibCheck", "--target", "es2022", "--module", "nodenext", "--types", "node", "--ignoreConfig",
+    join(project, "test/fixtures/catalog-read-ports.ts"),
+    join(project, "test/fixtures/service-profile-ports.ts")], { cwd: project, encoding: "utf8", timeout: 60000, windowsHide: true });
   assert.ifError(result.error);
   assert.equal(result.signal, null);
   assert.equal(result.status, 0, result.stdout + result.stderr);

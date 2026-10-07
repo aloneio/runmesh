@@ -1,8 +1,10 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDirectoryReader } from "../../apps/worker/src/application/capabilities/directory.js";
 import { createSharedProfileReader } from "../../apps/worker/src/application/capabilities/profile-read.js";
 import { catalogProfile, catalogSnapshot, fixtureDigest } from "./catalog-fixtures.js";
 import { publishedProfiles } from "../../apps/worker/src/application/capabilities/published-profiles.js";
+import type { DirectoryReadPorts } from "../../apps/worker/src/contracts/catalog.js";
+import type { IdentityDecision } from "../../apps/worker/src/contracts/identity.js";
 
 it.each(["added", "disabled", "revision"])("shared profile discovery withholds a %s publication during identity revalidation", async change => {
   const profiles = [catalogProfile("a")], snapshot = await catalogSnapshot("a");
@@ -69,4 +71,30 @@ it("shared profile discovery rejects looping pages and in-flight identity revoca
   expect(await createSharedProfileReader(ports)(principal, signal)).toEqual({ state: "unavailable" });
   reads = 0;
   expect(await createSharedProfileReader({ ...ports, profiles: () => ({ profiles: [profile], next_after: null }) })(principal, signal)).toEqual({ state: "denied" });
+});
+
+it.each(["directory", "profiles"] as const)("%s discovery separates changed credentials from failed observations at both admission checks", async surface => {
+  const principal = { client_id: "discovery-client", secret_version: 1 }, identity = { schema_version: 2 as const, ...principal, label: "Fixture", native_scopes: [] };
+  const failures: readonly [IdentityDecision, "denied" | "unavailable"][] = [
+    [{ state: "denied" }, "denied"],
+    [{ state: "malformed" }, "unavailable"],
+    [{ state: "unavailable" }, "unavailable"],
+    [{ state: "allowed", identity: { ...identity, label: " " } }, "unavailable"],
+    [{ state: "allowed", identity: { ...identity, client_id: "another-client" } }, "denied"],
+    [{ state: "allowed", identity: { ...identity, secret_version: 2 } }, "denied"],
+  ];
+  for (const phase of ["initial", "final"]) for (const [decision, expected] of failures) {
+    const profiles = vi.fn(() => ({ profiles: [], next_after: null }));
+    const observe = vi.fn(async (): Promise<IdentityDecision> => decision);
+    if (phase === "final") observe.mockResolvedValueOnce({ state: "allowed", identity });
+    const ports: DirectoryReadPorts = { profiles, identity: observe, digest: fixtureDigest, now: Date.now,
+      profile: () => undefined, repository: { readHead: () => undefined, readSnapshot: () => undefined },
+      cursor: { seal: async () => { throw new Error("empty directories have no cursor"); }, open: async () => undefined } };
+    const signal = new AbortController().signal;
+    const result = surface === "directory" ? await createDirectoryReader(ports)(principal, signal, () => false)
+      : await createSharedProfileReader(ports)(principal, signal);
+    expect(result).toEqual({ state: expected });
+    expect(observe).toHaveBeenCalledTimes(phase === "initial" ? 1 : 2);
+    expect(profiles).toHaveBeenCalledTimes(phase === "initial" ? 0 : 1);
+  }
 });

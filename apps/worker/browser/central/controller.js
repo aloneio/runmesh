@@ -55,7 +55,7 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, r
     const read = async () => {
       const reconciled = reconciliation('mcp');
       let listed;
-      try { listed = await client.list('profiles', 'profiles'); }
+      try { listed = await client.list('profiles'); }
       catch (error) { profilesReady = false; throw error; }
       profiles = listed;
       services.render(profiles);
@@ -73,7 +73,7 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, r
     const read = async () => {
       const reconciled = reconciliation('skills');
       skillView.invalidate();
-      try { skills = app.getAttribute('data-skills') === 'true' ? await client.list('skills', 'skills') : []; }
+      try { skills = app.getAttribute('data-skills') === 'true' ? await client.list('skills') : []; }
       catch (error) { skillsReady = false; throw error; }
       skillWorkflow.render(skills);
       operations.sync();

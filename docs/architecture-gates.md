@@ -22,6 +22,14 @@ Runner admission decisions live in `domain/runner-admission.ts`. They consume st
 
 Central browser request classification lives in `central/request-contract.js`. API response handling and operation scopes use this shared contract, while `central/operations.js` manages UI locks. The request contract has no DOM or scheduling dependencies. Catalog snapshot readers expose only `readHead` and `readSnapshot`; a compiled TypeScript fixture verifies that pagination, remote calls, tool search and Skill dependency inspection retain that boundary.
 
+Collection contracts also identify the response items field. The API validates the
+items array and explicit continuation cursor before the controller accepts a
+complete reload. Shared identity decisions live in `contracts/identity.ts`;
+application readers retain their own asynchronous checks and result mapping.
+Runner service lifecycle commands consume `ServiceProfilePort`, while service
+planning needs only the path and read method. Compiled positive and negative
+fixtures enforce these capabilities independently of the concrete profile store.
+
 Fixtures cover `.mts`, `.cts`, JSX, bare built-ins such as `dgram` and `dns/promises`, type-only Cloudflare imports, renamed barrels, nested modules and reverse coordinator dependencies. Positive fixtures cover native adapters, pure hashing and type-only platform ports. Three named Runtime persistence-coordinator test exceptions retain timing that a file-write fault cannot reproduce; replacing one requires equivalent fault timing and assertions.
 
 Central MCP providers consume public contracts, helpers within their own provider and reviewed server/schema SDKs. They cannot import application or platform implementations, unreviewed external packages, client SDKs, or platform I/O globals. Fixtures include direct imports, types, re-exports, nested helpers and dynamic imports. Protocol execution and persistence are injected through ports by composition.

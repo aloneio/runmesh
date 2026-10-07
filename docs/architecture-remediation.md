@@ -425,3 +425,19 @@ fixture deadline and assert exact commits, clean/dirty state and unchanged sourc
 metadata. Separate service-boundary tests use a controlled clock to verify the
 1.5-second cap, shorter caller budgets and path-resolution time within that same
 budget. This gives data semantics and scheduling policy independent failure evidence.
+
+Maintenance CLI and service lifecycle transactions use the structural
+`ServiceProfilePort` contract. Service planning receives only `filePath` and
+`load`; the ordinary CLI retains the complete profile store. Compiled fixtures
+check the required ownership capability and accepted structural substitutes.
+The installed manager retains its independent dependency graph.
+
+Central application readers share the synchronous `capturedIdentityState`
+decision for fresh observations. Each caller still owns I/O, deadlines and
+post-operation result handling. Malformed observations consistently mean
+unavailable; a rejected or changed valid identity means denied.
+
+Browser collection receipts derive their items field from the request contract.
+The API requires an array and an explicit null or nonempty continuation cursor,
+and rejects repeated cursors and empty pages that claim further results. A failed
+reload retains uncertain-write state until a complete collection is observed.

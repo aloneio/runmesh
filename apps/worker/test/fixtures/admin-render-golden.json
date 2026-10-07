@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "d0ef13ea1e53df1c50ace8aa3c758519faba3f680e95bb490b9c7720a86599a0",
-      "bytes": 180216,
+      "sha256": "9b6a04e2c621018487a7fad2149a3c4b83b20c03bccd3295a37ec5dfdf4e81ea",
+      "bytes": 180795,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -33,8 +33,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "ea70e9360e8ee05e21b6635b2689c12140b3968b92b1fc69862bd8b57d70c971",
-      "bytes": 180804,
+      "sha256": "15d4d55a33954c8a194ef08e055834ba5b0adbfe36264b72d1737140831f0e99",
+      "bytes": 181383,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -52,8 +52,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "a4918eb31c77e567a4e23d17b6d0e020131a717e981df54924af664a2ffc5cdd",
-      "bytes": 183279,
+      "sha256": "6a44813b27735beaf6a02646d60fc4880b3998b3196af80d3d58b9d78ebbb30d",
+      "bytes": 183858,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -423,8 +423,8 @@
           }
         ]
       ],
-      "sha256": "94f3b27fff7ec033412e28681e291ea25c14f65c2b463491e822a72d69c68e91",
-      "bytes": 183628,
+      "sha256": "0ac635a4acfd75e61e9d51deb24d772bf7275653d2912ae5a94a66f5acc3a092",
+      "bytes": 184207,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -1200,6 +1200,33 @@
         "name": "admin-document",
         "sha256": "a0b0bafcc156abae25e5203bc9d8d83acf05847eb0395f93682290e31870c920",
         "bytes": 183183
+      }
+    ]
+  },
+  "collection_contract_review": {
+    "source_baseline": "d7ada633823a72665d3dd1b2d766f3913cef4df9",
+    "reviewed_change": "The existing request contract owns collection response keys. Paginated reads require array items and explicit null or nonempty string cursors, and stop on empty pages with continuation cursors. The controller cannot reconcile an uncertain write from an incomplete collection. Independently rebuilding the committed browser modules and substituting only their bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "d0ef13ea1e53df1c50ace8aa3c758519faba3f680e95bb490b9c7720a86599a0",
+        "bytes": 180216
+      },
+      {
+        "name": "setup",
+        "sha256": "ea70e9360e8ee05e21b6635b2689c12140b3968b92b1fc69862bd8b57d70c971",
+        "bytes": 180804
+      },
+      {
+        "name": "secret",
+        "sha256": "a4918eb31c77e567a4e23d17b6d0e020131a717e981df54924af664a2ffc5cdd",
+        "bytes": 183279
+      },
+      {
+        "name": "admin-document",
+        "sha256": "94f3b27fff7ec033412e28681e291ea25c14f65c2b463491e822a72d69c68e91",
+        "bytes": 183628
       }
     ]
   }

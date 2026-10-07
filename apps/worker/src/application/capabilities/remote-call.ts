@@ -1,6 +1,6 @@
 import { RemoteFault, type RemoteCallPorts, type RemoteOutcome, type RemoteSession } from "../../contracts/remote.js";
 import { parseRemoteCall, parseRemoteResult } from "../../contracts/remote-values.js";
-import { parseClientIdentity, type CapturedIdentity } from "../../contracts/identity.js";
+import { capturedIdentityState, type CapturedIdentity } from "../../contracts/identity.js";
 import { parseProfile } from "../../contracts/connector-values.js";
 import { catalogJson } from "../../contracts/catalog-json.js";
 import { parseCatalogHead } from "../../contracts/catalog-values.js";
@@ -21,10 +21,8 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
       const liveIdentity = async () => {
         const state = await ports.identity(principal, signal);
         if (expired()) throw new RemoteFault("operation_timed_out");
-        if (state.state !== "allowed") throw new RemoteFault(state.state === "denied" ? "permission_denied" : "dependency_unavailable");
-        const identity = parseClientIdentity(state.identity);
-        if (identity === undefined) throw new RemoteFault("dependency_unavailable");
-        if (identity.client_id !== principal.client_id || identity.secret_version !== principal.secret_version) throw new RemoteFault("permission_denied");
+        const current = capturedIdentityState(principal, state);
+        if (current !== "allowed") throw new RemoteFault(current === "denied" ? "permission_denied" : "dependency_unavailable");
       };
       try {
         await liveIdentity();
