@@ -178,7 +178,7 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
           </select>
         </label>
         <label>Desired version
-          <input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3 or 1.2.3-dev.4" pattern="[0-9]+\\.[0-9]+\\.[0-9]+(-dev\\.[0-9]+)?">
+          <input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3 or 1.2.3-dev.4" pattern="[0-9]+\\.[0-9]+\\.[0-9]+(-dev\\.[0-9]+)?"${updateChannel === "pinned" ? " required" : " disabled"}>
         </label>
         <div class="form-submit-wrap full-width-submit">
           <button class="button">${message("text.save.version.policy", "en")}</button>

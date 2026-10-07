@@ -176,6 +176,17 @@ function createPageControls({
       });
       syncExecutionMode(form);
     });
+    root.querySelectorAll('select[name="update_channel"]').forEach(function (select) {
+      var desired = select.form && select.form.querySelector('input[name="desired_runner_version"]');
+      if (!desired || !claim(select, "runner-version")) return;
+      function syncVersion() {
+        var pinned = select.value === "pinned";
+        desired.disabled = !pinned;
+        desired.required = pinned;
+      }
+      select.addEventListener("change", syncVersion);
+      syncVersion();
+    });
     root.querySelectorAll('select[name="access_mode"]').forEach(function (select) {
       var permissions = select.form && select.form.querySelector("[data-client-computer-permissions]");
       if (!permissions || !claim(select, "client-access")) return;

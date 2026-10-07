@@ -84,6 +84,9 @@ their self-contained contract. Fixtures check clock, storage, scheduling, async
 execution and module-import boundaries. Registry retains the synchronous refresh
 and batch maintenance writes. CI configuration and provider evidence share matrix
 identities from `ci-contract.mjs`; name-drift regressions keep both checks aligned.
+CI wiring checks also retain unfiltered `main`/`dev` pushes and default pull-request
+events. Path, branch and activity filters require an explicit change to the coverage
+contract, so editing a trigger cannot silently omit modules from verification.
 
 The checker reads source without importing it or executing embedded installer text. It conservatively treats bare `require()` as module loading. Parsing is bounded to 5,000 files, 1 MiB per file, 16 MiB total source and 20,000 directory entries; parser or tooling failures produce a failed check.
 

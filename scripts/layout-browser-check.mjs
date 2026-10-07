@@ -298,13 +298,27 @@ async function checkRunnerVersionForm(page) {
   assert.equal(await form.getAttribute('method'), 'post');
   assert.match(await form.getAttribute('action'), /^\/admin\/runners\/[^/]+\/version-policy$/);
   const initial = await form.evaluate(node => Object.fromEntries(new FormData(node)));
-  assert.deepEqual(Object.keys(initial).sort(), ['csrf_token', 'desired_runner_version', 'operation_id', 'update_channel']);
+  assert.deepEqual(Object.keys(initial).sort(), ['csrf_token', ...(initial.update_channel === 'pinned' ? ['desired_runner_version'] : []), 'operation_id', 'update_channel']);
   assert.ok(initial.csrf_token.length > 0, 'Runner version form keeps its CSRF value');
   assert.equal(initial.operation_id, runnerUpdateOperation);
+  assert.equal(await desired.isEnabled(), initial.update_channel === 'pinned');
+  assert.equal(await desired.evaluate(node => node.required), initial.update_channel === 'pinned');
   assert.deepEqual(await channel.locator('option').evaluateAll(options => options.map(option => option.value)), ['stable', 'pinned']);
 
   // Exercise old releases and development versions locally; never submit a version change.
   await channel.selectOption('pinned');
+  await desired.fill('');
+  assert.equal(await form.evaluate(node => node.checkValidity()), false, 'An exact release selection needs a version');
+  await desired.fill('0.1.8-beta.1');
+  assert.equal(await form.evaluate(node => node.checkValidity()), false);
+  await channel.selectOption('stable');
+  assert.equal(await desired.isDisabled(), true);
+  assert.equal(await form.evaluate(node => node.checkValidity()), true, 'An invalid unused exact version must not block the latest release');
+  const { desired_runner_version: _initialDesired, ...initialFields } = initial;
+  assert.deepEqual(await form.evaluate(node => Object.fromEntries(new FormData(node))), { ...initialFields, update_channel: 'stable' });
+  await channel.selectOption('pinned');
+  assert.equal(await desired.inputValue(), '0.1.8-beta.1', 'Channel changes preserve the exact-version draft');
+  assert.equal(await form.evaluate(node => node.checkValidity()), false);
   for (const version of ['0.1.6', '0.1.8-dev.45']) {
     await desired.fill(version);
     assert.equal(await form.evaluate(node => node.checkValidity()), true);
@@ -313,10 +327,9 @@ async function checkRunnerVersionForm(page) {
     });
   }
   await channel.selectOption('stable');
-  await desired.fill('');
   assert.equal(await form.evaluate(node => node.checkValidity()), true, 'Latest release selection needs no exact version');
   assert.deepEqual(await form.evaluate(node => Object.fromEntries(new FormData(node))), {
-    ...initial, update_channel: 'stable', desired_runner_version: '',
+    ...initialFields, update_channel: 'stable',
   });
   await channel.selectOption('pinned');
   await desired.fill('0.1.6');

@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "fdf32a5a21d7da42eec63f46f5f93c29d59d05aa0ef8084e936bc5c88fb67490",
-      "bytes": 185386,
+      "sha256": "16722b95a8262b8bcf233839030569e0681186c03d0135d4fc60541aa379e80c",
+      "bytes": 185901,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -33,8 +33,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "8e61cc1f1eee4be623ef17392dec28e9850dd1689c5edbfcf45a2cf7fdf6532a",
-      "bytes": 186046,
+      "sha256": "3a762473a30de0ea342a31605c3d50493ab33d5fdd24184ae9d312cb9b8c02b3",
+      "bytes": 186561,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -52,8 +52,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "52229615b8541493ed0073d7ff012adf4f311c224794ce55bf2c6ec6b65e0f6d",
-      "bytes": 188343,
+      "sha256": "68a3c3e2bb68111b406a0b278ba4cf7d9325578a060d932fc1dfbb2165ffdc3c",
+      "bytes": 188858,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -396,8 +396,8 @@
           "distributable": true
         }
       ],
-      "sha256": "748d2f9e8c0b7db7356b6bcf50f1584ae39a32cc5f2700957c6e0a51f18f2531",
-      "bytes": 14903,
+      "sha256": "5e31f40343c85fcb56be9db6c2e854e434a0346e2e51e470b40cc15ef6bb91e9",
+      "bytes": 14912,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
@@ -423,8 +423,8 @@
           }
         ]
       ],
-      "sha256": "9867c038a4ca91708d0e239a2a4a2ae0615d79ecf05fae2cdb85f0b1a3dbb82f",
-      "bytes": 188692,
+      "sha256": "e9d570a17a63f643fd29faae085bd8ef6de74900502427092cedd02020cb2476",
+      "bytes": 189207,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -1447,6 +1447,44 @@
         "name": "admin-document",
         "sha256": "f92f5b5a74aa0bf0eba713222b49a406f3c442b8fcb92da0ac350e1f5af852dc",
         "bytes": 188302
+      }
+    ]
+  },
+  "version_channel_form_review": {
+    "source_baseline": "fd756d7adeb82f1ee5634f368a14d1b216c9cacc",
+    "reviewed_change": "Runner version fields follow their selected channel: the latest environment release disables the unused exact-version field, while a pinned release requires it. Binding runs once per mounted control, preserves typed values across changes, and keeps native form validation and submission. Rebuilding the committed browser source reproduces both previous script hashes; replacing only that bundle and removing the new version input attribute reproduces every previous renderer hash and byte count.",
+    "non_script_markup_changes": [
+      {
+        "fixture": "runner-detail",
+        "field": "desired_runner_version",
+        "added": "disabled"
+      }
+    ],
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "fdf32a5a21d7da42eec63f46f5f93c29d59d05aa0ef8084e936bc5c88fb67490",
+        "bytes": 185386
+      },
+      {
+        "name": "setup",
+        "sha256": "8e61cc1f1eee4be623ef17392dec28e9850dd1689c5edbfcf45a2cf7fdf6532a",
+        "bytes": 186046
+      },
+      {
+        "name": "secret",
+        "sha256": "52229615b8541493ed0073d7ff012adf4f311c224794ce55bf2c6ec6b65e0f6d",
+        "bytes": 188343
+      },
+      {
+        "name": "runner-detail",
+        "sha256": "748d2f9e8c0b7db7356b6bcf50f1584ae39a32cc5f2700957c6e0a51f18f2531",
+        "bytes": 14903
+      },
+      {
+        "name": "admin-document",
+        "sha256": "9867c038a4ca91708d0e239a2a4a2ae0615d79ecf05fae2cdb85f0b1a3dbb82f",
+        "bytes": 188692
       }
     ]
   }

@@ -60,6 +60,22 @@ const browserStep = f => f.gh.jobs.browser.steps.find(step => step.run === "npm 
 const transportStep = f => f.gh.jobs["native-runner"].steps.find(step => step.run === WINDOWS_TRANSPORT_STEP.run);
 const initializationStep = f => f.gh.jobs["native-runner"].steps.find(step => step.run === WINDOWS_REPORT_INITIALIZATION_STEP.run);
 test("CI02 normal closed execution grammar is accepted", () => assert.equal(verify(fixture()).critical_checks, CHECK_IDS.length));
+test("CI02 accepts an explicit unfiltered pull request trigger", () => {
+  const value = fixture(); value.gh.on.pull_request = {};
+  assert.equal(verify(value).critical_checks, CHECK_IDS.length);
+});
+for (const [name, mutate] of Object.entries({
+  "push path inclusion": event => event.push.paths = ["docs/**"],
+  "push path exclusion": event => event.push["paths-ignore"] = ["apps/**"],
+  "pull request path inclusion": event => event.pull_request = { paths: ["docs/**"] },
+  "pull request path exclusion": event => event.pull_request = { "paths-ignore": ["apps/**"] },
+  "pull request branch inclusion": event => event.pull_request = { branches: ["main"] },
+  "pull request branch exclusion": event => event.pull_request = { "branches-ignore": ["dev"] },
+  "pull request activity filtering": event => event.pull_request = { types: ["closed"] },
+})) test(`CI02 rejects reduced source coverage through ${name}`, () => {
+  const value = fixture(); verify(value); mutate(value.gh.on);
+  assert.throws(() => verify(value), /source coverage/u);
+});
 for (const id of ["verify", "browser", "verify-all", "native-runner", "runner-lts"])
 test(`CI02 rejects provider evidence name drift for ${id}`, () => {
   const value = fixture(); verify(value);

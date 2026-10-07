@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "b5758e914ea4ece079f8f15f385c9b6a4f00d5fa7cf1372a68550a81b3bf2652",
+      "sha256": "14b834ed486a9aec58be3184cb2f6de9afa7f616f16c12fa4d1d79fdc75bf6e9",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "08a72820c0061d4e64f9ac1e21ce7fe7fdd8e8c9dcb306b4eb3a35816118be07",
+      "sha256": "6400bdc08efad9829af2f7edbacbc83333d2ba58af3c335174d4a6fbda70f5b0",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -571,6 +571,27 @@
       {
         "nonce": "test-nonce",
         "sha256": "b0470b3b0edb5b5222419ed105aa77ac92a46414e25c3bb144779c017610c32c"
+      }
+    ]
+  },
+  "version_channel_form_review": {
+    "source_baseline": "fd756d7adeb82f1ee5634f368a14d1b216c9cacc",
+    "reviewed_change": "Runner version fields follow their selected channel: the latest environment release disables the unused exact-version field, while a pinned release requires it. Binding runs once per mounted control, preserves typed values across changes, and keeps native form validation and submission. Rebuilding the committed browser source reproduces both previous script hashes; replacing only that bundle and removing the new version input attribute reproduces every previous renderer hash and byte count.",
+    "non_script_markup_changes": [
+      {
+        "fixture": "runner-detail",
+        "field": "desired_runner_version",
+        "added": "disabled"
+      }
+    ],
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "b5758e914ea4ece079f8f15f385c9b6a4f00d5fa7cf1372a68550a81b3bf2652"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "08a72820c0061d4e64f9ac1e21ce7fe7fdd8e8c9dcb306b4eb3a35816118be07"
       }
     ]
   }
