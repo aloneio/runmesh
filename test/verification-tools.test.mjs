@@ -1,9 +1,9 @@
 import { CI_CHECKS } from "../scripts/ci-contract.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -19,6 +19,72 @@ import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferenc
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plan = JSON.parse(await readFile(join(root, "test/verification-plan.json"), "utf8"));
 const files = plan.groups.flatMap(g => g.files);
+
+for (const [config, testDirectory, testFile] of [["vitest.e2e.config.ts", "e2e", "mcp-runner.e2e.test.ts"], ["vitest.browser.config.ts", "browser", "admin-ui.browser.test.ts"]]) {
+  test(`${config} preserves real Vitest failure messages without mutating errors or exporting private text`, async t => {
+    const directory = await mkdtemp(join(tmpdir(), "runmesh-json-report-"));
+    t.after(async () => {
+      assert.equal(dirname(resolve(directory)), resolve(tmpdir())); assert.ok(basename(directory).startsWith("runmesh-json-report-"));
+      await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    });
+    await mkdir(join(directory, "scripts")); await mkdir(join(directory, "test", testDirectory), { recursive: true });
+    await symlink(join(root, "node_modules"), join(directory, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+    for (const file of [config, "scripts/test-json-reporter.mjs"])
+      await writeFile(join(directory, file), await readFile(join(root, file)));
+    // Freeze and observe the public errors before the JSON reporter runs.
+    await writeFile(join(directory, "vitest.fixture.config.mjs"), `
+      import config from './${config}';
+      import assert from 'node:assert/strict';
+      import { writeFileSync } from 'node:fs';
+      const observed = [];
+      const freeze = errors => { for (const error of errors) { observed.push({ error, message: error.message, stack: error.stack }); Object.freeze(error); } };
+      const guard = {
+        onTestCaseResult(test) { freeze(test.result().errors ?? []); },
+        onTestModuleEnd(module) { freeze(module.errors()); for (const suite of module.children.allSuites()) freeze(suite.errors()); },
+        onTestRunEnd() {
+          for (const value of observed) { assert.equal(value.error.message, value.message); assert.equal(value.error.stack, value.stack); }
+          writeFileSync('errors-unchanged.json', JSON.stringify({ errors: observed.length }));
+        }
+      };
+      export default { ...config, test: { ...config.test, reporters: [guard, ...config.test.reporters] } };
+    `);
+    await writeFile(join(directory, "test", testDirectory, testFile), `
+      import { it, describe, beforeEach } from 'vitest';
+      it('PRIVATE_PASS', () => {});
+      it.skip('PRIVATE_SKIP', () => {});
+      it.todo('PRIVATE_TODO');
+      it('PRIVATE_CASE', async () => new Promise(() => {}), 20);
+      describe('PRIVATE_GROUP', () => { beforeEach(async () => new Promise(() => {}), 20); it('PRIVATE_CASE', () => {}); });
+      describe('PRIVATE_ASSERTION', () => { it('PRIVATE_CASE', () => {
+        const error = new Error('AssertionError: PRIVATE_CREDENTIAL');
+        error.stack = 'Error: PRIVATE_STACK\\n at test/${testDirectory}/${testFile}:80:3'; throw error;
+      }); });
+    `);
+    await writeFile(join(directory, "test", testDirectory, "suite.test.ts"), `
+      import { it, describe, beforeAll } from 'vitest';
+      describe('PRIVATE_SUITE', () => { beforeAll(async () => new Promise(() => {}), 20); it('PRIVATE_SKIPPED', () => {}); });
+    `);
+    const path = join(directory, "private-report.json");
+    const invoke = (...args) => spawnSync(process.execPath, [join(root, "node_modules/vitest/vitest.mjs"), "run", "--config", "vitest.fixture.config.mjs", ...args], {
+      cwd: directory, env: { ...process.env, RUNMESH_TEST_RESULT_PATH: path }, encoding: "utf8", timeout: 30000, windowsHide: true,
+    });
+    const failed = invoke(); assert.equal(failed.status, 1, failed.stderr);
+    const raw = JSON.parse(await readFile(path, "utf8")), safe = testFailureEvidence(raw);
+    assert.equal(raw.numFailedTests, 3);
+    assert.ok(JSON.parse(await readFile(join(directory, "errors-unchanged.json"), "utf8")).errors >= 4);
+    assert.deepEqual(safe.failures.filter(value => value.scope === "test").map(value => value.kind), ["test_timeout", "hook_timeout", "assertion_failed"]);
+    assert.ok(safe.failures.some(value => value.scope === "suite" && value.kind === "hook_timeout"));
+    assert.ok(safe.failures.filter(value => value.scope === "test").every(value => value.location?.file === `test/${testDirectory}/${testFile}`));
+    const messages = raw.testResults.flatMap(file => file.assertionResults.flatMap(item => item.failureMessages)).join("\n");
+    assert.match(messages, /Test timed out/u); assert.match(messages, /Hook timed out/u); assert.match(messages, /PRIVATE_CREDENTIAL/u); assert.match(messages, /PRIVATE_STACK/u);
+    assert.doesNotMatch(JSON.stringify(safe), /PRIVATE_|STACK_TRACE_ERROR|runmesh-json-report-/u);
+    assert.throws(() => summarizeVitest(raw, failed.status));
+    const passed = invoke("--testNamePattern", "PRIVATE_PASS"); assert.equal(passed.status, 0, passed.stderr);
+    const success = JSON.parse(await readFile(path, "utf8"));
+    assert.equal(summarizeVitest(success, passed.status).passed, 1);
+    assert.ok(success.testResults.every(file => file.assertionResults.every(item => item.failureMessages.length === 0)));
+  });
+}
 
 async function transportFixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "runmesh-transport-wrapper-"));

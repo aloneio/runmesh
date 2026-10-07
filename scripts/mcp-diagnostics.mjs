@@ -229,6 +229,9 @@ const launcherSignals = ["SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGBUS", "
 const fixtureNames = ["queue", "busy"];
 const fixturePhases = ["primary", "release", "cancel", "observe"];
 const fixtureFailureKinds = ["mcp_http_failure", "assertion_failed", "timeout", "other"];
+const progressFixtures = ["job_recording", "job_history"];
+const progressPhases = ["admin_login_page", "admin_login", "client_create", "runner_select", "recording_update", "history_settings", "history_restore", "shell", "job_logs", "job_metadata", "job_poll", "job_list"];
+const progressBoundaries = ["headers", "body", "validation", "request", "filesystem", "poll"];
 const exitCode = value => value === null || (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647);
 
 function safeWorkerEvent(value) {
@@ -242,6 +245,9 @@ function safeWorkerEvent(value) {
     && (value.signal === null || launcherSignals.includes(value.signal)) && typeof value.teardown_started === "boolean" && typeof value.exited_before_teardown === "boolean")
     return { event: "launcher_snapshot", reason: value.reason, exit_code: value.exit_code, signal: value.signal,
       teardown_started: value.teardown_started, exited_before_teardown: value.exited_before_teardown };
+  if (value.event === "fixture_progress" && progressFixtures.includes(value.fixture) && progressPhases.includes(value.phase)
+    && progressBoundaries.includes(value.boundary) && Number.isInteger(value.elapsed_ms) && value.elapsed_ms >= 0 && value.elapsed_ms <= 900000)
+    return { event: "fixture_progress", fixture: value.fixture, phase: value.phase, boundary: value.boundary, elapsed_ms: value.elapsed_ms };
   if (value.event === "fixture_failure" && fixtureNames.includes(value.fixture) && fixturePhases.includes(value.phase) && fixtureFailureKinds.includes(value.kind)) {
     const base = { event: "fixture_failure", fixture: value.fixture, phase: value.phase, kind: value.kind };
     if (value.kind !== "mcp_http_failure") return base;
@@ -262,6 +268,11 @@ export function mcpLauncherDiagnostic(value) {
   return eventMarker({ ...value, event: "launcher_snapshot" });
 }
 
+/** Failure-only snapshots identify a pending fixture boundary, never its inputs. */
+export function mcpFixtureProgressDiagnostic(value) {
+  return eventMarker({ ...value, event: "fixture_progress" });
+}
+
 /** Keep the primary failure and each cleanup phase distinct without error text. */
 export function mcpFixtureFailureDiagnostic(fixture, phase, error) {
   const text = typeof error?.message === "string" ? error.message.slice(0, 16384) : "";
@@ -278,9 +289,10 @@ function eventBudget() {
   const counts = new Map();
   return event => {
     // Separate bounds preserve launcher and fixture evidence during log floods.
-    // Totals: 16 handler + 8 runtime + 8 proxy + 4 launcher + 2 primary + 16 cleanup = 54.
-    const key = event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
-    const limit = event.event === "mcp_handler_error" ? 16 : event.event === "launcher_snapshot" ? 4
+    // Totals: 16 handler + 8 runtime + 8 proxy + 4 launcher + 2 primary + 16 cleanup + 2 progress = 56.
+    const key = event.event === "fixture_progress" ? `progress:${event.fixture}`
+      : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
+    const limit = event.event === "fixture_progress" ? 1 : event.event === "mcp_handler_error" ? 16 : event.event === "launcher_snapshot" ? 4
       : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;
     const count = counts.get(key) ?? 0;
     if (count >= limit) return false;

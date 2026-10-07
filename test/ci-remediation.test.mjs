@@ -16,6 +16,20 @@ import { writeSupplement } from "../scripts/ci-supplement.mjs";
 import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { createUiNavigationDiagnostic, uiNavigationDiagnosticMarker, uiNavigationFailureDiagnostic, withUiNavigationDiagnostic } from "../scripts/ui-browser-diagnostics.mjs";
 import { closeUiBrowserSocket, createUiBrowserProtocol, waitForUiBrowserEndpoint, waitForUiBrowserSocket, waitForUiNavigation } from "../scripts/ui-browser-check.mjs";
+import * as mcpDiagnostics from "../scripts/mcp-diagnostics.mjs";
+
+test("CI04 stalled Job fixtures retain one bounded phase snapshot without private request state", () => {
+  const snapshot = { event: "fixture_progress", fixture: "job_recording", phase: "admin_login_page", boundary: "body", elapsed_ms: 29950 };
+  const next = { ...snapshot, fixture: "job_history", phase: "history_restore", boundary: "headers" };
+  const marker = value => `RUNMESH_E2E_MCP_WORKER_EVENT=${JSON.stringify(value)}\n`;
+  const privateInput = { ...snapshot, url: "https://private.invalid/token", cookie: "private-cookie", stack: "private-stack" };
+  assert.equal(mcpDiagnostics.mcpFixtureProgressDiagnostic(privateInput), marker(snapshot));
+  assert.deepEqual(mcpDiagnostics.mcpWorkerFailureEvidence(marker(privateInput).repeat(100) + marker(next)), [snapshot, next]);
+  for (const changed of [{ fixture: "private" }, { phase: "private" }, { boundary: "private" }, { elapsed_ms: -1 }, { elapsed_ms: 900001 }, { elapsed_ms: 1.5 }]) {
+    assert.equal(mcpDiagnostics.mcpFixtureProgressDiagnostic({ ...snapshot, ...changed }), undefined);
+    assert.deepEqual(mcpDiagnostics.mcpWorkerFailureEvidence(marker({ ...snapshot, ...changed })), []);
+  }
+});
 
 function fixture() {
   const pkg = { scripts: { "test:unit": "npm run test:domain && npm run test:contracts && npm run test --workspaces", "test:release-tools": "node --test test/x.test.mjs", "test:e2e": "node ./scripts/run-e2e.mjs", "test:package:e2e": "node scripts/run-package-e2e.mjs", "test:browser": "node scripts/run-browser-e2e.mjs" } };
