@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import { EventEmitter } from "node:events";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -248,8 +249,9 @@ test("CI08 Windows initialization creates and resets only transport evidence bef
   assert.notEqual(invalid.status, 0);
 });
 
-async function ciFailureFixture(t, id, command) {
-  const root = await mkdtemp(join(tmpdir(), "runmesh-ci-failure-")); t.after(() => rm(root, { recursive: true, force: true }));
+async function ciFailureFixture(t, id, command, stop = async () => {}) {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-ci-failure-"));
+  t.after(async () => { try { await stop(); } finally { await rm(root, { recursive: true, force: true }); } });
   await mkdir(join(root, "scripts"));
   for (const name of ["ci-check.mjs", "ci-report.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, "scripts", name));
@@ -257,6 +259,55 @@ async function ciFailureFixture(t, id, command) {
   await writeFile(join(root, "scripts/fixture-pass.mjs"), "process.exitCode = 0;\n");
   return { root, run: () => spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), id], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true }) };
 }
+
+test("CI08 cancellation finishes terminating the process group after the gate child exits", { skip: process.platform === "win32", timeout: 15000 }, async t => {
+  let gate, parentPid, exited;
+  const f = await ciFailureFixture(t, "tooling", "node scripts/fixture-parent.mjs", async () => {
+    if (Number.isSafeInteger(parentPid) && parentPid > 0) { try { process.kill(-parentPid, "SIGKILL"); } catch { /* already terminated */ } }
+    if (gate?.exitCode === null && gate.signalCode === null) gate.kill("SIGKILL");
+    await exited;
+  });
+  const heartbeat = join(f.root, "heartbeat"), ready = join(f.root, "ready"), parent = join(f.root, "parent");
+  await writeFile(join(f.root, "scripts/fixture-descendant.mjs"), `
+    import { writeFileSync } from 'node:fs';
+    let count = 0;
+    process.on('SIGTERM', () => {});
+    setInterval(() => writeFileSync(${JSON.stringify(heartbeat)}, String(++count)), 25);
+    writeFileSync(${JSON.stringify(ready)}, 'ready');
+  `);
+  await writeFile(join(f.root, "scripts/fixture-parent.mjs"), `
+    import { spawn } from 'node:child_process';
+    import { writeFileSync } from 'node:fs';
+    writeFileSync(${JSON.stringify(parent)}, String(process.pid));
+    process.on('SIGTERM', () => process.exit(0));
+    spawn(process.execPath, ['scripts/fixture-descendant.mjs'], { stdio: 'ignore' });
+    setInterval(() => {}, 1000);
+  `);
+  gate = spawn(process.execPath, [join(f.root, "scripts/ci-check.mjs"), "tooling"], { cwd: f.root, stdio: "ignore" });
+  exited = new Promise(resolve => { gate.once("exit", code => resolve(code)); gate.once("error", () => resolve(-1)); });
+  const deadline = Date.now() + 5000;
+  while (true) {
+    const observedPid = await readFile(parent, "utf8").then(Number, () => undefined);
+    if (Number.isSafeInteger(observedPid) && observedPid > 0) parentPid = observedPid;
+    if (await readFile(ready, "utf8").then(() => true, () => false)) break;
+    assert.ok(Date.now() < deadline, "descendant must become ready");
+    await delay(25);
+  }
+  parentPid = Number(await readFile(parent, "utf8"));
+  assert.ok(Number.isSafeInteger(parentPid) && parentPid > 0);
+  gate.kill("SIGTERM");
+  const stoppedBy = Date.now() + 5000;
+  while (gate.exitCode === null && gate.signalCode === null) {
+    assert.ok(Date.now() < stoppedBy, "cancelled gate must exit");
+    await delay(25);
+  }
+  assert.equal(await exited, 1);
+  const report = JSON.parse(await readFile(join(f.root, "ci-results/tooling.json"), "utf8"));
+  assert.equal(report.state, "cancelled");
+  const before = await readFile(heartbeat, "utf8").catch(() => "");
+  await delay(150);
+  assert.equal(await readFile(heartbeat, "utf8").catch(() => ""), before, "cancelled gate must not leave an executing descendant");
+});
 
 test("CI08 missing gate executable reports a safe process-start diagnostic", async t => {
   const f = await ciFailureFixture(t, "tooling", "runmesh-ci-missing-executable-fixture");

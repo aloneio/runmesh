@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { handleBrowserAdmin } from "../src/http/admin.js";
 import { handleBrowserRunnerAction } from "../src/http/runner-actions.js";
+import { deleteRunnerFromControlPlane } from "../src/http/runner-deletion.js";
 import { ADMIN_CSRF_COOKIE, ADMIN_SESSION_COOKIE } from "../src/http/constants.js";
 import { sha256Hex } from "../src/security.js";
 
@@ -81,3 +82,32 @@ it.each(["pending", "rejected"] as const)("does not replay a committed workspace
     expect(f.cancelled()).toBe(1);
   } finally { release(); await f.cleanup(); }
 }, 2_000);
+
+it.each([
+  { name: "completed", remove: 200, state: "deleted", cancelled: ["remove"] },
+  { name: "rejected", remove: 404, state: "rejected", cancelled: ["remove"] },
+  { name: "uncertain", remove: 503, state: "unknown", cancelled: ["remove"] },
+  { name: "failed fence", fence: 503, remove: 200, state: "unavailable", cancelled: ["fence"] },
+  { name: "failed cancellation", remove: 404, cancel: 503, state: "unknown", cancelled: ["remove", "cancel"] },
+])("releases status-only Runner deletion receipts after $name", async scenario => {
+  const cancelled: string[] = [], writes: string[] = [];
+  const receipt = (name: string, status: number) => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode(name)); },
+    cancel() { cancelled.push(name); return Promise.reject(new Error("cleanup unavailable")); },
+  }), { status });
+  const localEnv = { ...env,
+    REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: (request: Request) => {
+      if (new URL(request.url).pathname.endsWith("/mutation-state")) return Response.json({ runner_exists: true, mutation_committed: false });
+      writes.push(request.method); return receipt("remove", scenario.remove);
+    } }) },
+    RUNNER: { idFromName: () => "runner", get: () => ({ fetch: (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/begin-policy-mutation" && "fence" in scenario) return receipt("fence", scenario.fence!);
+      if (path === "/cancel-policy-mutation" && "cancel" in scenario) return receipt("cancel", scenario.cancel!);
+      return new Response(null, { status: 204 });
+    } }) },
+  } as unknown as typeof env;
+  expect(await deleteRunnerFromControlPlane(localEnv, "r", "r")).toMatchObject({ state: scenario.state });
+  expect(cancelled).toEqual(scenario.cancelled);
+  expect(writes).toEqual("fence" in scenario ? [] : ["DELETE"]);
+});

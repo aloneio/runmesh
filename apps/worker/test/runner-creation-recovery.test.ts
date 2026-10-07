@@ -82,3 +82,39 @@ it.each([
   expect(await f.submit(await f.session())).toMatchObject({ state: "failed", reason: "fence" });
   expect(await f.admission()).toEqual(before);
 });
+
+it.each(["create", "register"] as const)("releases status-only %s receipts without waiting for cleanup or replaying writes", async action => {
+  for (const fault of ["read", "fence", "write", "evidence"] as const) {
+    const receipts: Response[] = [], cancelled: string[] = [], calls: string[] = [];
+    let finishCleanup!: () => void;
+    const cleanup = new Promise<void>(resolve => { finishCleanup = resolve; });
+    const receipt = (name: string, status: number) => {
+      const response = new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode(name)); },
+        cancel() { cancelled.push(name); return cleanup; },
+      }), { status });
+      receipts.push(response); return response;
+    };
+    const localEnv = { ...env,
+      REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: (request: Request) => {
+        const path = new URL(request.url).pathname; calls.push(request.method + " " + path);
+        if (path.endsWith("/mutation-state")) return Response.json({ mutation_committed: false });
+        if (request.method === "GET") return receipt("read", fault === "read" ? 503 : 200);
+        return receipt("write", fault === "write" ? 503 : 200);
+      } }) },
+      RUNNER: { idFromName: () => "runner", get: () => ({ fetch: (request: Request) => {
+        const path = new URL(request.url).pathname; calls.push(request.method + " " + path);
+        return path === "/begin-policy-mutation" && fault === "fence" ? receipt("fence", 503) : new Response(null, { status: 204 });
+      } }) },
+    } as unknown as typeof env;
+    try {
+      const result = action === "create" ? await createRunnerFromControlPlane(localEnv, "r", creation)
+        : await registerRunnerFromControlPlane(localEnv, "r", "a".repeat(32), env.RUNNER_TOKEN_PEPPER, "dedicated_user");
+      expect(result.state).toBe("failed");
+      expect(cancelled).toEqual(fault === "read" ? ["read"] : fault === "fence" ? ["read", "fence"] : ["read", "write"]);
+      expect(calls.filter(call => call === (action === "create" ? "POST /runners/r/add" : "PUT /runners/r"))).toHaveLength(fault === "read" || fault === "fence" ? 0 : 1);
+    } finally {
+      finishCleanup(); await Promise.all(receipts.map(response => response.body?.cancel().catch(() => undefined)));
+    }
+  }
+}, 2_000);

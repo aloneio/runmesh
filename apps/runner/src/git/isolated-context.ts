@@ -80,7 +80,7 @@ export async function createIsolatedGitContext(worktree: string, deadline?: numb
     await writeFile(join(directory, "HEAD"), safeHead, { mode: 0o600 });
 
     const index = join(gitDirectory, "index");
-    const indexInfo = await lstat(index).catch(() => undefined);
+    const indexInfo = await optionalMetadataInfo(index);
     if (indexInfo !== undefined) {
       if (!indexInfo.isFile() || indexInfo.isSymbolicLink() || indexInfo.size > MAX_GIT_METADATA_BYTES) throw new Error("Git index is not a safe regular file");
       // Read through an identity-checked descriptor; copyFile(index, ...)
@@ -111,7 +111,7 @@ export async function createIsolatedGitContext(worktree: string, deadline?: numb
     const objectDirectory = await realpath(objectPath);
     if (!isPathWithin(objectDirectory, commonDirectory)) throw new Error("Git object directory escapes the repository");
     const alternateFile = join(commonDirectory, "objects", "info", "alternates");
-    const alternateInfo = await lstat(alternateFile).catch(() => undefined);
+    const alternateInfo = await optionalMetadataInfo(alternateFile);
     if (alternateInfo !== undefined) {
       const alternateText = await readRegularText(alternateFile, 64 * 1_024);
       if (alternateText.trim() !== "") throw new Error("Git object alternates are not supported for isolated inspection");
@@ -151,7 +151,7 @@ async function locateGitDirectory(worktree: string): Promise<string> {
 
 async function locateCommonDirectory(gitDirectory: string): Promise<string> {
   const pointer = join(gitDirectory, "commondir");
-  const info = await lstat(pointer).catch(() => undefined);
+  const info = await optionalMetadataInfo(pointer);
   if (info === undefined) return gitDirectory;
   throw new Error("Git common-directory pointers are not supported for isolated inspection");
 }
@@ -168,15 +168,24 @@ async function resolveGitRef(gitDirectory: string, commonDirectory: string, ref:
     return resolveGitRef(gitDirectory, commonDirectory, symbolic, depth + 1);
   }
   const packed = join(commonDirectory, "packed-refs");
-  const packedInfo = await lstat(packed).catch(() => undefined);
+  const packedInfo = await optionalMetadataInfo(packed);
   if (packedInfo === undefined) return undefined;
-  if (!packedInfo.isFile() || packedInfo.isSymbolicLink() || packedInfo.size > MAX_GIT_METADATA_BYTES) return undefined;
+  if (!packedInfo.isFile() || packedInfo.isSymbolicLink() || packedInfo.size > MAX_GIT_METADATA_BYTES) throw new Error("Git packed refs are not a safe regular file");
   const lines = (await readRefText(packed, MAX_GIT_METADATA_BYTES)).split(/\r?\n/u);
   for (const line of lines) {
     const match = /^([0-9a-f]{40}(?:[0-9a-f]{24})?) ([\s\S]+)$/iu.exec(line);
     if (match?.[2] === ref && match[1] !== undefined) return match[1];
   }
   return undefined;
+}
+
+/** Missing optional metadata is valid; unreadable metadata cannot describe a repository. */
+async function optionalMetadataInfo(path: string): Promise<Stats | undefined> {
+  try { return await lstat(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 async function readLooseGitRef(root: string, ref: string): Promise<string | undefined> {
@@ -195,10 +204,7 @@ async function readGitMetadata(root: string, parts: readonly string[], maxBytes:
     // and verify identities again before publishing the copied ref value.
     for (let index = 0; index < parts.length; index += 1) {
       const path = index === 0 ? root : join(parent, parts[index - 1]!);
-      const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      });
+      const info = await optionalMetadataInfo(path);
       if (info === undefined) return undefined;
       if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Git ref directory is not a regular directory");
       const handle = process.platform === "linux" ? await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) : undefined;

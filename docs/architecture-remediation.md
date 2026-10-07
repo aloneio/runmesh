@@ -12,6 +12,9 @@ limits and request-scoped snapshot cleanup. Status and index flags share one
 isolated context; the final HEAD check creates a fresh context. No snapshot or
 I/O promise is cached across requests. Baseline regressions exercise these
 operation boundaries, including concurrent index changes and budget exhaustion.
+Optional metadata shares one absence rule: `ENOENT` means missing; I/O and
+permission errors use the existing `git_unavailable` result. Invalid packed refs
+produce an error instead of an incomplete branch observation.
 
 | Area | Owns | Dependencies to keep outside this layer |
 | --- | --- | --- |
@@ -479,6 +482,9 @@ CI matrix versions, platforms and provider job names belong to `ci-contract.mjs`
 Workflow validation and cross-provider evidence consume that same declaration;
 job renaming is checked before publication. Packaged test evidence requires
 string source and runtime identities before projecting its report.
+The CI gate owns process-group termination through completion. On POSIX, an
+early exit of the direct child leaves descendant cleanup active; cancellation
+evidence is published after that cleanup finishes.
 
 Runner update receipts use the shared presence projection at the request's
 observation time. A successful replacement requires a fresh authenticated
@@ -511,3 +517,12 @@ local edits remain valid and mismatched receipts cannot publish success evidence
 Client credential confirmation reads the newly created client by ID through the
 existing Registry detail route, keeping single-record evidence independent of
 library size while retaining credential and scope checks.
+
+Runner HTTP adapters project status-only receipts through `runnerStatusReceipt`,
+which releases the unused response body. Application ports receive plain values;
+cleanup failures leave the mutation outcome and request count intact.
+Skill retention advances the head revision for each accepted command and writes
+version metadata only when its pinned value changes or the row is first created.
+OAuth completion records the existing token-dispatch claim in request-local state.
+Errors before that claim report `not_started`; later failures report `unknown`,
+independently of the error category. The repository still owns the exchange state.
