@@ -194,6 +194,28 @@ it("W05 cancellation ends a stalled stream without waiting for its cancel promis
   const pending = guardedRemoteResponse(response, 1, controller.signal, () => undefined);
   controller.abort(); await expect(pending).rejects.toMatchObject({ code: "operation_timed_out" }); expect(stopped).toHaveBeenCalledOnce();
 });
+it("discovery HTTP evidence retains the response byte and fragment budgets", async () => {
+  for (const declared of [true, false]) {
+    const cancelled = vi.fn(), account = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(1_048_577)); }, cancel: cancelled,
+    }), { status: 400, headers: declared ? { "content-length": "1048577" } : {} });
+    await expect(guardedRemoteResponse(response, 1, new AbortController().signal, account, true)).rejects.toMatchObject({ code: "upstream_protocol_error" });
+    expect(cancelled).toHaveBeenCalledOnce(); expect(account).toHaveBeenCalledTimes(declared ? 0 : 1);
+  }
+  const cancelled = vi.fn();
+  await expect(guardedRemoteResponse(new Response(new ReadableStream<Uint8Array>({
+    pull(controller) { controller.enqueue(new Uint8Array()); }, cancel: cancelled,
+  }), { status: 400 }), 1, new AbortController().signal, () => undefined, true)).rejects.toMatchObject({ code: "upstream_protocol_error" });
+  expect(cancelled).toHaveBeenCalledOnce();
+});
+it("discovery HTTP evidence cancellation settles even when peer cleanup stalls", async () => {
+  const controller = new AbortController(), cancelled = vi.fn(() => new Promise<void>(() => undefined));
+  const response = new Response(new ReadableStream({ cancel: cancelled }), { status: 400 });
+  const pending = guardedRemoteResponse(response, 1, controller.signal, () => undefined, true);
+  controller.abort(); await expect(pending).rejects.toMatchObject({ code: "operation_timed_out" }); expect(cancelled).toHaveBeenCalledOnce();
+  await expect(guardedRemoteResponse(new Response(null, { status: 400 }), 1, controller.signal, () => undefined, true)).rejects.toMatchObject({ code: "operation_timed_out" });
+});
 
 it("W05 disallowed destinations never load credentials or make network requests", async () => {
   const secret = vi.fn(async () => ({ kind: "bearer" as const, token })), http = vi.fn();

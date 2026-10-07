@@ -15,7 +15,7 @@ export class UpdateCoordinator {
   private readonly sleep: (milliseconds: number) => Promise<void>;
   public constructor(private readonly options: UpdateCoordinatorOptions) {
     this.now = options.now ?? (() => performance.now());
-    this.sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    this.sleep = options.sleep;
   }
   private guard(): void { this.options.assertInstallationLock?.(); }
   private owner(journal: UpdateJournalRecord): UpdateOwner { return { operation_id: journal.operation.operation_id, lifecycle_id: journal.operation.lifecycle_id, manager_id: journal.manager_id }; }
@@ -126,6 +126,7 @@ export class UpdateCoordinator {
   private async proveStopped(journal: UpdateJournal): Promise<void> {
     const deadline = this.now() + (this.options.activationTimeoutMs ?? 120_000);
     while (this.now() < deadline) {
+      if (this.options.signal?.aborted) throw new UpdateFailure("activation_failed");
       try {
         const result = await this.options.cloud.proveStopped(this.owner(journal));
         if (!this.matches(journal, result)) throw new UpdateFailure("activation_failed");

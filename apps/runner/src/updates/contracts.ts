@@ -84,7 +84,8 @@ export interface UpdateCoordinatorOptions {
   readonly stage: (target: ReleaseTarget, operationId: string) => Promise<VerifiedStagedRelease>;
   readonly jobs: () => Promise<LocalJobDrainObservation>;
   readonly now?: () => number;
-  readonly sleep?: (milliseconds: number) => Promise<void>;
+  /** The maintenance entry point binds retry waits to its shutdown signal. */
+  readonly sleep: (milliseconds: number) => Promise<void>;
   readonly drainTimeoutMs?: number;
   readonly activationTimeoutMs?: number;
   readonly signal?: AbortSignal;

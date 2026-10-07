@@ -599,6 +599,31 @@ test("detaching during a pending response prevents a follow-up mutation", async 
   assert.equal(api.refreshRequired(), true);
 });
 
+for (const [path, body] of [["profiles", undefined], ["connections/begin", { profile_id: "service" }]])
+test("a late " + path + " response releases its unread body after navigation", async t => {
+  const headers = deferred();
+  let controller, pulls = 0, cancellations = 0, settled = false;
+  const stream = new ReadableStream({
+    start(value) { controller = value; },
+    pull() { pulls++; },
+    cancel() { cancellations++; },
+  }, { highWaterMark: 0 });
+  const api = client(t, () => headers.promise);
+  const pending = api.request(path, body);
+  const rejected = assert.rejects(pending, { name: "AbortError" }).then(() => { settled = true; });
+  api.detach();
+  headers.resolve(new Response(stream, { headers: { "content-type": "application/json" } }));
+  await new Promise(setImmediate);
+  const observed = { pulls, cancellations, settled };
+  // Finish an uncancelled stream as well, so a regression never leaves a live
+  // request deadline behind or waits for the production 25-second timeout.
+  if (!cancellations) controller.close();
+  await rejected;
+  assert.deepEqual(observed, { pulls: 0, cancellations: 1, settled: true });
+  assert.equal(api.refreshRequired(), body !== undefined);
+  assert.equal(api.requests.length, 1);
+});
+
 test("detaching while a response body is pending prevents consuming the receipt", async t => {
   const body = deferred(), entered = deferred();
   const api = client(t, () => ({ ok: true, status: 200, json: () => { entered.resolve(); return body.promise; } }));

@@ -54,6 +54,91 @@ it.each(["modern", "legacy", "session"])("direct no-auth MCP negotiates %s and n
   expect(execute).toHaveBeenCalledTimes(1); expect(seen.filter(m => m === "tools/call")).toHaveLength(1);
   expect(seen.includes("DELETE")).toBe(mode === "session");
 });
+it.each([
+  { status: 400, wire: "text" }, { status: 404, wire: "text" }, { status: 405, wire: "empty" },
+  { status: 400, wire: "json" }, { status: 404, wire: "html" },
+])("direct MCP retains HTTP $status $wire discovery evidence for the SDK's legacy negotiation", async ({ status, wire }) => {
+  const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "connected" }] }));
+  const upstream = createMcpHandler(() => {
+    const server = new McpServer({ name: "legacy-http-fixture", version: "1" });
+    server.registerTool("read", { inputSchema: z.object({}).strict() }, execute); return server;
+  }, { route: "/mcp", legacy: "stateless" });
+  const seen: string[] = [];
+  const connector = createHttpRemoteConnector({ rules: connectionPolicy, credential: async () => null, fetch: async (url, init) => {
+    const request = JSON.parse(String(init?.body)); seen.push(request.method);
+    if (request.method === "server/discover") return wire === "json"
+      ? Response.json({ jsonrpc: "2.0", id: null, error: { code: -32601, message: "Method not found" } }, { status })
+      : new Response(wire === "empty" ? null : wire === "html" ? "<!doctype html><title>Use initialize</title>" : "Legacy handshake required",
+        { status, headers: { "content-type": wire === "html" ? "text/html" : "text/plain" } });
+    return upstream.fetch(new Request(url, init));
+  } });
+  const session = await connector.open(base, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools(); expect(tools[0]?.name).toBe("read");
+    expect(await session.callTool(tools[0]!, {}, async () => undefined)).toMatchObject({ isError: false });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(seen.filter(method => method === "server/discover")).toHaveLength(1);
+    expect(seen.filter(method => method === "initialize")).toHaveLength(1);
+    expect(seen.filter(method => method === "tools/call")).toHaveLength(1);
+  } finally { await session.close(); }
+});
+it.each([
+  { status: 400, contentType: "application/json", shape: "depth" },
+  { status: 404, contentType: "text/plain", shape: "depth" },
+  { status: 400, contentType: "text/plain", shape: "nodes" },
+  { status: 404, contentType: "application/json", shape: "array" },
+])("direct MCP bounds HTTP $status discovery $shape before SDK decoding", async ({ status, contentType, shape }) => {
+  const upstream = createMcpHandler(() => {
+    const server = new McpServer({ name: "bounded-discovery-fixture", version: "1" });
+    server.registerTool("read", { inputSchema: z.object({}).strict() }, async () => ({ content: [] })); return server;
+  }, { route: "/mcp", legacy: "stateless" });
+  const seen: string[] = [];
+  let data: unknown = null;
+  if (shape === "depth") for (let i = 0; i < 17; i++) data = { child: data };
+  else data = Array.from({ length: 8192 }, () => 0);
+  const connector = createHttpRemoteConnector({ rules: connectionPolicy, credential: async () => null, fetch: async (url, init) => {
+    const request = JSON.parse(String(init?.body)); seen.push(request.method);
+    if (request.method === "server/discover") {
+      const error = { jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found", data } };
+      return new Response(" \r\n\t" + JSON.stringify(shape === "array" ? [error] : error), { status, headers: { "content-type": contentType } });
+    }
+    return upstream.fetch(new Request(url, init));
+  } });
+  let session: Awaited<ReturnType<typeof connector.open>> | undefined;
+  try {
+    await expect((async () => { session = await connector.open(base, new AbortController().signal, () => undefined, async () => undefined); return session; })()).rejects.toMatchObject({ code: "upstream_protocol_error" });
+    expect(seen).toEqual(["server/discover"]);
+  } finally { await session?.close(); }
+});
+it("direct MCP preserves HTTP discovery version metadata instead of silently downgrading", async () => {
+  const seen: string[] = [];
+  const connector = createHttpRemoteConnector({ rules: connectionPolicy, credential: async () => null, fetch: async (_url, init) => {
+    const request = JSON.parse(String(init?.body)); seen.push(request.method);
+    return Response.json({ jsonrpc: "2.0", id: request.id, error: { code: -32022, message: "Protocol version", data: { supported: ["2026-08-01"] } } }, { status: 400 });
+  } });
+  await expect(connector.open(base, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({ code: "upstream_protocol_error" });
+  expect(seen).toEqual(["server/discover"]);
+});
+it.each(["synthetic-upstream-token", 'synthetic"upstream-token', "synthetic\\upstream-token"])("direct MCP withholds escaped credentials in discovery HTTP errors: %s", async token => {
+  const seen: string[] = [], encoded = [...token].map(char => "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0")).join("");
+  const connector = createHttpRemoteConnector({ rules: connectionPolicy, credential: async () => ({ kind: "bearer", token }), fetch: async (_url, init) => {
+    seen.push(JSON.parse(String(init?.body)).method);
+    return new Response(' {"jsonrpc":"2.0","id":null,"error":{"code":-32601,"message":"' + encoded + '"}}', { status: 400 });
+  } });
+  await expect(connector.open({ ...base, authentication: "oauth" }, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({ code: "result_invalid" });
+  expect(seen).toEqual(["server/discover"]);
+});
+it.each([401, 403, 429, 500, 302, 307])("direct MCP retains HTTP %s discovery failures without a legacy retry", async status => {
+  const cancelled = vi.fn(), seen: string[] = [];
+  const connector = createHttpRemoteConnector({ rules: connectionPolicy, credential: async () => null, fetch: async (_url, init) => {
+    seen.push(JSON.parse(String(init?.body)).method);
+    return new Response(new ReadableStream({ cancel: cancelled }), { status, headers: { location: "https://other.provider.com/mcp" } });
+  } });
+  await expect(connector.open(base, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({
+    code: status === 401 || status === 403 ? "authorization_required" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
+  });
+  expect(seen).toEqual(["server/discover"]); expect(cancelled).toHaveBeenCalledOnce();
+});
 it("connections require an explicit supported authentication mode", () => {
   const { authentication: _, ...legacy } = base; expect(connectionPolicy(legacy as ConnectionProfile)).toBeUndefined();
   expect(connectionPolicy({ ...base, endpoint: "https://127.0.0.1/mcp" })).toBeUndefined();

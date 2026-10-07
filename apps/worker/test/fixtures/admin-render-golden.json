@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "2b0faaa42a4ccaaecf759a5cab781ba46700ba92cd238ef9f8eae1a30a20f129",
-      "bytes": 182509,
+      "sha256": "d00ca57d27fb5a14a4aed65d8169173ba09b041c8611a378b614d69b4d05175d",
+      "bytes": 182634,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -33,8 +33,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "a1aa3f5944910e61d915b7d80231356d9cf38e578dcca8d8a7a4171d87f3d1fb",
-      "bytes": 183169,
+      "sha256": "9a724a50dff6c90c0c983daa3ffbcbd5166694ba58426591371e1a0f39d5a0df",
+      "bytes": 183294,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -52,8 +52,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "8468d57286a8f3bad7979120072295d33074648d5a642a2f4b7b01565fc82eab",
-      "bytes": 185466,
+      "sha256": "5f1119c49be42e727252f3e11a55c4c38b8434375d58cfd80eb9532102f11bdd",
+      "bytes": 185591,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -423,8 +423,8 @@
           }
         ]
       ],
-      "sha256": "d79e0480cdf4719e02f6c471ca9920f903f00e6c17f4d063d531a26a6e23f7fa",
-      "bytes": 185815,
+      "sha256": "36b2c07d6b1fadcd21674bb368d894058c451e2bd119d8709d53500348a30321",
+      "bytes": 185940,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -1339,6 +1339,33 @@
         "name": "admin-document",
         "sha256": "cc68f4c5541baa56b0395c417360af2187608619f195e4de954cc90511ca668c",
         "bytes": 185651
+      }
+    ]
+  },
+  "central_retired_response_review": {
+    "source_baseline": "38b093175f47393094d6a2e4bc1484b01b179ee4",
+    "reviewed_change": "Central API cancels an unread response body when its page has retired before headers arrive. Public API tests cover late read and OAuth responses without follow-up work. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "2b0faaa42a4ccaaecf759a5cab781ba46700ba92cd238ef9f8eae1a30a20f129",
+        "bytes": 182509
+      },
+      {
+        "name": "setup",
+        "sha256": "a1aa3f5944910e61d915b7d80231356d9cf38e578dcca8d8a7a4171d87f3d1fb",
+        "bytes": 183169
+      },
+      {
+        "name": "secret",
+        "sha256": "8468d57286a8f3bad7979120072295d33074648d5a642a2f4b7b01565fc82eab",
+        "bytes": 185466
+      },
+      {
+        "name": "admin-document",
+        "sha256": "d79e0480cdf4719e02f6c471ca9920f903f00e6c17f4d063d531a26a6e23f7fa",
+        "bytes": 185815
       }
     ]
   }

@@ -41,6 +41,10 @@ export function createCentralApi({
       }).catch(() => {
         throw new Error(t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'));
       });
+      if (!isCurrent()) {
+        void response.body?.cancel().catch(() => undefined);
+        assertCurrent();
+      }
       var value;
       try {
         value = await response.json();

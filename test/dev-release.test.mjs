@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, writeFile, mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
+import { copyFile, readFile, writeFile, mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { basename, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { execFileSync, spawnSync } from "node:child_process";
 import { parse } from "yaml";
 import { DEV_RELEASE_INTERVAL, releaseCadence, nextDevVersion, createDevPlan, validateDevPlan, assertPlanContext, validateDevDeferral } from "../scripts/dev-release/policy.mjs";
 import { baselineError } from "../scripts/dev-release/baseline-policy.mjs";
@@ -18,6 +19,47 @@ import { readPlan } from "../scripts/dev-release/io.mjs";
 const plan = () => createDevPlan({ source_sha: "a".repeat(40), source_tree: "b".repeat(40), stable_sha: "c".repeat(40), stable_version: "0.1.3", stable_release: { release_id: 9, commit_sha: "c".repeat(40), manifest_sha256: "f".repeat(64) }, push_number: 5, run_id: 123, published_at: "2026-09-16T00:00:00Z" });
 const env = () => ({ GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/dev", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_SHA: "a".repeat(40), GITHUB_RUN_NUMBER: "5", GITHUB_RUN_ID: "123" });
 async function temp(t) { const dir = await mkdtemp(join(tmpdir(), "runmesh-dev-release-test-")); t.after(() => rm(dir, { recursive: true, force: true })); return dir; }
+
+for (const operation of ["read", "fetch"]) test(`development Git ${operation} stays in its source checkout despite inherited routing`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh-dev-git-"));
+  t.after(async () => {
+    assert.equal(dirname(resolve(directory)), resolve(tmpdir())); assert.ok(basename(directory).startsWith("runmesh-dev-git-"));
+    await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  });
+  const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")));
+  const runGit = (cwd, ...args) => execFileSync("git", ["-c", "user.name=Runmesh Test", "-c", "user.email=test@example.invalid",
+    "-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + join(directory, "no-hooks"), ...args],
+  { cwd, env: environment, encoding: "utf8", timeout: 15000, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const requested = join(directory, "requested"), other = join(directory, "other");
+  for (const cwd of [requested, other]) {
+    await mkdir(cwd); runGit(cwd, "init", "--quiet", "--initial-branch=main");
+    await writeFile(join(cwd, "source.txt"), basename(cwd)); runGit(cwd, "add", "."); runGit(cwd, "commit", "--quiet", "-m", "fixture");
+  }
+  await mkdir(join(requested, "scripts/dev-release"), { recursive: true });
+  for (const file of ["dev-release/io.mjs", "dev-release/policy.mjs", "dev-release/baseline-policy.mjs", "evidence-io.mjs", "ci-report.mjs", "source-git.mjs"])
+    await copyFile(new URL(`../scripts/${file}`, import.meta.url), join(requested, "scripts", file));
+  runGit(requested, "remote", "add", "origin", other); runGit(other, "remote", "add", "origin", requested);
+  const requestedSha = runGit(requested, "rev-parse", "HEAD"), otherSha = runGit(other, "rev-parse", "HEAD");
+  assert.notEqual(requestedSha, otherSha);
+  const routed = { ...environment, GIT_DIR: join(other, ".git"), GIT_WORK_TREE: other, GIT_INDEX_FILE: join(other, ".git/index") };
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import assert from 'node:assert/strict';
+    import { git, command } from ${JSON.stringify(pathToFileURL(join(requested, "scripts/dev-release/io.mjs")).href)};
+    const inherited = process.env.GIT_DIR;
+    ${operation === "fetch" ? "await git('fetch', '--no-tags', 'origin', 'main:refs/remotes/origin/main');" : ""}
+    const commit = await git('rev-parse', 'HEAD');
+    assert.equal(process.env.GIT_DIR, inherited);
+    const child = await command(process.execPath, ['-e', 'process.stdout.write(process.env.GIT_DIR)']);
+    assert.equal(child.stdout, inherited, 'Only Git commands isolate Git routing');
+    console.log(JSON.stringify({ commit }));
+  `], { cwd: other, env: routed, encoding: "utf8", timeout: 20000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  if (operation === "read") assert.equal(JSON.parse(result.stdout).commit, requestedSha);
+  else {
+    assert.equal(runGit(requested, "rev-parse", "refs/remotes/origin/main"), otherSha);
+    assert.equal(runGit(other, "for-each-ref", "--format=%(refname)", "refs/remotes"), "", "foreign checkout must not receive fetched refs");
+  }
+});
 
 async function planningFixture(t, deferred = false) {
   const directory = await temp(t), p = plan(); let observations = 0;
