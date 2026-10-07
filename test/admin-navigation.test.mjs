@@ -746,6 +746,27 @@ test("rebinding execution-mode controls does not duplicate listeners or lose ini
   assert.equal(input.events.get("change").length, 1); assert.equal(confirmation.required, true); assert.equal(warning.hidden, false);
   input.value = "dedicated_user"; input.dispatch("change"); assert.equal(confirmation.required, false); assert.equal(warning.hidden, true);
 });
+for (const initialChannel of ["stable", "pinned"]) test("Runner version fields follow " + initialChannel + " initialization and preserve exact versions across channel changes", () => {
+  const h = controlsFixture(), channel = element(), desired = { value: "0.1.6", disabled: false, required: false };
+  channel.value = initialChannel;
+  channel.form = { querySelector: selector => selector === 'input[name="desired_runner_version"]' ? desired : null };
+  const root = h.root({ 'select[name="update_channel"]': [channel] });
+  h.controls.bindPageControls(root); h.controls.bindPageControls(root);
+  assert.equal(desired.disabled, initialChannel !== "pinned");
+  assert.equal(desired.required, initialChannel === "pinned");
+  channel.value = "pinned"; channel.dispatch("change");
+  assert.equal(desired.disabled, false); assert.equal(desired.required, true);
+  desired.value = "0.1.8-beta.1";
+  channel.value = "stable"; channel.dispatch("change");
+  assert.equal(desired.disabled, true, "An unused exact version must not block the latest environment release");
+  assert.equal(desired.required, false);
+  assert.equal(desired.value, "0.1.8-beta.1", "Switching channels keeps the user's exact-version draft");
+  h.controls.bindPageControls(root);
+  channel.value = "pinned"; channel.dispatch("change");
+  assert.equal(desired.disabled, false); assert.equal(desired.required, true);
+  assert.equal(desired.value, "0.1.8-beta.1");
+});
+
 test("client computer permissions follow access type on initial and dynamically mounted pages", () => {
   const h = controlsFixture();
   for (const initialMode of ["central", "native"]) {

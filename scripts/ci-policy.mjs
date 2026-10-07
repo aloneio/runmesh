@@ -47,8 +47,11 @@ function reportUpload(job, name) {
  * or a defense against an administrator rewriting the checker itself. */
 export function validateCiWiring(pkg, githubText, gitlabText) {
   const gh = parseCi(githubText), gl = parseCi(gitlabText);
-  eq(gh.on?.push?.branches, ["main", "dev"], "main/dev push coverage");
+  // A path or activity filter can silently remove changed modules from CI even
+  // when every job and command is present. Validate event coverage as a whole.
+  eq(gh.on?.push, { branches: ["main", "dev"] }, "main/dev push source coverage must remain unfiltered");
   for (const event of ["pull_request", "workflow_dispatch", "workflow_call"]) assert.ok(Object.hasOwn(gh.on, event), `missing ${event}`);
+  if (gh.on.pull_request !== null) eq(gh.on.pull_request, {}, "pull request source coverage must retain the default unfiltered events");
   eq(gh.permissions, { contents: "read" }, "ordinary CI token must be read-only");
   for (const [id, name] of Object.entries(GITHUB_JOB_NAMES))
     assert.equal(gh.jobs?.[id]?.name ?? id, name, `${id} must retain its provider evidence name`);
