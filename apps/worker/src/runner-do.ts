@@ -595,19 +595,22 @@ export class RunnerDO {
     // Never accept a caller-supplied grant or creator identity at this boundary.
     let dispatchParams = input.params;
     if ((method === "exec.start" || method === "exec.run") && isRecord(input.params)) {
-      const clean = { ...input.params }; delete clean.queue_grant; delete clean.record_history;
+      const clean = { ...input.params }; delete clean.queue_grant; delete clean.record_history; delete clean.created_by_client_id;
       if (reportingLaunch) clean.record_history = recordHistory;
       const principal = input.mcp_authorization;
-      if (attachment.queueProtocol === 1 && isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)
-        && typeof clean.workspace_id === "string" && validLifecycleId(attachment.lifecycleId)
-        && requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
+      if (isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)) {
+        // Job attribution belongs to the authenticated launch, independently
+        // of whether this Runner advertises queue admission.
         clean.created_by_client_id = principal.client_id;
-        clean.queue_grant = await signQueueGrant(this.env.INTERNAL_CONTROL_SECRET ?? "", {
-          version:1, runner_id:attachment.runnerId,lifecycle_id:attachment.lifecycleId,credential_version:attachment.credentialVersion,
-          client_id:principal.client_id,secret_version:principal.secret_version,workspace_id:clean.workspace_id,
-          policy_revision:requestPolicyRevision,policy_checksum:expectedPolicyChecksum,
-          launch_digest:await launchDigest(clean),expires_at_ms:Date.now()+3600000,nonce:crypto.randomUUID(),
-        });
+        if (attachment.queueProtocol === 1 && typeof clean.workspace_id === "string" && validLifecycleId(attachment.lifecycleId)
+          && requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
+          clean.queue_grant = await signQueueGrant(this.env.INTERNAL_CONTROL_SECRET ?? "", {
+            version:1, runner_id:attachment.runnerId,lifecycle_id:attachment.lifecycleId,credential_version:attachment.credentialVersion,
+            client_id:principal.client_id,secret_version:principal.secret_version,workspace_id:clean.workspace_id,
+            policy_revision:requestPolicyRevision,policy_checksum:expectedPolicyChecksum,
+            launch_digest:await launchDigest(clean),expires_at_ms:Date.now()+3600000,nonce:crypto.randomUUID(),
+          });
+        }
       }
       dispatchParams=clean;
     }

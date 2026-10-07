@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +7,16 @@ import { gzipSync } from "node:zlib";
 import { exactRunnerRelease } from "@aloneio/runmesh-protocol";
 import { runnerArchiveFiles } from "../src/updates/release-archive.js";
 import { downloadRunnerReleaseAsset, stageRunnerRelease } from "../src/updates/release-stager.js";
+
+const cleanupFault = vi.hoisted(() => ({ error: undefined as Error | undefined }));
+vi.mock("node:fs/promises", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const remove: typeof actual.rm = async (path, options) => {
+    if (cleanupFault.error !== undefined && String(path).endsWith(".staging")) throw cleanupFault.error;
+    return actual.rm(path, options);
+  };
+  return { ...actual, rm: remove };
+});
 
 function archive(entries: { name: string; value: string; type?: string }[]): Buffer {
   const parts: Buffer[] = [];
@@ -20,10 +30,10 @@ function archive(entries: { name: string; value: string; type?: string }[]): Buf
   }
   parts.push(Buffer.alloc(1024)); return gzipSync(Buffer.concat(parts));
 }
-function fixture(version = "0.1.6", policy: { protocolMin?: unknown; protocolMax?: unknown; nodeMajor?: number } = {}) {
+function fixture(version = "0.1.6", policy: { protocolMin?: unknown; protocolMax?: unknown; nodeMajor?: number; bundle?: string } = {}) {
   const release = exactRunnerRelease(version);
   const bytes = archive([{ name: "package/package.json", value: JSON.stringify({ name: "@aloneio/runmesh-runner", version, dependencies: {} }) },
-    { name: "package/dist/runmesh.cjs", value: `console.log(${JSON.stringify(version)});` }]);
+    { name: "package/dist/runmesh.cjs", value: policy.bundle ?? `console.log(${JSON.stringify(version)});` }]);
   const sha = createHash("sha256").update(bytes).digest("hex");
   const manifest = Buffer.from(JSON.stringify({ schema_version: 1, project: "runmesh", version, tag: release.tag, channel: release.channel,
     prerelease: release.channel === "dev", commit_sha: "a".repeat(40), protocol_min: policy.protocolMin ?? 2, protocol_max: policy.protocolMax ?? 2, published_at: "2026-10-06T00:00:00Z",
@@ -83,6 +93,125 @@ describe("Runner exact release staging", () => {
   it("blocks untrusted redirects and oversized responses", async () => {
     await expect(downloadRunnerReleaseAsset("https://github.com/example", 16, (async () => new Response(null, { status: 302, headers: { location: "https://example.com/private" } })) as typeof fetch)).rejects.toThrow("origin");
     await expect(downloadRunnerReleaseAsset("https://github.com/example", 16, (async () => new Response("x".repeat(17))) as typeof fetch)).rejects.toThrow("size");
+  });
+
+  it("does not fetch a release after maintenance has stopped", async () => {
+    const controller = new AbortController(), reason = new Error("maintenance stopped");
+    controller.abort(reason);
+    const fetchImpl = vi.fn(async () => new Response("release"));
+    await expect(downloadRunnerReleaseAsset("https://github.com/example", 16, fetchImpl, controller.signal)).rejects.toBe(reason);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending release body when maintenance stops", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController(), reason = new Error("maintenance stopped");
+    const cancel = vi.fn();
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(value) { streamController = value; }, cancel });
+    const downloading = downloadRunnerReleaseAsset("https://github.com/example", 16, (async () => new Response(body)) as typeof fetch, controller.signal);
+    let result: unknown;
+    const settled = downloading.then(value => { result = value; }, error => { result = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(body.locked).toBe(true);
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toBe(reason);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(body.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (cancel.mock.calls.length === 0) streamController.close();
+      await settled;
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a response that arrives after its release request was stopped", async () => {
+    const controller = new AbortController(), reason = new Error("maintenance stopped"), cancel = vi.fn();
+    let respond!: (response: Response) => void;
+    let requestSignal: AbortSignal | null | undefined;
+    const downloading = downloadRunnerReleaseAsset("https://github.com/example", 16, (async (_url, init) => {
+      requestSignal = init?.signal;
+      return new Promise<Response>(resolve => { respond = resolve; });
+    }) as typeof fetch, controller.signal);
+    const result = downloading.catch(error => error);
+    controller.abort(reason);
+    expect(await result).toBe(reason);
+    expect(requestSignal?.aborted).toBe(true);
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    respond(new Response(body));
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+    expect(body.locked).toBe(false);
+  });
+
+  it("releases a stalled body after the download deadline", async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn(), body = new ReadableStream<Uint8Array>({ cancel });
+    const result = downloadRunnerReleaseAsset("https://github.com/example", 16, (async () => new Response(body)) as typeof fetch).catch(error => error);
+    try {
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(await result).toMatchObject({ message: "Runner release download timed out." });
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(body.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("stops before fetching another asset or creating an installation after cancellation", async () => {
+    const f = fixture(), controller = new AbortController(), reason = new Error("maintenance stopped");
+    const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    const fetchImpl: typeof fetch = async (url, init) => {
+      const response = await f.fetchImpl(url, init);
+      controller.abort(reason);
+      return response;
+    };
+    try {
+      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "cancelled", runtimePath: process.execPath, fetch: fetchImpl, signal: controller.signal }, { trust: f.trust })).rejects.toBe(reason);
+      expect(f.calls).toEqual([f.release.manifest_url]);
+      expect(await readdir(root)).toEqual([]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("stops an active version probe that ignores SIGTERM and removes the temporary installation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "runmesh-stager-")), marker = join(root, "probe-started");
+    const f = fixture("0.1.6", { bundle: `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000);` });
+    const controller = new AbortController();
+    const staging = stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+      { installRoot: root, operationId: "cancelled-probe", runtimePath: process.execPath, fetch: f.fetchImpl, signal: controller.signal }, { trust: f.trust });
+    const result = staging.then(value => value, error => error);
+    let probePid: number | undefined, deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await vi.waitFor(async () => expect(await readFile(marker, "utf8")).toMatch(/^\d+$/u), { timeout: 5000 });
+      probePid = Number(await readFile(marker, "utf8"));
+      controller.abort();
+      const outcome = await Promise.race([result, new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("Version probe did not stop after cancellation.")), 2000); })]);
+      expect(outcome).toMatchObject({ name: "AbortError" });
+      expect(await readdir(join(root, "versions"))).toEqual([]);
+      expect(() => process.kill(probePid!, 0)).toThrow();
+      probePid = undefined;
+    } finally {
+      if (deadline !== undefined) clearTimeout(deadline);
+      controller.abort();
+      if (probePid !== undefined) { try { process.kill(probePid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+      await result;
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 10000);
+
+  it("retains the staging failure and cleanup error when removing its temporary installation fails", async () => {
+    const f = fixture(), root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    const cleanup = new Error("temporary installation cleanup fixture");
+    cleanupFault.error = cleanup;
+    try {
+      const failure = await stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "cleanup-failure", runtimePath: join(root, "missing-runtime"), fetch: f.fetchImpl }, { trust: f.trust }).catch(error => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.cause).toMatchObject({ code: "ENOENT", syscall: "lstat" });
+      expect(failure.errors).toEqual([failure.cause, cleanup]);
+    } finally { cleanupFault.error = undefined; await rm(root, { recursive: true, force: true }); }
   });
 
   it("stages a cloud-selected signed wire v3 release independently of the manager's older wire protocol", async () => {

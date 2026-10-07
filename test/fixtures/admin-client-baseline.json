@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "5ec8f7413b963c1c0e6ac7cd0084c6513b39348a19e36ba6680b2f7675a3e65b",
+      "sha256": "c326fcf6c09a0241b894711a5b12ff4f66d4906db15305bbbd49878adc5b9428",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "90239ab749ec39b3944e826ec32f7886c48f44eade6c5b0f309ee6f571c7a76b",
+      "sha256": "c0d0cc02a275ddefab60a41063c8448f062a9005f7bbf1b244feb10f5dbbefa4",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -526,6 +526,21 @@
       {
         "nonce": "test-nonce",
         "sha256": "335fe1a3d9e30f86c98b102ad328cc53e5098773c094f73d6fd8a357c7c46ab4"
+      }
+    ]
+  },
+  "navigation_failure_review": {
+    "source_baseline": "7df59a11fa34635f21332cd6dd4e9e9987c0a603",
+    "reviewed_change": "Pending navigation reuses one request for the latest identical destination and preserves history intent. MCP failure receipts retain specific localized guidance without changing write reconciliation. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "5ec8f7413b963c1c0e6ac7cd0084c6513b39348a19e36ba6680b2f7675a3e65b"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "90239ab749ec39b3944e826ec32f7886c48f44eade6c5b0f309ee6f571c7a76b"
       }
     ]
   }

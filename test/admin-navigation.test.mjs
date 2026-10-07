@@ -293,6 +293,37 @@ test("concurrent navigation coalesces to the latest destination within one owner
   assert.deepEqual(h.mounted.map(item => item.key), ["/admin/settings"]);
   assert.equal(h.nav.isLoading(), false);
 });
+for (const phase of ["headers", "body"]) test("repeated pending navigation shares one fresh request during " + phase, async () => {
+  const h = harness(); let finish;
+  h.context.fetch = (url, options) => {
+    h.fetched.push({ url, options });
+    const pending = new Promise(resolve => { finish = resolve; });
+    return phase === "headers" ? pending : Promise.resolve({ ok: true, text: () => pending });
+  };
+  const pending = h.open("/admin/runners");
+  await new Promise(setImmediate);
+  void h.open("/admin/runners"); void h.open("/admin/runners");
+  finish(phase === "headers" ? { ok: true, text: async () => "fresh" } : "fresh");
+  await pending; await new Promise(setImmediate);
+  const observed = { requests: h.fetched.length, mounts: h.mounted.map(item => item.title) };
+  h.nav.retire();
+  if (h.fetched.length > 1) finish(phase === "headers" ? { ok: true, text: async () => "duplicate" } : "duplicate");
+  await new Promise(setImmediate);
+  assert.deepEqual(observed, { requests: 1, mounts: ["fresh"] });
+});
+test("returning to the pending destination replaces the queue and preserves the latest history intent", async () => {
+  const h = harness(); let finish;
+  h.context.fetch = (url, options) => {
+    h.fetched.push({ url, options });
+    return h.fetched.length === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve({ ok: true, text: async () => "duplicate" });
+  };
+  const pending = h.open("/admin/runners");
+  void h.open("/admin/clients"); void h.open("/admin/runners", false);
+  finish({ ok: true, text: async () => "fresh" });
+  await pending; await new Promise(setImmediate);
+  assert.equal(h.fetched.length, 1);
+  assert.deepEqual(h.mounted.map(item => [item.title, item.key, item.push]), [["fresh", "/admin/runners", false]]);
+});
 for (const [destination, push] of [["/admin", false], ["/admin/settings", true]])
 test("superseded responses preserve the final page and history destination " + destination, async () => {
   const h = harness(), history = [];

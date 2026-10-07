@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { sourceGitEnvironment, sourceDirectoryIdentity, sameDirectoryIdentity } from "./source-git.mjs";
+import { sourceGitEnvironment, sourceIndexProblem, sourceDirectoryIdentity, sameDirectoryIdentity } from "./source-git.mjs";
 
 const sha = /^[a-f0-9]{40}$/u;
 const branch = value => value === "main" || value === "dev" ? value : null;
@@ -24,10 +24,12 @@ export function captureBuildProvenance(root, metadata = process.env) {
     const head = git("rev-parse", "--verify", "HEAD"), treeResult = git("rev-parse", "HEAD^{tree}");
     const commit = head.stdout.trim(), tree = treeResult.stdout.trim();
     if (head.status !== 0 || treeResult.status !== 0 || !sha.test(commit) || !sha.test(tree)) return absent("unavailable", "git_unavailable");
-    const flags = git("ls-files", "-v", "-z"), modes = git("ls-files", "--stage", "-z");
-    if (flags.status !== 0 || modes.status !== 0) return absent("unavailable", "git_unavailable");
-    if (flags.stdout.split("\0").some(line => /^[a-zS] /u.test(line))) return absent("unavailable", "hidden_index_flags");
-    if (modes.stdout.split("\0").some(line => /^(?:120000|160000) /u.test(line))) return absent("unavailable", "unsupported_tree");
+    const indexProblem = sourceIndexProblem((...args) => {
+      const result = git(...args);
+      if (result.status !== 0) throw new Error("git_unavailable");
+      return result.stdout;
+    });
+    if (indexProblem) return absent("unavailable", indexProblem);
     const clean = () => {
       const diff = git("diff", "--no-ext-diff", "--no-textconv", "--exit-code", "HEAD", "--");
       const status = git("status", "--porcelain=v1", "-z", "--untracked-files=all");

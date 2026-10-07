@@ -13,6 +13,7 @@ export function createAdminNavigation({
   let generation = 0;
   let leaving = false;
   let activeController;
+  let activeDestination;
   const boundLinks = new WeakSet();
   const pageKey = url => url.pathname + url.search;
   let renderedPageKey = pageKey(new URL(location.href));
@@ -39,6 +40,13 @@ export function createAdminNavigation({
     // its DOM remains visible during loading or a full-navigation fallback.
     generation++;
     if (loading) {
+      // A repeated destination can use the request already being revalidated.
+      // The latest history intent still owns the eventual mount.
+      if (activeDestination?.url.href === url.href) {
+        activeDestination.shouldPush = shouldPush;
+        queued = undefined;
+        return;
+      }
       queued = {
         url,
         shouldPush
@@ -46,6 +54,8 @@ export function createAdminNavigation({
       return;
     }
     loading = true;
+    const destination = { url, shouldPush };
+    activeDestination = destination;
     view.setLoading(true);
     const controller = new AbortController();
     activeController = controller;
@@ -72,7 +82,7 @@ export function createAdminNavigation({
       if (!next) throw new Error("main content missing");
       const root = view.pageRoot(next);
       if (!root) throw new Error("page root missing");
-      view.mount(root, parsed.title || "", pageKey(url), shouldPush, url);
+      view.mount(root, parsed.title || "", pageKey(url), destination.shouldPush, url);
       renderedPageKey = pageKey(url);
     } catch (error) {
       if (!leaving) {
@@ -83,6 +93,7 @@ export function createAdminNavigation({
       clearTimeout(timer);
       controller.abort();
       if (activeController === controller) activeController = undefined;
+      if (activeDestination === destination) activeDestination = undefined;
       loading = false;
       view.setLoading(false);
       if (queued) {

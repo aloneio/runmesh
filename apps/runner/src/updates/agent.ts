@@ -86,7 +86,7 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
               },
               installation: new ManagedInstallationPointer(layout.layout.installRoot),
               service: createNativeServiceMaintenance(options),
-              stage: (target, operationId) => stageRunnerRelease(target, { installRoot: layout.layout.installRoot, operationId, runtimePath: layout.runtimePath, ...(options.fetch === undefined ? {} : { fetch: options.fetch }) }),
+              stage: (target, operationId) => stageRunnerRelease(target, { installRoot: layout.layout.installRoot, operationId, runtimePath: layout.runtimePath, signal, ...(options.fetch === undefined ? {} : { fetch: options.fetch }) }),
               jobs: () => inspectLocalJobs(layout.layout.stateRoot), signal, sleep: ms => waitForRetry(ms, signal),
               assertInstallationLock: () => held.assertHeld(),
             });

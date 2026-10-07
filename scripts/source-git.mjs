@@ -6,6 +6,15 @@ export function sourceGitEnvironment() {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")));
 }
 
+/** CI evidence and build provenance require the same visible source index.
+ * The adapter must throw on a failed Git read; observation never alters flags. */
+export function sourceIndexProblem(readGit) {
+  const flags = readGit("ls-files", "-v", "-z"), modes = readGit("ls-files", "--stage", "-z");
+  if (flags.split("\0").some(line => /^[a-zS] /u.test(line))) return "hidden_index_flags";
+  if (modes.split("\0").some(line => /^(?:120000|160000) /u.test(line))) return "unsupported_tree";
+  return undefined;
+}
+
 /** A directory can have multiple Windows case/8.3 spellings. Compare the
  * actual directory object, never case-fold arbitrary paths or trust a prefix.
  * BigInt prevents distinct 64-bit file IDs from collapsing through rounding. */
