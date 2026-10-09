@@ -288,6 +288,24 @@ describe("workspace path policy", () => {
     });
   });
 
+  it.each([
+    ["fs.read", { path: "." }, { path: "sample.txt" }, { data: "needle\n" }],
+    ["fs.list", { path: "sample.txt" }, { path: "." }, { entries: [{ name: "sample.txt", type: "file" }] }],
+    ["fs.search", { path: "sample.txt", query: "needle" }, { path: ".", query: "needle" }, { results: [expect.objectContaining({ path: "sample.txt", match: "needle" })] }],
+  ] as const)("classifies %s target type mismatches as a correctable request", async (method, invalid, corrected, result) => {
+    const test = await fixture();
+    try {
+      await writeFile(join(test.root, "sample.txt"), "needle\n");
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const runtime = new RunnerRuntime({ config, stateDir: test.state });
+      await expect(runtime.dispatch(method, { workspace_id: test.workspace.workspaceId, ...invalid }).catch(rpcError)).resolves.toMatchObject({
+        code: "invalid_params", failure_class: "validation", operation_state: "not_started", next_action: "correct_request",
+      });
+      await expect(runtime.dispatch(method, { workspace_id: test.workspace.workspaceId, ...corrected })).resolves.toMatchObject(result);
+      expect(await readFile(join(test.root, "sample.txt"), "utf8")).toBe("needle\n");
+    } finally { await test.cleanup(); }
+  });
+
   it("rejects canonical central roots that overlap or nest", async () => {
     const test = await fixture();
     try {

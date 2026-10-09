@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { writeSupplement } from "./ci-supplement.mjs";
 import { readProviderJson, validateCrossforgeEvidence } from "./crossforge-evidence.mjs";
-import { gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
+import { assertSourceObservationUnchanged, gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
 
 const source = sourceObservation(), started = Date.now(); let code = 1;
 await writeGateReport(gateEvidence("crossforge_release", "running", 0, null, source));
@@ -32,6 +32,7 @@ try {
   assert.equal(githubJobPage.total_count, githubJobPage.jobs.length, "truncated GitHub jobs");
   assert.ok(gitlabJobs.length < 100, "ambiguous truncated GitLab jobs");
   const report = validateCrossforgeEvidence(expected, { github, githubJobs: githubJobPage.jobs, gitlab, gitlabJobs });
+  assertSourceObservationUnchanged(source);
   await writeSupplement("crossforge-evidence", report);
   console.log(JSON.stringify(report)); code = 0;
 } catch { console.error("crossforge_ci_unverified: no signing or publishing is allowed without exact-source successful checks on both providers; no polling/retry performed"); }
