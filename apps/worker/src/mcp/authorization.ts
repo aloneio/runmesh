@@ -9,6 +9,7 @@ import type { PermissionCheck } from "./contracts.js";
 import { registryCall } from "./transport.js";
 import { safeJobIdentifier } from "./results/primitives.js";
 import { safeLifecycleId } from "./results/primitives.js";
+import { safeWorkspaceMetadata } from "./results/selection.js";
 import type { ToolFailure } from "./contracts.js";
 
 export async function checkPermission(env: McpRequestEnv, clientId: string, runnerId: string, workspaceId: unknown, required: PermissionBit): Promise<PermissionCheck | undefined> {
@@ -64,15 +65,18 @@ async function snapshotAuthorization(env: McpRequestEnv, runnerId: string): Prom
 export async function checkAnyReadPermission(env: McpRequestEnv, clientId: string, runnerId: string): Promise<PermissionCheck | undefined> {
   const snapshotPermission = await snapshotAuthorization(env, runnerId);
   if (snapshotPermission !== undefined) return snapshotPermission;
-  const active = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/active-workspaces`);
-  if (!active.ok) return active;
-  if (!isRecord(active.value) || !Array.isArray(active.value.workspaces)) return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
-  for (const item of active.value.workspaces) {
-    if (!isRecord(item) || typeof item.workspace_id !== "string" || item.enabled !== true) continue;
-    const permission = await checkPermission(env, clientId, runnerId, item.workspace_id, "read");
-    if (permission === undefined) return undefined;
-    if (permission.error.code !== "permission_denied" && permission.error.code !== "readonly_workspace") return permission;
+  // The Registry computes the current client/policy intersection once for the
+  // complete list, without one additional request per enabled workspace.
+  const effective = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-workspaces/${encodeURIComponent(runnerId)}`);
+  if (!effective.ok) return effective.error.code === "not_found"
+    ? fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.") : effective;
+  const value = effective.value;
+  if (!isRecord(value) || value.runner_id !== runnerId || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1
+    || typeof value.checksum !== "string" || !/^[a-f0-9]{64}$/u.test(value.checksum)
+    || !Array.isArray(value.workspaces) || value.workspaces.some(workspace => safeWorkspaceMetadata(workspace) === undefined)) {
+    return fail("authorization_response_invalid", "Runner workspace authorization returned an invalid response.", "Ask the operator to check the authorization dependency; this does not establish denied permissions.", "not_started");
   }
+  if (value.workspaces.some(workspace => isRecord(workspace) && workspace.enabled === true && isRecord(workspace.permissions) && workspace.permissions.read === true)) return undefined;
   return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
 }
 
