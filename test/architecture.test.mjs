@@ -728,23 +728,79 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
       if (node.type === "AssignmentExpression") assert.notEqual(property(node.left), "registryRequest", `${name}: use the injected RegistryRequestPort`);
     });
   }
+  const runtimePrivateAccesses = root => {
+    const bindings = new Map(), violations = [];
+    const observe = (id, value, declaration = false) => {
+      if (id?.type !== "Identifier") return;
+      const binding = bindings.get(id.name) ?? { declarations: 0, constructed: false, invalid: false };
+      if (declaration) binding.declarations++;
+      if (value !== undefined) {
+        if (value?.type === "NewExpression" && value.callee?.name === "RunnerRuntime") binding.constructed = true;
+        else binding.invalid = true;
+      }
+      bindings.set(id.name, binding);
+    };
+    const shadow = pattern => {
+      if (pattern?.type === "Identifier") observe(pattern, null, true);
+      else if (pattern?.type === "AssignmentPattern") shadow(pattern.left);
+      else if (pattern?.type === "RestElement") shadow(pattern.argument);
+      else if (pattern?.type === "ArrayPattern") pattern.elements.forEach(shadow);
+      else if (pattern?.type === "ObjectPattern") pattern.properties.forEach(item => shadow(item.type === "RestElement" ? item.argument : item.value));
+    };
+    // Inspect each test independently. A public jobs port belongs to an
+    // explicitly constructed Runtime, regardless of its local variable name.
+    // Ambiguous bindings, shadowing and reassignment remain conservative.
+    visit(root, child => {
+      if (child.type === "VariableDeclarator") {
+        if (child.id.type === "Identifier") observe(child.id, child.init ?? undefined, true);
+        else shadow(child.id);
+      }
+      if (child.type === "AssignmentExpression") {
+        if (child.left.type === "Identifier") observe(child.left, child.operator === "=" ? child.right : null);
+        else shadow(child.left);
+      }
+      if (child.type === "UpdateExpression") observe(child.argument, null);
+      if (["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression", "ObjectMethod", "ClassMethod"].includes(child.type)) {
+        if (child.id) shadow(child.id);
+        child.params.forEach(shadow);
+      }
+      if (child.type === "CatchClause") shadow(child.param);
+      if (child.type === "ClassDeclaration") shadow(child.id);
+    });
+    const isRuntime = name => {
+      const binding = bindings.get(name);
+      return !bindings.has("RunnerRuntime") && binding?.declarations === 1 && binding.constructed && !binding.invalid;
+    };
+    visit(root, child => {
+      if (child.type === "TSAsExpression" && child.expression?.type === "TSAsExpression" && child.expression.typeAnnotation?.type === "TSUnknownKeyword")
+        violations.push("private-state assertion");
+      if (["MemberExpression", "OptionalMemberExpression"].includes(child.type)) {
+        const owner = child.object?.type === "TSNonNullExpression" ? child.object.expression?.name : child.object?.name;
+        if (["jobDir", "closeLogHandles", "queueLogAppend", "logWriteChain", "finish", "flushLogs", "pruneRetainedJobsNow", "cancelRecoveredUnknown", "reconcileRecoveredJob", "persist", "enqueuePersistence"].includes(property(child))
+          || property(child) === "jobs" && !isRuntime(owner)
+          || property(child) === "processes" && owner !== "probe") violations.push(property(child));
+      }
+    });
+    return violations;
+  };
+  for (const source of ["const restarted = new RunnerRuntime(); restarted.jobs.list();", "let supervisor; supervisor = new RunnerRuntime(); supervisor!.jobs.list();"])
+    assert.deepEqual(runtimePrivateAccesses(parseTest(source)), []);
+  for (const source of [
+    "const runtime = new JobManager(); runtime.jobs;",
+    "const instance = new RunnerRuntime(); instance.jobs.jobs;",
+    "const instance = new RunnerRuntime(); { const instance = new JobManager(); instance.jobs; }",
+    "const instance = new RunnerRuntime(); function inspect(instance) { instance.jobs; }",
+    "let instance = new RunnerRuntime(); instance = new JobManager(); instance.jobs;",
+    "let instance = new RunnerRuntime(); ({ instance } = source); instance.jobs;",
+    "const RunnerRuntime = JobManager; const instance = new RunnerRuntime(); instance.jobs;",
+    "const instance = manager as RunnerRuntime; instance.jobs;",
+    "const instance = new RunnerRuntime(); instance.jobs['persist']();",
+  ]) assert.ok(runtimePrivateAccesses(parseTest(source)).length > 0, "private or ambiguous Job ownership must be rejected");
   const runtime = parseTest(await readFile(join(project, "apps/runner/test/runtime.test.ts"), "utf8"));
   visit(runtime, node => {
     if (node.type !== "CallExpression" || node.arguments[0]?.type !== "StringLiteral"
       || !(node.callee?.name === "it" || node.callee?.type === "CallExpression" && node.callee.callee?.object?.name === "it")) return;
-    const name = node.arguments[0].value;
-    visit(node.arguments[1], child => {
-      if (child.type === "TSAsExpression" && child.expression?.type === "TSAsExpression" && child.expression.typeAnnotation?.type === "TSUnknownKeyword")
-        assert.fail(name + ": do not cast JobManager to a private-state test interface");
-      if (child.type === "MemberExpression") {
-        const owner = child.object?.type === "TSNonNullExpression" ? child.object.expression?.name : child.object?.name;
-        assert.ok(!["jobDir", "closeLogHandles", "queueLogAppend", "logWriteChain", "finish", "flushLogs", "pruneRetainedJobsNow", "cancelRecoveredUnknown", "reconcileRecoveredJob"].includes(property(child))
-          && !["persist", "enqueuePersistence"].includes(property(child))
-          && (property(child) !== "jobs" || owner === "runtime")
-          && (property(child) !== "processes" || owner === "probe"),
-          name + ": use persisted fixtures and supported ports rather than private JobManager state");
-      }
-    });
+    assert.deepEqual(runtimePrivateAccesses(node.arguments[1]), [], node.arguments[0].value + ": use persisted fixtures and supported ports rather than private JobManager state");
   });
 });
 
