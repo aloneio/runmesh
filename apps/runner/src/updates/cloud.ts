@@ -6,11 +6,12 @@ import type { CloudMaintenancePort, CloudUpdateObservation, CloudUpdateState, Up
 
 export function maintenanceEndpoint(profile: RunnerMaintenanceIdentity): URL {
   const url = new URL(profile.server_url);
-  if (url.username || url.password || url.search || url.hash || !url.pathname.endsWith("/runner/connect")) throw new Error("invalid maintenance origin");
+  const path = url.pathname.replace(/\/+$/, "");
+  if (url.username || url.password || url.search || url.hash || !path.endsWith("/runner/connect")) throw new Error("invalid maintenance origin");
   if (url.protocol === "wss:") url.protocol = "https:";
   else if (url.protocol === "ws:" && profile.insecure_local === true && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) url.protocol = "http:";
   else throw new Error("maintenance requires authenticated HTTPS");
-  url.pathname = url.pathname.slice(0, -"/runner/connect".length) + `/runner/${encodeURIComponent(profile.runner_id)}/update`;
+  url.pathname = path.slice(0, -"/runner/connect".length) + `/runner/${encodeURIComponent(profile.runner_id)}/update`;
   return url;
 }
 

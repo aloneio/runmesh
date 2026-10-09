@@ -13,7 +13,7 @@ const sha = "a".repeat(40), expected = { sha, branch: "main" };
 function fixture(sha = expected.sha) {
   const names = ["verify", "browser", "verify-all", "Runner native checks (ubuntu-latest)", "Runner native checks (windows-latest)", "Runner native checks (macos-latest)", "Runner LTS (22.23.2)", "Runner LTS (24.21.0)"];
   return { github: { id: 100, run_attempt: 1, repository: { full_name: "aloneio/runmesh" }, head_sha: sha, head_branch: "main", event: "push", path: ".github/workflows/ci.yml", status: "completed", conclusion: "success" },
-    githubJobs: names.map(name => ({ name, run_id: 100, head_sha: sha, status: "completed", conclusion: "success" })),
+    githubJobs: names.map(name => ({ name, run_id: 100, run_attempt: 1, head_sha: sha, status: "completed", conclusion: "success" })),
     gitlab: { id: 200, project_id: 85844627, sha, ref: "main", source: "push", status: "success" },
     gitlabJobs: ["verify", "browser"].map(name => ({ name, status: "success", allow_failure: false, pipeline: { id: 200 }, commit: { id: sha } })) };
 }
@@ -21,6 +21,11 @@ test("CI07 binds both provider runs and every required job to the candidate", ()
   const result = validateCrossforgeEvidence(expected, fixture());
   assert.equal(result.commit, sha); assert.equal(result.gitlab.pipeline_id, 200);
   assert.equal(result.signed_release, "not_run");
+});
+test("CI07 accepts a complete rerun with a consistent attempt identity", () => {
+  const f = fixture(); f.github.run_attempt = 2;
+  for (const job of f.githubJobs) job.run_attempt = 2;
+  assert.equal(validateCrossforgeEvidence(expected, f).github.attempt, 2);
 });
 for (const [name, mutate] of Object.entries({
   "different GitHub commit": f => f.github.head_sha = "b".repeat(40),
@@ -36,6 +41,9 @@ for (const [name, mutate] of Object.entries({
   "missing native lane": f => f.githubJobs.pop(),
   "duplicate required job": f => f.githubJobs.push(f.githubJobs[0]),
   "successful job from another run": f => f.githubJobs[0].run_id = 99,
+  "successful job from an earlier attempt": f => f.github.run_attempt = 2,
+  "successful job from a later attempt": f => f.githubJobs[0].run_attempt = 2,
+  "job without an attempt identity": f => delete f.githubJobs[0].run_attempt,
   "job from another commit": f => f.gitlabJobs[0].commit.id = "b".repeat(40),
   "skipped browser": f => f.githubJobs.find(j => j.name === "browser").conclusion = "skipped",
   "failed GitLab pipeline": f => f.gitlab.status = "failed",
@@ -58,7 +66,7 @@ test("CI07 stalled response cancellation uses the request deadline", async t => 
   try { await assert.rejects(readProviderJson("https://api.github.com", {}, async () => response)); assert.equal(cancelled, true); }
   finally { clearTimeout(timeout); }
 });
-for (const mode of ["stable", "source_changed"]) test(`CI07 actual CLI checks source after provider reads: ${mode}`, async t => {
+for (const mode of ["stable", "rerun", "source_changed"]) test(`CI07 actual CLI pins provider attempt and checks source after reads: ${mode}`, async t => {
   const directory = await mkdtemp(join(tmpdir(), "runmesh-crossforge-"));
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   await mkdir(join(directory, "scripts"));
@@ -78,8 +86,8 @@ for (const mode of ["stable", "source_changed"]) test(`CI07 actual CLI checks so
       [gl + 'pipelines?sha=' + sha + '&ref=main&source=push&order_by=id&sort=desc&per_page=2', [f.gitlab]],
       [gh + 'branches/main', { commit: { sha }, protected: true }],
       [gl + 'repository/branches/main', { commit: { id: sha }, protected: true }],
-      [gh + 'actions/runs/100', f.github],
-      [gh + 'actions/runs/100/attempts/1/jobs?per_page=100', { total_count: f.githubJobs.length, jobs: f.githubJobs }],
+      [gh + 'actions/runs/100/attempts/' + f.github.run_attempt, f.github],
+      [gh + 'actions/runs/100/attempts/' + f.github.run_attempt + '/jobs?per_page=100', { total_count: f.githubJobs.length, jobs: f.githubJobs }],
       [gl + 'pipelines/200', f.gitlab], [jobs, f.gitlabJobs],
     ]);
     // Replace only provider I/O; source observation and evidence publication stay real.
@@ -93,10 +101,15 @@ for (const mode of ["stable", "source_changed"]) test(`CI07 actual CLI checks so
     };
   `);
   const { source } = await initializeSourceCheckout(directory);
+  const data = fixture(source.commit);
+  if (mode === "rerun") {
+    data.github.run_attempt = 2;
+    for (const job of data.githubJobs) job.run_attempt = 2;
+  }
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:GIT_|GITHUB_|GH_|GITLAB_|NODE_OPTIONS$)/iu.test(key)));
   const result = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, join(directory, "scripts/check-crossforge-ci.mjs")], {
     cwd: directory, env: { ...env, GITHUB_REF: "refs/heads/main", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_SHA: source.commit,
-      CROSSFORGE_FIXTURE_MODE: mode, CROSSFORGE_FIXTURE_DATA: JSON.stringify(fixture(source.commit)) },
+      CROSSFORGE_FIXTURE_MODE: mode, CROSSFORGE_FIXTURE_DATA: JSON.stringify(data) },
     encoding: "utf8", timeout: 20000, windowsHide: true,
   });
   assert.equal(result.error, undefined);
@@ -112,6 +125,7 @@ for (const mode of ["stable", "source_changed"]) test(`CI07 actual CLI checks so
     assert.equal(result.stdout, ""); assert.match(result.stderr, /crossforge_ci_unverified/u);
   } else {
     assert.equal(supplement.commit, source.commit); assert.equal(supplement.github.state, "passed"); assert.equal(supplement.gitlab.state, "passed");
+    assert.equal(supplement.github.attempt, data.github.run_attempt);
     assert.deepEqual(JSON.parse(result.stdout), supplement);
   }
 });

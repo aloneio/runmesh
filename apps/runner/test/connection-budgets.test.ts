@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { RunnerConnection } from "../src/connection.js";
 import * as policyCandidate from "../src/connection/policy-candidate.js";
 import type { WorkspaceConfig } from "../src/config.js";
+import { validateRunnerConfig } from "../src/config.js";
 import type { ConnectionPolicyStorePort, ConnectionRuntimePort, ConnectionTransportFactory } from "../src/connection/ports.js";
 import { connectionRuntime } from "./helpers/connection-runtime.js";
 import { RUNNER_VERSION } from "../src/version.js";
@@ -46,6 +47,27 @@ function setup(overrides: Partial<ConnectionRuntimePort> = {}, restorePolicy = f
   return { connection, socket, sockets, createSocket, sleep, onStateChange, policyStore };
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+it.each([
+  ["", "/runner/connect"],
+  ["/prefix", "/prefix/runner/connect"],
+  ["/prefix/", "/prefix/runner/connect"],
+  ["/runner/connect", "/runner/connect"],
+  ["/runner/connect/", "/runner/connect"],
+  ["/prefix/runner/connect///", "/prefix/runner/connect"],
+])("connects accepted server path %s through its canonical endpoint", async (path, expectedPath) => {
+  const config = await validateRunnerConfig({ server: `wss://example.test${path}`, token: "synthetic-runner-token", runnerId: "runner", workspaces: [] });
+  const socket = new Socket();
+  const createSocket = vi.fn<ConnectionTransportFactory>(() => socket as unknown as WebSocket);
+  const connection = new RunnerConnection({ config, runtime: connectionRuntime(),
+    policyStore: { load: async () => undefined, activate: async () => {} } }, { createSocket });
+  const running = connection.start();
+  try {
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    expect(createSocket.mock.calls[0]?.[0].toString()).toBe(`wss://example.test${expectedPath}?runner_id=runner`);
+    expect(createSocket.mock.calls[0]?.[1].headers).toEqual({ Authorization: "Bearer synthetic-runner-token" });
+  } finally { connection.stop(); await running; }
+});
 
 it("reports its installed package version in the hello frame", async () => {
   expect(RUNNER_VERSION).toMatch(/^\d+\.\d+\.\d+/);
