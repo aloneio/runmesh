@@ -83,7 +83,7 @@ export class FilesystemService {
     const requestedOffset = cursor.offset ?? boundedInteger(params.cursor ?? params.offset, 0, Number.MAX_SAFE_INTEGER, 0);
     const requested = boundedInteger(params.limit, 1, MAX_READ_BYTES, MAX_READ_BYTES);
     const snapshot = await this.policy.snapshot(resolved);
-    if (snapshot.type !== "file") throw new Error("path is not a file");
+    if (snapshot.type !== "file") throw new RpcRuntimeError("invalid_params", "path is not a file");
     // Open and revalidate even for a cached page: a cursor never substitutes
     // for current path/OS/policy authorization. Buffers are process-local.
     const handle = await openNoFollow(path, true);
@@ -142,7 +142,7 @@ export class FilesystemService {
     const resolved = await this.policy.resolve(params.workspace_id, params.path ?? ".", "list");
     const { workspace, path } = resolved;
     const snapshot = await this.policy.snapshot(resolved);
-    if (snapshot.type !== "directory") throw new Error("path is not a directory");
+    if (snapshot.type !== "directory") throw new RpcRuntimeError("invalid_params", "path is not a directory");
     const limit = boundedInteger(params.limit, 1, 256, 200);
     const offset = boundedInteger(params.cursor, 0, MAX_LIST_CURSOR, 0);
     // Do not emit a continuation cursor beyond the hard scan window. A
@@ -185,7 +185,7 @@ export class FilesystemService {
     const results: SearchResult[] = [];
     const budget: SearchBudget = { bytes: 0, directories: 0, entries: 0, files: 0, deadline: performance.now() + MAX_SEARCH_DURATION_MS, truncated: false, truncatedReason: null, snapshotXor: Buffer.alloc(32) };
     const snapshot = await this.policy.snapshot(resolved);
-    if (snapshot.type !== "directory") throw new Error("path is not a directory");
+    if (snapshot.type !== "directory") throw new RpcRuntimeError("invalid_params", "path is not a directory");
     addSearchSnapshotPart(budget, relative(workspace.rootPath, resolved.path).split(sep).join("/"), snapshot);
     const inherited = await this.loadAncestorIgnoreRules(resolved, budget);
     if (inherited !== undefined) await this.searchDirectory(resolved, snapshot, params.query, options, results, budget, 0, inherited);

@@ -1,10 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { validateCrossforgeEvidence, readProviderJson } from "../scripts/crossforge-evidence.mjs";
 import { assertSecurityReadiness, REQUIRED_SECURITY_FINDINGS } from "../scripts/release-readiness.mjs";
+import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
 const sha = "a".repeat(40), expected = { sha, branch: "main" };
-function fixture() {
+function fixture(sha = expected.sha) {
   const names = ["verify", "browser", "verify-all", "Runner native checks (ubuntu-latest)", "Runner native checks (windows-latest)", "Runner native checks (macos-latest)", "Runner LTS (22.23.2)", "Runner LTS (24.21.0)"];
   return { github: { id: 100, run_attempt: 1, repository: { full_name: "aloneio/runmesh" }, head_sha: sha, head_branch: "main", event: "push", path: ".github/workflows/ci.yml", status: "completed", conclusion: "success" },
     githubJobs: names.map(name => ({ name, run_id: 100, head_sha: sha, status: "completed", conclusion: "success" })),
@@ -51,6 +57,63 @@ test("CI07 stalled response cancellation uses the request deadline", async t => 
   const timeout = setTimeout(() => controller.abort(), 10);
   try { await assert.rejects(readProviderJson("https://api.github.com", {}, async () => response)); assert.equal(cancelled, true); }
   finally { clearTimeout(timeout); }
+});
+for (const mode of ["stable", "source_changed"]) test(`CI07 actual CLI checks source after provider reads: ${mode}`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh-crossforge-"));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
+  await mkdir(join(directory, "scripts"));
+  for (const file of ["check-crossforge-ci.mjs", "crossforge-evidence.mjs", "ci-contract.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "evidence-io.mjs"])
+    await copyFile(new URL(`../scripts/${file}`, import.meta.url), join(directory, "scripts", file));
+  const preload = join(directory, "provider-fixture.mjs");
+  await writeFile(preload, `
+    import assert from 'node:assert/strict';
+    import { writeFile } from 'node:fs/promises';
+    import { setImmediate } from 'node:timers/promises';
+    const f = JSON.parse(process.env.CROSSFORGE_FIXTURE_DATA), sha = f.github.head_sha;
+    const gh = 'https://api.github.com/repos/aloneio/runmesh/';
+    const gl = 'https://gitlab.com/api/v4/projects/85844627/';
+    const jobs = gl + 'pipelines/200/jobs?include_retried=false&per_page=100';
+    const responses = new Map([
+      [gh + 'actions/workflows/ci.yml/runs?head_sha=' + sha + '&branch=main&event=push&per_page=2', { workflow_runs: [f.github] }],
+      [gl + 'pipelines?sha=' + sha + '&ref=main&source=push&order_by=id&sort=desc&per_page=2', [f.gitlab]],
+      [gh + 'branches/main', { commit: { sha }, protected: true }],
+      [gl + 'repository/branches/main', { commit: { id: sha }, protected: true }],
+      [gh + 'actions/runs/100', f.github],
+      [gh + 'actions/runs/100/attempts/1/jobs?per_page=100', { total_count: f.githubJobs.length, jobs: f.githubJobs }],
+      [gl + 'pipelines/200', f.gitlab], [jobs, f.gitlabJobs],
+    ]);
+    // Replace only provider I/O; source observation and evidence publication stay real.
+    globalThis.fetch = async (url, options) => {
+      assert.ok(responses.has(url.href), 'unexpected fixture provider request');
+      assert.deepEqual(options.headers, { accept: 'application/json' });
+      await setImmediate();
+      if (url.href === jobs && process.env.CROSSFORGE_FIXTURE_MODE === 'source_changed')
+        await writeFile('source.txt', 'changed source\\n');
+      return Response.json(responses.get(url.href));
+    };
+  `);
+  const { source } = await initializeSourceCheckout(directory);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:GIT_|GITHUB_|GH_|GITLAB_|NODE_OPTIONS$)/iu.test(key)));
+  const result = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, join(directory, "scripts/check-crossforge-ci.mjs")], {
+    cwd: directory, env: { ...env, GITHUB_REF: "refs/heads/main", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_SHA: source.commit,
+      CROSSFORGE_FIXTURE_MODE: mode, CROSSFORGE_FIXTURE_DATA: JSON.stringify(fixture(source.commit)) },
+    encoding: "utf8", timeout: 20000, windowsHide: true,
+  });
+  assert.equal(result.error, undefined);
+  const gate = JSON.parse(await readFile(join(directory, "ci-results/crossforge_release.json"), "utf8"));
+  const supplement = JSON.parse(await readFile(join(directory, "ci-results/crossforge-evidence.json"), "utf8"));
+  assert.deepEqual(gate.source, source);
+  const changed = mode === "source_changed";
+  assert.equal(await readFile(join(directory, "source.txt"), "utf8"), changed ? "changed source\n" : "initial source\n");
+  assert.deepEqual({ exit: result.status, gate: gate.state, supplement: supplement.evidence ?? supplement.state },
+    changed ? { exit: 1, gate: "failed", supplement: "not_run" } : { exit: 0, gate: "passed", supplement: "observed_provider_ci" }, result.stderr);
+  if (changed) {
+    assert.deepEqual(supplement, { schema_version: 1, state: "not_run", source });
+    assert.equal(result.stdout, ""); assert.match(result.stderr, /crossforge_ci_unverified/u);
+  } else {
+    assert.equal(supplement.commit, source.commit); assert.equal(supplement.github.state, "passed"); assert.equal(supplement.gitlab.state, "passed");
+    assert.deepEqual(JSON.parse(result.stdout), supplement);
+  }
 });
 function securityFixture() {
   const findings = REQUIRED_SECURITY_FINDINGS.map(id => ({ id, state: "closed", fixed_commit: "b".repeat(40), regressions: ["apps/worker/test/permission-chain.test.ts"] }));
