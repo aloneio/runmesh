@@ -13,7 +13,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence, testFailureEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
@@ -394,35 +394,78 @@ test("browser navigation diagnostics retain only complete fixed condition marker
     assert.equal(browserErrorDiagnostic({ message }).navigation_state, undefined);
 });
 
-test("admin setup response diagnostics retain fixed stages and runtime signatures without response content", async t => {
+const adminStages = ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "recording_disable", "recording_enable", "history_settings", "history_restore"];
+test("admin setup response diagnostics retain fixed stages and runtime signatures through CI evidence without response content", async t => {
   // These in-memory fixtures test content classification. Deadline behavior is
   // covered separately so host scheduling cannot change the expected content.
   t.mock.method(performance, "now", () => 0);
-  for (const stage of ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "private-stage"]) {
+  for (const stage of [...adminStages, "private-stage"]) {
     const response = new Response("Error: Network connection lost.\n at https://private-token/admin", {
       status: 500, headers: { "content-type": "text/plain; private=header", "set-cookie": "private-cookie", location: "https://private-location" },
     });
     const diagnostic = await adminSetupHttpDiagnostic(response, stage);
-    assert.equal(diagnostic, "RUNMESH_E2E_ADMIN_SETUP_DIAGNOSTIC=" + JSON.stringify({
-      stage: stage === "private-stage" ? "other" : stage, status: 500, content_type: "text", body_kind: "present", runtime_signature: "network_connection_lost",
-    }));
+    const expected = { event: "admin_http", stage: stage === "private-stage" ? "other" : stage, status: 500,
+      content_type: "text", body_kind: "present", runtime_signature: "network_connection_lost" };
+    assert.deepEqual(mcpWorkerFailureEvidence(diagnostic), [expected]);
+    assert.equal(diagnostic, "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(expected) + "\n");
     assert.ok(!diagnostic.includes("private"));
   }
   const html = await adminSetupHttpDiagnostic(new Response("<html>private-body Error: Network connection lost.</html>", {
     status: 503, headers: { "content-type": "text/html" },
   }), "runner_permissions");
-  assert.equal(html, 'RUNMESH_E2E_ADMIN_SETUP_DIAGNOSTIC={"stage":"runner_permissions","status":503,"content_type":"html","body_kind":"present"}');
+  assert.deepEqual(mcpWorkerFailureEvidence(html), [{ event: "admin_http", stage: "runner_permissions", status: 503, content_type: "html", body_kind: "present" }]);
 });
 
 test("admin setup diagnostics bound response inspection without retrying the mutation", async () => {
   let cancelled = false;
   const stalled = new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 500 });
   const result = await adminSetupHttpDiagnostic(stalled, "runner_permissions");
-  assert.equal(result, 'RUNMESH_E2E_ADMIN_SETUP_DIAGNOSTIC={"stage":"runner_permissions","status":500,"content_type":"absent","body_kind":"read_timeout"}');
+  assert.deepEqual(mcpWorkerFailureEvidence(result), [{ event: "admin_http", stage: "runner_permissions", status: 500, content_type: "absent", body_kind: "read_timeout" }]);
   assert.equal(cancelled, true);
   const oversized = await adminSetupHttpDiagnostic(new Response("private".repeat(1000), { status: 500 }), "workspace_create");
   assert.ok(oversized.includes('"body_kind":"oversized"'));
   assert.ok(!oversized.includes("private"));
+});
+
+test("admin HTTP evidence projects known fields and rejects invalid diagnostic values", () => {
+  const expected = { event: "admin_http", stage: "recording_disable", status: 500, content_type: "text", body_kind: "present", runtime_signature: "network_connection_lost" };
+  const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  const line = marker({ ...expected, url: "https://private-token/admin", body: "private-body", token: "private-token", error: "private-error" });
+  assert.deepEqual(mcpWorkerFailureEvidence(line), [expected]);
+  assert.doesNotMatch(JSON.stringify(mcpWorkerFailureEvidence(line)), /private|https?:/u);
+  for (const patch of [{ stage: "private" }, { stage: ["recording_disable"] }, { status: 0 }, { status: 99 }, { status: 600 }, { status: 500.5 }, { status: "500" },
+    { content_type: "private" }, { body_kind: "private" }, { body_kind: "json_rpc_error" }, { runtime_signature: "private" }, { runtime_signature: null }, { runtime_signature: ["network_connection_lost"] }])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...expected, ...patch })), []);
+  for (const field of ["stage", "status", "content_type", "body_kind"])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...expected, [field]: undefined })), []);
+  for (const status of [100, 599]) assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...expected, status })), [{ ...expected, status }]);
+  for (const body_kind of ["empty", "oversized", "read_timeout", "read_error"])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...expected, body_kind })), [{ ...expected, body_kind }]);
+  assert.deepEqual(mcpWorkerFailureEvidence("private " + line), []);
+  assert.deepEqual(mcpWorkerFailureEvidence(line.trimEnd() + "private\n"), []);
+});
+
+test("admin HTTP evidence keeps only the first event per stage without displacing launcher or progress", async () => {
+  let stderr = "";
+  const expected = [...adminStages, "other"].map(stage => ({ event: "admin_http", stage, status: 500, content_type: "absent", body_kind: "empty" }));
+  for (const event of expected) {
+    const first = await adminSetupHttpDiagnostic(new Response(null, { status: event.status }), event.stage);
+    const later = await adminSetupHttpDiagnostic(new Response(null, { status: 503 }), event.stage);
+    stderr += [first, ...Array(30).fill(later)].join("\n") + "\n";
+  }
+  const launcher = { event: "launcher_snapshot", reason: "test_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false };
+  const progress = { event: "fixture_progress", fixture: "job_history", phase: "job_list_snapshot", boundary: "request", elapsed_ms: 704 };
+  stderr += mcpLauncherDiagnostic(launcher) + mcpFixtureProgressDiagnostic(progress);
+  assert.deepEqual(mcpWorkerFailureEvidence(stderr), [...expected, launcher, progress]);
+});
+
+test("Job list progress evidence distinguishes live requests from snapshots", () => {
+  for (const phase of ["job_list_live", "job_list_snapshot"]) {
+    const expected = { event: "fixture_progress", fixture: "job_history", phase, boundary: "request", elapsed_ms: 704 };
+    const line = mcpFixtureProgressDiagnostic({ ...expected, url: "https://private-token/admin" });
+    assert.deepEqual(mcpWorkerFailureEvidence(line), [expected]);
+    assert.doesNotMatch(line, /private|https?:/u);
+  }
 });
 
 test("MCP tool-result diagnostics carry known classifications without inspecting free-form tool content", () => {

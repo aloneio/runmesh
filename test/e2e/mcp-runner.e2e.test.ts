@@ -786,7 +786,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const owner = original.structuredContent?.created_by_client_id;
     expect(typeof owner).toBe("string");
     const setRecording = async (enabled: boolean) => {
-      expect((await progress.run("recording_update", () => submitForm(`/admin/clients/${owner}/recording`, { csrf_token: csrf, record_jobs: String(enabled) }, adminJar), "headers")).status).toBe(303);
+      const response = await progress.run("recording_update", () => submitForm(`/admin/clients/${owner}/recording`, { csrf_token: csrf, record_jobs: String(enabled) }, adminJar), "headers");
+      if (response.status !== 303) console.error(await adminSetupHttpDiagnostic(response, enabled ? "recording_enable" : "recording_disable"));
+      expect(response.status).toBe(303);
     };
     const readRecord = (jobId: string) => progress.run("job_metadata", async () => JSON.parse(await readFile(join(runnerState, "jobs", jobId, "meta.json"), "utf8")), "filesystem");
     expect((await readRecord(original.structuredContent?.job_id as string)).record_history).toBe(true);
@@ -814,19 +816,24 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const cleanupErrors: unknown[] = [];
     onTestFinished(() => { if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "History fixture cleanup failed"); });
     const { adminJar, csrf } = await adminCredentials(progress.mark);
-    const save = (mode: string) => progress.run(mode === "immediate" ? "history_restore" : "history_settings", () => submitForm(`/admin/runners/${runnerId}/history-settings`, {
-      csrf_token: csrf, mode, interval_seconds: "300", retention_days: "7", local_retention_days: "0",
-    }, adminJar), "headers");
+    const save = async (mode: string) => {
+      const stage = mode === "immediate" ? "history_restore" : "history_settings";
+      const response = await progress.run(stage, () => submitForm(`/admin/runners/${runnerId}/history-settings`, {
+        csrf_token: csrf, mode, interval_seconds: "300", retention_days: "7", local_retention_days: "0",
+      }, adminJar), "headers");
+      if (response.status !== 303) console.error(await adminSetupHttpDiagnostic(response, stage));
+      return response;
+    };
     expect((await save("batched")).status).toBe(303);
     try {
       const started = await progress.run("shell", () => mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('batched-live-log\\n')"), background: true }));
       const jobId = started.structuredContent?.job_id;
       expect(typeof jobId).toBe("string");
       await progress.run("job_poll", () => waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: "workspace-1", job_id: jobId })).structuredContent?.status === "succeeded", 10000), "poll");
-      const listed = await progress.run("job_list", () => mcpTool("job", { action: "list", workspace_id: "workspace-1", limit: 10 }));
+      const listed = await progress.run("job_list_live", () => mcpTool("job", { action: "list", workspace_id: "workspace-1", limit: 10 }));
       expect(listed.structuredContent?.source).toBe("runner_live");
       expect((listed.structuredContent?.jobs as Array<{job_id?:string}>).some((job) => job.job_id === jobId)).toBe(true);
-      const saved = await progress.run("job_list", () => mcpTool("job", { action: "list", limit: 100 }));
+      const saved = await progress.run("job_list_snapshot", () => mcpTool("job", { action: "list", limit: 100 }));
       expect((saved.structuredContent?.jobs as Array<{job_id?:string}>).some((job) => job.job_id === jobId)).toBe(false);
       const logs = await progress.run("job_logs", () => mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 1024 }));
       expect(logs.structuredContent?.data).toContain("batched-live-log");
