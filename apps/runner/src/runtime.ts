@@ -6,7 +6,8 @@ import { effectiveMaxConcurrentJobs, type RunnerConfig } from "./config.js";
 import { ContextStore, type ContextEvidence } from "./context-store.js";
 import { GitService } from "./git-service.js";
 import { FilesystemService } from "./filesystem.js";
-import { JobManager, type JobEvent, type JobRecord } from "./jobs.js";
+import { JobManager, type JobEvent } from "./jobs.js";
+import { occupiesProcessSlot } from "./jobs/records.js";
 import { PatchService } from "./patch-service.js";
 import { PathPolicy, PathPolicyError } from "./path-policy.js";
 import { RpcRuntimeError, failureMetadata, type RpcFailureClass, type RpcNextAction, type RpcOperationState } from "./errors.js";
@@ -209,7 +210,9 @@ export class RunnerRuntime {
     const job = await this.startJob(startParams);
     if (job.status === "queued") return { job, completed: false, queue: this.jobs.queueStatus(), wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
     const deadline = Date.now() + requested;
-    while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!isActive(current)) return { job: current, completed: true, stdout: await this.executionLogs(job.job_id, "stdout"), stderr: await this.executionLogs(job.job_id, "stderr") }; await delay(Math.min(50, deadline - Date.now())); }
+    // A live process recovered after restart remains unknown and reserves its
+    // execution slot. An idempotent retry must not report that Job complete.
+    while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!occupiesProcessSlot(current)) return { job: current, completed: true, stdout: await this.executionLogs(job.job_id, "stdout"), stderr: await this.executionLogs(job.job_id, "stderr") }; await delay(Math.min(50, deadline - Date.now())); }
     return { job: this.jobs.get(job.job_id), completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
   }
 
@@ -238,5 +241,4 @@ function positiveInteger(value: unknown, field: string): number { if (!Number.is
 function assertExpectedJobWorkspace(params: Record<string, unknown>, actualWorkspaceId: string): void {
   if (typeof params.expected_workspace_id !== "string" || params.expected_workspace_id !== actualWorkspaceId) throw new RpcRuntimeError("permission_denied", "job workspace does not match request");
 }
-function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms))); }

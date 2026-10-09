@@ -1297,6 +1297,40 @@ describe("persistent local jobs", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("keeps an idempotent exec.run retry incomplete while its recovered process remains unknown", async () => {
+    const test = await fixture();
+    const first = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+    let job: JobRecord | undefined;
+    try {
+      await first.initialize();
+      const input = { workspace_id: test.workspace.workspaceId, command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 10000)"], request_id: "recovered-exec-run", created_by_client_id: "client-a" };
+      job = await first.start(input);
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const restarted = new RunnerRuntime({ config, stateDir: test.state });
+      await restarted.jobs.initialize();
+      expect(restarted.jobs.get(job.job_id)).toMatchObject({ status: "unknown", completed_at_ms: null });
+      await expect(restarted.dispatch("exec.run", { ...input, wait_ms: 100 })).resolves.toMatchObject({
+        completed: false, job: { job_id: job.job_id, status: "unknown", exit_code: null, completed_at_ms: null },
+      });
+      expect(restarted.jobs.list()).toHaveLength(1);
+      await first.cancel(job.job_id);
+      await waitFor(() => first.get(job!.job_id), value => !["queued", "running", "cancelling"].includes(value.status));
+      // A later retry reconciles the vanished process without inventing its
+      // exit code, then reports its actual terminal recovery state as complete.
+      await expect(restarted.dispatch("exec.run", { ...input, wait_ms: 100 })).resolves.toMatchObject({
+        completed: true, job: { job_id: job.job_id, status: "interrupted", exit_code: null },
+      });
+      expect(restarted.jobs.list()).toHaveLength(1);
+    } finally {
+      if (job !== undefined) {
+        await first.cancel(job.job_id).catch(() => undefined);
+        await waitFor(() => first.get(job!.job_id), value => !["queued", "running", "cancelling"].includes(value.status));
+      }
+      await test.cleanup();
+    }
+  });
+
   it("pages mixed UTF-8 filesystem reads with byte cursors without replacement characters", async () => {
     const test = await fixture();
     try {
