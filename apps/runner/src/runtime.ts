@@ -15,6 +15,7 @@ import type { JobMetadata } from "./protocol-types.js";
 
 export interface RunnerRuntimeOptions {
   readonly config: RunnerConfig;
+  /** Overrides config.stateDir when provided. */
   readonly stateDir?: string;
   readonly onJobEvent?: (event: JobEvent) => void;
   readonly environment?: EnvironmentReader;
@@ -35,14 +36,15 @@ export class RunnerRuntime {
 
   public constructor(options: RunnerRuntimeOptions) {
     this.config = options.config;
+    const stateDir = options.stateDir ?? options.config.stateDir;
     this.maxConcurrentJobs = effectiveMaxConcurrentJobs(options.config.maxConcurrentJobs);
     this.environment = options.environment ?? new EnvironmentInfoService();
     this.policy = new PathPolicy(options.config.workspaces);
     this.filesystem = new FilesystemService(this.policy);
     this.git = new GitService(this.policy);
     this.patcher = new PatchService(this.policy);
-    this.context = new ContextStore(options.stateDir === undefined ? {} : { stateDir: options.stateDir });
-    this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: this.maxConcurrentJobs, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
+    this.context = new ContextStore(stateDir === undefined ? {} : { stateDir });
+    this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: this.maxConcurrentJobs, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(stateDir === undefined ? {} : { stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
   }
   public async initialize(): Promise<void> {
     await this.jobs.initialize();
@@ -129,9 +131,9 @@ export class RunnerRuntime {
   public async cleanupJobs(): Promise<void> { await this.jobs.cleanupExpired(); }
   public needsHistoryReconciliation(): boolean { return this.jobs.hasPendingHistoryRecovery(); }
   public async syncJobs(limit = 100): Promise<JobMetadata[]> {
-    const jobs = limit > 100 ? await this.jobs.snapshotForSync(limit) : await this.jobs.listReconciled({ limit });
+    const jobs = await this.jobs.snapshotForSync(limit);
     await this.jobs.flushPersistence();
-    return jobs.filter(job => job.record_history !== false).map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), ...(job.request_id === undefined || job.request_id === null ? {} : { request_id: job.request_id }), runner_id: this.config.runnerId }));
+    return jobs.map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), ...(job.request_id === undefined || job.request_id === null ? {} : { request_id: job.request_id }), runner_id: this.config.runnerId }));
   }
   private readableJobWorkspaces(workspaceId: unknown): ReadonlySet<string> {
     if (workspaceId !== undefined) return new Set([this.policy.assertPermission(workspaceId, "read").workspaceId]);

@@ -264,9 +264,11 @@ export class JobManager {
   }
   public async cleanupExpired(): Promise<void> { if (this.retentionDays > 0) await this.pruneRetainedJobs(); }
   public async snapshotForSync(limit = 500): Promise<JobRecord[]> {
+    const snapshotLimit = Math.min(500, bounded(limit, 1, Number.MAX_SAFE_INTEGER, 500));
     await this.reconcileRecoveredJobs();
+    this.resumeQueue();
     return [...this.jobs.values()].filter(job => job.record_history !== false)
-      .sort((a,b) => b.updated_at_ms-a.updated_at_ms || b.job_id.localeCompare(a.job_id)).slice(0,Math.min(500,Math.max(1,limit)));
+      .sort((a,b) => b.updated_at_ms-a.updated_at_ms || b.job_id.localeCompare(a.job_id)).slice(0,snapshotLimit);
   }
 
   public list(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): JobRecord[] {

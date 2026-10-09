@@ -6,8 +6,28 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readBoundedEvidenceFile, readEvidenceJson } from "../scripts/evidence-io.mjs";
+import { npmCliPath } from "../scripts/npm-cli.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+test("package commands preserve CLI and archive paths containing spaces", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh npm arguments "));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const cli = join(directory, "npm-cli.js"), archive = join(directory, "runner archive.tgz");
+  await writeFile(cli, "console.log(JSON.stringify(process.argv.slice(2)));\n");
+  const selected = await npmCliPath({ ...process.env, npm_execpath: cli });
+  const result = spawnSync(process.execPath, [selected, "install", "--offline", archive], { encoding: "utf8", timeout: 10000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), ["install", "--offline", archive]);
+});
+
+test("direct Node package entrypoints locate the installed npm CLI offline", async () => {
+  const env = { ...process.env }; delete env.npm_execpath;
+  const cli = await npmCliPath(env);
+  const result = spawnSync(process.execPath, [cli, "--version"], { env, encoding: "utf8", timeout: 10000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+$/u);
+});
+
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "ar08-package-wrapper-"));
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));

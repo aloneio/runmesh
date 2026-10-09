@@ -5,37 +5,38 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { MAX_RELEASE_ASSET_BYTES } from "./release-io.mjs";
 import { checkPackedMaintenance } from "./packed-maintenance-check.mjs";
+import { npmCliPath } from "./npm-cli.mjs";
 
 const exec = promisify(execFile);
-// On Windows npm is exposed as a .cmd shim rather than a native executable;
-// execFile cannot launch a .cmd shim without shell dispatch, so select the
-// shim explicitly and enable that dispatch only on Windows.
-const npmExecutable = process.platform === "win32" ? "npm.cmd" : "npm";
-const npmExecOptions = process.platform === "win32" ? { shell: true } : {};
-const root = await mkdtemp(join(tmpdir(), "runmesh-pack-smoke-"));
+const npm = await npmCliPath();
+// Keep spaces in the fixture path so native CI exercises ordinary user paths.
+const root = await mkdtemp(join(tmpdir(), "runmesh pack smoke "));
 const cache = join(root, "npm-cache");
 try {
-  const packed = await exec(npmExecutable, ["pack", "--workspace=@aloneio/runmesh-runner", "--pack-destination", root], { cwd: process.cwd(), ...npmExecOptions });
+  const packed = await exec(process.execPath, [npm, "pack", "--workspace=@aloneio/runmesh-runner", "--pack-destination", root], { cwd: process.cwd() });
   const runner = packed.stdout.trim().split("\n").pop();
   if (!runner?.endsWith(".tgz")) throw new Error("npm pack did not return a Runner tarball");
   const packedMetadata = await stat(join(root, runner));
   if (!packedMetadata.isFile() || packedMetadata.size <= 0 || packedMetadata.size > MAX_RELEASE_ASSET_BYTES) {
     throw new Error(`Runner tarball exceeds the fixed hosted-installer size limit (${MAX_RELEASE_ASSET_BYTES} bytes)`);
   }
-  await exec(npmExecutable, ["init", "-y"], { cwd: root, ...npmExecOptions });
-  await exec(npmExecutable, ["install", "--ignore-scripts", "--offline", join(root, runner)], { cwd: root, env: { ...process.env, npm_config_cache: cache }, ...npmExecOptions });
+  await exec(process.execPath, [npm, "init", "-y"], { cwd: root });
+  await exec(process.execPath, [npm, "install", "--ignore-scripts", "--offline", join(root, runner)], { cwd: root, env: { ...process.env, npm_config_cache: cache } });
   const packageRoot = join(root, "node_modules", "@aloneio", "runmesh-runner");
   const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   if (manifest.private === true || manifest.bin?.["runmesh-runner"] !== "./dist/runmesh.cjs" || Object.keys(manifest.dependencies ?? {}).length !== 0) throw new Error("Runner tarball is not self-contained");
   for (const file of ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]) await readFile(join(packageRoot, file));
   await checkPackedMaintenance(packageRoot, manifest.version);
   const bin = process.platform === "win32" ? join(root, "node_modules", ".bin", "runmesh-runner.cmd") : join(root, "node_modules", ".bin", "runmesh-runner");
-  const binExecOptions = process.platform === "win32" ? { shell: true } : {};
-  const version = await exec(bin, ["--version"], { cwd: root, ...binExecOptions });
+  // Require the local installation's shim before asking npm to resolve it.
+  // An empty cache also keeps a missing local command from becoming a download.
+  if (!(await stat(bin)).isFile()) throw new Error("Installed Runner command shim is not a file");
+  const runBin = args => exec(process.execPath, [npm, "exec", "--offline", "--", "runmesh-runner", ...args], { cwd: root, env: { ...process.env, npm_config_cache: cache } });
+  const version = await runBin(["--version"]);
   if (version.stdout.trim() !== manifest.version) throw new Error(`packaged CLI version mismatch: ${version.stdout.trim()}`);
-  const help = await exec(bin, ["--help"], { cwd: root, ...binExecOptions });
+  const help = await runBin(["--help"]);
   if (!help.stdout.includes("usage: runmesh-runner")) throw new Error("packaged CLI help is invalid");
-  const doctor = await exec(bin, ["doctor", "--json"], { cwd: root, ...binExecOptions }).catch((error) => error);
+  const doctor = await runBin(["doctor", "--json"]).catch((error) => error);
   const parsed = JSON.parse(String(doctor.stdout ?? ""));
   if (!Array.isArray(parsed.checks)) throw new Error("packaged doctor did not produce JSON checks");
   // Use a real consumer argv[1] so a library import cannot hide a CLI side
