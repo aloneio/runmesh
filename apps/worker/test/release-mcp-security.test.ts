@@ -38,25 +38,41 @@ async function fixture(responder?: (request: Record<string, any>) => Response | 
 it("AUDIT-LIST: runner enumeration does not turn an authorization dependency outage into an empty successful list", async () => {
   const f = await fixture();
   expect((await f.call("runner_list", {})).body.result.structuredContent.runners).toHaveLength(1);
-  const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
-  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => new URL(request.url).pathname.includes("/effective-permissions/") ? Response.json({ error: { code: "unavailable" } }, { status: 503 }) : original(id).fetch(request) });
+  const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY); let permissionReads = 0;
+  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => {
+    if (new URL(request.url).pathname === "/auth/clients/c/effective-workspaces/r") {
+      permissionReads++;
+      return Response.json({ error: { code: "unavailable" } }, { status: 503 });
+    }
+    return original(id).fetch(request);
+  } });
   const result = (await f.call("runner_list", {})).body.result;
-  console.log(JSON.stringify({ audit: "runner_list_outage", is_error: result.isError === true, structured: result.structuredContent }));
-  expect(result.isError).toBe(true);
+  console.log(JSON.stringify({ audit: "runner_list_outage", permission_reads: permissionReads, is_error: result.isError === true, structured: result.structuredContent }));
+  expect(permissionReads).toBe(1);
+  expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "registry_unavailable", operation_state: "not_started" } } });
+  expect(f.forwarded).toHaveLength(0);
 });
 
 it("AUDIT-LIST: per-Job permission outage does not erase visible snapshot jobs", async () => {
   const f = await fixture();
-  const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY); let permissions = 0;
+  const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY); let snapshotReads = 0;
+  const checkedWorkspaces: Array<string | null> = [];
   (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => {
-    const path = new URL(request.url).pathname;
-    if (path === "/runners/r/jobs") return Response.json({ jobs: [f.job] });
-    if (path.includes("/effective-permissions/") && ++permissions >= 2) return Response.json({ error: { code: "unavailable" } }, { status: 503 });
+    const url = new URL(request.url);
+    if (url.pathname === "/runners/r/jobs") { snapshotReads++; return Response.json({ jobs: [f.job] }); }
+    // Fail the permission read for a returned Job, independently of how many
+    // permission observations were needed to admit the list itself.
+    if (url.pathname === "/auth/clients/c/effective-permissions/r" && snapshotReads > 0) {
+      checkedWorkspaces.push(url.searchParams.get("workspace_id"));
+      return Response.json({ error: { code: "unavailable" } }, { status: 503 });
+    }
     return original(id).fetch(request);
   } });
   const result = (await f.call("job", { action: "list", limit: 10 })).body.result;
-  console.log(JSON.stringify({ audit: "job_list_outage", permission_calls: permissions, is_error: result.isError === true, structured: result.structuredContent }));
-  expect(permissions).toBe(2); expect(result.isError).toBe(true);
+  console.log(JSON.stringify({ audit: "job_list_outage", snapshot_reads: snapshotReads, permission_calls: checkedWorkspaces.length, is_error: result.isError === true, structured: result.structuredContent }));
+  expect(snapshotReads).toBe(1); expect(checkedWorkspaces).toEqual([f.job.workspace_id]);
+  expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "registry_unavailable", operation_state: "not_started" } } });
+  expect(f.forwarded).toHaveLength(0);
 });
 
 it("AUDIT-LIST: malformed workspace response is not a confirmed empty workspace set", async () => {
