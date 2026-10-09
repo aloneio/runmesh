@@ -47,7 +47,7 @@ export class ContextStore {
 
   public async bootstrap(input: unknown): Promise<Record<string, unknown>> {
     const workspaceId = workspaceIdFrom(input);
-    const index = await this.readIndex(workspaceId, true);
+    const index = await this.readIndex(workspaceId);
     if (index === undefined || index.records.length === 0) return { workspace_id: workspaceId, state: "missing", context: null };
     const latest = [...index.records].sort((left, right) => right.updated_at_ms - left.updated_at_ms || right.revision - left.revision)[0];
     if (latest === undefined) return { workspace_id: workspaceId, state: "missing", context: null };
@@ -59,7 +59,7 @@ export class ContextStore {
     const params = object(input);
     const workspaceId = safeId(params.workspace_id, "workspace_id");
     const contextId = safeId(params.context_id, "context_id");
-    const index = await this.readIndex(workspaceId, true);
+    const index = await this.readIndex(workspaceId);
     if (index === undefined) return { workspace_id: workspaceId, state: "missing", context: null };
     const entry = index.records.find((candidate) => candidate.context_id === contextId);
     if (entry === undefined) return { workspace_id: workspaceId, state: "missing", context: null };
@@ -74,7 +74,7 @@ export class ContextStore {
     const query = boundedString(params.query, "query", 1, 512).toLocaleLowerCase();
     const limit = params.limit === undefined ? 20 : boundedInteger(params.limit, 1, 50, "limit");
     const offset = params.cursor === undefined ? 0 : boundedIntegerString(params.cursor, 0, MAX_CONTEXTS, "cursor");
-    const index = await this.readIndex(workspaceId, true);
+    const index = await this.readIndex(workspaceId);
     if (index === undefined) return { workspace_id: workspaceId, query, results: [], next_cursor: null, scanned_records: 0, state: "missing" };
     const matches = index.records.filter((entry) => entry.search_text.includes(query)).sort((left, right) => right.updated_at_ms - left.updated_at_ms || right.revision - left.revision);
     const page = matches.slice(offset, offset + limit).map(indexProjection);
@@ -104,7 +104,7 @@ export class ContextStore {
       assertAuthorized();
       const normalized = normalizeCheckpoint(params, workspaceId);
       await this.ensureWritableWorkspace(workspaceId);
-      const savedIndex = await this.readIndex(workspaceId, false);
+      const savedIndex = await this.readIndex(workspaceId);
       if (savedIndex === undefined && await this.hasContextRecords(workspaceId)) throw new RpcRuntimeError("context_index_missing", "Existing context records need an explicit index rebuild before another checkpoint");
       const index = savedIndex ?? emptyIndex(workspaceId);
       const sameTurn = index.records.filter((entry) => entry.turn_id === normalized.turnId);
@@ -190,7 +190,7 @@ export class ContextStore {
 
   private hasContextRecords(workspaceId: string): Promise<boolean> { return this.repository.hasContextRecords(workspaceId); }
 
-  private readIndex(workspaceId: string, allowMissing: boolean): Promise<ContextIndex | undefined> { return this.repository.readIndex(workspaceId, allowMissing); }
+  private readIndex(workspaceId: string): Promise<ContextIndex | undefined> { return this.repository.readIndex(workspaceId); }
 
   private readPending(workspaceId: string): Promise<CheckpointIntent | undefined> { return this.repository.readPending(workspaceId); }
 

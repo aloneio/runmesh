@@ -1,6 +1,6 @@
 import type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler, CachedDevelopmentReleaseRecord, DevelopmentReleaseFailure } from "../contracts/runner-release.js";
 import { DEV_RELEASE_CACHE_MS, DEV_RELEASE_STALE_MS, DEV_RELEASE_REFRESH_BUDGET_MS, compareDevelopmentReleaseVersions, developmentDescriptor, usableCacheAge, isDevelopment, unavailableDevelopmentRelease, releaseGateDiagnostics, runnerReleaseDescriptor } from "../domain/release-selection.js";
-import { DEV_RELEASE_DISCOVERY_URL, releaseFetch, boundedJson, readDevelopmentReleaseCache, writeDevelopmentReleaseCache, DevelopmentReleaseError, developmentReleaseFailure } from "./release-io.js";
+import { DEV_RELEASE_DISCOVERY_URL, releaseFetch, releaseFetchWithinDeadline, boundedJson, readDevelopmentReleaseCache, writeDevelopmentReleaseCache, DevelopmentReleaseError, developmentReleaseFailure } from "./release-io.js";
 
 export type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, ReleaseGateDiagnostics, DevelopmentReleaseCache, DevelopmentReleaseVerifier, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler } from "../contracts/runner-release.js";
 export { releaseGateDiagnostics, runnerReleaseDescriptor, createDevelopmentReleaseRuntime } from "../domain/release-selection.js";
@@ -42,11 +42,7 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
   onDiscoveryFallback: (failure: DevelopmentReleaseFailure, retryAtMs?: number) => void): Promise<RunnerReleaseDescriptor> {
   const { runtime, cache, now, verify } = dependencies;
   const deadline = AbortSignal.timeout(DEV_RELEASE_REFRESH_BUDGET_MS);
-  const boundedFetch: typeof fetch = (input, init) => {
-    deadline.throwIfAborted();
-    const signal = init?.signal == null ? deadline : AbortSignal.any([deadline, init.signal]);
-    return dependencies.fetch(input, { ...init, signal });
-  };
+  const boundedFetch = releaseFetchWithinDeadline(dependencies.fetch, deadline);
   let candidates: RunnerReleaseDescriptor[], revalidating = false;
   try {
     const response = await releaseFetch(DEV_RELEASE_DISCOVERY_URL, {

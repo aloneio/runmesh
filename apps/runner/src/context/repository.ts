@@ -18,14 +18,14 @@ export class ContextRepository implements ContextRecordPort {
     return false;
   }
 
-  public async readIndex(workspaceId: string, allowMissing: boolean): Promise<ContextIndex | undefined> {
+  /** Absence is data; each caller decides whether it needs an explicit rebuild. */
+  public async readIndex(workspaceId: string): Promise<ContextIndex | undefined> {
     if (await this.files.pathExists(this.pendingPath(workspaceId))) throw new RpcRuntimeError("context_index_stale", "An interrupted checkpoint needs an explicit index rebuild; saved history is not known to be complete");
     const path = this.indexPath(workspaceId);
     try {
       const { value } = await this.files.readJsonBounded(path, MAX_INDEX_BYTES);
       return parseIndex(value, workspaceId);
     } catch (error) {
-      if (allowMissing && isErrno(error, "ENOENT")) return undefined;
       if (isErrno(error, "ENOENT")) return undefined;
       if (error instanceof RpcRuntimeError) throw error;
       throw new RpcRuntimeError("context_index_corrupt", "context index is unavailable or invalid", { next_action: "rebuild_context_index" });

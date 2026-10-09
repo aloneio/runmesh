@@ -16,7 +16,7 @@ export function pruneContext(input: unknown, assertAuthorized: () => void, ports
     const generation = params.policy_generation === undefined ? null : boundedInteger(params.policy_generation, 0, Number.MAX_SAFE_INTEGER, "policy_generation");
     return ports.serialize(workspaceId, async () => {
       assertAuthorized();
-      const index = await ports.readIndex(workspaceId, true);
+      const index = await ports.readIndex(workspaceId);
       const directory = ports.workspaceDir(workspaceId), inventory = await scanContextStorage(directory);
       if (index === undefined && inventory.files.length > 0) throw new RpcRuntimeError("context_index_missing", "Rebuild the index before planning retention");
       const deadline = performance.now() + 4000;
