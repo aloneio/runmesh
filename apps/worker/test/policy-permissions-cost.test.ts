@@ -24,6 +24,65 @@ function storePolicy(state: DurableObjectState, policy: RunnerPolicy): void {
   state.storage.sql.exec("UPDATE runners SET desired_policy_revision=1, applied_policy_revision=1, runner_reported_policy_revision=1, desired_policy_checksum=?, active_policy_checksum=?, runner_reported_policy_checksum=?, policy_status='applied' WHERE runner_id='r'", policy.checksum, policy.checksum, policy.checksum);
 }
 
+function ready(instance: RegistryDO, state: DurableObjectState, count = 4): RunnerPolicy {
+  const policy = seed(instance, state, count);
+  state.storage.sql.exec("UPDATE runners SET state='online', connection_epoch=1, session_id='readiness-session' WHERE runner_id='r'");
+  return policy;
+}
+
+it.each([1, 64])("policy readiness reads one current Runner and one policy with %i workspaces", async count => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`readiness-cost-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, (instance, state) => {
+    const policy = ready(instance, state, count);
+    const expected = instance.getPolicyReadiness("r");
+    expect(expected).toMatchObject({ ok: true, applied_revision: 1, active_checksum: policy.checksum, session_id: "readiness-session" });
+    const cursors: Array<{ readonly rowsRead: number; readonly rowsWritten: number }> = [];
+    const exec = state.storage.sql.exec.bind(state.storage.sql);
+    const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: SqlStorageValue[]) => {
+      const cursor = exec(query, ...args); cursors.push(cursor); return cursor;
+    });
+    try { for (let n = 0; n < 20; n++) expect(instance.getPolicyReadiness("r")).toEqual(expected); }
+    finally { spy.mockRestore(); }
+    const reads = cursors.reduce((total, cursor) => total + cursor.rowsRead, 0);
+    const writes = cursors.reduce((total, cursor) => total + cursor.rowsWritten, 0);
+    console.log(JSON.stringify({ scenario: "policy_readiness_20", workspaces: count, queries: cursors.length, rows_read: reads, rows_written: writes }));
+    expect({ calls: cursors.length, reads, writes }).toEqual({ calls: 40, reads: 40, writes: 0 });
+  });
+});
+
+it.each(["offline", "desired-version", "missing-snapshot", "unapplied-snapshot", "malformed-snapshot", "changed-content"] as const)(
+  "policy readiness revalidates a subsequent %s change", async change => {
+    const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`readiness-fresh-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, (instance, state) => {
+      const policy = ready(instance, state);
+      expect(instance.getPolicyReadiness("r").ok).toBe(true);
+      if (change === "offline") state.storage.sql.exec("UPDATE runners SET state='offline' WHERE runner_id='r'");
+      else if (change === "desired-version") state.storage.sql.exec("UPDATE runners SET desired_policy_revision=2 WHERE runner_id='r'");
+      else if (change === "missing-snapshot") state.storage.sql.exec("DELETE FROM runner_policy_versions WHERE runner_id='r' AND revision=1");
+      else if (change === "unapplied-snapshot") state.storage.sql.exec("UPDATE runner_policy_versions SET status='pending' WHERE runner_id='r' AND revision=1");
+      else {
+        policy.workspaces[0]!.root_path = "/changed-workspace";
+        state.storage.sql.exec("UPDATE runner_policy_versions SET policy_json=? WHERE runner_id='r' AND revision=1", change === "malformed-snapshot" ? "{}" : JSON.stringify(policy));
+      }
+      expect(instance.getPolicyReadiness("r")).toMatchObject({ ok: false, code: "stale_policy" });
+    });
+  },
+);
+
+it("policy readiness propagates snapshot storage failure", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`readiness-storage-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, (instance, state) => {
+    ready(instance, state);
+    const exec = state.storage.sql.exec.bind(state.storage.sql);
+    const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: SqlStorageValue[]) => {
+      if (query.includes("FROM runner_policy_versions")) throw new Error("synthetic policy storage failure");
+      return exec(query, ...args);
+    });
+    try { expect(() => instance.getPolicyReadiness("r")).toThrow("synthetic policy storage failure"); }
+    finally { spy.mockRestore(); }
+  });
+});
+
 it.each([1, 64])("workspace listing uses bounded SQL reads with %i workspaces and no writes", async count => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`permission-cost-${crypto.randomUUID()}`));
   await runInDurableObject(stub, (instance, state) => {
@@ -44,8 +103,8 @@ it.each([1, 64])("workspace listing uses bounded SQL reads with %i workspaces an
     console.log(JSON.stringify({ scenario: "workspace_permissions", workspaces: count, queries: queries.length, rows_read: reads, rows_written: writes, policy_reads: policyReads }));
     expect(result?.workspaces).toEqual(Array.from({ length: count }, (_, index) => ({ workspace_id: `w${index}`, enabled: true, permissions: full })));
     expect(writes).toBe(0);
-    expect(queries.length).toBeLessThanOrEqual(8);
-    expect(reads).toBeLessThanOrEqual(8);
+    expect(queries.length).toBe(4);
+    expect(reads).toBe(3);
     expect(policyReads).toBe(1);
   });
 });

@@ -123,7 +123,7 @@ export class RegistryPolicy {
     const revision = runner.applied_policy_revision;
     const checksum = runner.active_policy_checksum;
     if (!Number.isSafeInteger(revision) || revision === null || revision <= 0 || typeof checksum !== "string" || !/^[a-f0-9]{64}$/.test(checksum)) return { ok: false, code: "policy_pending", reason: "active policy identity is incomplete" };
-    const active = this.getActivePolicySnapshot(runnerId);
+    const active = this.policySnapshot(runnerId, revision, checksum, "applied");
     if (active === undefined || active.revision !== revision || active.checksum !== checksum) return { ok: false, code: "stale_policy", reason: "immutable active policy snapshot is unavailable" };
     return { ok: true, policy: active };
   }
@@ -165,10 +165,10 @@ export class RegistryPolicy {
     // session. Fail closed if persistent state is incomplete.
     if (!validLifecycleId(runner.lifecycle_id)) return { ok: false, code: "stale_policy", reason: "runner lifecycle identity is unavailable" };
     if (runner.session_id === null || !validSessionId(runner.session_id)) return { ok: false, code: "stale_policy", reason: "runner session identity is unavailable" };
-    const active = this.getActivePolicySnapshot(runnerId);
-    const desired = this.getDesiredPolicySnapshot(runnerId);
-    if (active === undefined || desired === undefined || active.revision !== runner.applied_policy_revision || active.checksum !== runner.active_policy_checksum
-      || desired.revision !== runner.desired_policy_revision || desired.checksum !== runner.desired_policy_checksum) {
+    // The three identities above select the same immutable policy. This
+    // synchronous read validates it once without rereading the Runner row.
+    const active = this.policySnapshot(runnerId, runner.applied_policy_revision, runner.active_policy_checksum, "applied");
+    if (active === undefined) {
       return { ok: false, code: "stale_policy", reason: "immutable policy snapshot is unavailable" };
     }
     return {

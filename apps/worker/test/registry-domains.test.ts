@@ -27,6 +27,11 @@ it("AR06 preserves cross-domain SQL, transaction order, costs and receipts", asy
     const capture = <T>(name: string, action: () => T): T => {
       calls = []; cursors = [];
       const value = action(); expect(value).not.toBeInstanceOf(Promise);
+      if (["final_authorization", "exec_denied", "rotated_denied"].includes(name)) {
+        // These synchronous authorization reads must retain their lack of a
+        // transaction even though their redundant policy reads were removed.
+        expect(calls.filter(call => Array.isArray(call) && call[0] !== "sql")).toEqual([]);
+      }
       reports[name] = { calls: calls.length, trace: sha256Hex(JSON.stringify(calls)),
         reads: cursors.reduce((n, c) => n + c.rowsRead, 0), writes: cursors.reduce((n, c) => n + c.rowsWritten, 0),
         result: JSON.parse(JSON.stringify(value ?? null)) };
@@ -76,19 +81,24 @@ it("AR06 preserves cross-domain SQL, transaction order, costs and receipts", asy
       capture("dashboard", () => r.dashboardSnapshot());
       capture("permissions_deny", () => r.setClientRunnerOverride("c", "r", { read: true, edit: false, shell: false, job_control: false }, now + 5));
       capture("exec_denied", () => r.authorizeMcpRpc({ ...authorization, method: "exec.start" }));
+      // Historical fixture: this short prefix rejects rotation, so the next
+      // receipt is still allowed. Real rotation denial is covered by AUTH-04.
       capture("client_rotate", () => r.rotateMcpClient("c", "e".repeat(64), "new", now + 6));
       capture("rotated_denied", () => r.authorizeMcpRpc(authorization));
       capture("runner_revoke", () => r.revokeRunner("r", "r", now + 7, "revoke"));
       capture("stale_session", () => r.sessionIsCurrent("r", epoch, before.runner.credential_version, true, before.lifecycle_id, "session"));
       capture("stale_snapshot", () => r.syncRunner("r", epoch, before.runner.credential_version, [], [job], 2, now + 8, true, before.lifecycle_id, "session"));
       if (RECORD_BASELINE) console.log("AR06_CHARACTERIZATION=" + JSON.stringify(reports));
-      // The joined session read now reuses the settings row. Preserve its
+      // Session and readiness checks reuse their current rows. Preserve their
       // original receipts and explicit costs without freezing the new SQL text;
       // every other domain observation still matches the ca511cf baseline.
       else expect(reports).toEqual({
         ...baseline,
         admin_session_read: { ...baseline.admin_session_read, calls: 1, reads: 2, writes: 0, trace: expect.any(String) },
         admin_session_revoked: { ...baseline.admin_session_revoked, calls: 1, reads: 0, writes: 0, trace: expect.any(String) },
+        final_authorization: { ...baseline.final_authorization, calls: 10, reads: 9, writes: 0, trace: expect.any(String) },
+        exec_denied: { ...baseline.exec_denied, calls: 10, reads: 10, writes: 0, trace: expect.any(String) },
+        rotated_denied: { ...baseline.rotated_denied, calls: 10, reads: 10, writes: 0, trace: expect.any(String) },
       });
     } finally { sql.mockRestore(); tx.mockRestore(); random.mockRestore(); clock.mockRestore(); }
   });
