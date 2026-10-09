@@ -1,5 +1,6 @@
 import { nativeJobFiles } from "../src/jobs/storage.js";
 import { createJobProcessProbe } from "./helpers/job-process-probe.js";
+import { jobRecord } from "./helpers/job-record.js";
 import { createJobFileFaults } from "./helpers/job-file-faults.js";
 import { nativeJobProcesses } from "../src/jobs/process.js";
 import { lstat, mkdir, readFile, rm, symlink, writeFile, mkdtemp, realpath } from "node:fs/promises";
@@ -15,6 +16,7 @@ import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
 import { RunnerRuntime, rpcError } from "../src/runtime.js";
 import { discoverShellRuntime } from "../src/environment.js";
 import type { RunnerConfig, WorkspaceConfig } from "../src/config.js";
+import * as statePath from "../src/state-path.js";
 
 async function fixture(): Promise<{ root: string; outside: string; state: string; workspace: WorkspaceConfig; cleanup: () => Promise<void> }> {
   const base = await mkdtemp(join(tmpdir(), "runner-runtime-"));
@@ -48,6 +50,31 @@ async function waitFor<T>(get: () => T, predicate: (value: T) => boolean, timeou
   while (Date.now() < deadline) { const value = get(); if (predicate(value)) return value; await new Promise((resolve) => setTimeout(resolve, 25)); }
   throw new Error("timed out waiting for process");
 }
+
+describe("Runtime storage configuration", () => {
+  it.each(["config", "override", "default"] as const)("uses the %s state directory for Job and Context storage", async source => {
+    const test = await fixture();
+    const fallback = join(test.outside, "default-state"), configured = join(test.outside, "configured-state"), override = join(test.outside, "override-state");
+    // Even the unfixed/default path stays inside this fixture, never the user's
+    // real Runner state. Exercise public owners and their durable output only.
+    const defaultState = vi.spyOn(statePath, "defaultRunnerStateDir").mockReturnValue(fallback);
+    try {
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace],
+        ...(source === "default" ? {} : { stateDir: configured }) };
+      const runtime = new RunnerRuntime({ config, ...(source === "override" ? { stateDir: override } : {}) });
+      await runtime.jobs.initialize();
+      const checkpoint = await runtime.context.checkpoint({ workspace_id: test.workspace.workspaceId, turn_id: "storage-config", goal: "retain configured state" });
+      const contextId = (checkpoint.context as { context_id: string }).context_id;
+      const selected = source === "override" ? override : source === "config" ? configured : fallback;
+      expect(JSON.parse(await readFile(join(selected, "runner.json"), "utf8"))).toMatchObject({ runner_id: "runner-1", workspaces: [test.workspace.workspaceId] });
+      expect(JSON.parse(await readFile(join(selected, "contexts", test.workspace.workspaceId, contextId, "1.json"), "utf8")))
+        .toMatchObject({ context_id: contextId, goal: "retain configured state" });
+      for (const unused of [fallback, configured, override].filter(path => path !== selected)) {
+        await expect(lstat(unused)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally { defaultState.mockRestore(); await test.cleanup(); }
+  });
+});
 
 describe("Job request failure semantics", () => {
   it("classifies direct JobManager parameter and shell permission failures at their source", async () => {
@@ -456,6 +483,75 @@ describe("persistent local jobs", () => {
       await waitFor(() => runtime.jobs.get(started.job_id), (job) => job.status === "succeeded");
       await expect(runtime.syncJobs()).resolves.toEqual([expect.objectContaining({ job_id: started.job_id, workspace_id: test.workspace.workspaceId, status: "succeeded", runner_id: "runner-sync" })]);
       await expect(readFile(join(test.state, "jobs", started.job_id, "meta.json"), "utf8")).resolves.toContain('"status":"succeeded"');
+    } finally { await test.cleanup(); }
+  });
+
+  it.each([
+    { name: "one-record", limit: 1, hidden: 1 },
+    { name: "101-record", limit: 101, hidden: 100 },
+    { name: "default", limit: undefined, hidden: 100 },
+  ])("filters private jobs before the $name history snapshot limit", async ({ limit, hidden }) => {
+    const test = await fixture();
+    try {
+      // Recover completed durable records through the public storage boundary;
+      // no process launch or private JobManager state is needed for pagination.
+      const recorded = jobRecord({ status: "succeeded", pid: null, process_start_fingerprint: null, exit_code: 0,
+        completed_at_ms: 3, record_history: true });
+      const records = [recorded, ...Array.from({ length: hidden }, (_, index) => jobRecord({ ...recorded,
+        job_id: `job-00000000-0000-0000-0000-${String(index + 2).padStart(12, "0")}`,
+        record_history: false, updated_at_ms: 4 + index, completed_at_ms: 4 + index,
+      }))];
+      for (const record of records) {
+        const directory = join(test.state, "jobs", record.job_id);
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        await writeFile(join(directory, "meta.json"), JSON.stringify(record));
+      }
+      const runtime = new RunnerRuntime({ config: {
+        server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-sync",
+        stateDir: test.state, maxRetainedJobs: records.length, workspaces: [test.workspace],
+      } });
+      await runtime.jobs.initialize();
+      await expect(runtime.dispatch("job.list", { limit: 1 })).resolves.toMatchObject([{ job_id: records.at(-1)!.job_id, record_history: false }]);
+      expect(runtime.jobs.get(recorded.job_id)).toMatchObject({ status: "succeeded", record_history: true });
+      const snapshot = limit === undefined ? await runtime.syncJobs() : await runtime.syncJobs(limit);
+      expect(snapshot).toEqual([expect.objectContaining({ job_id: recorded.job_id, status: "succeeded", runner_id: "runner-sync" })]);
+    } finally { await test.cleanup(); }
+  });
+
+  it("keeps one history tie-break across snapshot limits and preserves local list ordering", async () => {
+    const test = await fixture();
+    try {
+      const records = [1, 2].map(index => jobRecord({
+        job_id: `job-00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+        status: "succeeded", pid: null, process_start_fingerprint: null, exit_code: 0, completed_at_ms: 3, record_history: true,
+      }));
+      for (const record of records) {
+        const directory = join(test.state, "jobs", record.job_id);
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        await writeFile(join(directory, "meta.json"), JSON.stringify(record));
+      }
+      const runtime = new RunnerRuntime({ config: {
+        server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-sync", stateDir: test.state, workspaces: [test.workspace],
+      } });
+      await runtime.jobs.initialize();
+      const historyIds = records.map(record => record.job_id).reverse();
+      expect((await runtime.syncJobs(1)).map(job => job.job_id)).toEqual(historyIds.slice(0, 1));
+      for (const limit of [undefined, 101, 501, Number.MAX_SAFE_INTEGER]) {
+        expect((await runtime.syncJobs(limit)).map(job => job.job_id)).toEqual(historyIds);
+      }
+      expect((await runtime.jobs.snapshotForSync()).map(job => job.job_id)).toEqual(historyIds);
+      await expect(runtime.dispatch("job.list", { limit: 1 })).resolves.toMatchObject([{ job_id: records[0]!.job_id }]);
+      await expect(runtime.dispatch("job.list", { limit: 101 })).rejects.toMatchObject({ code: "invalid_params" });
+    } finally { await test.cleanup(); }
+  });
+
+  it.each([0, -1, 0.5, 100.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])("rejects invalid history snapshot limit %s", async limit => {
+    const test = await fixture();
+    try {
+      const runtime = new RunnerRuntime({ config: {
+        server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-sync", stateDir: test.state, workspaces: [test.workspace],
+      } });
+      await expect(runtime.syncJobs(limit)).rejects.toMatchObject({ code: "invalid_params" });
     } finally { await test.cleanup(); }
   });
 

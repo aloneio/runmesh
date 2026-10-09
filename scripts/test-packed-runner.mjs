@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { command, readPlan, assertSource } from "./dev-release/io.mjs";
 import { checkPackedMaintenance } from "./packed-maintenance-check.mjs";
+import { npmCliPath } from "./npm-cli.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 assert.ok(process.argv.length === 3 || process.argv.length === 4, "pass the exact Runner tarball and optional frozen development plan");
@@ -14,7 +15,8 @@ if (devPlan !== undefined) await assertSource(devPlan);
 const archive = resolve(process.argv[2]);
 const info = await stat(archive);
 assert.ok(info.isFile() && info.size > 0 && info.size <= 8*1024*1024, "invalid portable archive size");
-const root = await mkdtemp(join(tmpdir(), "runmesh-exact-package-e2e-"));
+const npm = await npmCliPath();
+const root = await mkdtemp(join(tmpdir(), "runmesh exact package e2e "));
 async function run(command, args, options = {}) {
   const child = spawn(command,args,{cwd:repo,stdio:"inherit",...options});
   const code = await new Promise((resolveExit,reject) => { child.once("error",reject); child.once("exit",(code,signal) => resolveExit(signal === null ? code : 1)); });
@@ -22,7 +24,7 @@ async function run(command, args, options = {}) {
 }
 try {
   await writeFile(join(root,"package.json"),JSON.stringify({name:"runmesh-artifact-test",version:"1.0.0",private:true}));
-  await run(process.platform === "win32" ? "npm.cmd" : "npm",["install","--ignore-scripts","--offline","--no-audit","--no-fund",archive],{cwd:root,env:{...process.env,npm_config_cache:join(root,"empty-cache")},...(process.platform === "win32" ? {shell:true} : {})});
+  await run(process.execPath,[npm,"install","--ignore-scripts","--offline","--no-audit","--no-fund",archive],{cwd:root,env:{...process.env,npm_config_cache:join(root,"empty-cache")}});
   const pkg = join(root,"node_modules","@aloneio","runmesh-runner");
   const manifest = JSON.parse(await readFile(join(pkg,"package.json"),"utf8"));
   const source = JSON.parse(await readFile(join(repo,"package.json"),"utf8"));

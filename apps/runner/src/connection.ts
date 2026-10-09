@@ -150,7 +150,7 @@ export class RunnerConnection {
       this.cancelReconnectSleep = finish;
     }));
     this.onStateChange = options.onStateChange ?? (() => undefined);
-    const createRuntime: ConnectionRuntimeFactory = dependencies.createRuntime ?? (onJobEvent => new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent }));
+    const createRuntime: ConnectionRuntimeFactory = dependencies.createRuntime ?? (onJobEvent => new RunnerRuntime({ config: this.config, onJobEvent }));
     this.runtime = options.runtime ?? createRuntime(event => this.forwardJobEvent(event));
     this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
     this.historyUploads = new HistoryUploadScheduler(async revision => {
