@@ -1,8 +1,27 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 const MAX_EVIDENCE_BYTES = 8 * 1024 * 1024;
 const CHUNK_BYTES = 64 * 1024;
+
+/** CI projections own names and serialization; this adapter owns publication.
+ * Each file replaces its previous attempt through a private temporary file. */
+export async function writeCiEvidenceFile(root, name, body) {
+  assert.match(name, /^[a-z][a-z0-9_-]{0,63}\.(?:json|xml)$/u);
+  const directory = join(root, "ci-results");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const folder = await lstat(directory);
+  assert.ok(folder.isDirectory() && !folder.isSymbolicLink(), "unsafe report directory");
+  const target = join(directory, name), temporary = join(directory, `${randomUUID()}.tmp`);
+  const current = await lstat(target).catch(error => { if (error.code !== "ENOENT") throw error; });
+  assert.ok(current === undefined || current.isFile() && !current.isSymbolicLink(), "unsafe existing report");
+  try { await writeFile(temporary, body, { flag: "wx", mode: 0o600 }); await rename(temporary, target); }
+  finally { await rm(temporary, { force: true }); }
+}
+
 const invalid = () => new Error("invalid_or_changed_evidence_file");
 function regular(info, limit) {
   return info.isFile() && !info.isSymbolicLink() && Number.isSafeInteger(info.size)
