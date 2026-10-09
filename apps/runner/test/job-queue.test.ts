@@ -72,7 +72,16 @@ it.each(["busy", "queue_full"])("keeps retained task history when a new launch i
   expect(f.jobs.list().map(job => job.job_id).sort()).toEqual(idsBefore);
   expect(await readFile(recordPath)).toEqual(recordBefore);
   expect(await f.jobs.logs(retained.job_id)).toMatchObject({ data: "retained" });
- } finally { await f.release("hold"); await f.close(); }
+ } finally {
+  // This retention fixture admits at most its 2/4-record limit. Capture those
+  // identities before release, then let its finite tasks finish naturally;
+  // teardown must not race their exit with unrelated process-group cancellation.
+  const completing = f.jobs.list().map(job => job.job_id);
+  try {
+   await f.release("hold");
+   await wait(() => completing.every(jobId => f.jobs.get(jobId).status === "succeeded"));
+  } finally { await f.close(); }
+ }
 });
 it("a queued task is refused if fresh authorization or the local policy changed",async()=>{
  const authorization=vi.fn(async()=>false),f=await fixture(authorization);try{
