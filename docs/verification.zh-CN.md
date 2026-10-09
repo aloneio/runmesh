@@ -40,7 +40,7 @@ GitHub 在 `dev`、`main` 推送和拉取请求时自动验证。GitLab 在合�
 | `Runner native checks` | Windows、Linux、macOS 的原生行为；Windows 另运行完整传输链路 |
 | `Runner LTS` | 已登记 Node LTS 版本上的 Runner 行为 |
 
-GitHub 的 `verify-all` 汇总全部必需作业。GitLab 验收同时检查 `verify` 和 `browser`，Worker 部署构建另列结果。
+GitHub 的 `verify-all` 汇总全部必需作业。GitLab 验收同时检查 `verify` 和 `browser`，Worker 部署构建另列结果。双端发行证据从同一选定执行轮次读取 GitHub 运行详情和必需作业。
 
 从作业产物中的 `ci-results/` 读取 JSON 摘要和 JUnit 报告。传输结果包含源码身份、平台、测试计数，以及失败时的测试位置和错误分类；浏览器使用相同的诊断规则。GitHub 的综合、浏览器和 Windows 传输作业，以及 GitLab 的综合和浏览器作业，均在运行结束时保留报告 14 天。排查日志分页故障时，可结合报告中的字段状态、字节数和源码位置定位失败环节。
 

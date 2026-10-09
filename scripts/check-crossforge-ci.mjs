@@ -26,7 +26,7 @@ try {
   const run = runs.workflow_runs[0], pipeline = pipelines[0];
   assert.ok(Number.isSafeInteger(run.id) && Number.isSafeInteger(run.run_attempt) && Number.isSafeInteger(pipeline.id));
   const [github, githubJobPage, gitlab, gitlabJobs] = await Promise.all([
-    gh(`actions/runs/${run.id}`), gh(`actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`),
+    gh(`actions/runs/${run.id}/attempts/${run.run_attempt}`), gh(`actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`),
     gl(`pipelines/${pipeline.id}`), gl(`pipelines/${pipeline.id}/jobs?include_retried=false&per_page=100`),
   ]);
   assert.equal(githubJobPage.total_count, githubJobPage.jobs.length, "truncated GitHub jobs");

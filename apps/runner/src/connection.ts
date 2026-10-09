@@ -327,9 +327,10 @@ export class RunnerConnection {
   private connectOnce(): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = new URL(this.config.server);
-      if (!url.pathname.replace(/\/+$/, "").endsWith("/runner/connect")) {
-        url.pathname = url.pathname.endsWith("/") ? `${url.pathname}runner/connect` : `${url.pathname}/runner/connect`;
-      }
+      // Enrollment accepts trailing slashes; dispatch still needs the exact
+      // connect path, including when the supplied URL already names it.
+      const path = url.pathname.replace(/\/+$/, "");
+      url.pathname = path.endsWith("/runner/connect") ? path : `${path}/runner/connect`;
       url.searchParams.set("runner_id", this.config.runnerId);
       // Enforce the protocol limit in the WebSocket receiver, before it
       // buffers/reassembles a frame. Compression is unnecessary for bounded

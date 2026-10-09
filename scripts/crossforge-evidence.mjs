@@ -17,7 +17,7 @@ export function validateCrossforgeEvidence(expected, data) {
     const jobs = data.githubJobs.filter(job => job.name === name);
     assert.equal(jobs.length, 1, `missing/ambiguous required GitHub job: ${name}`);
     const job = jobs[0];
-    assert.equal(job.run_id, gh.id); assert.equal(job.head_sha, expected.sha);
+    assert.equal(job.run_id, gh.id); assert.equal(job.run_attempt, gh.run_attempt); assert.equal(job.head_sha, expected.sha);
     assert.equal(job.status, "completed"); assert.equal(job.conclusion, "success");
   }
   validateGitlabEvidence(expected, gl, data.gitlabJobs);

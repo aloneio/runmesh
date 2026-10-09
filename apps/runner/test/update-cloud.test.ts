@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createCloudMaintenance, maintenanceEndpoint } from "../src/updates/cloud.js";
 import { MaintenanceHttpError } from "../src/updates/contracts.js";
 import type { RunnerProfile } from "../src/profile.js";
+import { maintenanceIdentity } from "../src/maintenance-contract.js";
 import { parseProductArgs } from "../src/cli/input.js";
 import { runCli } from "../src/cli.js";
 
@@ -22,6 +23,20 @@ describe("maintenance HTTPS and CLI", () => {
     await cloud.poll(); current = { ...profile, token: "rotated-existing-token" }; await cloud.poll();
     expect(tokens).toEqual(["Bearer existing-runner-token", "Bearer rotated-existing-token"]);
   });
+  it.each([
+    ["/runner/connect", "/runner/runner_1/update"],
+    ["/runner/connect/", "/runner/runner_1/update"],
+    ["/prefix/runner/connect///", "/prefix/runner/runner_1/update"],
+  ])("polls an accepted profile path %s through its canonical maintenance endpoint", async (path, expectedPath) => {
+    const identity = maintenanceIdentity({ ...profile, server_url: `wss://example.test${path}` });
+    expect(identity).toBeDefined();
+    const urls: string[] = [];
+    const cloud = createCloudMaintenance({ profile: async () => identity!, fetch: (async url => {
+      urls.push(String(url)); return Response.json(idle);
+    }) as typeof fetch });
+    await expect(cloud.poll()).resolves.toEqual(idle);
+    expect(urls).toEqual([`https://example.test${expectedPath}`]);
+  });
   it.each([401, 403, 409, 429, 503])("exposes HTTP %s through the coordinator's error contract", async status => {
     const cloud = createCloudMaintenance({ profile: async () => profile, fetch: (async () => new Response("upstream detail", { status })) as typeof fetch });
     const request = cloud.poll();
@@ -36,7 +51,7 @@ describe("maintenance HTTPS and CLI", () => {
     const cloud = createCloudMaintenance({ profile: async () => profile, fetch: (async () => new Response("", { status: 503, headers: { "retry-after": String(value) } })) as typeof fetch });
     await expect(cloud.poll()).rejects.toMatchObject({ retryAfterMs: expected });
   });
-  it.each(["ws://remote.test/runner/connect", "wss://user:secret@example.test/runner/connect", "wss://example.test/arbitrary", "wss://example.test/runner/connect?token=secret"])("rejects an invalid maintenance origin %s", server_url => {
+  it.each(["ws://remote.test/runner/connect", "wss://user:secret@example.test/runner/connect", "wss://example.test/arbitrary", "wss://example.test/arbitrary/", "wss://example.test/runner/connect?token=secret", "wss://example.test/runner/connect/?token=secret", "wss://example.test/runner/connect/#fragment"])("rejects an invalid maintenance origin %s", server_url => {
     expect(() => maintenanceEndpoint({ ...profile, server_url })).toThrow();
   });
   it("bounds response bodies and rejects malformed control data", async () => {
