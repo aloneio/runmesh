@@ -2,6 +2,8 @@
 // this boundary; no response text, request arguments, IDs or log lines escape.
 const contentTypes = ["json", "html", "text", "sse", "other", "absent"];
 const bodyKinds = ["json_rpc_error", "empty", "non_json", "invalid_json", "not_rpc_error", "oversized", "read_timeout", "read_error"];
+const adminStages = ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "recording_disable", "recording_enable", "history_settings", "history_restore", "other"];
+const adminBodyKinds = ["present", "empty", "oversized", "read_timeout", "read_error"];
 const phases = ["read_initial", "read_continuation", "runner_select", "shell", "edit", "job_get", "job_logs", "job_cancel", "other"];
 const runtimeSignatures = new Map([
   ["network_connection_lost", "Network connection lost."],
@@ -108,11 +110,11 @@ export async function adminSetupHttpDiagnostic(response, stage) {
   const observed = await boundedBody(response);
   const runtime_signature = responseRuntimeSignature(observed, content_type);
   const detail = {
-    stage: ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create"].includes(stage) ? stage : "other",
+    event: "admin_http", stage: adminStages.includes(stage) ? stage : "other",
     status: response.status, content_type, body_kind: observed.body_kind ?? "present",
     ...(runtime_signature === undefined ? {} : { runtime_signature }),
   };
-  return `RUNMESH_E2E_ADMIN_SETUP_DIAGNOSTIC=${JSON.stringify(detail)}`;
+  return eventMarker(detail);
 }
 
 export async function mcpHttpFailure(response, requestId, name, args) {
@@ -230,12 +232,17 @@ const fixtureNames = ["queue", "busy"];
 const fixturePhases = ["primary", "release", "cancel", "observe"];
 const fixtureFailureKinds = ["mcp_http_failure", "assertion_failed", "timeout", "other"];
 const progressFixtures = ["job_recording", "job_history"];
-const progressPhases = ["admin_login_page", "admin_login", "client_create", "runner_select", "recording_update", "history_settings", "history_restore", "shell", "job_logs", "job_metadata", "job_poll", "job_list"];
+const progressPhases = ["admin_login_page", "admin_login", "client_create", "runner_select", "recording_update", "history_settings", "history_restore", "shell", "job_logs", "job_metadata", "job_poll", "job_list", "job_list_live", "job_list_snapshot"];
 const progressBoundaries = ["headers", "body", "validation", "request", "filesystem", "poll"];
 const exitCode = value => value === null || (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647);
 
 function safeWorkerEvent(value) {
   if (!record(value)) return undefined;
+  if (value.event === "admin_http" && adminStages.includes(value.stage) && Number.isInteger(value.status) && value.status >= 100 && value.status <= 599
+    && contentTypes.includes(value.content_type) && adminBodyKinds.includes(value.body_kind)
+    && (value.runtime_signature === undefined || runtimeSignatures.has(value.runtime_signature)))
+    return { event: "admin_http", stage: value.stage, status: value.status, content_type: value.content_type, body_kind: value.body_kind,
+      ...(value.runtime_signature === undefined ? {} : { runtime_signature: value.runtime_signature }) };
   if (value.event === "mcp_handler_error" && errorKinds.includes(value.kind) && stages.includes(value.stage) && reasons.includes(value.reason))
     return { event: "mcp_handler_error", kind: value.kind, stage: value.stage, reason: value.reason };
   if (value.event === "runtime_log" && runtimeSignatures.has(value.signature)) return { event: "runtime_log", signature: value.signature };
@@ -289,10 +296,10 @@ function eventBudget() {
   const counts = new Map();
   return event => {
     // Separate bounds preserve launcher and fixture evidence during log floods.
-    // Totals: 16 handler + 8 runtime + 8 proxy + 4 launcher + 2 primary + 16 cleanup + 2 progress = 56.
-    const key = event.event === "fixture_progress" ? `progress:${event.fixture}`
+    // Totals: 16 handler + 8 runtime + 8 proxy + 4 launcher + 2 primary + 16 cleanup + 2 progress + 9 admin = 65.
+    const key = event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
       : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
-    const limit = event.event === "fixture_progress" ? 1 : event.event === "mcp_handler_error" ? 16 : event.event === "launcher_snapshot" ? 4
+    const limit = event.event === "admin_http" || event.event === "fixture_progress" ? 1 : event.event === "mcp_handler_error" ? 16 : event.event === "launcher_snapshot" ? 4
       : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;
     const count = counts.get(key) ?? 0;
     if (count >= limit) return false;
