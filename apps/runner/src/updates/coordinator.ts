@@ -23,6 +23,7 @@ export class UpdateCoordinator {
     return observation.operation?.operation_id === journal.operation.operation_id && observation.operation.lifecycle_id === journal.operation.lifecycle_id && observation.operation.manager_id === journal.manager_id;
   }
   private async write(journal: UpdateJournal, phase: LocalUpdatePhase, errorCode?: UpdateErrorCode): Promise<UpdateJournal> {
+    this.guard();
     const next: UpdateJournal = { ...journal, phase, ...(errorCode === undefined ? {} : { error_code: errorCode }) };
     await this.options.journal.save(next); return next;
   }
@@ -50,6 +51,7 @@ export class UpdateCoordinator {
     this.guard(); await this.options.journal.complete(preparation);
   }
   private async finish(journal: UpdateJournal): Promise<void> {
+    this.guard();
     if (!isTerminalLocalUpdatePhase(journal.phase)) throw new UpdateFailure("local_state_invalid");
     // Persist terminal local state before asking the cloud to remove its fence.
     // A lost HTTP response can only replay this idempotent acknowledgement; it
@@ -59,7 +61,9 @@ export class UpdateCoordinator {
     try { result = await this.options.cloud.report(this.owner(journal), journal.phase, { observed_version: version, ...(journal.error_code === undefined ? {} : { error_code: journal.error_code }) }); }
     catch (error) {
       if (!(error instanceof MaintenanceHttpError) || error.status !== 409) throw error;
+      this.guard();
       const observed = await this.options.cloud.poll();
+      this.guard();
       // An operator can enqueue the next operation after the server committed
       // our terminal receipt but its response was lost. Retire only this local
       // terminal record; never replay it over a new operation or lifecycle.
@@ -77,6 +81,9 @@ export class UpdateCoordinator {
       }
       throw error;
     }
+    // The mutex helper can exit while the cloud response is in flight. Only
+    // the current installation owner may retire its durable recovery record.
+    this.guard();
     if (!this.matches(journal, result) || result.operation?.state !== journal.phase) throw new UpdateFailure("activation_failed");
     await this.options.journal.complete(journal);
   }
@@ -242,6 +249,7 @@ export class UpdateCoordinator {
     }
     // An uncertain replacement write can leave either preparing or claimed on
     // disk. Recover that record next time before sending any failure receipt.
+    this.guard();
     await this.options.journal.save(journal);
     let failureCode: UpdateErrorCode = "verification_failed";
     try {

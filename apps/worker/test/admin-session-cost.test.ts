@@ -14,16 +14,16 @@ async function signed(path: string, input: Record<string, unknown>, timestamp = 
     headers: await internalHeaders(secret, "POST", path, body, { timestamp }) });
 }
 
-it("repeated administrator session checks perform zero SQL writes", async () => {
+it("repeated administrator session checks use one SQL query and zero writes", async () => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName("admin-cost-" + crypto.randomUUID()));
   await runInDurableObject(stub, async (instance, state) => {
     const now = Date.now();
     instance.setupAdmin("synthetic-admin", now);
     expect(instance.createAdminSession(sessionHash, csrfHash, now + 60_000, now, 1)).toBe(true);
     const original = state.storage.sql.exec.bind(state.storage.sql);
-    let rows = 0;
+    let reads = 0, writes = 0;
     const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
-      const cursor = original(query, ...args); rows += cursor.rowsWritten; return cursor;
+      const cursor = original(query, ...args); reads += cursor.rowsRead; writes += cursor.rowsWritten; return cursor;
     });
     try {
       for (let n = 0; n < 40; n++) {
@@ -31,8 +31,10 @@ it("repeated administrator session checks perform zero SQL writes", async () => 
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual({ csrf_hash: csrfHash });
       }
-      console.log(JSON.stringify({ scenario: "admin_session_checks_40", sql_rows_written: rows }));
-      expect(rows).toBe(0);
+      console.log(JSON.stringify({ scenario: "admin_session_checks_40", sql_rows_read: reads, sql_rows_written: writes, sql_calls: spy.mock.calls.length }));
+      expect(reads).toBe(80);
+      expect(writes).toBe(0);
+      expect(spy).toHaveBeenCalledTimes(40);
       expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM internal_request_nonces").one().n).toBe(0);
     } finally { spy.mockRestore(); }
   });
@@ -75,9 +77,9 @@ it("single-client administration reads one row in a populated library and retain
   });
 });
 
-it.each(["logout", "expiry", "password"] as const)("session-check replay revalidates %s without granting authority", async reason => {
+it.each(["logout", "expiry", "password", "version", "settings"] as const)("session-check replay revalidates %s without granting authority", async reason => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName("admin-replay-" + crypto.randomUUID()));
-  await runInDurableObject(stub, async instance => {
+  await runInDurableObject(stub, async (instance, state) => {
     const now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       instance.setupAdmin("synthetic-admin", now);
@@ -87,6 +89,8 @@ it.each(["logout", "expiry", "password"] as const)("session-check replay revalid
       expect((await instance.fetch(request.clone())).status).toBe(200);
       if (reason === "logout") instance.logoutAdminSession(sessionHash);
       else if (reason === "password") instance.changeAdminPassword("synthetic-replacement", now);
+      else if (reason === "version") state.storage.sql.exec("UPDATE admin_settings SET session_version = session_version + 1 WHERE id = 1");
+      else if (reason === "settings") state.storage.sql.exec("DELETE FROM admin_settings WHERE id = 1");
       else clock.mockReturnValue(now + 60_000);
       expect((await instance.fetch(request.clone())).status).toBe(404);
     } finally { clock.mockRestore(); }

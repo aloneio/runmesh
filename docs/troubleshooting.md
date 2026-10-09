@@ -59,7 +59,7 @@ Refresh the AI client's Runmesh catalog after changing a connection. If an upstr
 
 ## Skill upload or update needs attention
 
-Select a folder with `SKILL.md` at its root. Check that it has single-line `name` and `description` metadata and that the selected files use UTF-8 text. Extract archives before selecting their Skill folder. The [Skill guide](central-skills.md) includes a complete example and current file limits.
+Select a folder with `SKILL.md` at its root. Check that its YAML metadata includes a valid `name` and `description`; descriptions can span several lines. The selected files must use UTF-8 text. Extract archives before selecting their Skill folder. The [Skill guide](central-skills.md) includes a complete example and current file limits.
 
 For a same-name replacement, review the files and select **Update Skill**. If another administrator changed the Skill while you were reviewing it, refresh the list and select your files again. After publication, refresh the AI client's Skill list so its reads use the current version.
 
