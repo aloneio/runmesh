@@ -59,7 +59,7 @@ Worker 更新后刷新 Runmesh 工具目录。任务后续查询拒绝 `workspac
 
 ## Skill 上传或更新需要处理
 
-选择根目录含 `SKILL.md` 的文件夹，检查文件开头的 `name`、`description` 各占一行，所选文件使用 UTF-8 文本。压缩包先解压，再选择对应 Skill 文件夹。[Skill 指南](central-skills.zh-CN.md)提供完整示例与当前文件上限。
+选择根目录含 `SKILL.md` 的文件夹，检查文件开头的 YAML 元数据包含有效的 `name` 和 `description`，说明可以分多行编写。所选文件应使用 UTF-8 文本。压缩包先解压，再选择对应 Skill 文件夹。[Skill 指南](central-skills.zh-CN.md)提供完整示例与当前文件上限。
 
 替换同名 Skill 时，核对文件后点击「更新 Skill」。审阅期间其他管理员修改了该 Skill 时，刷新列表并重新选择文件。发布后刷新 AI 客户端的 Skill 列表，以当前版本读取内容。
 

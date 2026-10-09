@@ -204,12 +204,11 @@ export class RegistryAuth {
   }
 
   public verifyAdminSession(sessionHash: string, nowMs: number): { csrf_hash: string } | undefined {
-    const row = this.storage.sql.exec<SessionRow>(
-      `SELECT s.csrf_hash, s.expires_at_ms, s.session_version FROM admin_sessions s
+    const row = this.storage.sql.exec<SessionRow & { current_session_version: number }>(
+      `SELECT s.csrf_hash, s.expires_at_ms, s.session_version, a.session_version AS current_session_version FROM admin_sessions s
        JOIN admin_settings a ON a.id = 1 WHERE s.session_hash = ?`, sessionHash,
     ).toArray()[0];
-    const settings = this.settings();
-    if (row === undefined || settings === undefined || row.expires_at_ms <= nowMs || row.session_version !== settings.session_version) {
+    if (row === undefined || row.expires_at_ms <= nowMs || row.session_version !== row.current_session_version) {
       if (row !== undefined) {
         try { this.storage.sql.exec("DELETE FROM admin_sessions WHERE session_hash = ?", sessionHash); } catch { /* session cleanup is optional */ }
       }

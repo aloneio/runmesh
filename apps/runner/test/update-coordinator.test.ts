@@ -446,6 +446,60 @@ describe("independent update coordinator", () => {
     expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("restore");
   });
 
+  it.each(["reported", "same_terminal", "replaced_operation", "nonterminal"] as const)("preserves the replacement journal when the installation lease is lost during terminal acknowledgement: %s", async response => {
+    const test = fixture(), saved = { ...recovering(), phase: "succeeded" as const };
+    const replacement: UpdateJournal = { ...saved, phase: "claimed", operation: { ...saved.operation, operation_id: "upgrade_2", state: "verifying" } };
+    test.setJournal(saved);
+    let held = true;
+    const replaceOwner = () => { held = false; test.setJournal(replacement); };
+    const cloud = { ...test.options.cloud,
+      report: async (...args: Parameters<typeof test.options.cloud.report>) => {
+        if (args[1] !== "succeeded") return test.options.cloud.report(...args);
+        if (response !== "reported") throw new MaintenanceHttpError(409);
+        const result = await test.options.cloud.report(...args);
+        replaceOwner();
+        return result;
+      },
+      poll: async (): Promise<CloudUpdateObservation> => {
+        const result = await test.options.cloud.poll();
+        const operation: CloudUpdateOperation = response === "replaced_operation" ? replacement.operation
+          : { ...saved.operation, state: response === "nonterminal" ? "checking" : "succeeded" };
+        replaceOwner();
+        return { ...result, operation };
+      },
+    };
+    const error = await new UpdateCoordinator({ ...test.options, cloud,
+      assertInstallationLock: () => { if (!held) throw new Error("lease lost"); },
+    }).runOnce().then(() => undefined, cause => cause);
+    expect({ error: error instanceof Error ? error.message : undefined, active: test.active(),
+      mutations: test.events.filter(event => event === "complete" || event === "stop" || event === "restore" || event.startsWith("local:")),
+    }).toEqual({ error: "lease lost", active: replacement, mutations: [] });
+  });
+
+  it.each(["inspect", "snapshot", "stage"] as const)("preserves the replacement journal when the installation lease is lost during %s", async boundary => {
+    const test = fixture();
+    const replacement: UpdateJournal = { ...recovering(), phase: "claimed", operation: { ...recovering().operation, operation_id: "upgrade_2", state: "verifying" } };
+    let held = true, replacedAt = 0;
+    const replaceOwner = (observed: typeof boundary) => {
+      if (observed !== boundary) return;
+      held = false; test.setJournal(replacement); replacedAt = test.events.length;
+    };
+    const error = await new UpdateCoordinator({ ...test.options,
+      assertInstallationLock: () => { if (!held) throw new Error("lease lost"); },
+      installation: { ...test.options.installation, inspect: async () => {
+        const result = await test.options.installation.inspect(); replaceOwner("inspect"); return result;
+      } },
+      service: { ...test.options.service, snapshot: async () => {
+        const result = await test.options.service.snapshot(); replaceOwner("snapshot"); return result;
+      } },
+      stage: async (...args) => {
+        const result = await test.options.stage(...args); replaceOwner("stage"); return result;
+      },
+    }).runOnce().then(() => undefined, cause => cause);
+    expect({ error: error instanceof Error ? error.message : undefined, active: test.active(), mutations: test.events.slice(replacedAt) })
+      .toEqual({ error: "lease lost", active: replacement, mutations: [] });
+  });
+
   it("retains the fence after a native failure and retries the owned recovery when it becomes available", async () => {
     const test = fixture(); test.setJournal(recovering());
     await expect(new UpdateCoordinator({ ...test.options, installation: { ...test.options.installation, restore: async () => { throw new Error("disk unavailable"); } } }).runOnce()).rejects.toThrow("rollback_failed");
@@ -509,8 +563,14 @@ describe("independent update coordinator", () => {
 
   it("never switches or restores after losing the OS installation lease", async () => {
     const test = fixture(); let held = true; const originalStop = test.options.service.stop;
-    await expect(new UpdateCoordinator({ ...test.options, assertInstallationLock: () => { if (!held) throw new Error("lease lost"); }, service: { ...test.options.service, stop: async () => { await originalStop(); held = false; } } }).runOnce()).rejects.toThrow("rollback_failed");
+    const assertInstallationLock = () => { if (!held) throw new Error("lease lost"); };
+    await expect(new UpdateCoordinator({ ...test.options, assertInstallationLock, service: { ...test.options.service, stop: async () => { await originalStop(); held = false; } } }).runOnce()).rejects.toThrow("lease lost");
     expect(test.events).not.toContain("switch"); expect(test.events).not.toContain("restore");
-    expect(test.active()?.phase).toBe("recovery_required");
+    expect(test.active()?.phase).toBe("stopping");
+    // The last write made while holding the lease already records possible
+    // native work. A new lease holder can recover it without an unowned write.
+    held = true;
+    await new UpdateCoordinator({ ...test.options, assertInstallationLock }).runOnce();
+    expect(test.events).toContain("restore"); expect(test.operation().state).toBe("rolled_back"); expect(test.active()).toBeUndefined();
   });
 });
