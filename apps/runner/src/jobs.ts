@@ -15,12 +15,12 @@ import type { PathPolicy } from "./path-policy.js";
 import type { JobRecord, RecoveryLiveness, JobEvent } from "./jobs/records.js";
 export type { JobRecord, RecoveryLiveness, LocalJobStatus, JobEvent } from "./jobs/records.js";
 import { isActive, occupiesProcessSlot, sameJobProcessIdentity, safeJobId, normalizeJobRecord, isJobStatus, nextJobUpdate } from "./jobs/records.js";
-import { parseInvocation, paramsObject, bounded, positiveInteger, boundedPositiveInteger, relativeWorkspacePath, safeOptionalIdentifier, safeOptionalRequestId, launchRequestFingerprint, isErrno } from "./jobs/values.js";
+import { parseInvocation, paramsObject, bounded, positiveInteger, relativeWorkspacePath, safeOptionalIdentifier, safeOptionalRequestId, launchRequestFingerprint, isErrno } from "./jobs/values.js";
 import { terminalRecoveredJob } from "./jobs/recovery.js";
 import { nativeJobFiles } from "./jobs/storage.js";
 import { nativeJobProcesses, type ProcessTerminator } from "./jobs/process.js";
 import { JobLogReader } from "./jobs/logs.js";
-import { MAX_MAINTENANCE_JOB_RECORDS } from "./maintenance-contract.js";
+import { effectiveJobStorageLimits } from "./config.js";
 
 /** @internal Internal composition seam; no CLI or wire configuration exposes adapters. */
 export interface JobManagerDependencies { readonly files?: JobFilePort; readonly processes?: JobProcessPort; readonly persistence?: JobPersistencePort }
@@ -46,10 +46,6 @@ export interface JobManagerOptions {
 
 const MAX_INPUT_BYTES = 64 * 1024;
 const TERMINAL_OBSERVATION_TIMEOUT_MS = 5_000;
-const DEFAULT_MAX_RETAINED_JOBS = 100;
-const DEFAULT_MAX_LOG_BYTES_PER_JOB = 4 * 1024 * 1024;
-const DEFAULT_MAX_TOTAL_LOG_BYTES = 32 * 1024 * 1024;
-const MAX_CONFIGURED_LOG_BYTES = 512 * 1024 * 1024;
 
 type TerminationCheck =
   | { readonly safe: true }
@@ -171,10 +167,10 @@ export class JobManager {
     this.runnerStatePath = join(this.stateDir, "runner.json");
     this.runnerId = options.runnerId ?? "runner";
     this.maxConcurrentJobs = positiveInteger(options.maxConcurrentJobs ?? 1, "maxConcurrentJobs");
-    this.maxRetainedJobs = boundedPositiveInteger(options.maxRetainedJobs ?? DEFAULT_MAX_RETAINED_JOBS, 1, MAX_MAINTENANCE_JOB_RECORDS, "maxRetainedJobs");
-    this.maxLogBytesPerJob = boundedPositiveInteger(options.maxLogBytesPerJob ?? DEFAULT_MAX_LOG_BYTES_PER_JOB, 1, MAX_CONFIGURED_LOG_BYTES, "maxLogBytesPerJob");
-    this.maxTotalLogBytes = boundedPositiveInteger(options.maxTotalLogBytes ?? DEFAULT_MAX_TOTAL_LOG_BYTES, 1, MAX_CONFIGURED_LOG_BYTES, "maxTotalLogBytes");
-    if (this.maxTotalLogBytes < this.maxLogBytesPerJob) throw new Error("maxTotalLogBytes must be at least maxLogBytesPerJob");
+    const storageLimits = effectiveJobStorageLimits(options);
+    this.maxRetainedJobs = storageLimits.maxRetainedJobs;
+    this.maxLogBytesPerJob = storageLimits.maxLogBytesPerJob;
+    this.maxTotalLogBytes = storageLimits.maxTotalLogBytes;
     this.onEvent = options.onEvent ?? (() => undefined);
     // Keep the injectable public seam free of Node-only types so consumers of
     // the published declaration graph do not need @types/node. Native

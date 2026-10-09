@@ -42,11 +42,17 @@ it("resolves the current environment before freezing its latest version", async 
   expect(resolveRunnerReleaseDescriptor).toHaveBeenCalled(); expect(resolveExactRunnerRelease).toHaveBeenCalledWith("0.1.7-dev.42");
   expect(f.writes[0]?.input.target_version).toBe("0.1.7-dev.42");
 });
-it("does not create an operation when exact release verification fails", async () => {
+it.each([
+  ["en", "The selected Runner release could not be verified. No version change was requested."],
+  ["zh-CN", "所选 Runner 版本验证失败，请重试。"],
+] as const)("renders failed release verification in %s without creating an operation", async (locale, message) => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const f = fixture(); vi.mocked(resolveExactRunnerRelease).mockRejectedValue(new Error("PRIVATE_RELEASE_ERROR"));
   const response = await handleBrowserRunnerAction(f.localEnv, f.form, "https://worker.test", f.runnerId, "version-policy");
-  expect(response.status).toBe(503); expect(f.writes).toEqual([]); expect(await response.text()).not.toContain("PRIVATE_RELEASE_ERROR");
+  const localized = localizeHtmlResponse(new Request(`https://worker.test/admin/runners/${encodeURIComponent(f.runnerId)}?lang=${locale}`), response);
+  expect(localized.status).toBe(503); expect(localized.headers.get("content-language")).toBe(locale); expect(f.writes).toEqual([]);
+  const html = await localized.text();
+  expect(html).toContain(`data-admin-error>${message}</p>`); expect(html).not.toContain("PRIVATE_RELEASE_ERROR");
   expect(warn).toHaveBeenCalledExactlyOnceWith({ event: "runner_update_release_verification_failed", phase: "verification", reason: "unexpected" });
 });
 it("logs fixed release failure diagnostics without exception details or creating an operation", async () => {

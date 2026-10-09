@@ -1,5 +1,6 @@
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, parse, relative, resolve, sep } from "node:path";
+import { MAX_MAINTENANCE_JOB_RECORDS } from "./maintenance-contract.js";
 
 export interface PermissionSet {
   readonly read: boolean;
@@ -67,10 +68,33 @@ const MAX_TOKEN_LENGTH = 4_096;
 const MAX_DISCONNECT_AFTER_MS = 24 * 60 * 60 * 1_000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 export const DEFAULT_MAX_CONCURRENT_JOBS = 2;
+const DEFAULT_MAX_RETAINED_JOBS = 100;
+const DEFAULT_MAX_LOG_BYTES_PER_JOB = 4 * 1024 * 1024;
+const DEFAULT_MAX_TOTAL_LOG_BYTES = 32 * 1024 * 1024;
+const MAX_CONFIGURED_LOG_BYTES = 512 * 1024 * 1024;
 
 /** Keep execution admission and advertised capability on one effective value. */
 export function effectiveMaxConcurrentJobs(value: number | undefined): number {
   return value ?? DEFAULT_MAX_CONCURRENT_JOBS;
+}
+
+/** Configuration and the supervisor must admit the same effective storage limits. */
+export function effectiveJobStorageLimits(options: Pick<RunnerConfig, "maxRetainedJobs" | "maxLogBytesPerJob" | "maxTotalLogBytes">): {
+  readonly maxRetainedJobs: number;
+  readonly maxLogBytesPerJob: number;
+  readonly maxTotalLogBytes: number;
+} {
+  const limits = {
+    maxRetainedJobs: options.maxRetainedJobs ?? DEFAULT_MAX_RETAINED_JOBS,
+    maxLogBytesPerJob: options.maxLogBytesPerJob ?? DEFAULT_MAX_LOG_BYTES_PER_JOB,
+    maxTotalLogBytes: options.maxTotalLogBytes ?? DEFAULT_MAX_TOTAL_LOG_BYTES,
+  };
+  for (const [name, maximum] of [["maxRetainedJobs", MAX_MAINTENANCE_JOB_RECORDS], ["maxLogBytesPerJob", MAX_CONFIGURED_LOG_BYTES], ["maxTotalLogBytes", MAX_CONFIGURED_LOG_BYTES]] as const) {
+    const supplied = options[name];
+    if (supplied !== undefined && (!Number.isSafeInteger(supplied) || supplied < 1 || supplied > maximum)) throw new Error(`${name} must be an integer from 1 to ${maximum}`);
+  }
+  if (limits.maxTotalLogBytes < limits.maxLogBytesPerJob) throw new Error("maxTotalLogBytes must be at least maxLogBytesPerJob");
+  return limits;
 }
 
 export async function validateRunnerConfig(options: RawRunnerOptions): Promise<RunnerConfig> {
@@ -102,9 +126,7 @@ export async function validateRunnerConfig(options: RawRunnerOptions): Promise<R
   if (options.maxConcurrentJobs !== undefined && (!Number.isSafeInteger(options.maxConcurrentJobs) || options.maxConcurrentJobs < 1 || options.maxConcurrentJobs > 64)) {
     throw new Error("--max-concurrent-jobs must be an integer from 1 to 64");
   }
-  for (const [name, value] of [["maxRetainedJobs", options.maxRetainedJobs], ["maxLogBytesPerJob", options.maxLogBytesPerJob], ["maxTotalLogBytes", options.maxTotalLogBytes]] as const) {
-    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 512 * 1024 * 1024)) throw new Error(`--${name} must be a positive bounded integer`);
-  }
+  effectiveJobStorageLimits(options);
   if (options.disconnectAfterMs !== undefined && (!Number.isSafeInteger(options.disconnectAfterMs) || options.disconnectAfterMs < 1 || options.disconnectAfterMs > MAX_DISCONNECT_AFTER_MS)) {
     throw new Error("--disconnect-after-ms must be a positive bounded integer");
   }

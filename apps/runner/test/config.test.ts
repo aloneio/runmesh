@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import { reconnectDelayMs } from "../src/backoff.js";
 import { DEFAULT_MAX_CONCURRENT_JOBS, parseRunnerArgs, validateRunnerConfig } from "../src/config.js";
 import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
 import { defaultRunnerStateDir } from "../src/state-path.js";
+import { RunnerRuntime } from "../src/runtime.js";
 
 describe("runner configuration", () => {
   it("canonicalizes workspace roots and rejects malformed configuration", async () => {
@@ -71,6 +72,46 @@ describe("runner configuration", () => {
   it("parses explicit persistent state and transport-disconnect test controls", () => {
     expect(parseRunnerArgs(["--state-dir", "/tmp/state", "--disconnect-after-ms", "25", "--disconnect-control-file", "/tmp/disconnect"])).toMatchObject({ stateDir: "/tmp/state", disconnectAfterMs: 25, disconnectControlFile: "/tmp/disconnect" });
     expect(() => parseRunnerArgs(["--disconnect-after-ms", "0"])).toThrow("positive integer");
+  });
+});
+
+describe("Job storage configuration", () => {
+  const base = { server: "wss://example.test", token: "0123456789abcdef", runnerId: "runner-limits" } as const;
+  const maximumBytes = 512 * 1024 * 1024;
+  it.each([
+    { name: "defaults", limits: {} },
+    { name: "retained-record maximum", limits: { maxRetainedJobs: 10_000 } },
+    { name: "minimum matching limits", limits: { maxRetainedJobs: 1, maxLogBytesPerJob: 1, maxTotalLogBytes: 1 } },
+    { name: "maximum matching byte limits", limits: { maxLogBytesPerJob: maximumBytes, maxTotalLogBytes: maximumBytes } },
+    { name: "per-job limit at the default total", limits: { maxLogBytesPerJob: 32 * 1024 * 1024 } },
+    { name: "total limit at the default per-job limit", limits: { maxTotalLogBytes: 4 * 1024 * 1024 } },
+  ])("constructs Runtime from a validated configuration with $name", async ({ limits }) => {
+    const root = await mkdtemp(join(tmpdir(), "runmesh-storage-config-"));
+    const stateDir = join(root, "state");
+    try {
+      const config = await validateRunnerConfig({ ...base, ...limits, stateDir });
+      expect(config).toMatchObject(limits);
+      expect(() => new RunnerRuntime({ config })).not.toThrow();
+      // Construction must not initialize storage or discover/start a process.
+      await expect(lstat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    { name: "retained-record overflow", limits: { maxRetainedJobs: 10_001 }, message: "maxRetainedJobs" },
+    { name: "per-job byte overflow", limits: { maxLogBytesPerJob: maximumBytes + 1 }, message: "maxLogBytesPerJob" },
+    { name: "total byte overflow", limits: { maxTotalLogBytes: maximumBytes + 1 }, message: "maxTotalLogBytes" },
+    { name: "per-job limit above the default total", limits: { maxLogBytesPerJob: 32 * 1024 * 1024 + 1 }, message: "maxTotalLogBytes" },
+    { name: "total limit below the default per-job limit", limits: { maxTotalLogBytes: 4 * 1024 * 1024 - 1 }, message: "maxTotalLogBytes" },
+    { name: "explicit total below the per-job limit", limits: { maxLogBytesPerJob: 2, maxTotalLogBytes: 1 }, message: "maxTotalLogBytes" },
+  ])("rejects $name during configuration validation", async ({ limits, message }) => {
+    await expect(validateRunnerConfig({ ...base, ...limits })).rejects.toThrow(message);
+  });
+
+  it.each(["maxRetainedJobs", "maxLogBytesPerJob", "maxTotalLogBytes"] as const)("rejects invalid numeric %s values", async field => {
+    for (const value of [0, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      await expect(validateRunnerConfig({ ...base, [field]: value })).rejects.toThrow(field);
+    }
   });
 });
 
