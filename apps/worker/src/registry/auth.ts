@@ -5,7 +5,7 @@ import type { McpRunnerSelectionResult } from "../contracts/runner-selection.js"
 import { isSafeIdentifier } from "../security.js";
 import { AUTH_SOURCE_RETENTION_MS } from "../auth-throttle.js";
 import { MAX_AUTH_THROTTLE_KEYS } from "../auth-throttle.js";
-import { reserveSourceAuthAttempt } from "../auth-throttle.js";
+import { reserveSourceAuthAttempt, sourceAuthGlobalRetryAfter } from "../auth-throttle.js";
 import type { AuthThrottleState } from "../auth-throttle.js";
 import type { CodingScope, McpClientRecord, VerifiedMcpClient, AdminSettingsRow, AuthThrottleRow, AuthThrottleKind, SessionRow, McpClientRow } from './records.js';
 import { CLIENT_LAST_USED_WRITE_INTERVAL_MS, AUTH_THROTTLE_FAILURE_THRESHOLD, AUTH_THROTTLE_INITIAL_BLOCK_MS, AUTH_THROTTLE_MAX_BLOCK_MS } from './records.js';
@@ -55,6 +55,9 @@ export class RegistryAuth {
           }
           const prior = read(key);
           if (prior !== undefined && prior.blocked_until_ms > nowMs) return { allowed: false, retry_after_ms: prior.blocked_until_ms - nowMs };
+          const globalKey = `${kind}:global`, priorGlobal = read(globalKey);
+          const retryAfter = sourceAuthGlobalRetryAfter(priorGlobal, nowMs);
+          if (retryAfter > 0) return { allowed: false, retry_after_ms: retryAfter };
           if (nowMs >= this.sourceThrottleMaintenanceAtMs) {
             const cutoff = nowMs - AUTH_SOURCE_RETENTION_MS;
             if (this.storage.sql.exec("SELECT 1 FROM auth_source_throttle WHERE updated_at_ms < ? LIMIT 1", cutoff).toArray().length > 0) {
@@ -69,7 +72,9 @@ export class RegistryAuth {
             if (candidates.length < needed) return { allowed: false, retry_after_ms: 60_000 };
             for (const candidate of candidates) this.storage.sql.exec("DELETE FROM auth_source_throttle WHERE id = ?", candidate.id);
           }
-          return reserveSourceAuthAttempt({ read, write: (id, state) => {
+          // This synchronous transaction cannot change an active global window.
+          // Reuse its observation rather than adding a read to admitted attempts.
+          return reserveSourceAuthAttempt({ read: id => id === globalKey ? priorGlobal : read(id), write: (id, state) => {
             this.storage.sql.exec(
               `INSERT INTO auth_source_throttle (id, failed_attempts, blocked_until_ms, updated_at_ms) VALUES (?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET failed_attempts = excluded.failed_attempts, blocked_until_ms = excluded.blocked_until_ms, updated_at_ms = excluded.updated_at_ms`,

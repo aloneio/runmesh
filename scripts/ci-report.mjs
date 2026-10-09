@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { lstat, mkdir, writeFile, rename, rm } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sourceGitEnvironment, sourceIndexProblem, sourceDirectoryIdentity, sameDirectoryIdentity } from "./source-git.mjs";
+import { writeCiEvidenceFile } from "./evidence-io.mjs";
 
 export const ROOT = fileURLToPath(new URL("../", import.meta.url));
 export function sourceObservation(root = ROOT) {
@@ -54,15 +52,8 @@ export function gateJUnit(report) {
 }
 
 export async function writeGateReport(report, root = ROOT) {
-  const directory = join(root, "ci-results");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const info = await lstat(directory); assert.ok(info.isDirectory() && !info.isSymbolicLink(), "unsafe report directory");
   assert.match(report.gate, /^[a-z][a-z0-9_]{0,63}$/u);
   for (const [extension, body] of [["json", JSON.stringify(report, null, 2) + "\n"], ["xml", gateJUnit(report)]]) {
-    const target = join(directory, `${report.gate}.${extension}`), temporary = join(directory, `${randomUUID()}.tmp`);
-    const old = await lstat(target).catch(error => { if (error.code !== "ENOENT") throw error; });
-    assert.ok(old === undefined || old.isFile() && !old.isSymbolicLink(), "unsafe existing report");
-    try { await writeFile(temporary, body, { flag: "wx", mode: 0o600 }); await rename(temporary, target); }
-    finally { await rm(temporary, { force: true }); }
+    await writeCiEvidenceFile(root, `${report.gate}.${extension}`, body);
   }
 }

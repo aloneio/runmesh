@@ -545,11 +545,28 @@ test("language controls delegate the full destination to the navigation owner", 
   const root = { querySelectorAll: selector => selector === "[data-lang-toggle]" ? [link] : [], querySelector: () => null };
   controls.bindPageControls(root); controls.bindPageControls(root);
   let prevented = false;
-  link.dispatch("click", { preventDefault() { prevented = true; } });
+  link.dispatch("click", { button: 0, preventDefault() { prevented = true; } });
   assert.equal(prevented, true);
   assert.deepEqual(destinations, ["https://worker.test/admin/central?connected=example&lang=zh-CN#tools"]);
   assert.equal(location.href, "https://worker.test/admin/central?connected=example#tools");
   assert.match(document.cookie, /^runmesh_lang=zh-CN;/u);
+});
+
+for (const gesture of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }, { defaultPrevented: true }])
+test("language controls preserve native navigation for " + JSON.stringify(gesture), () => {
+  const document = { documentElement: { lang: "en" }, cookie: "runmesh_lang=en" }, destinations = [];
+  const location = { href: "https://worker.test/admin/clients#add-client" };
+  const controls = createPageControls({ document, window: {}, navigator: {}, location,
+    locale: createLocale({ document }), navigate: url => destinations.push(url) });
+  const link = element(); link.setAttribute("data-lang-toggle", "zh-CN"); link.setAttribute("href", "?lang=zh-CN");
+  const root = { querySelectorAll: selector => selector === "[data-lang-toggle]" ? [link] : [], querySelector: () => null };
+  controls.bindPageControls(root);
+  let prevented = false;
+  link.dispatch("click", { button: 0, ...gesture, preventDefault() { prevented = true; } });
+  assert.equal(prevented, false, "A browser-owned or already handled click must keep its default navigation intent");
+  assert.deepEqual(destinations, [], "The current document and its drafts remain active");
+  assert.equal(location.href, "https://worker.test/admin/clients#add-client");
+  assert.equal(document.cookie, "runmesh_lang=en", "Only an ordinary language click changes this document's preference");
 });
 
 function permissionFormFixture(withProfile = false) {

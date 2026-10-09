@@ -152,9 +152,19 @@ export async function checkAdminNavigation(executable) {
         assert.equal(await label.inputValue(), 'Unsaved connection label', 'Opening the repository preserves unsaved form values');
         assert.equal(requests.filter(request => request.path === '/admin/clients').length, reads, 'The repository link bypasses internal navigation');
       } finally { await repository.close(); }
+      for (const modifier of ['ControlOrMeta', 'Shift']) {
+        const opened = page.context().waitForEvent('page', { timeout: 5000 });
+        await page.locator('[data-lang-toggle="zh-CN"]').click({ modifiers: [modifier] });
+        const translated = await opened;
+        try {
+          await translated.waitForURL(origin + '/admin/clients?lang=zh-CN');
+          assert.equal(page.url(), consoleUrl, 'Modified language navigation keeps the console on its current page');
+          assert.equal(await label.inputValue(), 'Unsaved connection label', 'Modified language navigation preserves the current form draft');
+        } finally { await translated.close(); }
+      }
     } finally { await page.close(); }
     assert.deepEqual(errors, []);
-    return { state: 'passed', scenarios: scenarios.length + 9, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, enrollment_layout_scope_restored: true, fragment_focus_and_scroll_restored: true, resized_same_page_fragments_visible: true, same_page_forms_preserved: true, repository_link_preserves_console: true, screenshots: 0 };
+    return { state: 'passed', scenarios: scenarios.length + 11, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, enrollment_layout_scope_restored: true, fragment_focus_and_scroll_restored: true, resized_same_page_fragments_visible: true, same_page_forms_preserved: true, repository_link_preserves_console: true, modified_language_links_preserve_console: true, screenshots: 0 };
   } finally {
     await browser?.close();
     server.closeAllConnections();

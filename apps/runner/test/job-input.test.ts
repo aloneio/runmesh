@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import { JobManager } from "../src/jobs.js";
 import { PathPolicy } from "../src/path-policy.js";
 import { nativeJobProcesses } from "../src/jobs/process.js";
+import { rpcError } from "../src/runtime.js";
 
 // Exercise the public JobManager API with real Node streams and a process
 // adapter. No OS child is started and no private JobManager fields are read.
@@ -37,6 +38,20 @@ async function outcome(pending: Promise<unknown>): Promise<string> {
   } finally { if (timer !== undefined) clearTimeout(timer); }
 }
 function listeners(stream: Writable): number[] { return ["error", "close", "drain", "finish"].map(event => stream.listenerCount(event)); }
+
+it.each([undefined, 42, "x".repeat(65_537)])("classifies rejected Job input without delivering stdin %#", async data => {
+  const chunks: string[] = [];
+  const stdin = new Writable({ write(chunk, _encoding, done) { chunks.push(chunk.toString()); done(); } });
+  await withInput(stdin, async (manager, id) => {
+    await expect(manager.input(id, data).catch(rpcError)).resolves.toMatchObject({
+      code: "invalid_params", failure_class: "validation", operation_state: "not_started", next_action: "correct_request",
+    });
+    expect(chunks).toEqual([]);
+    expect(manager.get(id).status).toBe("running");
+    await expect(manager.input(id, "ok")).resolves.toEqual({ accepted: 2, eof: false });
+    expect(chunks).toEqual(["ok"]);
+  });
+});
 
 it("job input releases per-call listeners after repeated backpressure", async () => {
   const stdin = new Writable({ highWaterMark: 1, write(_chunk, _encoding, done) { setImmediate(done); } });

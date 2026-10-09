@@ -290,8 +290,8 @@ export class JobManager {
   private filteredList(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown }, visibleWorkspaces?: ReadonlySet<string>): JobRecord[] {
     const workspaceId = input.workspace_id;
     const status = input.status;
-    if (workspaceId !== undefined && typeof workspaceId !== "string") throw new Error("workspace_id must be a string");
-    if (status !== undefined && !isJobStatus(status)) throw new Error("status is invalid");
+    if (workspaceId !== undefined && typeof workspaceId !== "string") throw new RpcRuntimeError("invalid_params", "workspace_id must be a string");
+    if (status !== undefined && !isJobStatus(status)) throw new RpcRuntimeError("invalid_params", "status is invalid");
     const limit = bounded(input.limit, 1, 100, 100);
     return [...this.jobs.values()]
       .filter((job) => (visibleWorkspaces === undefined || visibleWorkspaces.has(job.workspace_id)) && (workspaceId === undefined || job.workspace_id === workspaceId) && (status === undefined || job.status === status))
@@ -313,9 +313,9 @@ export class JobManager {
   }
 
   public get(jobId: unknown): JobRecord {
-    if (typeof jobId !== "string") throw new Error("job_id is required");
+    if (typeof jobId !== "string") throw new RpcRuntimeError("invalid_params", "job_id is required");
     const job = this.jobs.get(jobId);
-    if (job === undefined) throw new Error("job not found");
+    if (job === undefined) throw new RpcRuntimeError("not_found", "job not found");
     return job;
   }
 
@@ -786,9 +786,9 @@ export class JobManager {
   public async input(jobId: unknown, data: unknown, closeStdin = false): Promise<{ accepted: number; eof: boolean }> {
     const job = this.get(jobId);
     if (data !== undefined && (typeof data !== "string" || Buffer.byteLength(data, "utf8") > MAX_INPUT_BYTES)) {
-      throw new Error("input must be a UTF-8 string no larger than 65536 bytes");
+      throw new RpcRuntimeError("invalid_params", "input must be a UTF-8 string no larger than 65536 bytes");
     }
-    if (data === undefined && !closeStdin) throw new Error("input data or close_stdin is required");
+    if (data === undefined && !closeStdin) throw new RpcRuntimeError("invalid_params", "input data or close_stdin is required");
     const child = this.processes.get(job.job_id);
     if (child === undefined || job.status !== "running") throw new Error("job does not accept input");
     const stdin = child.stdin;

@@ -49,6 +49,67 @@ async function waitFor<T>(get: () => T, predicate: (value: T) => boolean, timeou
   throw new Error("timed out waiting for process");
 }
 
+describe("Job request failure semantics", () => {
+  it("classifies direct JobManager parameter and shell permission failures at their source", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      await expect(manager.start(null).catch(rpcError)).resolves.toMatchObject({ code: "invalid_params", operation_state: "not_started", next_action: "correct_request" });
+      expect(() => manager.list({ workspace_id: 42 })).toThrowError(expect.objectContaining({ code: "invalid_params" }));
+      await expect(manager.start({ workspace_id: test.workspace.workspaceId, command: "echo", shell: true }).catch(rpcError)).resolves.toMatchObject({
+        code: "permission_denied", failure_class: "authorization", operation_state: "not_started", next_action: "refresh_permissions",
+      });
+      expect(manager.list()).toEqual([]);
+    } finally { await test.cleanup(); }
+  });
+
+  it.each([
+    ["exec.start", { command: [] }],
+    ["exec.start", { command: process.execPath, args: [null] }],
+    ["exec.start", { command: process.execPath, created_by_client_id: "invalid client" }],
+    ["job.list", { status: "invalid" }],
+    ["job.list", { limit: 0 }],
+    ["job.get", {}],
+  ] as const)("classifies rejected %s input before any command starts", async (method, params) => {
+    const test = await fixture();
+    try {
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const runtime = new RunnerRuntime({ config, stateDir: test.state });
+      await expect(runtime.dispatch(method, { workspace_id: test.workspace.workspaceId, ...params }).catch(rpcError)).resolves.toMatchObject({
+        code: "invalid_params", failure_class: "validation", operation_state: "not_started", next_action: "correct_request",
+      });
+      expect(runtime.jobs.list()).toEqual([]);
+    } finally { await test.cleanup(); }
+  });
+
+  it("reports a missing Job as an unavailable resource", async () => {
+    const test = await fixture();
+    try {
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const runtime = new RunnerRuntime({ config, stateDir: test.state });
+      await expect(runtime.dispatch("job.get", { job_id: "job-missing", expected_workspace_id: test.workspace.workspaceId }).catch(rpcError)).resolves.toMatchObject({
+        code: "not_found", failure_class: "resource", operation_state: "not_started", next_action: "correct_request",
+      });
+    } finally { await test.cleanup(); }
+  });
+
+  it.each([{ limit: 0 }, { offset: 1 }])("keeps invalid log pagination distinct from an unavailable log %#", async params => {
+    const test = await fixture();
+    try {
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const runtime = new RunnerRuntime({ config, stateDir: test.state });
+      await runtime.jobs.initialize();
+      const job = await runtime.jobs.start({ workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", ""] });
+      await waitFor(() => runtime.jobs.get(job.job_id), current => current.status === "succeeded");
+      await expect(runtime.dispatch("job.logs", { job_id: job.job_id, expected_workspace_id: test.workspace.workspaceId, ...params }).catch(rpcError)).resolves.toMatchObject({
+        code: "invalid_params", failure_class: "validation", operation_state: "not_started", next_action: "correct_request",
+      });
+      expect(runtime.jobs.get(job.job_id).status).toBe("succeeded");
+      await expect(runtime.dispatch("job.logs", { job_id: job.job_id, expected_workspace_id: test.workspace.workspaceId })).resolves.toMatchObject({ data: "" });
+    } finally { await test.cleanup(); }
+  });
+});
+
 describe("shell runtime discovery", () => {
   it("falls back to Windows PowerShell and preserves the command invocation contract", async () => {
     const probes: string[] = [];

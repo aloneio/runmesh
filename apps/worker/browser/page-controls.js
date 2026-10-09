@@ -77,6 +77,7 @@ function createPageControls({
     root.querySelectorAll("[data-lang-toggle]").forEach(function (link) {
       if (!claim(link, "locale")) return;
       link.addEventListener("click", function (event) {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         var locale2 = link.getAttribute("data-lang-toggle") || "en";
         rememberLocale(locale2);
         var url = new URL(location.href);

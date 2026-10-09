@@ -57,3 +57,27 @@ it("blocked source checks do not issue cleanup or mutation SQL", async () => {
     exec.mockRestore();
   });
 });
+
+it.each(["existing", "new"] as const)("exhausted shared KDF budget rejects %s sources without scanning or evicting buckets", async kind => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`global-readonly-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, (instance, state) => {
+    const now = Date.now(), sql = state.storage.sql;
+    sql.exec(`WITH RECURSIVE n(x) AS (SELECT 0 UNION ALL SELECT x+1 FROM n WHERE x<2045)
+      INSERT INTO auth_source_throttle SELECT 'login:' || printf('%064x',x),1,0,? FROM n`, now);
+    sql.exec("INSERT INTO auth_source_throttle VALUES ('login:global',120,?,?)", now + 60_000, now);
+    const source = kind === "existing" ? "0".repeat(64) : "f".repeat(64);
+    const original = sql.exec.bind(sql), cursors: SqlStorageCursor[] = [];
+    const spy = vi.spyOn(sql, "exec").mockImplementation((query: string, ...args: SqlStorageValue[]) => {
+      const cursor = original(query, ...args); cursors.push(cursor); return cursor;
+    });
+    try {
+      expect(instance.checkSourceAuthThrottle("login", source, now + 1)).toEqual({ allowed: false, retry_after_ms: 59_999 });
+      const cost = { rows_read: cursors.reduce((sum, cursor) => sum + cursor.rowsRead, 0), rows_written: cursors.reduce((sum, cursor) => sum + cursor.rowsWritten, 0) };
+      console.log(JSON.stringify({ scenario: "shared_kdf_rejection", source: kind, ...cost }));
+      expect(cost.rows_written).toBe(0);
+      expect(cost.rows_read).toBeLessThanOrEqual(4);
+    } finally { spy.mockRestore(); }
+    expect(sql.exec<{ total: number }>("SELECT COUNT(*) AS total FROM auth_source_throttle").one().total).toBe(2047);
+    expect(instance.checkSourceAuthThrottle("login", source, now + 60_000).allowed).toBe(true);
+  });
+});
