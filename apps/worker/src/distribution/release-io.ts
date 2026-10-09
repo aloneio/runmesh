@@ -45,6 +45,15 @@ export async function releasePhase<T>(phase: DevelopmentReleaseFailure["phase"],
   catch (error) { throw releaseError(error, phase, error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name) ? "timeout" : reason); }
 }
 
+/** Every redirect, retry and asset retains the request owner's original budget. */
+export function releaseFetchWithinDeadline(fetchImpl: typeof fetch, deadline: AbortSignal): typeof fetch {
+  return (input, init) => {
+    deadline.throwIfAborted();
+    const signal = init?.signal == null ? deadline : AbortSignal.any([deadline, init.signal]);
+    return fetchImpl(input, { ...init, signal });
+  };
+}
+
 export async function readDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined, timeoutMs?: number): Promise<CachedDevelopmentReleaseRecord | undefined> {
   if (cache === undefined) return undefined;
   if (timeoutMs !== undefined) {

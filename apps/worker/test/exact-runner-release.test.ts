@@ -43,3 +43,48 @@ it("distinguishes signature failure from signed manifest incompatibility", async
   const manifestError = await resolveExactRunnerRelease("0.1.7", assetFetch()).catch(error => error);
   expect(developmentReleaseFailure(manifestError)).toEqual({ phase: "verification", reason: "invalid_manifest" });
 });
+
+it.each(["headers", "body"] as const)("shares one exact-release deadline across sequential asset %s", async phase => {
+  vi.useFakeTimers();
+  const timeouts: number[] = [], signals: AbortSignal[] = [];
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+    timeouts.push(ms);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException("synthetic deadline", "TimeoutError")), ms);
+    return controller.signal;
+  });
+  const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const name = new URL(String(input)).pathname.split("/").at(-1)!;
+    const signal = init!.signal!;
+    signals.push(signal);
+    const bytes = new TextEncoder().encode(files[name]);
+    if (phase === "body") return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        const timer = setTimeout(() => { signal.removeEventListener("abort", stop); controller.enqueue(bytes); controller.close(); }, 9_000);
+        const stop = () => { clearTimeout(timer); controller.error(signal.reason); };
+        signal.addEventListener("abort", stop, { once: true });
+      },
+    }));
+    return new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => { signal.removeEventListener("abort", stop); resolve(new Response(bytes)); }, 9_000);
+      const stop = () => { clearTimeout(timer); reject(signal.reason); };
+      signal.addEventListener("abort", stop, { once: true });
+    });
+  });
+  let outcome: unknown;
+  const pending = resolveExactRunnerRelease("0.1.6", fetchImpl).then(value => { outcome = value; }, error => { outcome = developmentReleaseFailure(error); });
+  try {
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(signals).toHaveLength(3);
+    expect(signals[2]!.aborted).toBe(false);
+    expect(outcome).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(301);
+    expect(outcome).toEqual({ phase: "signature_descriptor", reason: "timeout" });
+    expect(signals[2]!.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(timeouts.filter(ms => ms === 20_000)).toHaveLength(1);
+  } finally {
+    await vi.advanceTimersByTimeAsync(40_000); await pending;
+    timeout.mockRestore(); vi.clearAllTimers(); vi.useRealTimers();
+  }
+});

@@ -12,7 +12,7 @@ export interface ContextFilePort {
 }
 export interface ContextRecordPort {
   hasContextRecords(workspaceId: string): Promise<boolean>;
-  readIndex(workspaceId: string, allowMissing: boolean): Promise<ContextIndex | undefined>;
+  readIndex(workspaceId: string): Promise<ContextIndex | undefined>;
   readPending(workspaceId: string): Promise<CheckpointIntent | undefined>;
   clearPending(expected: CheckpointIntent): Promise<void>;
   readRecord(workspaceId: string, contextId: string, revision: number): Promise<ContextRecord>;

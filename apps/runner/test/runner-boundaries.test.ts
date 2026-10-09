@@ -307,7 +307,7 @@ it("AR07 Context pending checkpoints fence index reads without opening record bo
   const read = vi.fn(nativeContextFiles.readJsonBounded);
   const files = { ...nativeContextFiles, pathExists: async () => true, readJsonBounded: read };
   const repository = new ContextRepository("synthetic-state", "synthetic-contexts", files);
-  await expect(repository.readIndex("w", true)).rejects.toMatchObject({ code: "context_index_stale" });
+  await expect(repository.readIndex("w")).rejects.toMatchObject({ code: "context_index_stale" });
   expect(read).not.toHaveBeenCalled();
 });
 
