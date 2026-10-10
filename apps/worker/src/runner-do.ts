@@ -499,7 +499,13 @@ export class RunnerDO {
     await this.scheduleHelloDeadline();
   }
 
-  public async webSocketClose(ws: WebSocket): Promise<void> {
+  public async webSocketClose(ws: WebSocket, code = 1000, reason = ""): Promise<void> {
+    // Finish the peer's close handshake before asynchronous session cleanup.
+    // 1005 represents an empty Close frame; transport-loss codes need no reply.
+    try {
+      if (code === 1005) ws.close();
+      else if (code !== 1006 && code !== 1015) ws.close(code, reason);
+    } catch { /* Cleanup must still retire the Runner session. */ }
     return this.disconnectSocket(ws, "offline", "runner connection closed");
   }
   public async webSocketError(ws: WebSocket): Promise<void> {

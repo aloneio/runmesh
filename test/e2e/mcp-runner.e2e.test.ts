@@ -14,6 +14,8 @@ import { inspectInputCases } from "../helpers/inspect-input-cases.js";
 import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
 import { spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../../scripts/worker-fixture.mjs";
 import { createTestHttpScope } from "../../scripts/test-http-scope.mjs";
+import WebSocket from "ws";
+import { decodeWireFrame, encodeWireFrame, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 
 const testHttp = createTestHttpScope();
 const fetch = testHttp.fetch;
@@ -1243,6 +1245,69 @@ describe.sequential("real local SQLite Runner sessions", () => {
     const result = await probeSessionConflict({ server: `${origin.replace("http:", "ws:")}/runner/connect`, runnerId: testRunner, token });
     expect(result).toMatchObject({ close_code: 4000, close_reason: "replaced by newer session", valid_sync_acknowledged: true,
       superseded_sync_acknowledged: true, same_credential_reconnected: true, new_session: true, recovery_echo: true });
+  });
+
+  it.each([
+    { name: "with status", code: 1000, reason: "runner stopped", expectedCode: 1000 },
+    { name: "without status", code: undefined, reason: undefined, expectedCode: 1005 },
+  ])("completes a Runner-initiated normal close handshake ($name)", async ({ name, code, reason, expectedCode }) => {
+    const closeRunnerId = name === "with status" ? "e2e-normal-close" : "e2e-empty-close";
+    const closeToken = "synthetic-normal-close-token-0123456789";
+    const registration = await fetch(`${origin}/admin/runners`, { method: "POST", signal: AbortSignal.timeout(5_000),
+      headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ runner_id: closeRunnerId, token: closeToken, execution_mode: "dedicated_user" }) });
+    await registration.body?.cancel();
+    expect(registration.status).toBe(200);
+    const address = new URL("/runner/connect", origin);
+    address.protocol = "ws:";
+    address.searchParams.set("runner_id", closeRunnerId);
+    const socket = new WebSocket(address, { headers: { Authorization: `Bearer ${closeToken}` }, handshakeTimeout: 5_000 });
+    // Keep teardown errors observed even after an individual wait has settled.
+    socket.on("error", () => {});
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error): void => {
+          clearTimeout(timer);
+          socket.off("error", onError); socket.off("message", onMessage); socket.off("close", onClose);
+          if (error) reject(error); else resolve();
+        };
+        const onError = (error: Error): void => finish(error);
+        const onClose = (): void => finish(new Error("Runner closed before welcome"));
+        const onMessage = (bytes: WebSocket.RawData): void => {
+          try {
+            const frame = decodeWireFrame(bytes.toString());
+            if (frame.type === "runner.welcome") finish();
+          } catch (error) { finish(error instanceof Error ? error : new Error("Invalid Runner welcome")); }
+        };
+        const timer = setTimeout(() => finish(new Error("Runner welcome timed out")), 5_000);
+        socket.once("error", onError); socket.once("close", onClose); socket.on("message", onMessage);
+        socket.once("open", () => socket.send(encodeWireFrame({
+          type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "normal-close-hello",
+          min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+          runner: { runner_id: closeRunnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: {
+            filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false,
+            max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {},
+          } },
+        })));
+      });
+      // A close event alone can be the transport timing out with code 1006.
+      // Require the peer's normal close response before the fallback deadline.
+      const closed = await new Promise<{ code: number; reason: string }>((resolve, reject) => {
+        const finish = (error?: Error, value?: { code: number; reason: string }): void => {
+          clearTimeout(timer); socket.off("close", onClose); socket.off("error", onError);
+          if (error) reject(error); else resolve(value!);
+        };
+        const onClose = (code: number, reason: Buffer): void => finish(undefined, { code, reason: reason.toString() });
+        const onError = (error: Error): void => finish(error);
+        const timer = setTimeout(() => finish(new Error("Runner normal close handshake timed out")), 5_000);
+        socket.once("close", onClose); socket.once("error", onError);
+        if (code === undefined) socket.close();
+        else socket.close(code, reason);
+      });
+      expect(closed).toEqual({ code: expectedCode, reason: reason ?? "" });
+    } finally {
+      if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+    }
   });
 });
 

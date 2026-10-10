@@ -155,7 +155,8 @@ describe("Runner update maintenance fencing", () => {
     });
   }
 
-  for (const event of ["close", "error"] as const) for (const fault of ["none", "uncertainty", "reply", "registry", "alarm", "combined"] as const) {
+  for (const event of ["close", "error"] as const) for (const fault of ["none", "close-reply", "uncertainty", "reply", "registry", "alarm", "combined"] as const) {
+    if (event === "error" && fault === "close-reply") continue;
     it(`${event} independently cleans up transport and retains maintenance evidence when ${fault} fails`, async () => {
       await runInDurableObject(scoped(), async (_existing, state) => {
         await call(fixture(state.storage).maintenance, "begin");
@@ -164,7 +165,9 @@ describe("Runner update maintenance fencing", () => {
         const attachment = { runnerId: owner.runner_id, lifecycleId: owner.lifecycle_id, sessionId: "closed-session", epoch: 4,
           credentialVersion: 1, protocolVersion: PROTOCOL_CURRENT_VERSION, authenticated: true,
           helloDeadlineMs: alarmAt, pendingUpdateRpcIds: ["pending-rpc"] };
-        const socket = { readyState: WebSocket.CLOSED, deserializeAttachment: () => attachment } as unknown as WebSocket;
+        const close = vi.fn();
+        if (fault === "close-reply") close.mockImplementation(() => { throw new Error("close response unavailable"); });
+        const socket = { readyState: WebSocket.CLOSED, close, deserializeAttachment: () => attachment } as unknown as WebSocket;
         const statePort = new Proxy(state, { get(target, key) {
           if (key === "getWebSockets") return () => [socket];
           const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
@@ -188,10 +191,12 @@ describe("Runner update maintenance fencing", () => {
         const removeAlarm = vi.spyOn(state.storage, "deleteAlarm");
         if (fault === "alarm" || fault === "combined") removeAlarm.mockRejectedValue(new Error("alarm unavailable"));
         try {
-          const closed = event === "close" ? instance.webSocketClose(socket) : instance.webSocketError(socket);
-          if (fault === "none") await closed;
+          const closed = event === "close" ? instance.webSocketClose(socket, 1000, "runner stopped") : instance.webSocketError(socket);
+          if (fault === "none" || fault === "close-reply") await closed;
           else if (fault === "combined") await expect(closed).rejects.toBeInstanceOf(AggregateError);
           else await expect(closed).rejects.toThrow("unavailable");
+          if (event === "close") expect(close).toHaveBeenCalledExactlyOnceWith(1000, "runner stopped");
+          else expect(close).not.toHaveBeenCalled();
           expect(replies.size).toBe(0);
           expect(resolve).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: "rpc.error", request_id: "pending-rpc",
             error: expect.objectContaining({ code: "runner_offline" }) }));
