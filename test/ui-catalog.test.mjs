@@ -5,7 +5,6 @@ import {parse} from "@babel/parser";
 import { ZH_UI_TEXT } from "../apps/worker/dist/ui-catalog.js";
 import { MESSAGES } from "../apps/worker/dist/i18n/messages.js";
 
-const code=readFileSync(new URL("../apps/worker/src/ui-catalog.ts",import.meta.url),"utf8");
 const catalog=ZH_UI_TEXT;
 const http = readdirSync(new URL("../apps/worker/src/http/", import.meta.url)).filter(file => file.endsWith(".ts"));
 const administratorErrorHelpers=new Set(["adminError","adminRunnerError","adminClientError","adminUpstreamError","adminSectionError"]);
@@ -70,5 +69,4 @@ test("keyed messages and legacy translation adapter are immutable and unambiguou
  assert.equal(Object.isFrozen(MESSAGES),true);assert.equal(Object.isFrozen(catalog),true);
  for(const value of Object.values(MESSAGES)) {assert.ok(Object.isFrozen(value));assert.equal(catalog[value.en],value['zh-CN']);}
  assert.equal(Object.keys(catalog).length,Object.keys(MESSAGES).length);
- assert.ok(code.includes('Object.freeze(Object.fromEntries(entries))'));
 });
