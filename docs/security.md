@@ -11,7 +11,8 @@ Every client with a valid credential can use the instance's enabled MCP tools an
 | Credential | Purpose and storage |
 | --- | --- |
 | Administrator password | PBKDF2-HMAC-SHA-256 with a random salt and versioned verifier |
-| Browser session | Random session/CSRF values; Registry stores hashes, version and expiry; cookies use `Secure`, `HttpOnly` and `SameSite=Strict` |
+| Browser session | Random session value; Registry stores its hash, credential version and expiry; the cookie uses `Secure`, `HttpOnly` and `SameSite=Strict` |
+| Administrator CSRF value | Bound to the session in Registry; its separate cookie uses `Secure` and `SameSite=Strict` and is readable by the browser application for request headers |
 | MCP URL secret | A 256-bit base64url path credential at `/<secret>/mcp`; Registry stores its SHA-256 verifier and short prefix |
 | Enrollment code | A 43-character single-use code for `POST /runner/enroll`; Registry stores its verifier, validity window and use state |
 | Runner token | Returned once at enrollment and kept in the private local profile; Registry stores a peppered HMAC verifier |

@@ -16,6 +16,14 @@
 > [!IMPORTANT]
 > Runmesh 按 PolyForm Noncommercial License 1.0.0 提供。个人、教育和非商业用途可按许可证使用；商业使用请先取得书面授权，详见 [商业许可](docs/legal/COMMERCIAL_LICENSE.zh-CN.md)。
 
+## 60 秒了解 Runmesh
+
+一个入口访问 Linux、macOS 和 Windows，连接 NAT 内网中的机器。换个 AI 客户端，继续使用同一套 MCP 和 Skill 配置。
+
+https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
+
+[下载 MP4](docs/media/runmesh-promo.zh-CN.mp4?raw=1) · [视频介绍与字幕](docs/media/README.zh-CN.md) · 60 秒，中文旁白与字幕。
+
 ## Runmesh 能做什么
 
 Runmesh 把 ChatGPT、Claude、Cursor 等支持 MCP 的客户端连接到你自己的电脑或服务器。你可以让 AI 在指定目录中查看文件、提出修改、执行经过授权的命令，并跟踪长时间运行的任务。

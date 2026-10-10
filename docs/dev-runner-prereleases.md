@@ -20,7 +20,7 @@ Versions are ordered by dev sequence. A delayed older batch therefore leaves a n
 
 ## Configure development release automation
 
-The maintained GitHub workflow `Dev Runner Prerelease` runs in `aloneio/runmesh` and attempts publication on every fifth dev push that creates a workflow run. Each release completes verification and signing in that run. To publish from your own repository, configure its release workflow and signing environment.
+The maintained GitHub workflow `Dev Runner Prerelease` runs in `aloneio/runmesh` and attempts publication on every fifth dev push that creates a workflow run. Each release completes verification and signing in that run. The checked-in publication scripts and Worker download URLs also use `aloneio/runmesh`. Publishing a fork requires reviewed source changes to the repository checks, API and asset URLs, and trusted public key, together with its workflow and signing environment. A self-hosted Worker can continue using the project's verified release channel without publishing a fork.
 
 Configure the GitHub environment `dev-release` for **branch dev only**, using `RELEASE_SIGNING_KEY`, `RELEASE_SIGNING_KEY_ID` and the checked-in public keyring. Keep the stable `release` environment restricted to main. Only the publish job's signing step receives the private key.
 

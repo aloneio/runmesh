@@ -16,7 +16,7 @@ The URL is the credential. Copy it exactly, including its secret path, and remov
 
 ## Use shared MCP tools and Skills
 
-Active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory tools include `remote_profiles`, `remote_tools`, `skill_list` and `skill_read`.
+Active clients share the instance's enabled MCP tools and Skills. Refresh the Runmesh connection in your client to load the current collection. You can ask the AI to find an available tool or read a Skill; directory and search tools include `remote_profiles`, `remote_tools`, `remote_search`, `skill_list` and `skill_read`.
 
 Use the digest from `skill_list` when reading a Skill. Reading `SKILL.md` includes the complete file manifest with paths, UTF-8 sizes and SHA-256 hashes; read its attachments as needed with that same digest. After the administrator updates or restores a version, refresh `skill_list` to use the current content.
 
@@ -25,8 +25,10 @@ Runmesh manages these connections and content reads. Continue to the machine-sel
 ## Choose a machine and workspace for computer access
 
 1. Call `runner_current` to check your current selection, and `runner_list` to find the intended machine.
-2. If no Runner is selected, call `runner_select` even when the list shows only one machine. Switching an existing selection requires `confirm_switch: true`. Confirm the result with `runner_current`.
+2. If no Runner is selected, use `runner_select` to choose the intended machine explicitly. Switching an existing selection requires `confirm_switch: true`. Confirm the result with `runner_current`.
 3. Call `workspace_list` to see your permitted workspace IDs. Start with `read` or `inspect` before changing files or starting commands.
+
+When the instance has exactly one registered Runner, a workspace or machine operation can select it automatically if the client is authorized and has no current selection. A list showing one visible Runner does not imply that it is the instance's only registered Runner. Explicit selection keeps the target clear.
 
 Use the workspace ID returned by `workspace_list` and file paths relative to that workspace. Your Runner selection persists while it is offline. Keep the original Runner selected when following up a Job.
 

@@ -1,4 +1,4 @@
-# Central OAuth and operation-local sessions (development)
+# Central OAuth and operation-local sessions
 
 > Maintainer reference: interfaces, protocol and verification boundaries. For everyday use, see the [user guide](../central-oauth.md).
 

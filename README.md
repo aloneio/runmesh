@@ -16,6 +16,14 @@
 > [!IMPORTANT]
 > Runmesh is provided under the PolyForm Noncommercial License 1.0.0. Commercial use requires separate written authorization. See [Commercial License](docs/legal/COMMERCIAL_LICENSE.md).
 
+## See Runmesh in 60 seconds
+
+One entry point for Linux, macOS and Windows. Reach machines behind NAT and keep your MCP connections and Skills available when you switch AI clients.
+
+https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
+
+[Download MP4](docs/media/runmesh-promo.zh-CN.mp4?raw=1) · [Video overview and subtitles](docs/media/README.md) — Chinese narration and captions, 60 seconds.
+
 ## What Runmesh does
 
 Runmesh connects ChatGPT, Claude, Cursor, and other MCP-compatible clients to computers you control. An AI client can inspect approved files, suggest or apply changes, run authorized commands, and follow long-running jobs.

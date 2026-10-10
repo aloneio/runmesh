@@ -20,7 +20,7 @@ Worker 通常在 60 秒后刷新版本选择，后台刷新期间可在验签后
 
 ## 配置开发版发布自动化
 
-维护中的 GitHub 工作流 `Dev Runner Prerelease` 在 `aloneio/runmesh` 运行，每收到第五次创建工作流运行的 dev 推送，就尝试发布。每次发布在该次运行中完成验证与签名。通过自己的仓库发布时，请配置对应的发布工作流和签名环境。
+维护中的 GitHub 工作流 `Dev Runner Prerelease` 在 `aloneio/runmesh` 运行，每收到第五次创建工作流运行的 dev 推送，就尝试发布。每次发布在该次运行中完成验证与签名。仓库内的发布脚本与 Worker 下载地址也使用 `aloneio/runmesh`。发布 fork 时，需要审阅并同步修改源码中的仓库校验、API 和资产地址、可信公钥，以及工作流和签名环境。自行部署的 Worker 可以继续使用项目已验证的发行通道，无需另行发布 fork。
 
 GitHub 环境 `dev-release` 仅允许 **dev 分支**，使用 `RELEASE_SIGNING_KEY`、`RELEASE_SIGNING_KEY_ID` 和源码中的公钥目录。正式 `release` 环境继续仅允许 main。私钥只交给发布任务的签名步骤。
 

@@ -16,9 +16,9 @@ The latest release follows the control plane's environment: a dev instance selec
 
 Runmesh verifies the published package, pauses new requests to that Runner, and waits for its local tasks to finish. It then switches the installed package and checks that the selected version reconnects to the control plane. The Runner keeps its identity, workspaces, credentials, task records and service account.
 
-If the new version fails to start or reconnect, the version manager restores the previous package. The panel reports the result. An interrupted change is recovered from a local journal when the manager starts again.
+If the new version fails to start or reconnect, the version manager attempts to restore the previous package. The panel reports the result. An interrupted change resumes recovery from a local journal when the manager starts again. If the panel reports `rollback_failed` or `local_state_invalid`, inspect the host's service and retained update state before requesting another change. A failed rollback keeps the maintenance hold in place while recovery is incomplete.
 
-Allow running tasks to finish before switching. If a task needs attention, resolve it in the task list or on the computer, then submit the version change again. A sleeping or disconnected computer picks up the request when its version manager can reach the control plane.
+Allow running tasks to finish before switching. Each wait for local work has a 15-minute limit; if the panel reports `busy_local_jobs`, resolve the task in the task list or on the computer, then submit the version change again. A sleeping or disconnected computer picks up the request when its version manager can reach the control plane. The manager normally checks for requests every 30–60 seconds while idle.
 
 ## Enable remote version management on an existing computer
 

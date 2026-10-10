@@ -38,7 +38,7 @@ npm run deploy:worker -- --env production
 npm run check:deployment -- https://your-worker.example <实际40位提交> main
 ```
 
-填写实际的 40 位提交；开发环境将最后一个参数改为 `dev`。核验器读取 `/health`，确认编译来源的提交和分支符合预期。请求超时时，先检查 Worker 是否可访问，再重新运行。
+填写实际的 40 位提交；开发环境将最后一个参数改为 `dev`。首个参数必须是精确的 HTTPS origin，例如 `https://your-worker.example`，省略尾斜杠、路径、查询参数和凭据。核验器读取一次 `/health`，确认编译来源的提交和分支符合预期。请求超时时，先检查 Worker 是否可访问，再重新运行。
 
 | 返回结果 | 含义与处理 |
 | --- | --- |

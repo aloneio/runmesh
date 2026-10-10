@@ -124,8 +124,10 @@ manual bearer configuration is supported. OAuth uses the existing deployment sec
 HTTPS ports, IP literals, private hosts, wildcards, URL credentials, queries and fragments are rejected.
 
 Create and enable a profile using the existing protected administration API.
-POST `/admin/central/discovery/{profile_id}` with `{"expected_revision":0}` and
-the administrator's existing session, same origin and matching CSRF token. The
+Read `GET /admin/central/catalogs/{profile_id}` and pass its `head.revision` as
+`expected_revision` to `POST /admin/central/discovery/{profile_id}`. Use
+`{"expected_revision":0}` only when the catalog read returns `{"state":"empty"}`.
+Requests use the administrator's existing session, same origin and matching CSRF token. The
 complete bounded tools/list result is stored and published atomically in one
 catalog revision. Every discovered tool is immediately available to authenticated
 clients; the connection requires no additional review or approval in the

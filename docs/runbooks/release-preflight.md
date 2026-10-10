@@ -11,11 +11,11 @@ Determine whether a candidate is ready for an activation decision using evidence
 ## Procedure
 
 1. Record the candidate's source SHA and inspect the working tree used to build it.
-2. Require hosted CI evidence for that SHA. Check the shared release-relevant jobs on GitHub and GitLab, and identify each required native-platform result.
-3. Run package/version, release-contract, license, Worker dry-run and package smoke checks. Verify the signed asset manifest with the repository's release tooling.
+2. Require hosted CI evidence for that SHA. Check GitHub's `verify-all` and its required jobs from the same selected run attempt, GitLab's `verify` and `browser`, and each required native-platform result. Use the [verification guide](../verification.md) to interpret reports and platform requirements.
+3. Run `npm run check:versions`, `node scripts/check-release-contract.mjs`, `npm run check:licenses`, `npm run validate:worker -- --dry-run` and `npm run pack:smoke`. Repeat Worker dry-run for `--env development` and `--env production` as required by CI. Verify the signed asset manifest through the [independent package verification procedure](../portable-runner-installation.md#independently-verify-a-downloaded-package).
 4. Record the intended Worker/Runner versions and test their protocol combination. Include strict older peers when adding optional fields or methods.
 5. Before a host restart, check disk space, account for active Jobs, confirm the service identity, and verify an independent recovery/control channel.
-6. Present the evidence for the activation decision. After approval, follow the release procedure for publication and distribution activation, the deployment procedure for the Worker, and the host upgrade procedure for each Runner. Preserve existing immutable release assets.
+6. Present the evidence for the activation decision. After approval, follow the [release procedure](../maintainers/release-process.md) for publication and distribution activation, the [deployment procedure](../deployment.md) for the Worker, and the [host upgrade procedure](../upgrading.md) for each Runner. Preserve existing immutable release assets.
 
 ## Exit conditions
 

@@ -47,7 +47,7 @@ If you deploy through a GitLab mirror, configure `scripts/sync-gitlab-dev.mjs` o
 
 ## Provision resources and secrets
 
-A standard deployment uses the Worker, SQLite-backed `RegistryDOv2`, `RunnerDOv2` and `CapabilitiesDOv1`, the `HISTORY_DB` D1 history database, static assets and version metadata. New installations provision their own account resources. Upgrades retain the live resource identities.
+A standard production deployment uses the Worker, SQLite-backed `RegistryDOv2`, `RunnerDOv2` and `CapabilitiesDOv1`, the `HISTORY_DB` D1 history database, static assets and version metadata. The checked-in development environment uses its own Durable Objects and stores history in Registry SQLite, with no D1 binding or Cron Trigger. New installations provision their own account resources. Upgrades retain the live resource identities and shared-capability settings described in [runtime configuration](runtime-config.md).
 
 Production uses one Cron Trigger (`*/15 * * * *`) for [D1 history retention](quota-resilience.md#retention). Reserve one slot within the target account's [Cron Trigger allowance](https://developers.cloudflare.com/workers/platform/limits/#account-plan-limits). If deployment reports error `10072`, review existing schedules and remove an obsolete schedule you manage, or increase the account allowance, then rerun deployment. A Worker upload can succeed before trigger configuration fails; verify the final deployment status and the `runmesh` Cron Trigger together.
 
@@ -128,7 +128,7 @@ runmesh start \
   --runner-id home-pc
 ```
 
-Use `POST /admin/runners/<runner_id>/rotate` to replace the token and `POST /admin/runners/<runner_id>/revoke` to revoke it. Protect token values in your automation's secret-management system. Browser administration uses its own session and password flow.
+Use `POST /admin/runners/<runner_id>/rotate` to replace the token and `POST /admin/runners/<runner_id>/revoke` to revoke it. Revocation requires a JSON body whose `confirmation` exactly matches the Runner ID, for example `{"confirmation":"home-pc"}`. Rotation returns the replacement token once; update the host's credential before reconnecting. Protect token values in your automation's secret-management system. Browser administration uses its own session and password flow.
 
 ## Operate and update the deployment
 

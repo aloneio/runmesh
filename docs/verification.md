@@ -2,7 +2,7 @@
 
 [简体中文](verification.zh-CN.md) · [Documentation](README.md) · [Release status](release-readiness.md)
 
-Use this guide when validating a source change or preparing an installation for release. Run commands from the repository root after installing the pinned toolchain and dependencies with `npm ci`. Choose the checks that cover your local change; release candidates must also pass the complete required CI. For an existing deployed installation, start with the [upgrade guide](upgrading.md).
+Use this guide when validating a source change or preparing an installation for release. Run commands from the repository root with the pinned toolchain. On a fresh checkout, run `npm ci` followed by `npm run build` to prepare generated modules and workspace exports used by the integration and tooling checks. Choose the checks that cover your local change; release candidates must also pass the complete required CI. For an existing deployed installation, start with the [upgrade guide](upgrading.md).
 
 ## Choose the appropriate checks
 
@@ -16,12 +16,12 @@ Use this guide when validating a source change or preparing an installation for 
 | Build and release tooling | `npm run test:release-tools` | Build, installer, release, architecture and verification-tool behavior |
 | Local source transport | `npm run test:e2e` | Real local MCP through Worker and a source Runner |
 | Installed package transport | `npm run test:package:e2e` | The newly packed, independently installed Runner participates in the same real local transport scenarios |
-| Browser flows | `npm run browser:install`, then `npm run test:browser` | Chromium navigation against a local Worker, plus MCP, Skill and OAuth page interactions |
+| Browser flows | On Linux, `npm run browser:install`, then `npm run test:browser` | Chromium navigation against a local Worker, plus MCP, Skill and OAuth page interactions |
 | Tracked security regressions | `npm run test:security` on Linux with a clean checkout | Regression results and release-readiness evidence for the checked-out candidate |
 
 `npm run test:unit` combines domain, contract, workspace and selected presentation tests. `npm test` adds source E2E. The complete release CI also runs the package, browser, platform, tooling and security checks. Worker and browser test commands use local test environments; deployed-instance checks follow the [upgrade guide](upgrading.md).
 
-Run candidate-bound `test:security` on Linux from a clean checkout. For development on Windows/macOS or with local edits, use the relevant individual regression suites, then collect release evidence from the clean Linux candidate run.
+The `test:browser` gate requires Linux. Run candidate-bound `test:security` on Linux from a clean checkout as well. For development on Windows/macOS or with local edits, use the relevant individual regression suites, then collect these gates' release evidence from the Linux candidate run.
 
 When adding a test file, assign it one owner in `test/verification-plan.json`. Run `npm run check:verification` to detect missing or duplicate ownership and confirm that root Node tests appear in executable commands.
 

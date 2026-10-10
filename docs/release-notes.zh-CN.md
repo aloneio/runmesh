@@ -2,6 +2,16 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
+## 未发布 — 当前 dev
+
+以下功能已包含在当前 dev 源码中。已发布正式版仍为 0.1.7；安装包的可用状态见[发行状态](release-readiness.zh-CN.md)和 [Runner 开发渠道](dev-runner-prereleases.zh-CN.md)。
+
+- **远程管理 Runner 版本。** 在控制端选择签名发行包，也可切换到旧版。标准受管安装使用独立版本管理器，保留 Runner 配置，等待本地任务结束并检查重新连接。变更中断后可通过本地日志恢复；切换失败时尝试还原原安装包。安装要求与恢复指引见 [Runner 版本管理](runner-versions.zh-CN.md)。
+- **MCP 连接检查与工具搜索。** 检查连接状态和声明的能力，从 MCP Registry 的 `server.json` 文件导入支持的远程条目，通过 `remote_search` 跨已启用服务查找已发布工具。详见[连接 MCP](central-remote-mcp.zh-CN.md)。
+- **Skill 导入与版本管理。** 从固定 commit 的公开 GitHub 目录导入，查看文件清单、比较历史版本、保留重要版本、恢复旧版并预览存储清理。详见 [Skill 安装与更新](central-skills.zh-CN.md)。
+- **控制端改进。** 更新导航与 Runner 操作，明确 MCP 和 Skill 状态，并在输入校验报错后保留恢复指引。
+- **文档与视频。** 同步中英文指南，加入带中文旁白与字幕的 [60 秒 Runmesh 介绍](media/README.zh-CN.md)。
+
 ## 0.1.7 — 已发布正式版
 
 [Runmesh 0.1.7](https://github.com/aloneio/runmesh/releases/tag/v0.1.7) 已发布，提供签名便携 Runner 安装包。安装与升级步骤见[发行状态](release-readiness.zh-CN.md)。

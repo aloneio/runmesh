@@ -38,7 +38,7 @@ From the repository, run:
 npm run check:deployment -- https://your-worker.example <expected-full-commit> main
 ```
 
-Supply the actual 40-character commit; use `dev` as the last argument for development. The checker reads `/health` and confirms that the compiled source has the expected commit and branch. If the request times out, check Worker availability before running it again.
+Supply the actual 40-character commit; use `dev` as the last argument for development. The first argument must be the exact HTTPS origin, such as `https://your-worker.example`, without a trailing slash, path, query or credentials. The checker reads `/health` once and confirms that the compiled source has the expected commit and branch. If the request times out, check Worker availability before running it again.
 
 | Result | Meaning and next step |
 | --- | --- |

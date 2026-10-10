@@ -21,14 +21,15 @@ Dashboard administration uses your administrator session. Configure `ADMIN_TOKEN
 | --- | --- |
 | `WORKER_ID` | Derived from production/development mode; an existing explicit ID remains supported |
 | `RUNMESH_PUBLIC_ORIGIN` | Validated HTTPS request URL and matching Host. Set an explicit public HTTPS origin when a reverse proxy supplies an internal request URL |
-| `RUNMESH_AUDIT_BACKEND` | D1 in production; preserve an intentional backend override |
-| `RUNMESH_JOB_HISTORY_BACKEND` | Packed D1 in production; keep the `HISTORY_DB` binding available |
+| `RUNMESH_AUDIT_BACKEND` | D1 in production; development without `HISTORY_DB` uses the Registry Durable Object's SQLite storage. Preserve an intentional backend override |
+| `RUNMESH_JOB_HISTORY_BACKEND` | Packed D1 in production; development without `HISTORY_DB` uses the Registry Durable Object's SQLite storage. An explicit `d1` setting requires the binding |
+| `CENTRAL_SKILLS_ENABLED` / `CENTRAL_DIRECT_TOOLS_ENABLED` / `CENTRAL_GOVERNANCE_ENABLED` | Enabled with `1` in the checked-in production and development configuration; preserve these settings with the `CAPABILITIES` binding when upgrading shared MCP and Skill features |
 | `RUNMESH_SIGNED_RELEASE_AVAILABLE` | The reviewed stable release in production, or disabled for a candidate; `dev` discovery in development. An explicit empty value disables hosted installation |
 | `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Build tools read the branch and commit from Git and check any supplied values against it; use [provenance checks](build-provenance.md) to inspect the deployed source |
 
 A public-origin override contains the scheme, hostname and optional port, for example `https://runmesh.example.com`. Leave out paths, query strings, fragments, credentials and whitespace. Use a valid value or remove the override to restore automatic selection. Runmesh derives the default from the direct request URL and Host header; configure the override when a proxy uses a different internal address.
 
-Development uses `RUNMESH_ENVIRONMENT=development`. Keep test variables in the local test environment. Preserve the Registry/Runner Durable Object namespaces, `HISTORY_DB`, static assets and `CF_VERSION_METADATA` bindings when updating an existing instance.
+Development uses `RUNMESH_ENVIRONMENT=development`; its checked-in configuration has no D1 binding or retention Cron Trigger. Keep test variables in the local test environment. Preserve the `REGISTRY`, `RUNNER` and `CAPABILITIES` Durable Object namespaces, any existing `HISTORY_DB`, static assets and `CF_VERSION_METADATA` bindings when updating an instance.
 
 ## Release and environment selection
 
