@@ -136,7 +136,8 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
               // The SDK ends aggregation on a repeated response cursor. Reject
               // that incomplete walk before it can look like a complete catalog.
               if (!Array.isArray(result.tools) || (totalTools += result.tools.length) > CATALOG_LIMITS.tools
-                || result.tools.some(tool => parseRemoteTool(tool) === undefined)
+                || result.tools.some(tool => catalogJson(tool, CATALOG_LIMITS.tool_bytes) === undefined
+                  || (!ports.inspection && parseRemoteTool(tool) === undefined))
                 || (result.nextCursor !== undefined && (typeof result.nextCursor !== "string" || !result.nextCursor || result.nextCursor.length > 2048 || cursors.has(result.nextCursor))))
                 throw new RemoteFault("upstream_protocol_error");
             }
@@ -171,6 +172,15 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
               apps: extensions?.["io.modelcontextprotocol/ui"] !== undefined } };
         },
         current: () => !parent.aborted && credentialCurrent() && egressCurrent(),
+        async countTools() {
+          try {
+            const response = await client.listTools({}, { signal, timeout: REMOTE_LIMITS.operation_ms });
+            const names = new Set(response.tools.map(tool => tool.name));
+            if (response.tools.length !== totalTools || names.size !== response.tools.length
+              || catalogJson(response.tools, CATALOG_LIMITS.snapshot_bytes) === undefined) throw new RemoteFault("upstream_protocol_error");
+            return response.tools.length;
+          } catch (error) { throw lastFault ?? (error instanceof RemoteFault ? error : new RemoteFault("upstream_protocol_error")); }
+        },
         async listTools() {
           try {
             const response = await client.listTools({}, { signal, timeout: REMOTE_LIMITS.operation_ms });

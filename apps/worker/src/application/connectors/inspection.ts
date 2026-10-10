@@ -15,13 +15,13 @@ export function createConnectorInspection(ports: ConnectorInspectionPorts) {
       await authorize();
       session = await ports.connector.open(profile, signal, () => { throw new RemoteFault("unsupported_interaction"); }, authorize);
       const server = session.describe?.();
-      if (!server) throw new RemoteFault("upstream_protocol_error");
-      const tools = server.capabilities.tools ? await session.listTools() : undefined;
+      if (!server || (server.capabilities.tools && !session.countTools)) throw new RemoteFault("upstream_protocol_error");
+      const toolsCount = server.capabilities.tools ? await session.countTools!() : null;
       const observed = session; session = undefined;
       await observed.close().catch(() => undefined);
       await authorize();
       if (!observed.current()) throw new RemoteFault("result_withheld");
-      return { state: "inspected", endpoint: profile.endpoint, server, tools_count: tools?.length ?? null, observed_at_ms: ports.now() };
+      return { state: "inspected", endpoint: profile.endpoint, server, tools_count: toolsCount, observed_at_ms: ports.now() };
     } catch (error) {
       const code = error instanceof RemoteFault ? error.code : "dependency_unavailable";
       return { state: code === "authorization_required" ? "authorization_required" : code === "permission_denied" ? "denied" : "unavailable", code };

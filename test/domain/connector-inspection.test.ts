@@ -10,7 +10,7 @@ import { catalogDefinition, catalogProfile } from "./catalog-fixtures.js";
 
 function inspection(tools = true) {
   const server: RemoteServerInfo = { protocol_version: "2026-07-28", capabilities: { tools, resources: true, prompts: true, tasks: false, apps: false } };
-  const session = { describe: vi.fn(() => server), current: vi.fn(() => true), listTools: vi.fn(async () => [catalogDefinition()]),
+  const session = { describe: vi.fn(() => server), current: vi.fn(() => true), countTools: vi.fn(async () => 1), listTools: vi.fn(async () => [catalogDefinition()]),
     callTool: vi.fn(async (): Promise<RemoteResult> => { throw new Error("business call forbidden"); }), close: vi.fn(async () => undefined) } satisfies RemoteSession;
   const ports = { connector: { open: vi.fn(async () => session), validate: vi.fn(() => true) },
     authorize: vi.fn(async (): Promise<AdminDecision> => "allowed"), now: vi.fn(() => 1_000) } satisfies ConnectorInspectionPorts;
@@ -20,7 +20,8 @@ function inspection(tools = true) {
 it("RM10 observes protocol, capabilities and tools without publication or a business call", async () => {
   const f = inspection();
   expect(await f.run()).toEqual({ state: "inspected", endpoint: catalogProfile().endpoint, server: f.server, tools_count: 1, observed_at_ms: 1_000 });
-  expect(f.session.listTools).toHaveBeenCalledOnce();
+  expect(f.session.countTools).toHaveBeenCalledOnce();
+  expect(f.session.listTools).not.toHaveBeenCalled();
   expect(f.session.callTool).not.toHaveBeenCalled();
   expect(f.session.close).toHaveBeenCalledOnce();
   expect(f.ports.authorize).toHaveBeenCalledTimes(2);
@@ -31,6 +32,7 @@ it("RM10 inspects a resource-only server without asking it to list tools", async
   const f = inspection(false);
   expect(await f.run()).toMatchObject({ state: "inspected", tools_count: null, server: { capabilities: { tools: false, resources: true } } });
   expect(f.session.listTools).not.toHaveBeenCalled();
+  expect(f.session.countTools).not.toHaveBeenCalled();
   expect(f.session.callTool).not.toHaveBeenCalled();
   expect(f.session.close).toHaveBeenCalledOnce();
 });
@@ -58,14 +60,14 @@ it("RM10 closes the session before rejecting a revoked administrator", async () 
 
 it.each(["list", "close"])("RM10 withholds results when credentials change during %s", async stage => {
   const f = inspection();
-  if (stage === "list") f.session.listTools.mockImplementationOnce(async () => { f.session.current.mockReturnValue(false); return [catalogDefinition()]; });
+  if (stage === "list") f.session.countTools.mockImplementationOnce(async () => { f.session.current.mockReturnValue(false); return 1; });
   else f.session.close.mockImplementationOnce(async () => { f.session.current.mockReturnValue(false); });
   expect(await f.run()).toEqual({ state: "unavailable", code: "result_withheld" });
   expect(f.session.close).toHaveBeenCalledOnce();
 });
 
 it("RM10 closes failed discovery and canceled sessions without issuing business calls", async () => {
-  const f = inspection(); f.session.listTools.mockRejectedValueOnce(new RemoteFault("upstream_protocol_error"));
+  const f = inspection(); f.session.countTools.mockRejectedValueOnce(new RemoteFault("upstream_protocol_error"));
   expect(await f.run()).toEqual({ state: "unavailable", code: "upstream_protocol_error" });
   expect(f.session.close).toHaveBeenCalledOnce();
   expect(f.session.callTool).not.toHaveBeenCalled();
