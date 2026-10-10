@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "b77e3cd7cb5e541c198085e3e8aed1ffb5a59bd8f814ec123adae003a73aa6b0",
-      "bytes": 186012,
+      "sha256": "e2c3b6f8a292c5556f198801533e0b6c7f39fbaaa62b86f333eaac9680fbf499",
+      "bytes": 186129,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -33,8 +33,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "8c12b6d1aecefb8ae7d049e02d2a9a47afa1417a340727028a93b58a6099640f",
-      "bytes": 186672,
+      "sha256": "16dda42880e70760a463eaa1ccbb49c4e9de4017d3d31d84cf5d7ab975f97a48",
+      "bytes": 186789,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -52,8 +52,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "a86dcc66f8ae333992a9bbf2f7a00c8675e8b7d5da5204aa47474f72b96562a2",
-      "bytes": 188969,
+      "sha256": "11f37c8c1691848594b476e0ead15eb897ec96fe8517b3a14d7efe16977e9bed",
+      "bytes": 189086,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -423,8 +423,8 @@
           }
         ]
       ],
-      "sha256": "451745aba1fe6847866ea813bd9099046184c952277fa50d487ed9c5ec0e49a2",
-      "bytes": 189318,
+      "sha256": "250a1e4bd590ab1dbe7df44292c74344ec5fdc815f1aa3afd4c0c2e932fc35d8",
+      "bytes": 189435,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -1485,6 +1485,33 @@
         "name": "admin-document",
         "sha256": "9867c038a4ca91708d0e239a2a4a2ae0615d79ecf05fae2cdb85f0b1a3dbb82f",
         "bytes": 188692
+      }
+    ]
+  },
+  "skill_source_error_review": {
+    "source_baseline": "cadff022601a4658d9abeeadf642ec5420705bcf",
+    "reviewed_change": "Skill source failures use the same string and own-key lookup rule as remote failures. Unknown error codes retain localized guidance and write reconciliation. Rebuilding the prior browser source reproduces both prior script hashes; restoring only that bundle reproduces every prior rendered hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "b77e3cd7cb5e541c198085e3e8aed1ffb5a59bd8f814ec123adae003a73aa6b0",
+        "bytes": 186012
+      },
+      {
+        "name": "setup",
+        "sha256": "8c12b6d1aecefb8ae7d049e02d2a9a47afa1417a340727028a93b58a6099640f",
+        "bytes": 186672
+      },
+      {
+        "name": "secret",
+        "sha256": "a86dcc66f8ae333992a9bbf2f7a00c8675e8b7d5da5204aa47474f72b96562a2",
+        "bytes": 188969
+      },
+      {
+        "name": "admin-document",
+        "sha256": "451745aba1fe6847866ea813bd9099046184c952277fa50d487ed9c5ec0e49a2",
+        "bytes": 189318
       }
     ]
   }
