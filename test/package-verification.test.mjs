@@ -1,14 +1,33 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readBoundedEvidenceFile, readEvidenceJson } from "../scripts/evidence-io.mjs";
 import { npmCliPath } from "../scripts/npm-cli.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+function lookupWithoutSubprocesses(env, cwd) {
+  const helper = new URL("../scripts/npm-cli.mjs", import.meta.url).href;
+  // The lookup itself must own no descendants or temporary working directory.
+  // Run the public helper in a fresh process so this guard cannot affect peers.
+  return spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    childProcess.execFile = () => { throw new Error('npm discovery must not launch subprocesses'); };
+    syncBuiltinESMExports();
+    const { npmCliPath } = await import(${JSON.stringify(helper)});
+    console.log(await npmCliPath());
+  `], { cwd, env, encoding: "utf8", timeout: 10000, windowsHide: true });
+}
+
+function discoveryEnvironment(path) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path" && key !== "npm_execpath"));
+  return { ...env, PATH: path };
+}
+
 test("package commands preserve CLI and archive paths containing spaces", async t => {
   const directory = await mkdtemp(join(tmpdir(), "runmesh npm arguments "));
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
@@ -27,16 +46,60 @@ test("direct Node package entrypoints locate the installed npm CLI offline indep
   // Project script configuration must not participate in finding npm itself.
   await writeFile(join(directory, ".npmrc"), `script-shell=${join(directory, "missing-script-shell")}\n`);
   const env = { ...process.env }; delete env.npm_execpath;
-  const helper = new URL("../scripts/npm-cli.mjs", import.meta.url).href;
-  const lookup = spawnSync(process.execPath, ["--input-type=module", "-e", `import { npmCliPath } from ${JSON.stringify(helper)}; console.log(await npmCliPath());`], {
-    cwd: directory, env, encoding: "utf8", timeout: 20000, windowsHide: true,
-  });
+  const lookup = lookupWithoutSubprocesses(env, directory);
   assert.equal(lookup.error, undefined, "npm discovery must finish within its own bound");
   assert.equal(lookup.status, 0, lookup.stderr);
   const cli = lookup.stdout.trim();
   const result = spawnSync(process.execPath, [cli, "--version"], { env, encoding: "utf8", timeout: 10000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+$/u);
+});
+
+for (const layout of ["prefix", "package-bin"]) test(`npm discovery preserves the first PATH ${layout} installation without executing its launcher`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh npm identity "));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const first = join(directory, "first npm"), later = join(directory, "later npm");
+  const relativeCli = layout === "prefix" ? ["node_modules", "npm", "bin", "npm-cli.js"] : ["npm-cli.js"];
+  for (const entry of [first, later]) {
+    await mkdir(join(entry, ...relativeCli.slice(0, -1)), { recursive: true });
+    await writeFile(join(entry, ...relativeCli), "throw new Error('discovery must not execute the npm CLI');\n");
+    await writeFile(join(entry, process.platform === "win32" ? "npm.cmd" : "npm"), "discovery must not execute the launcher\n", { mode: 0o755 });
+  }
+  const result = lookupWithoutSubprocesses(discoveryEnvironment([first, later].join(delimiter)), directory);
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), await realpath(join(first, ...relativeCli)));
+});
+
+test("npm discovery rejects an unsupported first PATH launcher instead of selecting another installation", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh npm unsupported "));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const first = join(directory, "custom shim"), later = join(directory, "standard npm");
+  await mkdir(first); await mkdir(join(later, "node_modules", "npm", "bin"), { recursive: true });
+  for (const entry of [first, later]) await writeFile(join(entry, process.platform === "win32" ? "npm.cmd" : "npm"), "discovery must not execute the launcher\n", { mode: 0o755 });
+  const cli = join(later, "node_modules", "npm", "bin", "npm-cli.js");
+  await writeFile(cli, "// installed npm fixture\n");
+  const env = discoveryEnvironment([first, later].join(delimiter));
+  const result = lookupWithoutSubprocesses(env, directory);
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /first npm launcher.*npm_execpath/u);
+  assert.equal(await npmCliPath({ ...env, npm_execpath: cli }), cli);
+  await assert.rejects(npmCliPath({ ...env, npm_execpath: "relative/npm-cli.js" }), /installed npm CLI/u);
+});
+
+test("npm discovery follows a POSIX launcher symlink to its installed CLI", { skip: process.platform === "win32" }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh npm symlink "));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const bin = join(directory, "bin"), packageBin = join(directory, "share", "nodejs", "npm", "bin");
+  await mkdir(bin); await mkdir(packageBin, { recursive: true });
+  const cli = join(packageBin, "npm-cli.js");
+  await writeFile(cli, "throw new Error('discovery must not execute the npm CLI');\n", { mode: 0o755 });
+  await symlink(cli, join(bin, "npm"));
+  const result = lookupWithoutSubprocesses(discoveryEnvironment(bin), directory);
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), await realpath(cli));
 });
 
 async function fixture(t) {
