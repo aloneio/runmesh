@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "b4e2be060a96df82f37d4e6418b567a661086368698e3dc332ea35c5b58db0e5",
+      "sha256": "b994fe1d6c434a480105bbec447aa80bdbb14cfa5fafbac16ef54a2c9f98cdf7",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "7c96c177dfff4e3039d22ed2a35041893e35894d52cf9b0ff45ac80f670453f4",
+      "sha256": "ccfa4bb3a1310857d100ff9345a66b9efb77cff8f694325d98b81477425ac4f9",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -592,6 +592,21 @@
       {
         "nonce": "test-nonce",
         "sha256": "08a72820c0061d4e64f9ac1e21ce7fe7fdd8e8c9dcb306b4eb3a35816118be07"
+      }
+    ]
+  },
+  "skill_source_error_review": {
+    "source_baseline": "cadff022601a4658d9abeeadf642ec5420705bcf",
+    "reviewed_change": "Skill source failures use the same string and own-key lookup rule as remote failures. Unknown error codes retain localized guidance and write reconciliation. Rebuilding the prior browser source reproduces both prior script hashes; restoring only that bundle reproduces every prior rendered hash and byte count.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "b4e2be060a96df82f37d4e6418b567a661086368698e3dc332ea35c5b58db0e5"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "7c96c177dfff4e3039d22ed2a35041893e35894d52cf9b0ff45ac80f670453f4"
       }
     ]
   }
