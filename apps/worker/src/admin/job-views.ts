@@ -10,7 +10,8 @@ export function jobSnapshotNote(): string {
   return `<div class="snapshot-note"><p class="muted font-12">${JOBS_SNAPSHOT_NOTE}</p><p class="snapshot-loaded muted font-12"><span>${message("text.last.loaded", "en")}</span> ${timeMarkup(Date.now())}</p></div>`;
 }
 
-export function adminJobUrl(runnerId: unknown, jobId: unknown): string | undefined {
-  return typeof runnerId === "string" && isSafeIdentifier(runnerId) && typeof jobId === "string" && isSafeIdentifier(jobId)
-    ? `/admin/runners/${encodeURIComponent(runnerId)}/jobs/${encodeURIComponent(jobId)}` : undefined;
+export function adminJobUrl(runnerId: unknown, jobId: unknown, workspaceId?: string): string | undefined {
+  if (typeof runnerId !== "string" || !isSafeIdentifier(runnerId) || typeof jobId !== "string" || !isSafeIdentifier(jobId)) return undefined;
+  const path = `/admin/runners/${encodeURIComponent(runnerId)}/jobs/${encodeURIComponent(jobId)}`;
+  return workspaceId === undefined ? path : `${path}?workspace_id=${encodeURIComponent(workspaceId)}`;
 }

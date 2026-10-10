@@ -8,6 +8,7 @@ import { escapeSystemdArgument, escapeXml } from "../services/escaping.js";
 import { ownedManifest, parseOwnedManifest } from "../services/manifest-ownership.js";
 import { refreshNativeServiceBody, renderWindowsDaemonTask, sameWindowsTaskDefinition } from "../services/native-template.js";
 import { nativeProbeReliable } from "../services/probes.js";
+import { windowsTaskMissingCatch } from "../services/task-scheduler.js";
 import { hasStandardEffectiveMaintenanceLaunch, hasStandardMaintenanceLaunch, maintenanceLayout } from "./native-service.js";
 import { renderManagedLauncher, renderWindowsMaintenanceUninstall } from "./launchers.js";
 import type { MaintenanceLayout } from "./native-service.js";
@@ -182,7 +183,7 @@ function managerHost(options: MaintenanceManagerOptions) {
   const registered = async () => {
     const result = layout.platform === "linux" ? await executor.execute("systemctl", [...prefix, "show", LINUX_MANAGER, "--property=LoadState", "--value"])
       : layout.platform === "darwin" ? await executor.execute("launchctl", ["print", target])
-        : await ps("$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); try { $t=$s.GetFolder('\\').GetTask('RunmeshManager'); [Console]::Write('present') } catch { $e=$_.Exception; while($null -ne $e) { if($e.HResult -eq -2147024894) { [Console]::Write('absent'); exit 0 }; $e=$e.InnerException }; throw }");
+        : await ps(`$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); try { $t=$s.GetFolder('\\').GetTask('RunmeshManager'); [Console]::Write('present') } ${windowsTaskMissingCatch("text")}`);
     if (layout.platform === "linux") {
       if (result.exitCode !== 0) throw new Error("maintenance manager registration could not be inspected");
       const load = result.stdout?.trim();

@@ -171,8 +171,7 @@ export async function verifyDevelopmentRunnerRelease(descriptor: RunnerReleaseDe
   const signatureDescriptorBytes = await releasePhase("signature_descriptor", "invalid_response", () => boundedReleaseBytes(target.signature_descriptor_url, 16 * 1024, fetchImpl, "signature_descriptor"));
   const signatureDescriptor = await releasePhase("signature_descriptor", "invalid_response", () => parseJsonBytes(signatureDescriptorBytes));
   if (!isRecord(signatureDescriptor) || signatureDescriptor.schema_version !== 1 || signatureDescriptor.algorithm !== "ed25519" || signatureDescriptor.key_id !== trust.key_id || signatureDescriptor.encoding !== "base64" || signatureDescriptor.signed_file !== "manifest.json") throw new DevelopmentReleaseError("development release signature descriptor is invalid", { phase: "signature_descriptor", reason: "invalid_signature" });
-  await releasePhase("verification", "invalid_signature", () => verifyRunnerReleaseSignature(manifestBytes, signatureBytes, signatureDescriptorBytes, trust));
-  const manifest = await releasePhase("verification", "invalid_manifest", () => parseJsonBytes(manifestBytes));
+  const manifest = await releasePhase("verification", "invalid_signature", () => verifyRunnerReleaseSignature(manifestBytes, signatureBytes, signatureDescriptorBytes, trust));
   const problem = releaseManifestProblem(manifest, { version: target.version, channel: target.channel,
     artifact_name: target.artifact_name, artifact_url: target.artifact_url,
     protocol_min: PROTOCOL_MIN_VERSION, protocol_max: PROTOCOL_CURRENT_VERSION, max_asset_bytes: MAX_RELEASE_ASSET_BYTES });
