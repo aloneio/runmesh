@@ -11,13 +11,13 @@ export function clientCredentialBadge(revoked: boolean, format: "full" | "compac
   return '<span class="badge ' + style + (format === "compact" ? ' credential-badge' : '') + '"><span class="status-dot ' + style + '"></span>' + label + '</span>';
 }
 
-export function jobTable(jobs: readonly Record<string, unknown>[], runnerId?: string): string {
+export function jobTable(jobs: readonly Record<string, unknown>[], runnerId?: string, workspaceId?: string): string {
   if (jobs.length === 0) return '<p class="empty">No recent jobs.</p>';
   return `<div class="table-wrap"><table class="data-table job-table" aria-label="${message("text.recent.jobs", "en")}"><thead><tr><th scope="col">${message("text.job", "en")}</th><th scope="col">${message("text.workspace", "en")}</th><th scope="col">${message("text.mcp.client.2", "en")}</th><th scope="col">${message("text.status", "en")}</th><th scope="col">${message("text.updated", "en")}</th></tr></thead><tbody>${jobs.map((job) => {
     const status = String(job.status ?? "unknown");
     const safeStatus = statusClass(status);
     const clientId = typeof job.created_by_client_id === "string" && job.created_by_client_id.length > 0 ? job.created_by_client_id : "—";
-    const href = adminJobUrl(job.runner_id ?? runnerId, job.job_id);
+    const href = adminJobUrl(job.runner_id ?? runnerId, job.job_id, workspaceId);
     const label = escapeHtml(String(job.job_id ?? "unknown"));
     const jobCell = href === undefined ? label : `<a href="${escapeHtml(href)}">${label}</a>`;
     return `<tr class="data-row"><td class="mono job-id-cell" data-no-i18n>${jobCell}</td><td><span class="workspace-pill" data-no-i18n>${escapeHtml(String(job.workspace_id ?? "unknown"))}</span></td><td class="mono font-12"><span data-no-i18n>${escapeHtml(clientId)}</span></td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}" aria-hidden="true"></span> ${escapeHtml(status)}</span></td><td class="time-cell">${timeMarkup(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null)}</td></tr>`;
@@ -52,6 +52,5 @@ export function clientList(clients: readonly ClientViewModel[]): string {
 }
 
 export function historyJobTable(jobs: Record<string,unknown>[], runnerId: string, view: HistoryView): string {
-  const table = jobTable(jobs,runnerId);
-  return view.scope === "live" ? table.replace(/(href="[^"?]+\/jobs\/[^"?]+)"/g,`$1?workspace_id=${encodeURIComponent(view.workspace ?? "")}"`) : table;
+  return jobTable(jobs, runnerId, view.scope === "live" ? view.workspace ?? "" : undefined);
 }

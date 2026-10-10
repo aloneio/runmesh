@@ -13,7 +13,8 @@ import { permissionForm, managedWorkspaceForm, workspaceProfile } from "../src/a
 import { workspacePermissionPreset } from "../src/contracts/permission-profiles.js";
 import type { AdminData } from "../src/contracts/admin-views.js";
 import { timestamp, timeMarkup } from "../src/admin/format.js";
-import { jobTable, mcpCallTable } from "../src/admin/tables.js";
+import { jobTable, historyJobTable, mcpCallTable } from "../src/admin/tables.js";
+import type { HistoryView } from "../src/history-ui.js";
 import { PRODUCT_VERSION } from "../src/generated-version.js";
 
 // Hashes were captured by evaluating the pre-refactor renderers at the fixed
@@ -38,6 +39,27 @@ describe("AR04 rendering compatibility", () => {
     expect(timeMarkup(null)).toBe("Never"); expect(timeMarkup(0)).toBe("Never");
     expect(timestamp(8_640_000_000_000_000)).toBe("+275760-09-13T00:00:00.000Z");
     expect(timeMarkup(8_640_000_000_000_000)).toContain('datetime="+275760-09-13T00:00:00.000Z"');
+  });
+  it("keeps live workspace context on task links while saved and default lists use archived links", async () => {
+    const jobs = [
+      { runner_id: "runner:one", job_id: "job:one" }, { job_id: "fallback-job" },
+      { runner_id: "bad/runner", job_id: "unlinked-job" }, { job_id: "bad/job" }, {},
+    ];
+    const cases: { view?: HistoryView; query: string }[] = [
+      { view: { scope: "live", limit: 10, workspace: "Project:main" }, query: "?workspace_id=Project%3Amain" },
+      { view: { scope: "live", limit: 10 }, query: "?workspace_id=" },
+      { view: { scope: "jobs", limit: 10, workspace: "Project:main" }, query: "" },
+      { view: { scope: "all", limit: 10, workspace: "Project:main" }, query: "" },
+      { query: "" },
+    ];
+    for (const { view, query } of cases) {
+      const markup = view ? historyJobTable(jobs, "fallback-runner", view) : jobTable(jobs, "fallback-runner");
+      const links: (string | null)[] = [];
+      await new HTMLRewriter().on("a", { element: element => { links.push(element.getAttribute("href")); } })
+        .transform(new Response(markup)).text();
+      expect(links).toEqual([`/admin/runners/runner%3Aone/jobs/job%3Aone${query}`, `/admin/runners/fallback-runner/jobs/fallback-job${query}`]);
+      expect(markup).toContain("unlinked-job"); expect(markup).toContain("bad/job");
+    }
   });
   for (const fixture of fixtures.cases) it(`preserves reviewed ${fixture.name} markup (origin ${fixtures.baseline.slice(0, 7)})`, () => {
     const args: unknown[] = [...fixture.args];

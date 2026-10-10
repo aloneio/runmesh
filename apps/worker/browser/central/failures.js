@@ -1,6 +1,8 @@
 const remoteMessages = Object.freeze({ remote_upstream_unavailable: 'mcpServiceUnavailable',
   remote_upstream_protocol_error: 'mcpResponseInvalid', remote_result_invalid: 'mcpResponseInvalid',
   remote_dependency_unavailable: 'mcpConnectionUnavailable' });
+const sourceMessages = Object.freeze({ skill_source_invalid: 'skillSourceInvalid', skill_source_missing: 'skillSourceMissing',
+  skill_source_capacity: 'skillSourceCapacity', skill_source_changed: 'skillSourceChanged', skill_source_unavailable: 'skillSourceUnavailable' });
 
 /** Classify failure receipts into guidance and recovery metadata; the API owns refresh admission. */
 export function classifyCentralFailure({ serviceInput, skillInput, skillInstallation, sourceAction, inspection, registry }, status, value) {
@@ -33,8 +35,7 @@ export function classifyCentralFailure({ serviceInput, skillInput, skillInstalla
   if (code === 'skill_lifecycle_protected') return failure('skillCleanupProtected');
   if (sourceAction && code === 'skill_source_busy' && notStarted)
     return { messageKey: 'skillSourceBusy', confirmedNotStarted: true };
-  const sourceError = sourceAction && { skill_source_invalid: 'skillSourceInvalid', skill_source_missing: 'skillSourceMissing',
-    skill_source_capacity: 'skillSourceCapacity', skill_source_changed: 'skillSourceChanged', skill_source_unavailable: 'skillSourceUnavailable' }[code];
+  const sourceError = sourceAction && typeof code === 'string' && Object.hasOwn(sourceMessages, code) ? sourceMessages[code] : undefined;
   if (sourceError) return failure(sourceError);
   if (inspection) return failure(status === 400 ? 'checkServiceNameAndPublicMcpUrl' : status === 403 ? 'accessWasDeniedSignInAgainOrCheckThe' : 'inspectionFailed');
   if (registry && code === 'registry_invalid_entry') return failure('registryInvalidEntry');

@@ -515,6 +515,32 @@ test("failure receipts retain the Skill workflow Error fields through the API bo
   assert.equal(conflict.refreshRequired(), true, "A conflict requires refreshing before the workflow can confirm its update");
 });
 
+test("unknown Skill source errors retain localized guidance and write reconciliation", async t => {
+  let code;
+  t.mock.method(globalThis, "fetch", async () => Response.json({ error: { code, operation_state: "not_started" } }, { status: 503 }));
+  for (const locale of ["en", "zh-CN"]) {
+    const translate = createCentralTranslator(locale);
+    for (code of ["constructor", "toString", "__proto__", ["skill_source_missing"], { code: "skill_source_missing" }, "skill_source_new", null]) {
+      for (const operation of ["preview", "install"]) {
+        let refresh = false;
+        const api = createCentralApi({ csrf: "fixture-csrf", t: translate, isCurrent: () => true,
+          refreshRequired: () => refresh, requireRefresh: () => { refresh = true; } });
+        await assert.rejects(api.request("skill-source/" + operation, {}), {
+          name: "Error", message: translate("operationCouldNotBeConfirmedRefreshTheCurrentState")
+        });
+        assert.equal(refresh, operation === "install", "Only a source write needs reconciliation");
+      }
+    }
+    for (const [knownCode, key] of [["skill_source_invalid", "skillSourceInvalid"], ["skill_source_missing", "skillSourceMissing"],
+      ["skill_source_capacity", "skillSourceCapacity"], ["skill_source_changed", "skillSourceChanged"], ["skill_source_unavailable", "skillSourceUnavailable"]]) {
+      code = knownCode;
+      const api = createCentralApi({ csrf: "fixture-csrf", t: translate, isCurrent: () => true,
+        refreshRequired: () => false, requireRefresh() {} });
+      await assert.rejects(api.request("skill-source/preview", {}), { name: "Error", message: translate(key) });
+    }
+  }
+});
+
 for (const [path, status] of [["connections/begin", 200], ["profiles/service", 200], ["discovery/service", 503]])
 test("authorization-required is only a successful discovery result: " + path + " " + status, async t => {
   const api = client(t, () => Response.json({ state: "authorization_required" }, { status }));
