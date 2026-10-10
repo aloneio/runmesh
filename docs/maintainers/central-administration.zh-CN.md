@@ -18,7 +18,8 @@
 能力库；同一轮不会重试失败连接。刷新失败时停止后续恢复。OAuth 返回也会接续其他
 待完成连接。只有刷新后服务仍启用、全部工具仍已发布，才显示工具已就绪。
 
-选择 SKILL.md 和配套文本文件，或整个 Skill 文件夹即可安装。名称和说明从元数据
+选择 SKILL.md 和配套文本文件、整个 Skill 文件夹，或从固定 commit 的公开 GitHub
+目录导入即可安装。名称和说明从元数据
 读取；内容、批准和启用状态原子保存，不执行脚本。同名更新需查看内容并确认，提交
 当前 revision。无需高级 JSON 配置。
 安装后刷新也会确认该版本仍启用；若已被其他操作暂停或替换，会提示当前状态已变化。
@@ -38,7 +39,8 @@
 Runner 和工作区权限仍单独检查，共享中央能力不会自动增加机器权限。
 
 Skill 更新对所有客户端生效。旧 digest 请求被拒绝，需要重新 skill_list，再按新
-digest 读取正文和附件。旧 bundle 保留给管理员显式回退。停用或撤销凭据不能清除
+digest 读取正文和附件。旧 bundle 在清理前可由管理员显式恢复；可通过
+[Skill 版本管理](central-skills.zh-CN.md)比较、保留、恢复和清理版本。停用或撤销凭据不能清除
 已进入客户端上下文的内容。
 
 ## 发布、身份与连接边界
@@ -63,9 +65,10 @@ GET /admin/central/profiles 每页最多 50 个无凭据档案，用 next_after 
 ## 发现与可选治理
 
 remote_profiles 列出有界共享服务目录；remote_tools 按 profile_id 和 cursor
-读取已发布工具；remote_call 调用精确工具及版本。CENTRAL_DIRECT_TOOLS_ENABLED=1
+读取已发布工具；remote_search 跨已启用服务搜索已发布工具；remote_call 调用精确工具
+及版本。CENTRAL_DIRECT_TOOLS_ENABLED=1
 还发布带原始已发布 schema 的 rm_ 别名，最多八个服务、32 个工具。更大的库通过
-remote_profiles、remote_tools、remote_call 使用，不静默截断。发现不会连接上游。
+remote_profiles、remote_tools、remote_search、remote_call 使用，不静默截断。发现不会连接上游。
 
 连接或刷新服务会先关闭本次操作的上游会话，再复核权限和版本并发布发现的工具，
 避免发布自身引起的版本变化阻止会话清理。

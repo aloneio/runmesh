@@ -30,4 +30,4 @@ MCP 返回受限的 `git_unavailable` 恢复提示。具体安装路径可通过
 
 `git_unavailable` 属于可用性错误，默认 `operation_state=not_started`；Runner 明确返回的状态优先。修正安装或工作区配置后，重新发起只读 Git 请求。结果为 `unknown` 时，按[调用恢复](mcp-agent-call-contract.md)检查产生该结果的原操作。
 
-排查兼容性时，核对已部署 Worker 和已安装 Runner 的版本。需要更新主机行为时安装已验证的 Runner 发行包，并在服务重启期间保留独立主机访问。详见[升级说明](upgrading.md)。
+排查兼容性时，核对已部署 Worker 和已安装 Runner 的版本。需要更新主机行为时安装已验证的 Runner 发行包，并在服务重启期间保留独立主机访问。详见[升级说明](upgrading.zh-CN.md)。

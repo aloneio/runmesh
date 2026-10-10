@@ -2,6 +2,8 @@
 
 This archive records the releases and migration procedures named below. For current installation, upgrade and deployment guides, use the [documentation index](../README.md).
 
+Separate bilingual release notes are available for [0.1.7](../releases/0.1.7.md) and [0.1.6](../releases/0.1.6.md). Check [release status](../release-readiness.md) for current production availability.
+
 ---
 
 # 0.1.3 — fair multi-client Job queues and stable single-language UI

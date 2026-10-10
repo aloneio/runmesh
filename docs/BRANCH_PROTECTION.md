@@ -6,8 +6,8 @@ Repository administrators configure branch rules and release environments; CI ch
 
 - Require `verify-all` for the exact candidate SHA. It aggregates `verify`, native Runner checks, the supported Node LTS matrix and browser checks; failed, cancelled or skipped dependencies fail the aggregate.
 - Apply the [main promotion policy](main-promotion-policy.md), including its required source check and provider-specific PR/MR protections.
-- Protect version tags, enable immutable releases, and protect the stable `release` environment.
-- Retain owner-only publication checks for both the original actor and any rerun actor.
+- Protect version tags, enable immutable releases, restrict the stable `release` environment to `main`, and restrict `dev-release` to `dev`.
+- Retain stable publication's owner-only checks for both the original actor and any rerun actor. The development workflow follows its separate [push cadence and signing environment](dev-runner-prereleases.md).
 
 ## Verify the live configuration
 

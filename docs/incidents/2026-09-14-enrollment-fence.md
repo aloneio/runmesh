@@ -1,5 +1,7 @@
 # Enrollment fence recovery investigation — 2026-09-14
 
+This historical investigation concerns the 0.1.2-era Worker and the observations recorded below. For current recovery and component updates, use [troubleshooting](../troubleshooting.md) and the [upgrade guide](../upgrading.md).
+
 ## Observed incident
 
 The operator reported an unavailable Runner and `Enrollment code cleanup is uncertain; Runner remains safely fenced.` Investigation used main baseline `75d9eeb7b42b3e6546d8ee1ad1f7cc4b90dadf37`, service logs and isolated tests. No production credential or service mutation was used for reproduction.

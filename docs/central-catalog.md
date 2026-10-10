@@ -99,7 +99,13 @@ profile/revision, catalog revision, page limit and five-minute expiry. Old v1
 cursors are rejected; clients must refresh. Each page rechecks identity and
 publication after asynchronous work. A cursor is not an authorization token.
 
-remote_profiles lists published shared services; remote_tools pages their tools.
+`remote_profiles` lists published shared services; `remote_search` searches their
+published names, titles, descriptions and connection names; `remote_tools` pages
+complete tool definitions. Search accepts `query`, optional `profile_id` and
+optional `limit` (default 10, maximum 20). Its query is limited to 256 UTF-8 bytes.
+It reads saved snapshots and rechecks identity and publication before returning;
+it does not query upstream services. Results include the exact `tool_id` and
+`version` for `remote_call`; use `remote_tools` to read the input schema first.
 Small direct directories also expose reviewed rm_ aliases. Larger libraries use
 the bounded discovery surface without requiring manually supplied profile IDs.
 
@@ -123,8 +129,15 @@ arguments, Runner state or external results are copied into these tables.
 | Total snapshot body storage | 16 MiB |
 | Page tools / cursor size / cursor expiry | 20 / 2 KiB / 5 minutes |
 
-At capacity, reviewed content is retained and existing catalogs can still be
-disabled. The table defines admission and storage limits. The local inventory
+When an incoming snapshot needs capacity, storage reclaims the oldest snapshots
+that are no longer the current observed or approved version. It first meets the
+profile's version limit, then the shared count and byte limits. Reclamation and
+publication share the transaction; if sufficient space cannot be reserved, the
+write fails without deleting retained snapshots. Current observed and approved
+versions remain protected, and existing catalogs can still be disabled. Retained
+history is therefore bounded rather than a permanent archive.
+
+The table defines admission and storage limits. The local inventory
 test uses 100 synthetic profiles and 2,000 tools; measure throughput and connected
 MCP capacity in the target environment.
 

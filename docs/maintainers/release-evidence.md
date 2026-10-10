@@ -28,6 +28,8 @@ The [independent oci0 candidate review](../release-review-20260917-1612.md) foun
 
 The [final admission and bounded receipt audit](../release-admission-audit-20260917.md) records further bridge/dequeue authorization, stream-budget and Job-identity repairs and confirms that the existing nonduplicating GitLab dev-mirroring policy remains intact. Its source regression results remain separate from clean-candidate, provider, installed-component and stable-release acceptance.
 
+The [2026-09-17 receipt and Runner identity audit](../release-receipt-audit-20260917.md) records completion-receipt and sticky-selection repairs, including an intermediate failed verification lane and the focused follow-up. Those observations apply to the recorded candidate and remain separate from installed-component and provider acceptance.
+
 The [Runner storage boundary audit](../release-storage-audit-20260917.md) records SEC17 special-file open repairs and their mandatory candidate-bound regression coverage. Source verification remains separate from stable publication and installed-component acceptance.
 
 The [2026-09-18 release-tool input audit](../release-tools-audit-20260918.md) records nonblocking FIFO rejection in bounded release and MCP catalog readers, executable tooling regressions, and the remaining deployed-component acceptance gaps. Earlier baseline CI is not acceptance evidence for a repaired candidate.
@@ -39,3 +41,7 @@ The [2026-09-18 stdin delivery audit](../release-stdin-audit-20260918.md) record
 The [2026-09-18 verification-input audit](../release-evidence-audit-20260918.md) records descriptor-bound package and security-evidence reads, five reproduced failures, executable tooling regressions and the remaining platform/deployment acceptance limits. Neither previous CI nor partial local verification approves the changed candidate for a stable release.
 
 The [2026-09-18 cancellation observation audit](../release-cancellation-audit-20260918.md) records live-process identity uncertainty incorrectly releasing concurrency slots, the local/recovered cancellation repair, and executable regression coverage. Baseline CI, changed-source tests and exact-candidate installed-component acceptance remain distinct evidence.
+
+The [2026-09-18 concurrent cancellation audit](../release-concurrent-cancellation-audit-20260918.md) retains the initial incomplete review and subsequent targeted validation as separate observations, alongside the recorded connector and release gaps.
+
+The [2026-09-14 enrollment-fence investigation](../incidents/2026-09-14-enrollment-fence.md) records the observed incident and Worker recovery repair. Its service logs and regression results describe that period, not the present deployment.

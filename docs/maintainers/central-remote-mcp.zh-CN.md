@@ -94,9 +94,11 @@ POST `/admin/central/registry-preview` 接受 `{entry}`，内容为一份 server
 就是精确出站准入，不需要环境变量白名单或手工 bearer 配置。OAuth 使用现有部署密钥。
 非标准 HTTPS 端口、IP 字面量、私有主机、通配符、URL 用户信息、查询及片段均被拒绝。
 
-先通过现有受保护管理接口创建并启用档案。随后 POST
-`/admin/central/discovery/{profile_id}`，正文为 `{"expected_revision":0}`，沿用
-管理员会话、同源及 CSRF 校验。完整、有界的 tools/list 结果一次性保存并发布全部工具，
+先通过现有受保护管理接口创建并启用档案。读取
+`GET /admin/central/catalogs/{profile_id}`，将返回的 `head.revision` 作为
+`expected_revision`，POST 到 `/admin/central/discovery/{profile_id}`。仅当目录读取
+返回 `{"state":"empty"}` 时使用 `{"expected_revision":0}`。请求沿用管理员会话、同源
+及 CSRF 校验。完整、有界的 tools/list 结果一次性保存并发布全部工具，
 只增加一个目录版本，所有有效客户端立即可用，无需单独审阅或批准，参见
 [控制端管理界面](central-administration.zh-CN.md)。客户端仍需连接凭据，中央发布不授予机器权限。
 

@@ -4,6 +4,10 @@
 
 按需要完成的任务选择指南。连接 MCP 客户端从用户指南开始，搭建实例从管理员指南开始。
 
+https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
+
+[下载 MP4](media/runmesh-promo.zh-CN.mp4?raw=1) · [视频介绍与字幕](media/README.zh-CN.md) · 中文旁白与字幕。
+
 ## 开始使用
 
 | 你要做什么 | 对应指南 |
@@ -37,5 +41,7 @@ Runmesh 将已启用的 MCP 工具和 Skill 共享给已连接客户端。添加
 开发自定义集成时，可从[工具示例](tool-examples.md)、[MCP 调用约定（英文）](mcp-agent-call-contract.md)和[工具目录刷新（英文）](mcp-connector-refresh.md)开始。
 
 [维护者文档](maintainers/README.zh-CN.md)汇总架构、开发、发版流程和历史审查记录。
+
+参与项目请参阅[社区治理](community/GOVERNANCE.zh-CN.md)与[贡献者（英文）](community/CONTRIBUTORS.md)。
 
 安全问题按 [SECURITY.zh-CN.md](../.github/SECURITY.zh-CN.md) 私密报告。普通问题提供版本、操作、时间和脱敏错误代码；分享前检查附件中的凭据和私有输出。

@@ -2,7 +2,7 @@
 
 [简体中文](central-capabilities-architecture.zh-CN.md)
 
-Runmesh 0.1.6 behavior: every valid authenticated client in an instance shares the enabled, published MCP tools and active Skills. Administrators connect MCP services and install Skills in the control panel. Clients do not need individual capability assignments. The [rollout ledger](central-rollout.md) records deployment and acceptance evidence.
+The current source uses an instance-wide shared library: every valid authenticated client in an instance shares the enabled, published MCP tools and active Skills. Administrators connect MCP services and install Skills in the control panel. Clients do not need individual capability assignments. The [rollout ledger](central-rollout.md) records deployment and acceptance evidence.
 
 ## Ownership and dependency direction
 
@@ -32,9 +32,11 @@ Client authentication remains mandatory. Invalid, rotated or revoked credentials
 
 Catalog readers return the enabled profile’s reviewed, compatible tools. Invocation revalidates client identity, profile state, approved catalog/schema, current upstream schema and credential generation across waits. A previously listed tool is not a reusable authorization ticket. In-flight identity, profile or publication changes withhold results. Deadlines remain bounded; uncertain remote mutations are not replayed automatically.
 
-remote_profiles discovers published service IDs and names from local metadata. remote_tools pages each service’s published catalog and remote_call performs controlled invocation. Small libraries also expose direct tool names. Exceeding the direct directory limits falls back to these discovery tools instead of silently losing access to larger libraries.
+`remote_profiles` discovers published service IDs and names from local metadata. `remote_search` searches published tool names, titles, descriptions and connection names; `remote_tools` pages each service’s complete tool definitions, and `remote_call` performs controlled invocation. Search uses bounded local snapshot reads and rechecks identity and publication before returning. Small libraries also expose direct tool names. Exceeding the direct directory limits falls back to these discovery tools instead of silently losing access to larger libraries.
 
-Skill listing returns each enabled Skill’s current active digest. Reads require that exact active digest and recheck identity and head revision before returning content. Publishing a new version updates every client; an old cached digest is denied and the client refreshes skill_list. Historical bundles remain stored for administrator review or explicit rollback. Dependency status is advisory and never executes, enables or authorizes a capability.
+Skill listing returns each enabled Skill’s current active digest. Reads require that exact active digest and recheck identity and head revision before returning content. Publishing a new version updates every client; an old cached digest is denied and the client refreshes `skill_list`. Administrators can compare, pin and reactivate retained versions, or preview and confirm cleanup of older versions. Cleanup protects the active, latest uploaded and pinned versions and runs in the content owner’s transaction. Dependency status is advisory and never executes, enables or authorizes a capability.
+
+Skill frontmatter uses bounded YAML parsing. Reading `SKILL.md` returns a manifest of the delivered files, including their UTF-8 sizes and hashes. Public GitHub imports use an exact commit and a reviewed bundle digest; the source adapter fetches content, while the existing Skill repository owns installation. Read-only MCP inspection uses the guarded connector transport without publishing a catalog. Imported `server.json` entries supply connection-form metadata. See [ADR 0002](adr-0002-skill-maintenance-and-discovery.md) for these ownership decisions.
 
 ## Storage and supported model
 
@@ -55,10 +57,13 @@ Catalog cursors are version 2, MAC authenticated and bound to client identity, c
 | Direct directory | 8 profiles / 32 tools; overflow uses remote_profiles and remote_tools |
 | Catalog | 128 tools per snapshot; client pages up to 20 tools |
 | Catalog cursor | 2,048 bytes and 5-minute lifetime; version/revision/identity bound |
+| Tool search | Query up to 256 UTF-8 bytes; 10 results by default, at most 20; optional `profile_id` filter |
 | Skills | 1,000 heads; skill_list scans up to 128 heads per page |
 | Skill continuation | after / next_after; disabled heads may produce an empty page with a continuation |
 | Skill resources/list | Walks bounded pages, rejects duplicate/non-progressing results and never returns a partial success |
 | Skill bundle | 256 text files, 1 MiB per file, 8 MiB per canonical bundle, 256 MiB stored total, 32 stored versions per Skill |
+| GitHub Skill import | 32 text files at one full commit SHA; preview and installation use the same commit and bundle digest |
+| Skill cleanup | Explicit preview and confirmation bound to the administrator session, exact versions and head revision; five-minute expiry |
 
 Limits are explicit safety ceilings, not latency promises. Contracts remain authoritative for byte, count and deadline budgets. Unexpected state fails closed rather than being repaired or cleared automatically.
 

@@ -21,7 +21,9 @@ runner_select({ runner_id, confirm_switch: true }) # switch an existing selectio
 
 Selection is persisted per client and survives a rename or secret rotation. An unselected client's ordinary request can select the sole registered Runner automatically. With zero or multiple Runners, select one explicitly. A selected unavailable Runner returns its own error; inspect `runner_current` before choosing another. Deleting a Runner clears selections referencing it.
 
-## Use the public catalog
+## Use the computer-access catalog
+
+The tools below discover, select and operate on Runners. Shared MCP tools and Skills are available independently of Runner selection; see the [user guide](user-guide.md#use-shared-mcp-tools-and-skills) for their directory and read tools.
 
 ```text
 runner_list

@@ -89,6 +89,8 @@ From 0.1.4 onward, history reporting uploads snapshots when they change while he
 
 Back up control-plane data through your storage provider's recovery process. Protect Runner profiles, Job state, retained logs, service manifests, verified packages and project data, and rehearse restoration separately.
 
-An upgrade keeps the existing Worker, v2 namespaces, D1 binding and secrets. Plan Worker deployment and Runner installation as separate steps. Before restarting a Runner, stop new submissions, drain active/queued work and inspect uncertain recovered processes. Record its actual service executable and version, then follow the [upgrade guide](upgrading.md).
+An upgrade keeps the existing Worker, Registry/Runner namespaces, `CAPABILITIES` namespace, any D1 binding and secrets. Plan Worker deployment and Runner installation as separate steps. Before restarting a Runner, stop new submissions, drain active/queued work and inspect uncertain recovered processes. Record its actual service executable and version, then follow the [upgrade guide](upgrading.md).
+
+For a managed installation with the independent version manager, open **Runner version** on the Runner details page to choose the latest release for that environment or an exact published version. Follow [Change a Runner version](runner-versions.md) to enable the manager on an older installation and check the outcome.
 
 For daily operation, review Runner/client access and recent Jobs, configure edge-log redaction, and keep a credential-rotation and host-shutdown procedure available.

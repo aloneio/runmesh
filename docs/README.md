@@ -4,6 +4,10 @@
 
 Choose a guide for the task you want to complete. Start with the user guide to connect an MCP client, or the administrator guide to set up an instance.
 
+https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
+
+[Download MP4](media/runmesh-promo.zh-CN.mp4?raw=1) · [Overview and subtitles](media/README.md) — Chinese narration and captions.
+
 ## Use Runmesh
 
 | Task | Guide |
@@ -37,5 +41,7 @@ Check [release status](release-readiness.md) for package availability and [build
 For custom integrations, start with the [tool examples](tool-examples.md), [MCP call contract](mcp-agent-call-contract.md) and [catalog refresh guide](mcp-connector-refresh.md).
 
 The [maintainer documentation](maintainers/README.md) covers architecture, development, publication and historical review records.
+
+For project participation, see [community governance](community/GOVERNANCE.md) and [contributors](community/CONTRIBUTORS.md).
 
 Security reports follow the private process in [SECURITY.md](../.github/SECURITY.md). For other issues, include the version, operation, time and redacted error code. Review attachments for credentials and private output before sharing.

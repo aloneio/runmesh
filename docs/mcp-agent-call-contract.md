@@ -24,7 +24,7 @@ Foreground shell output is a bounded tail. A positive `offset` means its prefix 
 
 ## Recover according to operation state
 
-Tool failures carry `isError:true` with `code`, `failure_class`, `operation_state`, `next_action` and `recovery_hint`. Text-only clients receive the same bounded JSON metadata. Protocol and SDK argument-validation errors use their own MCP conventions.
+Native tool failures carry `isError:true` with `code`, `failure_class`, `operation_state`, `next_action` and `recovery_hint`. Text-only clients receive the same bounded JSON metadata. Protocol and SDK argument-validation errors use their own MCP conventions.
 
 | Result | Next action |
 | --- | --- |
@@ -41,6 +41,21 @@ Tool failures carry `isError:true` with `code`, `failure_class`, `operation_stat
 | Unknown bridge code | Treat the result as internal/unknown and ask the operator to investigate. |
 
 Only `not_started` can justify an admission retry. **Do not automatically replay a mutation, input or cancellation when its state is `unknown`, `running` or `committed`.** Reconcile partial prune or rollback failures against current state before another operation.
+
+## Discover and call shared MCP tools
+
+Use `remote_profiles` to find a service, or `remote_search` with a keyword `query`
+and optional `profile_id` to find relevant tools. Search returns a bounded summary;
+read the full definition and `inputSchema` through `remote_tools`. Call
+`remote_call` with the returned `profile_id`, `tool_id`, `version` and schema-valid
+`arguments`. A changed catalog requires a fresh definition and version.
+
+Shared remote calls use their own upstream session and do not create a Runner Job.
+Runmesh remote errors use `remote_` codes and operation states `not_started`,
+`completed` or `unknown`. A completed upstream action can have its result withheld
+after an authorization change. Inspect the provider's state before repeating a
+call with a completed or unknown outcome; a local `job` query cannot recover it.
+See [remote MCP](central-remote-mcp.md) for output limits and connection recovery.
 
 ## Use cursors and previews
 

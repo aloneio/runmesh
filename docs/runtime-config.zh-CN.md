@@ -21,14 +21,15 @@
 | --- | --- |
 | `WORKER_ID` | 由生产或开发模式确定，也支持现有的显式 ID |
 | `RUNMESH_PUBLIC_ORIGIN` | 校验后的 HTTPS 请求地址与匹配的 Host；反向代理传入内部地址时，显式设置公网 HTTPS origin |
-| `RUNMESH_AUDIT_BACKEND` | 生产默认 D1；保留有意设置的后端覆盖项 |
-| `RUNMESH_JOB_HISTORY_BACKEND` | 生产默认使用打包的 D1 历史；保持 `HISTORY_DB` 绑定可用 |
+| `RUNMESH_AUDIT_BACKEND` | 生产默认 D1；开发环境未绑定 `HISTORY_DB` 时使用 Registry Durable Object 的 SQLite 存储。保留有意设置的后端覆盖项 |
+| `RUNMESH_JOB_HISTORY_BACKEND` | 生产默认使用打包的 D1 历史；开发环境未绑定 `HISTORY_DB` 时使用 Registry Durable Object 的 SQLite 存储。显式设为 `d1` 时须提供绑定 |
+| `CENTRAL_SKILLS_ENABLED` / `CENTRAL_DIRECT_TOOLS_ENABLED` / `CENTRAL_GOVERNANCE_ENABLED` | 仓库中的生产与开发配置均设为 `1`；升级共享 MCP 和 Skill 功能时，与 `CAPABILITIES` 绑定一起保留 |
 | `RUNMESH_SIGNED_RELEASE_AVAILABLE` | 生产使用经过审核的正式版本，候选版关闭；开发使用 `dev` 发现。显式空值会关闭托管安装 |
 | `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | 构建工具读取 Git 分支和提交，并核对所传入的配置值；通过[来源核验](build-provenance.zh-CN.md)查看实际部署的源码 |
 
 公网地址覆盖项由协议、主机名和可选端口组成，例如 `https://runmesh.example.com`，省略路径、查询、片段、凭据和空白。填写有效值，或删除覆盖项以恢复自动选择。Runmesh 默认使用直接请求中的 URL 和 Host；代理使用不同的内部地址时，请配置该覆盖项。
 
-开发环境使用 `RUNMESH_ENVIRONMENT=development`，测试变量保留在本地测试环境。更新已有实例时，保留 Registry/Runner Durable Object 命名空间、`HISTORY_DB`、静态资源和 `CF_VERSION_METADATA` 绑定。
+开发环境使用 `RUNMESH_ENVIRONMENT=development`，仓库中的开发配置未绑定 D1，也未设置历史清理 Cron Trigger。测试变量保留在本地测试环境。更新已有实例时，保留 `REGISTRY`、`RUNNER`、`CAPABILITIES` Durable Object 命名空间、已有的 `HISTORY_DB`、静态资源和 `CF_VERSION_METADATA` 绑定。
 
 ## 选择发行物与环境
 

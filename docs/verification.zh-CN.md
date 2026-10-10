@@ -2,7 +2,7 @@
 
 [English](verification.md) · [文档目录](README.zh-CN.md) · [发行状态](release-readiness.zh-CN.md)
 
-验证源码修改或准备发行时，可按本文选择检查。在仓库根目录使用固定工具链执行 `npm ci` 安装依赖，再运行相应命令。本地修改选择与改动相关的检查；发行候选仍须通过全部必需 CI。验收已经部署的实例，请先阅读[升级指南](upgrading.zh-CN.md)。
+验证源码修改或准备发行时，可按本文选择检查。在仓库根目录使用固定工具链；首次检出后先执行 `npm ci`，再执行 `npm run build`，准备集成与工具测试需要的生成模块和工作区导出。本地修改选择与改动相关的检查；发行候选仍须通过全部必需 CI。验收已经部署的实例，请先阅读[升级指南](upgrading.zh-CN.md)。
 
 ## 选择需要的检查
 
@@ -16,12 +16,12 @@
 | 构建与发行工具 | `npm run test:release-tools` | 构建、安装器、发行、架构和验证工具的行为 |
 | 源码传输链路 | `npm run test:e2e` | 真实本地 MCP → Worker → 源码 Runner |
 | 安装包传输链路 | `npm run test:package:e2e` | 新打包并独立安装的 Runner 通过相同本地链路场景 |
-| 浏览器操作 | 先运行 `npm run browser:install`，再运行 `npm run test:browser` | Chromium 连接本地 Worker 的导航，以及 MCP、Skill 和 OAuth 页面操作 |
+| 浏览器操作 | 在 Linux 上先运行 `npm run browser:install`，再运行 `npm run test:browser` | Chromium 连接本地 Worker 的导航，以及 MCP、Skill 和 OAuth 页面操作 |
 | 已登记安全回归 | Linux 上从干净工作区运行 `npm run test:security` | 当前候选提交的安全回归结果和发行准入证据 |
 
 `npm run test:unit` 包含领域、契约、工作区和部分界面测试，`npm test` 另加源码 E2E。完整发行 CI 还会运行安装包、浏览器、平台、工具和安全检查。Worker 与浏览器测试命令使用本地测试环境，已部署实例按[升级指南](upgrading.zh-CN.md)验收。
 
-候选提交的 `test:security` 在 Linux 的干净工作区中运行。使用 Windows/macOS 或带本地修改开发时，先运行相关单项回归，再从干净候选提交的 Linux 运行中收集发行证据。
+`test:browser` 门禁要求 Linux；候选提交的 `test:security` 也在 Linux 的干净工作区中运行。使用 Windows/macOS 或带本地修改开发时，先运行相关单项回归，再从 Linux 候选运行中收集这些门禁的发行证据。
 
 新增测试文件时，在 `test/verification-plan.json` 中指定唯一归属，并运行 `npm run check:verification` 检查遗漏、重复和 Node 测试的执行入口。
 

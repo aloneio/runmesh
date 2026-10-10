@@ -27,8 +27,9 @@ fails, recovery stops. Returning from OAuth also resumes other pending services.
 Ready-to-use messages require the refreshed service to remain enabled and its
 complete tool catalog to remain published.
 
-Select SKILL.md and supporting text files, or a complete Skill folder, to install
-a Skill. Its name and description come from frontmatter. Installing saves,
+Select SKILL.md and supporting text files, a complete Skill folder, or import a
+public GitHub folder at an exact commit to install a Skill. Its name and description
+come from frontmatter. Installing saves,
 approves and activates the files atomically; scripts never execute. Replacing
 an installed Skill requires confirmation and the currently observed revision.
 The success message also verifies that the installed version is still active
@@ -55,7 +56,9 @@ sharing central capabilities never creates machine access.
 
 Updates publish the active Skill version to all clients. A cached old digest is
 rejected; refresh skill_list and use its new digest for every attachment. Old
-bundles remain available to administrators for explicit rollback. Disabling or
+bundles remain available to administrators for explicit restoration until cleaned
+up. Administrators can compare, retain, restore and clean up versions through
+[Skill version management](central-skills.md). Disabling or
 revoking access cannot erase content already delivered to a client's context.
 
 ## Publication, identity and connection boundaries
@@ -92,10 +95,11 @@ cards recreated by an intermediate refresh.
 ## Discovery and optional governance
 
 remote_profiles lists the bounded shared service directory. remote_tools reads
-published tools for its profile_id with cursor pagination; remote_call invokes
-one exact tool/version. CENTRAL_DIRECT_TOOLS_ENABLED=1 also publishes direct rm_
+published tools for its profile_id with cursor pagination; remote_search searches
+published tools across enabled services; remote_call invokes one exact tool/version.
+CENTRAL_DIRECT_TOOLS_ENABLED=1 also publishes direct rm_
 aliases with their published schemas, bounded to eight profiles and 32 tools.
-Larger libraries use remote_profiles, remote_tools and remote_call; they are not
+Larger libraries use remote_profiles, remote_tools, remote_search and remote_call; they are not
 silently truncated. Discovery never contacts upstream services.
 
 Connecting or refreshing a service closes any operation-scoped upstream session
