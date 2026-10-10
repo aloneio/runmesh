@@ -51,6 +51,8 @@ export type RemoteOutcome = ({ readonly state: "completed"; readonly operation_s
 /** No URLs, headers, tokens, sessions, Runner selection or SDK types in the call port. */
 export interface RemoteSession {
   describe?(): RemoteServerInfo;
+  /** Observe the protocol catalog without admitting tools for publication. */
+  countTools?(): Promise<number>;
   /** Synchronous credential/egress validity of observed data, including after close. */
   current(): boolean;
   listTools(): Promise<readonly RemoteToolDefinition[]>;
