@@ -1,7 +1,7 @@
 import type { ActivePolicyReadiness } from "./contracts.js";
 import { appliedPolicyIdentity } from "../contracts/runner-selection.js";
 import { fail } from "./results/envelope.js";
-import { isRecord } from "./results/primitives.js";
+import { isRecord, isSafePositiveInteger, isSha256 } from "./results/primitives.js";
 import { isSafeIdentifier } from "../security.js";
 import type { McpRequestEnv } from "./contracts.js";
 import type { PermissionBit } from "./contracts.js";
@@ -17,7 +17,7 @@ export async function checkPermission(env: McpRequestEnv, clientId: string, runn
   const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-permissions/${encodeURIComponent(runnerId)}?workspace_id=${encodeURIComponent(workspaceId)}`);
   if (!call.ok) return call.error.code === "not_found" ? fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.") : call;
   const permissions = isRecord(call.value) && isRecord(call.value.permissions) ? call.value.permissions : undefined;
-  if (permissions === undefined || typeof permissions[required] !== "boolean") return fail("authorization_response_invalid", "Workspace authorization returned an invalid response.", "Ask the operator to check the authorization dependency; this does not establish denied permissions.", "not_started");
+  if (permissions === undefined || typeof permissions[required] !== "boolean") return fail("authorization_response_invalid", "Workspace authorization returned an invalid response.", "Ask the administrator to check the control-plane logs.", "not_started");
   if (permissions?.[required] !== true) return fail(required === "edit" ? "readonly_workspace" : "permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
   return undefined;
 }
@@ -58,7 +58,12 @@ export async function policyReadiness(env: McpRequestEnv, runnerId: string): Pro
 async function snapshotAuthorization(env: McpRequestEnv, runnerId: string): Promise<ToolFailure | undefined> {
   const snapshot = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/snapshot-authorization`);
   if (!snapshot.ok) return snapshot;
-  if (!isRecord(snapshot.value) || snapshot.value.ok !== true) return fail("policy_pending", "The selected runner has no trusted active policy snapshot.", "Wait for an active policy to be acknowledged, then retry.");
+  if (!isRecord(snapshot.value) || typeof snapshot.value.ok !== "boolean"
+    || (snapshot.value.ok ? !isSafePositiveInteger(snapshot.value.revision) || !isSha256(snapshot.value.checksum)
+      : (snapshot.value.code !== "policy_pending" && snapshot.value.code !== "stale_policy") || typeof snapshot.value.reason !== "string")) {
+    return fail("authorization_response_invalid", "Policy snapshot authorization returned an invalid response.", "Ask the administrator to check the control-plane logs.", "not_started");
+  }
+  if (!snapshot.value.ok) return fail("policy_pending", "The selected runner has no trusted active policy snapshot.", "Wait for an active policy to be acknowledged, then retry.");
   return undefined;
 }
 
@@ -74,7 +79,7 @@ export async function checkAnyReadPermission(env: McpRequestEnv, clientId: strin
   if (!isRecord(value) || value.runner_id !== runnerId || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1
     || typeof value.checksum !== "string" || !/^[a-f0-9]{64}$/u.test(value.checksum)
     || !Array.isArray(value.workspaces) || value.workspaces.some(workspace => safeWorkspaceMetadata(workspace) === undefined)) {
-    return fail("authorization_response_invalid", "Runner workspace authorization returned an invalid response.", "Ask the operator to check the authorization dependency; this does not establish denied permissions.", "not_started");
+    return fail("authorization_response_invalid", "Runner workspace authorization returned an invalid response.", "Ask the administrator to check the control-plane logs.", "not_started");
   }
   if (value.workspaces.some(workspace => isRecord(workspace) && workspace.enabled === true && isRecord(workspace.permissions) && workspace.permissions.read === true)) return undefined;
   return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
