@@ -34,6 +34,14 @@ function selectionSnapshot(value: unknown): McpClientActiveRunner | undefined {
     runner: { runner_id: runnerId, state, available: context.available, updated_at_ms: context.updated_at_ms } };
 }
 
+/** Validate list identity before filtering or automatic selection. Public
+ * metadata projection remains separate and accepts additional internal fields. */
+function runnerListSnapshot(value: unknown): readonly { readonly runner_id: string }[] | undefined {
+  if (!isRecord(value) || !Array.isArray(value.runners)
+    || value.runners.some(runner => !isRecord(runner) || safeJobIdentifier(runner.runner_id) === undefined)) return undefined;
+  return value.runners;
+}
+
 function invalidSelectionReceipt(operationState: "not_started" | "unknown"): ReturnType<typeof fail> {
   return fail("registry_unavailable", "The Registry returned an invalid or mismatched Runner selection.", "Inspect runner_current after the control plane recovers; do not select or retry a command automatically.", operationState);
 }
@@ -79,14 +87,15 @@ export async function resolveActiveRunner(env: McpRequestEnv, clientId: string, 
   if (state.active_runner_id === null) {
     const runners = await registryCall(env, "/runners");
     if (!runners.ok) return runners;
-    const list = isRecord(runners.value) && Array.isArray(runners.value.runners) ? runners.value.runners : [];
+    const list = runnerListSnapshot(runners.value);
+    if (list === undefined) return fail("registry_unavailable", "The Registry returned an invalid Runner list.", "Ask the administrator to check the control-plane logs.", "not_started");
     if (list.length === 0) {
       return fail("no_runners_available", "No registered runners are available.", "Register a runner, then call runner_list and runner_select.");
     }
-    if (list.length !== 1 || !isRecord(list[0]) || typeof list[0].runner_id !== "string") {
+    if (list.length !== 1) {
       return fail("runner_not_selected", "No active runner is selected.", "Call runner_list, then runner_select with the desired runner_id.");
     }
-    const selected = await selectActiveRunner(env, clientId, list[0].runner_id, false);
+    const selected = await selectActiveRunner(env, clientId, list[0]!.runner_id, false);
     if (!selected.ok) return selected;
     state = (selected.value as { selection: McpClientActiveRunner }).selection;
     automatic = true;
@@ -125,12 +134,13 @@ export async function activeWorkspaceList(env: McpRequestEnv, clientId: string):
 export async function gatedRunnerList(env: McpRequestEnv, clientId: string): Promise<unknown> {
   const call = await registryCall(env, "/runners");
   if (!call.ok) return asToolResult(call);
-  const runners = isRecord(call.value) && Array.isArray(call.value.runners) ? call.value.runners : [];
+  const runners = runnerListSnapshot(call.value);
+  if (runners === undefined) return asToolResult(fail("registry_unavailable", "The Registry returned an invalid Runner list.", "Ask the administrator to check the control-plane logs.", "not_started"));
   const visible: unknown[] = [];
   for (const runner of runners) {
-    if (!isRecord(runner) || typeof runner.runner_id !== "string") continue;
     const permission = await checkAnyReadPermission(env, clientId, runner.runner_id);
-    if (permission?.error.code === "registry_unavailable" || permission?.error.code === "service_unavailable") return asToolResult(permission);
+    if (permission?.error.code === "registry_unavailable" || permission?.error.code === "service_unavailable"
+      || permission?.error.code === "authorization_response_invalid") return asToolResult(permission);
     if (permission === undefined) visible.push(runner);
   }
   return runnerListToolValue(visible);
