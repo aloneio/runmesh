@@ -93,6 +93,7 @@ export class RunnerConnection {
    */
   private welcomedSocket: WebSocket | undefined;
   private stopped = false;
+  private startPromise: Promise<void> | undefined;
   private cancelReconnectSleep: (() => void) | undefined;
   private lifecycleGeneration = 0;
   private reconnectAttempt = 0;
@@ -180,7 +181,22 @@ export class RunnerConnection {
     };
   }
 
-  public async start(): Promise<void> {
+  public start(): Promise<void> {
+    if (this.startPromise !== undefined) return this.startPromise;
+    let resolve!: () => void, reject!: (error: unknown) => void;
+    const started = new Promise<void>((done, failed) => { resolve = done; reject = failed; });
+    // Publish the lifecycle owner before initialization can invoke a port.
+    // Repeated starts share its transport, policy load and timer cleanup.
+    this.startPromise = started;
+    const release = (): void => { if (this.startPromise === started) this.startPromise = undefined; };
+    void this.startLifecycle().then(
+      () => { release(); resolve(); },
+      error => { release(); reject(error); },
+    );
+    return started;
+  }
+
+  private async startLifecycle(): Promise<void> {
     const generation = ++this.lifecycleGeneration;
     this.stopped = false;
     await this.runtime.initialize();
@@ -223,6 +239,8 @@ export class RunnerConnection {
     }
     while (!this.stopped && generation === this.lifecycleGeneration) {
       this.onStateChange("connecting");
+      // Public observers may synchronously stop or replace this lifecycle.
+      if (this.stopped || generation !== this.lifecycleGeneration) return;
       try {
         await this.connectOnce();
         if (this.stopped || generation !== this.lifecycleGeneration) return;
@@ -232,7 +250,7 @@ export class RunnerConnection {
         const detail = error instanceof Error ? error.message : String(error);
         if (detail.length > 0) console.error(`runner connection error: ${detail}`);
         this.onStateChange("offline");
-        if (this.stopped) break;
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         if (error instanceof RunnerAuthenticationError || classifyConnectionFailure({ error }) === "authentication") {
           this.stopped = true;
           this.queueNegotiated = false;
@@ -250,6 +268,9 @@ export class RunnerConnection {
   }
 
   public stop(): void {
+    // A replacement may start while the retired initialization/close is still
+    // pending. Its promise must never be cleared by that older lifecycle.
+    this.startPromise = undefined;
     this.lifecycleGeneration += 1;
     this.stopped = true;
     this.queueNegotiated = false;
@@ -430,6 +451,9 @@ export class RunnerConnection {
           this.queueNegotiated = message.extensions?.runmesh_job_queue === 1;
           this.runtime.jobs?.setQueueAuthorizer?.(this.queueNegotiated ? (input,job) => this.authorizeQueuedJob(input,job.job_id,job.created_by_client_id) : undefined);
           this.onStateChange("online");
+          // Stop/restart observers retire this socket before session timers
+          // and history work may be installed.
+          if (this.stopped || this.socket !== socket || this.welcomedSocket !== socket) return;
           this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
           if (this.reportingNegotiated && history !== undefined) {

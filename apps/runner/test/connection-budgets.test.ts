@@ -82,6 +82,158 @@ it("reports its installed package version in the hello frame", async () => {
   } finally { connection.stop(); await running; }
 });
 
+it("shares one startup while initialization is pending", async () => {
+  vi.useFakeTimers();
+  let release!: () => void;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  const initialize = vi.fn(() => delayed);
+  const { connection, sockets, createSocket, policyStore } = setup({ initialize });
+  const load = vi.spyOn(policyStore, "load");
+  const starts = [connection.start(), connection.start()];
+  try {
+    expect(initialize).toHaveBeenCalledOnce();
+    release(); await vi.advanceTimersByTimeAsync(0);
+    expect(load).toHaveBeenCalledOnce();
+    expect(createSocket).toHaveBeenCalledOnce();
+    connection.stop();
+    await Promise.all(starts);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    connection.stop(); release();
+    for (const socket of sockets) socket.close();
+    await Promise.allSettled(starts);
+  }
+});
+
+it("keeps one online transport and releases all its timers after duplicate starts", async () => {
+  vi.useFakeTimers();
+  const initialize = vi.fn(async () => {});
+  const { connection, socket, sockets, createSocket, policyStore, onStateChange } = setup({ initialize });
+  const load = vi.spyOn(policyStore, "load");
+  const starts = [connection.start()];
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    socket.open(); socket.emit("message", Buffer.from(encodeWireFrame(welcome)));
+    await vi.advanceTimersByTimeAsync(0);
+    const onlineTimers = vi.getTimerCount();
+    starts.push(connection.start());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(initialize).toHaveBeenCalledOnce();
+    expect(load).toHaveBeenCalledOnce();
+    expect(createSocket).toHaveBeenCalledOnce();
+    expect(onStateChange.mock.calls.map(([state]) => state)).toEqual(["connecting", "online"]);
+    expect(vi.getTimerCount()).toBe(onlineTimers);
+    connection.stop(); await Promise.all(starts);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    connection.stop();
+    for (const current of sockets) current.close();
+    await Promise.allSettled(starts);
+  }
+});
+
+it.each(["synchronous", "rejected"] as const)("allows a fresh startup after a %s initialization failure", async kind => {
+  vi.useFakeTimers();
+  const failure = new Error("initialization temporarily unavailable");
+  const initialize = vi.fn<ConnectionRuntimePort["initialize"]>()
+    .mockImplementationOnce(() => { if (kind === "synchronous") throw failure; return Promise.reject(failure); })
+    .mockResolvedValue(undefined);
+  const { connection, sockets, createSocket } = setup({ initialize });
+  await expect(connection.start()).rejects.toBe(failure);
+  const retry = connection.start();
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(initialize).toHaveBeenCalledTimes(2);
+    expect(createSocket).toHaveBeenCalledOnce();
+    connection.stop(); await retry;
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { connection.stop(); for (const socket of sockets) socket.close(); await retry; }
+});
+
+it("releases startup ownership on stop without letting an older completion retire its replacement", async () => {
+  vi.useFakeTimers();
+  let release!: () => void;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  const initialize = vi.fn<ConnectionRuntimePort["initialize"]>().mockImplementationOnce(() => delayed).mockResolvedValue(undefined);
+  const { connection, socket, sockets, createSocket, policyStore, onStateChange } = setup({ initialize });
+  const load = vi.spyOn(policyStore, "load");
+  const original = connection.start();
+  connection.stop();
+  const starts = [original, connection.start()];
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createSocket).toHaveBeenCalledOnce();
+    socket.open(); socket.emit("message", Buffer.from(encodeWireFrame(welcome)));
+    release(); await original;
+    starts.push(connection.start());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(initialize).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledOnce();
+    expect(createSocket).toHaveBeenCalledOnce();
+    expect(onStateChange.mock.calls.map(([state]) => state)).toEqual(["connecting", "online"]);
+    connection.stop(); await Promise.all(starts);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    connection.stop(); release();
+    for (const current of sockets) current.close();
+    await Promise.allSettled(starts);
+  }
+});
+
+it("does not create a transport after the connecting callback stops its lifecycle", async () => {
+  vi.useFakeTimers();
+  const { connection, sockets, createSocket, onStateChange } = setup();
+  onStateChange.mockImplementation(state => { if (state === "connecting") connection.stop(); });
+  const running = connection.start();
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createSocket).not.toHaveBeenCalled();
+    await running;
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { connection.stop(); for (const socket of sockets) socket.close(); await running; }
+});
+
+it("does not install timers after the online callback stops its lifecycle", async () => {
+  vi.useFakeTimers();
+  const { connection, socket, onStateChange } = setup();
+  onStateChange.mockImplementation(state => { if (state === "online") connection.stop(); });
+  const running = connection.start();
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    socket.open(); socket.emit("message", Buffer.from(encodeWireFrame(welcome)));
+    await vi.advanceTimersByTimeAsync(0); await running;
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { connection.stop(); socket.close(); await running; }
+});
+
+it.each([1006, 4001])("keeps an offline callback replacement independent of retired close %s", async code => {
+  vi.useFakeTimers(); vi.spyOn(console, "error").mockImplementation(() => {});
+  const { connection, socket, sockets, createSocket, onStateChange, sleep } = setup({}, false, true);
+  let replacement: Promise<void> | undefined;
+  onStateChange.mockImplementation(state => {
+    if (state === "offline") { connection.stop(); replacement = connection.start(); }
+  });
+  const original = connection.start().then(() => undefined, error => error);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    socket.open(); socket.emit("message", Buffer.from(encodeWireFrame(welcome)));
+    socket.close(code); await vi.advanceTimersByTimeAsync(0);
+    expect(await original).toBeUndefined();
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    expect(sleep).not.toHaveBeenCalled();
+    const current = sockets[1]!;
+    current.open(); current.emit("message", Buffer.from(encodeWireFrame(welcome)));
+    expect(onStateChange).toHaveBeenLastCalledWith("online");
+    connection.stop(); await replacement;
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    connection.stop();
+    for (const current of sockets) current.close();
+    await original; await replacement;
+  }
+});
+
 it("re-applies an unchanged policy when reconnect interrupts durable activation before live publish", async () => {
   const applyPolicy = vi.fn();
   const { connection, socket, sockets, createSocket, policyStore } = setup({ applyPolicy }, false, true);
