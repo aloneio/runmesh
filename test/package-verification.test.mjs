@@ -20,9 +20,20 @@ test("package commands preserve CLI and archive paths containing spaces", async 
   assert.deepEqual(JSON.parse(result.stdout), ["install", "--offline", archive]);
 });
 
-test("direct Node package entrypoints locate the installed npm CLI offline", async () => {
+test("direct Node package entrypoints locate the installed npm CLI offline independently of the caller project", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh npm caller "));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  await writeFile(join(directory, "package.json"), '{"name":"synthetic-npm-caller","version":"1.0.0","private":true}\n');
+  // Project script configuration must not participate in finding npm itself.
+  await writeFile(join(directory, ".npmrc"), `script-shell=${join(directory, "missing-script-shell")}\n`);
   const env = { ...process.env }; delete env.npm_execpath;
-  const cli = await npmCliPath(env);
+  const helper = new URL("../scripts/npm-cli.mjs", import.meta.url).href;
+  const lookup = spawnSync(process.execPath, ["--input-type=module", "-e", `import { npmCliPath } from ${JSON.stringify(helper)}; console.log(await npmCliPath());`], {
+    cwd: directory, env, encoding: "utf8", timeout: 20000, windowsHide: true,
+  });
+  assert.equal(lookup.error, undefined, "npm discovery must finish within its own bound");
+  assert.equal(lookup.status, 0, lookup.stderr);
+  const cli = lookup.stdout.trim();
   const result = spawnSync(process.execPath, [cli, "--version"], { env, encoding: "utf8", timeout: 10000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+$/u);
