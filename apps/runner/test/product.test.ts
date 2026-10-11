@@ -1577,6 +1577,51 @@ describe("runner product CLI and service safety", () => {
     } finally { await test.cleanup(); }
   });
 
+  it.each(([
+    { executionMode: "dedicated_user", privilegeState: "restricted" },
+    { executionMode: "privileged_host", privilegeState: "privileged" },
+  ] as const).flatMap(mode => [false, true, undefined].map(reliable => ({ ...mode, reliable }))))(
+    "doctor only reports an observed $executionMode identity when reliable=$reliable",
+    async ({ executionMode, privilegeState, reliable }) => {
+      const test = await fixture();
+      try {
+        await test.store.save({ ...profile(), execution_mode: executionMode });
+        const doctorPlatform = process.platform === "win32" ? "win32" : "linux";
+        const identity = executionMode === "privileged_host"
+          ? doctorPlatform === "win32" ? "NT AUTHORITY\\SYSTEM" : "root"
+          : doctorPlatform === "win32" ? "NT AUTHORITY\\LOCAL SERVICE" : "runmesh";
+        const manifest = renderService({ platform: doctorPlatform, mode: "system", profilePath: test.store.filePath, executionMode });
+        for (const shareable of [false, true]) {
+          const lines: string[] = [], exitCodes: number[] = [];
+          await runCli(["doctor", "--json", ...(shareable ? ["--shareable"] : [])], {
+            store: test.store, stdout: line => lines.push(line), servicePlatform: doctorPlatform,
+            serviceFilesystem: { read: async () => manifest.content, write: async () => undefined, remove: async () => undefined },
+            serviceManager: {
+              platform: doctorPlatform, mode: "system", install: async () => undefined, stop: async () => undefined,
+              restart: async () => undefined, uninstall: async () => undefined,
+              status: async () => ({ installed: true, active: true, identity, ...(reliable === undefined ? {} : { reliable }), detail: "synthetic status detail" }),
+            },
+            discoverShellRuntime: async () => undefined,
+            environment: { get: async () => ({ tools: { node: { available: true } } }) },
+            setExitCode: code => exitCodes.push(code),
+          });
+          const result = JSON.parse(lines[0] ?? "{}");
+          expect(result.service.privilege_state).toBe(reliable === false ? "unknown" : privilegeState);
+          if (shareable) expect(result.service).not.toHaveProperty("actual_service_identity");
+          else expect(result.service.actual_service_identity).toBe(reliable === false ? null : identity);
+          const serviceChecks = result.checks.filter((check: { name: string }) => ["service_installed", "service_active", "service_identity", "service_privilege_state"].includes(check.name));
+          expect(serviceChecks).toHaveLength(4);
+          for (const check of serviceChecks) {
+            expect(check).toMatchObject({ required: true, ok: reliable !== false, status: reliable === false ? "failure" : "ok" });
+            if (reliable === false && !shareable) expect(check.detail).toBe("synthetic status detail");
+          }
+          expect(result.ok).toBe(reliable !== false);
+          expect(exitCodes).toEqual(reliable === false ? [1] : []);
+        }
+      } finally { await test.cleanup(); }
+    },
+  );
+
   it("emits stable doctor JSON checks and only fails its exit seam for required failures", async () => {
     const test = await fixture();
     try {

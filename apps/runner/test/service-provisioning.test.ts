@@ -104,6 +104,73 @@ describe("native service package ownership", () => {
     expect(calls.every(call => call[1] === "print")).toBe(true);
   });
 
+  function macOSStartupFixture(action: "install" | "restart-loaded" | "restart-unloaded", observe: (clock: number) => { state?: string; pid?: number }) {
+    const manifest = renderService({ platform: "darwin", mode: "system" });
+    const calls: string[][] = [];
+    let clock = 0, started = false;
+    const manager = createServiceManager({ platform: "darwin", mode: "system",
+      filesystem: { read: async path => path === manifest.path ? manifest.content : undefined },
+      now: () => clock, delay: async ms => { clock += ms; },
+      executor: { execute: async (file, args) => {
+        calls.push([file, ...args]);
+        if (file !== "launchctl") throw new Error("unexpected synthetic program");
+        if (args[0] === "bootstrap" || args[0] === "kickstart") started = true;
+        if (args[0] !== "print") return { exitCode: 0 };
+        if (!started && action === "restart-unloaded") return { exitCode: 113, stderr: "Could not find service" };
+        const observation = started ? observe(clock) : { state: "waiting" };
+        return { exitCode: 0, stdout: `${observation.state === undefined ? "" : `state = ${observation.state}\n`}${observation.pid === undefined ? "" : `pid = ${observation.pid}\n`}user = runmesh\n` };
+      } },
+    });
+    return { run: () => manager[action === "install" ? "install" : "restart"](manifest), calls, clock: () => clock };
+  }
+
+  it.each(["install", "restart-loaded", "restart-unloaded"] as const)("waits for stable macOS startup after %s", async action => {
+    const test = macOSStartupFixture(action, clock => clock < 200 ? { state: "spawn scheduled" } : { state: "running", pid: 4321 });
+    await test.run();
+    expect(test.clock()).toBe(500);
+    expect(test.calls.some(call => call[1] === (action === "restart-loaded" ? "kickstart" : "bootstrap"))).toBe(true);
+  });
+
+  it.each(["install", "restart-loaded", "restart-unloaded"] as const)("rejects macOS startup that stays scheduled after %s", async action => {
+    const test = macOSStartupFixture(action, () => ({ state: "spawn scheduled" }));
+    await expect(test.run()).rejects.toThrow("did not become active");
+    expect(test.clock()).toBe(5_000);
+  });
+
+  it.each(["exited", "respawning"] as const)("rejects a macOS startup process that is %s before becoming stable", async outcome => {
+    const test = macOSStartupFixture("install", clock => outcome === "exited" && clock >= 100
+      ? { state: "waiting" } : { state: "running", pid: outcome === "respawning" ? 4321 + clock : 4321 });
+    await expect(test.run()).rejects.toThrow("did not become active");
+    expect(test.clock()).toBe(5_000);
+  });
+
+  it("restarts the macOS startup stability window when its process changes", async () => {
+    const test = macOSStartupFixture("install", clock => ({ state: "running", pid: clock < 200 ? 4321 : 4322 }));
+    await test.run();
+    expect(test.clock()).toBe(500);
+  });
+
+  it.each([undefined, 0, -1, Number.MAX_SAFE_INTEGER + 1])("requires a positive process identity for macOS startup (pid %s)", async pid => {
+    const test = macOSStartupFixture("install", () => ({ state: "running", ...(pid === undefined ? {} : { pid }) }));
+    await expect(test.run()).rejects.toThrow("did not become active");
+    expect(test.clock()).toBe(5_000);
+  });
+
+  it.each(["spawn scheduled", "not running", "waiting", undefined])("reads the complete macOS loaded state %s", async state => {
+    const manifest = renderService({ platform: "darwin", mode: "system" });
+    const manager = createServiceManager({ platform: "darwin", mode: "system",
+      filesystem: { read: async path => path === manifest.path ? manifest.content : undefined },
+      executor: { execute: async () => ({ exitCode: 0, stdout: `${state === undefined ? "" : `state = ${state}\n`}user = runmesh\n` }) },
+    });
+    await expect(manager.status?.(manifest)).resolves.toMatchObject({ active: state === undefined, installed: true, registered: true, reliable: true });
+  });
+
+  it("requires an explicit running state for macOS startup", async () => {
+    const test = macOSStartupFixture("install", () => ({ pid: 4321 }));
+    await expect(test.run()).rejects.toThrow("did not become active");
+    expect(test.clock()).toBe(5_000);
+  });
+
   it.skipIf(process.platform !== "win32").each(["stopped", "absent", "running", "queued", "denied", "unknown"] as const)("evaluates the Windows stop probe against a synthetic %s task", async state => {
     let script = "";
     const manager = createServiceManager({ platform: "win32", mode: "system", executor: {

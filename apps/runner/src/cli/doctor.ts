@@ -134,8 +134,6 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
   } else {
     try {
       const status = await manager.status(serviceProbeManifest);
-      actualServiceIdentity = status.identity ?? null;
-      privilegeState = servicePrivilegeState(serviceProbeManifest, status.identity, status.active);
       if (status.reliable === false) {
         const detail = status.detail ?? "native service status probe was unreliable";
         add("service_installed", true, false, detail);
@@ -143,6 +141,8 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
         add("service_identity", serviceIdentityRequired, false, detail);
         add("service_privilege_state", serviceIdentityRequired, false, detail);
       } else {
+        actualServiceIdentity = status.identity ?? null;
+        privilegeState = servicePrivilegeState(serviceProbeManifest, status.identity, status.active);
         add("service_installed", true, status.installed, status.detail);
         add("service_active", true, status.active, status.detail);
         const identityMatches = expectedIdentity === undefined ? true : privilegeState === "privileged" || privilegeState === "restricted";

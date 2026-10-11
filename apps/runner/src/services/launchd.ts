@@ -1,4 +1,5 @@
 import { MACOS_LABEL } from "./values.js";
+import { SERVICE_STARTUP_STABILITY_DELAY_MS } from "./values.js";
 import { nativeProbeReliable } from "./probes.js";
 import { safeServiceReportedIdentity } from "./values.js";
 import type { ServiceCommandExecutor } from "./contracts.js";
@@ -10,6 +11,10 @@ import { isManagedService } from "./manifest.js";
 import { createLaunchdStopRecovery } from "./launchd-stop.js";
 
 export { launchdProcessExited, waitForLaunchdExit } from "./launchd-stop.js";
+
+function launchdState(output: string): string | undefined {
+  return /^[\t ]*state[\t ]*=[\t ]*([^\r\n]*)/imu.exec(output)?.[1]?.trim().toLowerCase();
+}
 
 export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommandExecutor, execute: (file: string, args: readonly string[]) => Promise<void>, filesystem: Pick<ServiceManifestFilesystem, "read">, options: Pick<ServiceManagerOptions, "stopRecoveryFilesystem" | "now" | "delay"> = {}): ServiceManagerAdapter {
   const platform = "darwin" as const;
@@ -26,6 +31,28 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
       ...(options.now === undefined ? {} : { now: options.now }),
       ...(options.delay === undefined ? {} : { delay: options.delay }),
     });
+    const waitForStartup = async (): Promise<void> => {
+      const now = options.now ?? (() => performance.now());
+      const delay = options.delay ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+      const deadline = now() + 5_000;
+      let runningSince: number | undefined, runningPid: number | undefined;
+      while (true) {
+        const result = await executor.execute("launchctl", ["print", target]);
+        if (!nativeProbeReliable(result, "query")) throw new Error("launchd service state could not be verified");
+        const output = result.stdout ?? "";
+        const state = launchdState(output);
+        const pid = Number(/^[\t ]*pid[\t ]*=[\t ]*(\d+)[\t ]*$/imu.exec(output)?.[1]);
+        const observedAt = now();
+        // A loaded job can still be awaiting spawn or repeatedly crashing.
+        // Require one running process to survive the whole stability window.
+        if (result.exitCode === 0 && (state === "running" || state === "active") && Number.isSafeInteger(pid) && pid > 0) {
+          if (runningPid !== pid) { runningPid = pid; runningSince = observedAt; }
+          if (runningSince !== undefined && observedAt - runningSince >= SERVICE_STARTUP_STABILITY_DELAY_MS && observedAt <= deadline) return;
+        } else { runningSince = undefined; runningPid = undefined; }
+        if (observedAt >= deadline) throw new Error("launchd service did not become active before the startup deadline");
+        await delay(100);
+      }
+    };
     return {
       platform, mode,
       install: async (manifest) => {
@@ -45,7 +72,7 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
           await execute("launchctl", ["bootstrap", domain, manifest.path]);
         }
         await execute("launchctl", ["enable", target]);
-        await execute("launchctl", ["print", target]);
+        await waitForStartup();
       },
       // SIGTERM alone lets KeepAlive immediately respawn the process. Unload
       // the native job while retaining its managed plist for a later restart.
@@ -57,6 +84,7 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
           if (!isManagedService(await filesystem.read(manifest.path) ?? "")) throw new Error("managed launchd service manifest is missing");
           await execute("launchctl", ["bootstrap", domain, manifest.path]);
         }
+        await waitForStartup();
       },
       uninstall: async (manifest) => recovery(manifest.path).stop(),
       status: async (manifest) => {
@@ -65,7 +93,7 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
         // A system LaunchDaemon that omits UserName is launched as root by
         // launchd. Report that native default explicitly so the status and
         // doctor layers can distinguish it from an unavailable identity.
-        const state = /^\s*state\s*=\s*([^\s]+)\s*$/imu.exec(result.stdout ?? "")?.[1]?.toLowerCase();
+        const state = launchdState(result.stdout ?? "");
         // launchctl can report a loaded job whose last process already
         // exited. Treat explicit non-running states as inactive; when older
         // launchctl output omits a state line, retain the successful print
