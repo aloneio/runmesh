@@ -373,10 +373,13 @@ export async function uninstall(parsed: ParsedCommand, store: ServiceProfilePort
     if (platform === "win32" && process.execPath.toLowerCase().startsWith(layout.installRoot.toLowerCase() + "\\")) {
       throw new Error("Run the hosted uninstall command so maintenance can remove the in-use runtime from a temporary location");
     }
-    // Keep the stable CLI until purge removes installRoot last. If another
-    // cleanup step fails, the ordinary launcher must still support a retry.
-    await maintenanceInstaller(dependencies)?.uninstall({ ...maintenanceOptions(platform, mode, store.filePath), preservePackage: true });
-    const result = await (dependencies.purgeInstallation ?? purgeInstallation)({ platform, mode, ...(parsed.json ? {} : { progress: output }) });
+    const result = await (dependencies.purgeInstallation ?? purgeInstallation)({ platform, mode, ...(parsed.json ? {} : { progress: output }),
+      beforeServiceStop: async () => {
+        // Preflight failures leave the manager registered. Keep its CLI for
+        // retries if cleanup fails after the manager has been removed.
+        await maintenanceInstaller(dependencies)?.uninstall({ ...maintenanceOptions(platform, mode, store.filePath), preservePackage: true });
+      },
+    });
     if (parsed.json) output(JSON.stringify(result));
     else {
       for (const failure of result.failures) output(`  Remaining: ${failure.path} (${failure.reason})`);

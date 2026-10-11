@@ -41,6 +41,8 @@ On Linux, cleanup handles the exact `runmesh-runner.service` unit in the standar
 
 The independent `runmesh-manager.service` on Linux and `io.alone.runmesh.manager` service on macOS are stopped and unregistered before Runner cleanup. An unfinished version change retains its journal and must be recovered before removal.
 
+Complete removal first checks workspace protection, mounted filesystems and service ownership. A failure in this initial check leaves the version manager registered and the Runner unchanged. These checks run again after the manager stops and before file removal, using the latest local policy and installation layout.
+
 Project workspaces, other services and installations, system accounts/groups and the shared system journal remain. Keep project data outside Runmesh runtime directories. If a cached policy identifies a workspace inside a purge directory, move that workspace before continuing. Use the appropriate package manager for custom or npm-managed layouts.
 
 A filesystem-root workspace, such as `/` or `C:\`, represents access to the host or volume. Complete removal still cleans only the managed Runmesh paths listed above. A specific project directory overlapping those paths remains protected, including paths retained in the previous policy.
