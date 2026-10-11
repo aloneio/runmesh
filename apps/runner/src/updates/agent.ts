@@ -118,7 +118,11 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
           delayMs = serviceReconnectDelayMs(failures, Math.random(), error instanceof MaintenanceHttpError ? error.retryAfterMs : undefined);
           failures = Math.min(4, failures + 1);
         }
-      } finally { await lease?.release().catch(() => undefined); }
+      } finally {
+        // A failed release can retain our live-PID lock. Exit so the native
+        // service restarts and recovers it instead of polling behind ourselves.
+        await lease?.release();
+      }
       // Idle polling is read-only and jittered; active phase writes occur only
       // on transitions, never once per poll or when no operation is offered.
       await waitForRetry(delayMs, signal);
