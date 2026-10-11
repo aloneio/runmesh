@@ -5,6 +5,7 @@ import { UpdateFailure } from "../src/updates/contracts.js";
 
 const testState = vi.hoisted(() => ({ profile: undefined as RunnerMaintenanceIdentity | undefined, failStateDirectory: false,
   journal: undefined as UpdateJournalRecord | undefined, journalReads: 0, failJournalReadAt: 0, journalCompletes: 0, leaseReleases: 0,
+  leaseHeld: false, leaseAcquisitions: 0, releaseFailure: undefined as Error | undefined,
   runCoordinator: undefined as ((options: UpdateCoordinatorOptions) => Promise<void>) | undefined }));
 vi.mock("node:fs/promises", () => ({ lstat: async () => ({ isFile: () => true, isSymbolicLink: () => false, mode: 0o600, uid: process.getuid?.() }), realpath: async (path: string) => path }));
 vi.mock("../src/profile.js", () => ({ ProfileStore: class { async loadMaintenanceIdentity() { return testState.profile; } } }));
@@ -14,7 +15,16 @@ vi.mock("../src/updates/journal.js", () => ({ assertManagerDirectory: async (_pa
   async save(journal: UpdateJournalRecord) { testState.journal = journal; }
 }, loadManagerId: async () => "manager" }));
 vi.mock("../src/updates/manager-install.js", () => ({ maintenanceManagerLayout: () => ({ platform: process.platform, mode: "user", managerRoot: "/manager", runtimePath: process.execPath, bundlePath: process.argv[1], layout: { installRoot: "/install", stateRoot: "/state" } }) }));
-vi.mock("../src/updates/installation-lock.js", () => ({ acquireInstallationLock: async () => ({ assertHeld() {}, async release() { testState.leaseReleases++; } }) }));
+vi.mock("../src/updates/installation-lock.js", () => ({ acquireInstallationLock: async () => {
+  testState.leaseAcquisitions++;
+  if (testState.leaseHeld) return undefined;
+  testState.leaseHeld = true;
+  return { assertHeld() { if (!testState.leaseHeld) throw new Error("fixture lease released"); }, async release() {
+    testState.leaseReleases++;
+    if (testState.releaseFailure !== undefined) throw testState.releaseFailure;
+    testState.leaseHeld = false;
+  } };
+} }));
 vi.mock("../src/updates/native-service.js", () => ({ createNativeServiceMaintenance: () => ({}) }));
 vi.mock("../src/updates/coordinator.js", () => ({ UpdateCoordinator: class {
   constructor(private readonly options: UpdateCoordinatorOptions) {}
@@ -34,6 +44,7 @@ describe("maintenance request scheduling", () => {
   beforeEach(() => {
     vi.useFakeTimers(); vi.spyOn(Math, "random").mockReturnValue(0); testState.profile = identity; testState.failStateDirectory = false;
     testState.journal = undefined; testState.journalReads = 0; testState.failJournalReadAt = 0; testState.journalCompletes = 0; testState.leaseReleases = 0; testState.runCoordinator = undefined;
+    testState.leaseHeld = false; testState.leaseAcquisitions = 0; testState.releaseFailure = undefined;
   });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -45,6 +56,47 @@ describe("maintenance request scheduling", () => {
     const completed = running.then(() => { settled = true; }, cause => { settled = true; failure = cause; });
     return { errors, tokens, calls: () => calls, settled: () => settled, failure: () => failure, async stop(expectedFailure = false) { controller.abort(); await completed; if (!expectedFailure && failure !== undefined) throw failure; } };
   }
+
+  it.each(["completed", "failed"] as const)("exits for native restart when lease release fails after a %s update attempt", async outcome => {
+    const signals = ["SIGINT", "SIGTERM"] as const, before = signals.map(signal => process.listeners(signal));
+    const saved = pending(outcome === "completed" ? "succeeded" : "checking"); testState.journal = saved;
+    const failure = Object.freeze(Object.assign(new Error("fixture lock unlink failed"), { code: "EIO" }));
+    testState.releaseFailure = failure;
+    let attempts = 0;
+    testState.runCoordinator = async options => {
+      attempts++;
+      if (outcome === "failed") throw new UpdateFailure("activation_failed");
+      await options.journal.complete(saved);
+    };
+    const agent = start(() => Response.json({ ...idle, operation }));
+    try {
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(agent.settled()).toBe(true); expect(agent.failure()).toBe(failure);
+      expect(attempts).toBe(1); expect(testState.leaseAcquisitions).toBe(1); expect(testState.leaseReleases).toBe(1);
+      expect(testState.leaseHeld).toBe(true); expect(agent.calls()).toBe(0);
+      expect(testState.journal).toBe(outcome === "completed" ? undefined : saved);
+      expect(testState.journalCompletes).toBe(outcome === "completed" ? 1 : 0);
+      expect(agent.errors).toEqual(outcome === "completed" ? [] : ["activation_failed"]);
+      expect(signals.map(signal => process.listeners(signal))).toEqual(before);
+    } finally { await agent.stop(true); }
+  });
+
+  it("keeps lease release failure observable when shutdown interrupts an update", async () => {
+    const signals = ["SIGINT", "SIGTERM"] as const, before = signals.map(signal => process.listeners(signal));
+    const saved = pending("checking"); testState.journal = saved;
+    const failure = new Error("fixture lock release failed during shutdown"); testState.releaseFailure = failure;
+    testState.runCoordinator = async options => new Promise<void>((_resolve, reject) => {
+      options.signal!.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")), { once: true });
+    });
+    const agent = start(() => Response.json(idle));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(testState.leaseHeld).toBe(true);
+    await agent.stop(true);
+    expect(agent.settled()).toBe(true); expect(agent.failure()).toBe(failure);
+    expect(testState.leaseReleases).toBe(1); expect(testState.journal).toBe(saved); expect(testState.journalCompletes).toBe(0);
+    expect(agent.calls()).toBe(0); expect(agent.errors).toEqual([]);
+    expect(signals.map(signal => process.listeners(signal))).toEqual(before);
+  });
 
   it.each(["runner", "server"] as const)("preserves old journals across an actual coordinator restart with a changed %s", async changed => {
     const { UpdateCoordinator } = await vi.importActual<typeof import("../src/updates/coordinator.js")>("../src/updates/coordinator.js");

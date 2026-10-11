@@ -117,17 +117,18 @@ export function assertSystemInstallationPrivilege(manifest: ServiceManifest, dep
   if (manifest.mode !== "system") return;
   const elevated = dependencies.isAdministrator ?? (() => {
     if (manifest.platform !== "win32") return process.getuid?.() === 0;
-    // `net session` returns success only from an elevated Windows token.
-    // Use the absolute inbox utility path.  Windows CreateProcess searches
-    // the current directory before PATH even when PATH has been scrubbed;
-    // resolving a bare `net.exe` here would let a same-directory binary run
-    // in the administrator's context during install/uninstall.
+    // Query the current token directly: `net session` also depends on the
+    // optional Server service and rejects elevated hosts when it is stopped.
     const systemRoot = trustedWindowsRoot();
-    const executable = process.platform === "win32" ? resolveTrustedWindowsTool("net.exe", systemRoot) : "net";
-    return spawnSync(executable, ["session"], {
+    const executable = resolveTrustedWindowsTool("powershell.exe", systemRoot);
+    const script = "$ErrorActionPreference='Stop'; $identity=[Security.Principal.WindowsIdentity]::GetCurrent(); "
+      + "try { $principal=[Security.Principal.WindowsPrincipal]::new($identity); if($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 }; exit 1 } finally { $identity.Dispose() }";
+    return spawnSync(executable, ["-NoProfile", "-NonInteractive", "-Command", script], {
       stdio: "ignore",
       windowsHide: true,
-      ...(process.platform === "win32" ? { cwd: `${systemRoot}\\System32`, env: trustedWindowsEnvironment(systemRoot) } : {}),
+      timeout: 10_000,
+      cwd: `${systemRoot}\\System32`,
+      env: trustedWindowsEnvironment(systemRoot),
     }).status === 0;
   });
   if (!elevated()) throw new Error("system Runner installation requires administrator/root privileges; rerun from an elevated administrator/root shell");

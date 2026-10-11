@@ -200,6 +200,49 @@ describe("runner product profile and enrollment", () => {
       expect(lines.join("\n")).not.toContain("0123456789abcdef");
     } finally { await test.cleanup(); }
   });
+  it.each(["unreliable-active", "unreliable-inactive", "throw", "missing"] as const)("reports CLI service state as unknown for a %s probe", async scenario => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile());
+      const output: string[] = [];
+      await runCli(["status", "--json"], {
+        store: test.store, stdout: line => output.push(line), servicePlatform: "linux",
+        serviceFilesystem: { read: async () => undefined, write: async () => undefined, remove: async () => undefined },
+        serviceManager: {
+          platform: "linux", mode: "system", install: vi.fn(), stop: vi.fn(), restart: vi.fn(), uninstall: vi.fn(),
+          ...(scenario === "missing" ? {} : { status: async () => {
+            if (scenario === "throw") throw new Error("native query unavailable");
+            return { installed: true, registered: true, active: scenario === "unreliable-active", identity: "runmesh", reliable: false };
+          } }),
+        },
+      });
+      expect(JSON.parse(output[0]!)).toMatchObject({
+        configured: true, actual_service_identity: null, privilege_state: "unknown", connection: "unknown",
+        service: { status: "unknown", registered: null, installed: null, active: null, actual_service_identity: null, privilege_state: "unknown" },
+      });
+    } finally { await test.cleanup(); }
+  });
+  it.each([true, undefined])("reports CLI service state from a trusted probe with reliability %s", async reliable => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile());
+      for (const active of [true, false]) {
+        const output: string[] = [];
+        await runCli(["status", "--json"], {
+          store: test.store, stdout: line => output.push(line), servicePlatform: "linux",
+          serviceFilesystem: { read: async () => undefined, write: async () => undefined, remove: async () => undefined },
+          serviceManager: {
+            platform: "linux", mode: "system", install: vi.fn(), stop: vi.fn(), restart: vi.fn(), uninstall: vi.fn(),
+            status: async () => ({ installed: true, registered: true, active, identity: "runmesh", ...(reliable === undefined ? {} : { reliable }) }),
+          },
+        });
+        expect(JSON.parse(output[0]!)).toMatchObject({
+          actual_service_identity: "runmesh", privilege_state: active ? "restricted" : "unknown", connection: "unknown",
+          service: { status: active ? "active" : "inactive", registered: true, installed: true, active },
+        });
+      }
+    } finally { await test.cleanup(); }
+  });
   it.skipIf(process.platform === "win32")("rejects a symlinked profile directory", async () => {
     const root = await mkdtemp(join(tmpdir(), "runner-profile-link-"));
     const outside = await mkdtemp(join(tmpdir(), "runner-profile-outside-"));

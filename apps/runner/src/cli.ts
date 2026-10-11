@@ -68,7 +68,10 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
         }
         const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode, ...(dependencies.serviceFilesystem === undefined ? {} : { filesystem: dependencies.serviceFilesystem }) });
         if (manager.platform === manifest.platform && manager.mode === manifest.mode && manager.status !== undefined) {
-          try { runtimeStatus = await manager.status(statusManifest); } catch { runtimeStatus = undefined; }
+          try {
+            const observed = await manager.status(statusManifest);
+            runtimeStatus = observed.reliable === false ? undefined : observed;
+          } catch { runtimeStatus = undefined; }
         }
       }
       const actualIdentity = runtimeStatus?.identity ?? null;
