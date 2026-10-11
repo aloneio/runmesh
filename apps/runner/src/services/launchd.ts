@@ -5,35 +5,13 @@ import type { ServiceCommandExecutor } from "./contracts.js";
 import type { ServiceManagerAdapter } from "./contracts.js";
 import type { ServiceMode } from "./contracts.js";
 import type { ServiceManifestFilesystem } from "./contracts.js";
+import type { ServiceManagerOptions } from "./contracts.js";
 import { isManagedService } from "./manifest.js";
+import { createLaunchdStopRecovery } from "./launchd-stop.js";
 
-/** A missing registration does not prove that its previous process exited. */
-export async function launchdProcessExited(executor: ServiceCommandExecutor, pid: number): Promise<boolean> {
-  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Runner process identity is unavailable");
-  const result = await executor.execute("ps", ["-p", String(pid), "-o", "pid="]);
-  if (result.exitCode === 1 && !(result.stdout ?? "").trim() && !(result.stderr ?? "").trim()) return true;
-  if (result.exitCode !== 0) throw new Error("Runner process exit could not be confirmed");
-  return false;
-}
+export { launchdProcessExited, waitForLaunchdExit } from "./launchd-stop.js";
 
-/** A removed launchd registration can outlive its original process. */
-export async function waitForLaunchdExit(executor: ServiceCommandExecutor, target: string, pid: number | undefined, options: { now?: () => number; delay?: (ms: number) => Promise<void> } = {}): Promise<void> {
-  const now = options.now ?? Date.now;
-  const delay = options.delay ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
-  const deadline = now() + 5_000;
-  while (true) {
-    const registration = await executor.execute("launchctl", ["print", target]);
-    if (!nativeProbeReliable(registration, "query")) throw new Error("launchd service state could not be verified");
-    if (registration.exitCode !== 0) {
-      if (pid === undefined || pid === 0) return;
-      if (await launchdProcessExited(executor, pid)) return;
-    }
-    if (now() >= deadline) throw new Error("launchd service or process did not stop before the cleanup deadline");
-    await delay(100);
-  }
-}
-
-export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommandExecutor, execute: (file: string, args: readonly string[]) => Promise<void>, filesystem: Pick<ServiceManifestFilesystem, "read">): ServiceManagerAdapter {
+export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommandExecutor, execute: (file: string, args: readonly string[]) => Promise<void>, filesystem: Pick<ServiceManifestFilesystem, "read">, options: Pick<ServiceManagerOptions, "stopRecoveryFilesystem" | "now" | "delay"> = {}): ServiceManagerAdapter {
   const platform = "darwin" as const;
 
     const domain = mode === "system" ? "system" : `gui/${process.getuid?.() ?? 0}`;
@@ -43,12 +21,15 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
       if (!nativeProbeReliable(result, "query")) throw new Error("launchd service state could not be verified");
       return result.exitCode === 0;
     };
-    const unload = async (): Promise<void> => {
-      if (await loaded()) await execute("launchctl", ["bootout", target]);
-    };
+    const recovery = (manifestPath: string) => createLaunchdStopRecovery({ executor, target, mode, manifestPath,
+      ...(options.stopRecoveryFilesystem === undefined ? {} : { filesystem: options.stopRecoveryFilesystem }),
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.delay === undefined ? {} : { delay: options.delay }),
+    });
     return {
       platform, mode,
       install: async (manifest) => {
+        await recovery(manifest.path).recover();
         // `bootstrap` rejects an already-loaded label.  Retry only this exact
         // Runmesh label after confirming it is already loaded and booting it
         // out.  A permission or malformed-plist failure must not be masked by
@@ -60,7 +41,7 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
             const detail = bootstrapped.stderr === undefined || bootstrapped.stderr.trim() === "" ? "" : ` (${bootstrapped.stderr.trim().slice(0, 512)})`;
             throw new Error(`service command failed: launchctl bootstrap ${domain} ${manifest.path}${detail}`);
           }
-          await execute("launchctl", ["bootout", target]);
+          await recovery(manifest.path).stop();
           await execute("launchctl", ["bootstrap", domain, manifest.path]);
         }
         await execute("launchctl", ["enable", target]);
@@ -68,15 +49,16 @@ export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommand
       },
       // SIGTERM alone lets KeepAlive immediately respawn the process. Unload
       // the native job while retaining its managed plist for a later restart.
-      stop: unload,
+      stop: async (manifest) => recovery(manifest.path).stop(),
       restart: async (manifest) => {
+        await recovery(manifest.path).recover();
         if (await loaded()) await execute("launchctl", ["kickstart", "-k", target]);
         else {
           if (!isManagedService(await filesystem.read(manifest.path) ?? "")) throw new Error("managed launchd service manifest is missing");
           await execute("launchctl", ["bootstrap", domain, manifest.path]);
         }
       },
-      uninstall: unload,
+      uninstall: async (manifest) => recovery(manifest.path).stop(),
       status: async (manifest) => {
         const result = await executor.execute("launchctl", ["print", target]);
         const match = /(?:user|UserName)\s*=\s*([^\s]+)/u.exec(result.stdout ?? "");

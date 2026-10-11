@@ -608,6 +608,22 @@ function Invoke-LoggedStep([string]$Message, [string]$LogPath, [scriptblock]$Act
   }
   Write-Ok $Message
 }
+function Invoke-InstalledServiceInstall([string]$RunnerPath) {
+  # Installation replaces the .cmd launchers; keep this invocation outside them.
+  $ManagerRoot = Join-Path $InstallRoot 'manager'
+  if (Test-Path -LiteralPath $ManagerRoot) {
+    $ServiceRuntime = Join-Path $ManagerRoot 'runtime\node.exe'
+    $ServiceEntry = Join-Path $ManagerRoot 'runmesh.cjs'
+  } else {
+    $ServiceRuntime = Join-Path $CurrentRoot 'runtime\node.exe'
+    $ServiceEntry = Join-Path $CurrentRoot 'node_modules\@aloneio\runmesh-runner\dist\maintenance.cjs'
+    if (-not (Test-Path -LiteralPath $ServiceEntry -PathType Leaf)) { $ServiceEntry = Join-Path $CurrentRoot 'runmesh.cjs' }
+  }
+  foreach ($ServiceFile in @($ServiceRuntime, $ServiceEntry)) {
+    if (-not (Test-Path -LiteralPath $ServiceFile -PathType Leaf)) { throw 'Installed service maintenance entry is incomplete.' }
+  }
+  & $ServiceRuntime $ServiceEntry install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $RunnerPath
+}
 function Refresh-Existing {
   if (-not (Test-Path -LiteralPath $CurrentRoot)) { return $false }
   if (-not (Test-Path -LiteralPath $CurrentRoot -PathType Container)) { throw 'Existing Runmesh current path is not a managed directory.' }
@@ -629,7 +645,7 @@ function Refresh-Existing {
     $EnrollmentCode | & $ExistingRunner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --re-enroll __EXECUTION_MODE_FLAGS__ *> $RefreshEnrollLog
     if ($LASTEXITCODE -ne 0) { Write-LogFailure 'Refreshing credentials for the existing Runmesh Runner.' $RefreshEnrollLog $LASTEXITCODE; throw 'Enrollment refresh failed.' }
     $RefreshInstallLog = Join-Path $InstallRoot ('.refresh-install.{0}.log' -f $PID)
-    & $ExistingRunner install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $ExistingRunner *> $RefreshInstallLog
+    Invoke-InstalledServiceInstall $ExistingRunner *> $RefreshInstallLog
     if ($LASTEXITCODE -ne 0) { Write-LogFailure 'Refreshing the installed service for the existing Runmesh Runner.' $RefreshInstallLog $LASTEXITCODE; throw 'Service installation refresh failed.' }
     $RefreshRestartLog = Join-Path $InstallRoot ('.refresh-restart.{0}.log' -f $PID)
     & $ExistingRunner restart --profile $Profile *> $RefreshRestartLog
@@ -861,7 +877,7 @@ __VERIFIER__
   $ServiceLog = Join-Path $TempRoot 'service-install.log'
   $RuntimePhase = 'service_install'
   Invoke-LoggedStep 'Starting service' $ServiceLog {
-    & $CurrentRunner install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $CurrentRunner
+    Invoke-InstalledServiceInstall $CurrentRunner
   }
   $Succeeded = $true
   Write-Ok "Runmesh Runner $Version is ready."

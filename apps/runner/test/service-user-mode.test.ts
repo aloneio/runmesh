@@ -42,10 +42,15 @@ it("stops and resumes a macOS KeepAlive service through the public CLI", async (
     write: async (path, content) => { contents.set(path, content); }, remove: async path => { contents.delete(path); } };
   let loaded = true, active = true;
   const calls: string[][] = [];
-  const manager = createServiceManager({ platform: "darwin", mode: "user", filesystem, executor: {
+  const manager = createServiceManager({ platform: "darwin", mode: "user", filesystem,
+    stopRecoveryFilesystem: { read: filesystem.read, create: async (path, content) => {
+      if (contents.has(path)) throw new Error("record already exists");
+      contents.set(path, content);
+    }, sync: async () => undefined, remove: filesystem.remove }, executor: {
     execute: async (file, args) => {
       calls.push([file, ...args]);
-      if (args[0] === "print") return loaded ? { exitCode: 0, stdout: `state = ${active ? "running" : "waiting"}\nuser = fixture\n` }
+      if (file === "ps") return active ? { exitCode: 0, stdout: "4321\n" } : { exitCode: 1 };
+      if (args[0] === "print") return loaded ? { exitCode: 0, stdout: `state = ${active ? "running" : "waiting"}\nuser = fixture\n${active ? "pid = 4321\n" : ""}` }
         : { exitCode: 113, stderr: "Could not find service" };
       if (args[0] === "kill") active = true; // KeepAlive relaunches a signalled process.
       if (args[0] === "bootout") { loaded = false; active = false; }

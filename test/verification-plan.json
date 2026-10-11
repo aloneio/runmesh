@@ -102,6 +102,7 @@
         "apps/runner/test/job-recovery.test.ts",
         "apps/runner/test/job-reporting.test.ts",
         "apps/runner/test/launchd-exit.test.ts",
+        "apps/runner/test/launchd-lifecycle-recovery.test.ts",
         "apps/runner/test/maintenance-cli.test.ts",
         "apps/runner/test/patch-git.test.ts",
         "apps/runner/test/patch-large-lines.test.ts",

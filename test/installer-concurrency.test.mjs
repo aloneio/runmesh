@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Run only locking/rollback/maintenance fragments from the generated installer.
@@ -35,6 +36,119 @@ function startScript(path, environment) {
   }).finally(() => clearTimeout(timer));
   return { child, completed };
 }
+
+let managedLauncher;
+function windowsManagedLauncher(root) {
+  if (managedLauncher === undefined) {
+    const source = buildSync({ entryPoints: [fileURLToPath(new URL("../apps/runner/src/updates/launchers.ts", import.meta.url))], platform: "node", format: "cjs", bundle: true, write: false }).outputFiles[0].text;
+    const module = { exports: {} };
+    new Function("module", "exports", "require", source)(module, module.exports, createRequire(import.meta.url));
+    managedLauncher = module.exports.renderManagedLauncher;
+  }
+  return managedLauncher("win32", root);
+}
+
+for (const entry of ["fresh", "refresh"]) for (const scenario of [
+  { name: "first manager setup", maintenance: true, modern: true, expected: "maintenance" },
+  { name: "dedicated-user first setup", maintenance: true, modern: true, mode: "dedicated_user", expected: "maintenance" },
+  { name: "existing manager priority", maintenance: true, modern: true, manager: true, expected: "manager" },
+  { name: "incomplete manager rejection", maintenance: true, modern: true, manager: true, incomplete: true },
+  { name: "legacy package fallback", expected: "runner" },
+  { name: "nonzero install result", maintenance: true, modern: true, expected: "maintenance", exitCode: 23 },
+]) test(`Windows hosted ${entry} service install handles ${scenario.name}${scenario.incomplete ? " without invoking a CLI" : " exactly once"}`, { skip: !windows }, async () => {
+  const temporary = await realpath(await mkdtemp(join(tmpdir(), "runmesh-service-entry-")));
+  const root = join(temporary, "managed installation");
+  const version = join(root, "versions", "fixture-version");
+  const current = join(root, "current");
+  const manager = join(root, "manager");
+  const log = join(temporary, "calls.jsonl");
+  const fixture = join(temporary, "fixture.json");
+  const profile = join(temporary, "profile.json");
+  const manifest = join(temporary, "native-service.xml");
+  const script = join(temporary, "install.ps1");
+  const managerSource = join(temporary, "manager-source.cjs");
+  const installLog = join(temporary, "service-install.log");
+  const template = join(temporary, "managed-wrapper.txt");
+  const wrapper = windowsManagedLauncher(root);
+  const mode = scenario.mode ?? "privileged_host";
+  const generated = loaded.exports.renderPowerShellInstaller("https://installer.example.test", mode);
+  const program = role => `const fs=require('node:fs'),path=require('node:path');
+const c=JSON.parse(fs.readFileSync(process.env.RUNMESH_SERVICE_FIXTURE,'utf8')),args=process.argv.slice(2),role=${JSON.stringify(role)};
+if(args[0]!=='install')throw Error('Unexpected service fixture command');
+fs.appendFileSync(c.log,JSON.stringify({role,args,runtime:process.execPath})+'\\n');
+console.log('fixture service install exit '+c.exitCode);
+if(c.exitCode){process.exitCode=c.exitCode;return;}
+if(c.modern){
+  if(!fs.existsSync(c.manager)){fs.mkdirSync(path.join(c.manager,'runtime'),{recursive:true});fs.copyFileSync(process.execPath,path.join(c.manager,'runtime','node.exe'));fs.copyFileSync(c.managerSource,path.join(c.manager,'runmesh.cjs'));}
+  const wrapper=fs.readFileSync(c.template);
+  for(const name of ['runmesh.cmd','runmesh-runner.cmd']){const destination=path.join(c.current,name);if(fs.readFileSync(destination).equals(wrapper))continue;const temporary=destination+'.fixture.tmp';fs.writeFileSync(temporary,wrapper);fs.renameSync(temporary,destination);}
+}
+`;
+  try {
+    await mkdir(join(version, "runtime"), { recursive: true });
+    await copyFile(process.execPath, join(version, "runtime", "node.exe"));
+    await writeFile(join(version, "runmesh.cjs"), program("runner"));
+    await writeFile(managerSource, program("manager"));
+    if (scenario.maintenance) {
+      const dist = join(version, "node_modules/@aloneio/runmesh-runner/dist");
+      await mkdir(dist, { recursive: true });
+      await writeFile(join(dist, "maintenance.cjs"), program("maintenance"));
+    }
+    if (scenario.manager) {
+      await mkdir(join(manager, "runtime"), { recursive: true });
+      await copyFile(process.execPath, join(manager, "runtime", "node.exe"));
+      if (!scenario.incomplete) await copyFile(managerSource, join(manager, "runmesh.cjs"));
+    }
+    await symlink(version, current, "junction");
+    await writeFile(template, wrapper);
+    await writeFile(profile, JSON.stringify({ runner_id: "fixture-runner", execution_mode: mode, token: "fixture-only-token" }));
+    await writeFile(manifest, "unchanged synthetic native service");
+    const retained = await Promise.all([profile, manifest].map(path => readFile(path)));
+    await writeFile(fixture, JSON.stringify({ current, manager, managerSource, log, template, modern: scenario.modern === true, exitCode: scenario.exitCode ?? 0 }));
+    const source = `$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+$InstallRoot=$env:RUNMESH_SERVICE_ROOT
+$CurrentRoot=Join-Path $InstallRoot 'current'
+$Stage=Join-Path $InstallRoot 'versions\\fixture-version'
+$Profile=$env:RUNMESH_SERVICE_PROFILE
+$CurrentRunner=Join-Path $CurrentRoot 'runmesh.cmd'
+$ExistingRunner=$CurrentRunner
+$ServiceLog=$env:RUNMESH_SERVICE_LOG
+$EnrollmentAttempted=$true
+$crlf=[Environment]::NewLine
+$dq=[char]34
+$global:LASTEXITCODE=0
+${section(generated, "$script:StepIndex = 0", "function Refresh-Existing")}
+${section(generated, "  $Runner = Join-Path $Stage 'runmesh.cmd'", "  if ((& $Runner --version)")}
+${entry === "fresh" ? section(generated, "  Invoke-LoggedStep 'Starting service'", "  $Succeeded = $true")
+      : section(generated, "    $RefreshInstallLog =", "    $RefreshRestartLog =")}
+`;
+    await writeFile(script, source);
+    const result = await startScript(script, { RUNMESH_SERVICE_ROOT: root, RUNMESH_SERVICE_PROFILE: profile,
+      RUNMESH_SERVICE_LOG: installLog, RUNMESH_SERVICE_FIXTURE: fixture,
+      NODE_OPTIONS: "", NODE_PATH: "" }).completed;
+    const called = await readFile(log, "utf8").catch(error => { if (error.code === "ENOENT") return ""; throw error; });
+    const calls = called.trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+    if (scenario.incomplete) {
+      assert.notEqual(result.code, 0, "an incomplete manager must not fall back to the selected Runner");
+      assert.match(result.stdout + result.stderr, /Installed service maintenance entry is incomplete/);
+      assert.deepEqual(calls, []);
+    } else {
+      if (scenario.exitCode) {
+        assert.notEqual(result.code, 0, "the generated caller must observe the native CLI failure");
+        assert.match(result.stdout + result.stderr, entry === "fresh" ? /Starting service/ : /Service installation refresh failed/);
+      } else assert.equal(result.code, 0, result.stdout + result.stderr);
+      assert.equal(calls.length, 1, `one generated ${entry} install must invoke its service CLI once: ${JSON.stringify(calls)}`);
+      assert.equal(calls[0].role, scenario.expected, result.stdout + result.stderr);
+      assert.deepEqual(calls[0].args, ["install", "--profile", profile, "--execution-mode", mode, ...(mode === "privileged_host" ? ["--confirm-privileged-host"] : []), "--executable-path", join(current, "runmesh.cmd")]);
+    }
+    assert.equal(await realpath(current), await realpath(version));
+    for (const [index, path] of [profile, manifest].entries()) assert.deepEqual(await readFile(path), retained[index]);
+  } finally {
+    assert.equal(dirname(temporary), await realpath(tmpdir()));
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
 
 test("hosted installer lock excludes a second process and releases on failure", async () => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-installer-lock-"));

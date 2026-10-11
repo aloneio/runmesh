@@ -10,7 +10,14 @@ const linuxExecStart = (args: readonly string[] = linuxArguments, path = args[0]
 function options(platform: "linux" | "darwin" | "win32", executor: ServiceCommandExecutor): NativeServiceMaintenanceOptions {
   const layout = serviceLayout({ platform, mode: "system" });
   const manifest = renderService({ platform, mode: "system" });
+  const records = new Map<string, string>();
   return { platform, mode: "system", profilePath: serviceProfilePath(layout), installRoot: layout.installRoot, executor,
+    stopRecoveryFilesystem: {
+      read: async path => records.get(path),
+      create: async (path, text) => { if (records.has(path)) throw new Error("record exists"); records.set(path, text); },
+      sync: async () => undefined,
+      remove: async path => { records.delete(path); },
+    },
     filesystem: { read: async path => path === manifest.path ? manifest.content : undefined } };
 }
 
@@ -166,6 +173,45 @@ it("disables a Windows task before stopping and restores an originally disabled 
   expect(active).toBe(true);
   expect(enabled).toBe(false);
   expect(calls.some(call => call.includes("/Delete"))).toBe(false);
+});
+
+it("retains a macOS process across failed stop attempts and adapter recreation", async () => {
+  let loaded = true, queryFails = true, alive = true, time = 0;
+  const calls: string[][] = [];
+  const base = { ...options("darwin", { execute: async (file, args) => {
+    calls.push([file, ...args]);
+    if (args[0] === "print-disabled") return { exitCode: 0, stdout: '{ "io.alone.runmesh.runner" => true }' };
+    if (args[0] === "print") return loaded ? { exitCode: 0, stdout: "state = running\npid = 123\n" } : { exitCode: 113, stderr: "Could not find service" };
+    if (args[0] === "bootout") loaded = false;
+    if (file === "ps") return queryFails ? { exitCode: 2, stderr: "process query failed" } : alive ? { exitCode: 0, stdout: "123\n" } : { exitCode: 1 };
+    return { exitCode: 0 };
+  } }), now: () => time, delay: async (ms: number) => { time += ms; } };
+  await expect(createNativeServiceMaintenance(base).stop()).rejects.toThrow("process exit could not be confirmed");
+  queryFails = false;
+  await expect(createNativeServiceMaintenance(base).stop()).rejects.toThrow("did not stop");
+  expect(calls.filter(call => call.includes("bootout"))).toHaveLength(1);
+  alive = false;
+  await createNativeServiceMaintenance(base).stop();
+  expect(calls.filter(call => call[0] === "ps").at(-1)).toEqual(["ps", "-p", "123", "-o", "pid="]);
+});
+
+it("recovers a retained purge stop before enabling a macOS Runner", async () => {
+  let alive = true, time = 0;
+  const calls: string[][] = [];
+  const base = { ...options("darwin", { execute: async (file, args) => {
+    calls.push([file, ...args]);
+    if (args[0] === "print") return { exitCode: 113, stderr: "Could not find service" };
+    if (file === "ps") return alive ? { exitCode: 0, stdout: "123" } : { exitCode: 1 };
+    return { exitCode: 0 };
+  } }), now: () => time, delay: async (ms: number) => { time += ms; } };
+  const path = `${serviceLayout({ platform: "darwin", mode: "system" }).manifestPath}.purge-stop.json`;
+  await base.stopRecoveryFilesystem!.create(path, JSON.stringify({ schema_version: 1, target: "system/io.alone.runmesh.runner", mode: "system", pid: 123 }));
+  await expect(createNativeServiceMaintenance(base).start()).rejects.toThrow("did not stop");
+  expect(calls.some(call => call.includes("enable") || call.includes("bootstrap"))).toBe(false);
+  alive = false;
+  await createNativeServiceMaintenance(base).start();
+  expect(await base.stopRecoveryFilesystem!.read(path)).toBeUndefined();
+  expect(calls.filter(call => call.includes("bootstrap"))).toHaveLength(1);
 });
 
 it("rejects unknown and custom service ownership before a stop command", async () => {
