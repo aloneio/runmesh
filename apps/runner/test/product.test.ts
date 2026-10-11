@@ -1,12 +1,14 @@
 import { chmod, chown, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
 import { classifyConnectionFailure, RunnerConnection } from "../src/connection.js";
 import { enrollRunner, EnrollmentOutcomeUnknownError } from "../src/enrollment.js";
 import { isCliErrorReported } from "../src/cli/reporting.js";
+import { enrollmentCode } from "../src/cli/enrollment.js";
 import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
 import { createServiceManager, createServiceProvisioner, hashContent, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceLayout, serviceProfilePath, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
@@ -27,6 +29,54 @@ const runnerPolicy = (runnerId: string, revision: number) => {
   const unsigned = { schema_version: 1 as const, runner_id: runnerId, revision, runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] as [] };
   return { ...unsigned, checksum: runnerPolicyChecksum(unsigned) };
 };
+
+async function withEnrollmentInput(write: (input: PassThrough) => void, check: (result: Promise<string>) => Promise<unknown>): Promise<void> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "stdin")!;
+  const input = new PassThrough();
+  Object.defineProperty(process, "stdin", { configurable: true, value: input });
+  try {
+    const result = enrollmentCode(parseProductArgs(["enroll", "--code-stdin"]));
+    const checked = check(result);
+    write(input);
+    await checked;
+    expect(input.isPaused()).toBe(true);
+    for (const event of ["data", "error", "end"]) expect(input.listenerCount(event)).toBe(0);
+  } finally {
+    input.destroy();
+    Object.defineProperty(process, "stdin", descriptor);
+  }
+}
+
+describe("stdin enrollment input", () => {
+  it.each(["\n", "\r\n", "\r"])("reads the first line ending in %j regardless of stream chunks", async newline => {
+    const code = "a".repeat(43), suffix = "note".repeat(150);
+    const chunks = [
+      [`${code}${newline}${suffix}`],
+      [`${code}${newline}`, suffix],
+      [code, newline, suffix],
+      [code.slice(0, 20), code.slice(20), ...newline, suffix],
+    ];
+    for (const parts of chunks) {
+      await withEnrollmentInput(input => { for (const part of parts) input.write(part); }, result => expect(result).resolves.toBe(code));
+    }
+  });
+
+  it.each(["\n", ""])("rejects an oversized first line with terminator %j", async newline => {
+    const suffix = newline === "" ? "" : `${newline}second line`;
+    for (const parts of [[`${"a".repeat(513)}${suffix}`], ["a".repeat(512), `a${suffix}`]]) {
+      await withEnrollmentInput(input => { for (const part of parts) input.write(part); }, result => expect(result).rejects.toThrow("--code-stdin input is too long"));
+    }
+  });
+
+  it("accepts a code completed by EOF and releases its input listeners", async () => {
+    const code = "b".repeat(43);
+    await withEnrollmentInput(input => input.end(code), result => expect(result).resolves.toBe(code));
+  });
+
+  it("releases input listeners after a read error", async () => {
+    await withEnrollmentInput(input => input.destroy(new Error("synthetic read failure")), result => expect(result).rejects.toThrow("--code-stdin input could not be read"));
+  });
+});
 
 describe("runner product profile and enrollment", () => {
   it("recovers policy only for the enrolled server, Runner and credential while preserving rollback JSON", async () => {

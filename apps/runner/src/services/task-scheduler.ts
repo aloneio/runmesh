@@ -5,6 +5,7 @@ import type { ServiceCommandResult } from "./contracts.js";
 import type { ServiceManagerAdapter } from "./contracts.js";
 import type { ServiceMode } from "./contracts.js";
 import { WINDOWS_TASK_NAME } from "./values.js";
+import { SERVICE_STARTUP_STABILITY_DELAY_MS } from "./values.js";
 
 /** PowerShell wraps COM method errors; the native HRESULT may be on an inner
  * exception. Use one missing-task classifier for status, stop and cleanup. */
@@ -31,12 +32,22 @@ export async function stopWindowsTask(executor: ServiceCommandExecutor): Promise
 
 export function createTaskSchedulerManager(mode: ServiceMode, executor: ServiceCommandExecutor, execute: (file: string, args: readonly string[]) => Promise<void>): ServiceManagerAdapter {
   const platform = "win32" as const;
+  const waitForStartup = async (): Promise<void> => {
+    // /Run only queues a launch. Wait for a running instance to remain active
+    // before the lifecycle transaction verifies its identity or reports success.
+    const script = "$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); $clock=[Diagnostics.Stopwatch]::StartNew(); $runningSince=$null; "
+      + "do { $t=$s.GetFolder('\\').GetTask('RunmeshRunner'); if([int]$t.State -eq 4 -and ($t.GetInstances(0)).Count -gt 0) { "
+      + "if($null -eq $runningSince) { $runningSince=$clock.ElapsedMilliseconds }; "
+      + `if(($clock.ElapsedMilliseconds - $runningSince) -ge ${SERVICE_STARTUP_STABILITY_DELAY_MS}) { Write-Output 'running'; exit 0 } `
+      + "} else { $runningSince=$null }; if($clock.ElapsedMilliseconds -ge 5000) { throw 'Runner task did not become active' }; [Threading.Thread]::Sleep(100) } while($true)";
+    await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+  };
 return {
     platform, mode,
-    install: async (manifest) => { await execute("schtasks", ["/Create", "/TN", WINDOWS_TASK_NAME, "/XML", manifest.path, "/F"]); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); await execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]); },
+    install: async (manifest) => { await execute("schtasks", ["/Create", "/TN", WINDOWS_TASK_NAME, "/XML", manifest.path, "/F"]); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); await execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]); await waitForStartup(); },
     stop: async () => { await stopWindowsTask(executor); },
     disable: async () => { await execute("schtasks", ["/Change", "/TN", WINDOWS_TASK_NAME, "/DISABLE"]); },
-    restart: async () => { await stopWindowsTask(executor); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); },
+    restart: async () => { await stopWindowsTask(executor); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); await waitForStartup(); },
     uninstall: async () => {
       if (await stopWindowsTask(executor) !== "absent") await execute("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
     },
