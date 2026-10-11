@@ -7,6 +7,32 @@ import type { ServiceMode } from "./contracts.js";
 import type { ServiceManifestFilesystem } from "./contracts.js";
 import { isManagedService } from "./manifest.js";
 
+/** A missing registration does not prove that its previous process exited. */
+export async function launchdProcessExited(executor: ServiceCommandExecutor, pid: number): Promise<boolean> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Runner process identity is unavailable");
+  const result = await executor.execute("ps", ["-p", String(pid), "-o", "pid="]);
+  if (result.exitCode === 1 && !(result.stdout ?? "").trim() && !(result.stderr ?? "").trim()) return true;
+  if (result.exitCode !== 0) throw new Error("Runner process exit could not be confirmed");
+  return false;
+}
+
+/** A removed launchd registration can outlive its original process. */
+export async function waitForLaunchdExit(executor: ServiceCommandExecutor, target: string, pid: number | undefined, options: { now?: () => number; delay?: (ms: number) => Promise<void> } = {}): Promise<void> {
+  const now = options.now ?? Date.now;
+  const delay = options.delay ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const deadline = now() + 5_000;
+  while (true) {
+    const registration = await executor.execute("launchctl", ["print", target]);
+    if (!nativeProbeReliable(registration, "query")) throw new Error("launchd service state could not be verified");
+    if (registration.exitCode !== 0) {
+      if (pid === undefined || pid === 0) return;
+      if (await launchdProcessExited(executor, pid)) return;
+    }
+    if (now() >= deadline) throw new Error("launchd service or process did not stop before the cleanup deadline");
+    await delay(100);
+  }
+}
+
 export function createLaunchdManager(mode: ServiceMode, executor: ServiceCommandExecutor, execute: (file: string, args: readonly string[]) => Promise<void>, filesystem: Pick<ServiceManifestFilesystem, "read">): ServiceManagerAdapter {
   const platform = "darwin" as const;
 

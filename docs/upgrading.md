@@ -253,7 +253,7 @@ if ($EnableManager) {
 }
 ```
 
-Confirm the new files retain administrator ownership and the existing service account's read/execute access through the install root's ACL. In the same session, disable the existing task temporarily, stop it, wait for termination, and switch only its junction:
+Confirm the new files retain administrator ownership and the existing service account's read/execute access through the install root's ACL. In the same session, disable the existing task temporarily, stop it, and wait until it has no running instances and its state is Disabled or Ready. A disabled task can still have running instances. Then switch only its junction:
 
 ```powershell
 $Task = Get-ScheduledTask -TaskName 'RunmeshRunner' -TaskPath '\'
@@ -261,11 +261,15 @@ $WasEnabled = [bool]$Task.Settings.Enabled
 if ($EnableManager -and -not $WasEnabled) { throw 'First manager setup starts both services. Schedule explicit Runner activation before continuing.' }
 Disable-ScheduledTask -TaskName 'RunmeshRunner' -TaskPath '\' | Out-Null
 Stop-ScheduledTask -TaskName 'RunmeshRunner' -TaskPath '\'
-$Deadline = (Get-Date).AddSeconds(30)
-while ((Get-ScheduledTask -TaskName 'RunmeshRunner' -TaskPath '\').State -eq 'Running') {
-  if ((Get-Date) -ge $Deadline) { throw 'Wait for the old Runner to stop before switching.' }
+$TaskScheduler = New-Object -ComObject Schedule.Service
+$TaskScheduler.Connect()
+$Deadline = [DateTime]::UtcNow.AddSeconds(30)
+do {
+  $StoppedTask = $TaskScheduler.GetFolder('\').GetTask('RunmeshRunner')
+  if (-not [bool]$StoppedTask.Enabled -and ($StoppedTask.GetInstances(0)).Count -eq 0 -and ([int]$StoppedTask.State -eq 1 -or [int]$StoppedTask.State -eq 3)) { break }
+  if ([DateTime]::UtcNow -ge $Deadline) { throw 'Wait for the old Runner to stop before switching.' }
   Start-Sleep -Milliseconds 200
-}
+} while ($true)
 New-Item -ItemType Junction -Path $Next -Target $New | Out-Null
 Rename-Item -LiteralPath $Current -NewName ([IO.Path]::GetFileName($Previous))
 Rename-Item -LiteralPath $Next -NewName 'current'

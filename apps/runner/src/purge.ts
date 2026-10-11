@@ -4,6 +4,8 @@ import { dirname, join, posix, resolve, sep, win32 } from "node:path";
 import { homedir } from "node:os";
 import { currentServicePlatform, hostServiceCommandExecutor, isManagedService, serviceLayout, type ServiceCommandExecutor, type ServiceMode, type ServicePlatform } from "./service.js";
 import { stopWindowsTask, windowsTaskMissingCatch } from "./services/task-scheduler.js";
+import { launchdProcessExited, waitForLaunchdExit } from "./services/launchd.js";
+import { nativeProbeReliable } from "./services/probes.js";
 
 /** Cleanup is restricted to these application-owned locations. */
 export function purgeLayout(platform: ServicePlatform, mode: ServiceMode, home = homedir()) {
@@ -33,6 +35,8 @@ export interface PurgeFilesystem {
   file(path: string): Promise<void>;
   directory(path: string): Promise<void>;
   mounts(): Promise<string[]>;
+  /** Exclusively create and durably publish a cleanup recovery record. */
+  createFile?(path: string, content: string): Promise<void>;
   withDirectory?(path: string, expected: PurgeStat, action: (anchored: string) => Promise<void>): Promise<void>;
 }
 const missing = (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
@@ -54,6 +58,13 @@ export const hostPurgeFilesystem: PurgeFilesystem = {
   link: readlink,
   file: unlink,
   directory: rmdir,
+  createFile: async (path, content) => {
+    const handle = await open(path, "wx", 0o600);
+    try { await handle.writeFile(content); await handle.sync(); }
+    finally { await handle.close(); }
+    const parent = await open(dirname(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try { await parent.sync(); } finally { await parent.close(); }
+  },
   text: async (path, limit) => {
     let handle;
     try {
@@ -100,6 +111,9 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
   const progress = options.progress ?? (() => undefined);
   const result: PurgeResult = { action: "uninstall", purged: false, removed: [], absent: [], failures: [], preserved: ["project workspaces", "system accounts", "shared system journal", "other users' installations"] };
   const paths = new Set<string>(); let mounts: string[] = [];
+  const launchdTarget = mode === "system" ? "system/io.alone.runmesh.runner" : `gui/${process.getuid?.() ?? 0}/io.alone.runmesh.runner`;
+  const stopRecordPath = `${layout.manifestPath}.purge-stop.json`;
+  let stopRecord: { path: string; info: PurgeStat; text: string; pid: number } | undefined;
   const errors = (path: string, error: unknown) => result.failures.push({ path, reason: error instanceof Error ? error.message : "cleanup failed" });
   const acceptedAlias = (path: string, target: string) => {
     if (platform === "darwin" && path === "/var") return target === "/private/var";
@@ -120,6 +134,44 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
   async function add(path: string) {
     const safe = await safeParent(path);
     if (safe === undefined || !await io.stat(safe)) { result.absent.push(path); return; }
+    paths.add(safe);
+  }
+  async function readStopRecord(): Promise<typeof stopRecord> {
+    const safe = await safeParent(stopRecordPath);
+    const info = safe === undefined ? undefined : await io.stat(safe);
+    if (safe === undefined || info === undefined) return undefined;
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error("Runner stop recovery record has an unsafe file type");
+    const text = await io.text(safe, 4096);
+    if (text === undefined || !same(info, await io.stat(safe))) throw new Error("Runner stop recovery record changed while reading");
+    let value: unknown;
+    try { value = JSON.parse(text); } catch { throw new Error("Runner stop recovery record is invalid; retain it for inspection"); }
+    if (typeof value !== "object" || value === null || Array.isArray(value)
+      || !("schema_version" in value) || value.schema_version !== 1
+      || !("target" in value) || value.target !== launchdTarget
+      || !("mode" in value) || value.mode !== mode
+      || !("pid" in value) || !Number.isSafeInteger(value.pid) || Number(value.pid) <= 0
+      || Object.keys(value).some(key => !["schema_version", "target", "mode", "pid"].includes(key))) {
+      throw new Error("Runner stop recovery record is invalid; retain it for inspection");
+    }
+    return { path: safe, info, text, pid: Number(value.pid) };
+  }
+  async function assertStopRecordUnchanged(): Promise<void> {
+    const expected = stopRecord;
+    const current = await readStopRecord();
+    if (expected === undefined || current === undefined || current.path !== expected.path || current.text !== expected.text || !same(expected.info, current.info)) {
+      throw new Error("Runner stop recovery record changed during cleanup");
+    }
+  }
+  async function rememberStoppedProcess(pid: number): Promise<void> {
+    if (io.createFile === undefined) throw new Error("Runner stop requires durable recovery-record creation");
+    const safe = await safeParent(stopRecordPath);
+    if (safe === undefined) throw new Error("Runner stop recovery directory is missing");
+    const text = JSON.stringify({ schema_version: 1, target: launchdTarget, mode, pid }) + "\n";
+    // Publish before bootout: a failure or interruption must leave enough
+    // information to check the original process on the next purge attempt.
+    await io.createFile(safe, text);
+    stopRecord = await readStopRecord();
+    if (stopRecord === undefined || stopRecord.path !== safe || stopRecord.text !== text) throw new Error("Runner stop recovery record was not persisted");
     paths.add(safe);
   }
   const manifests: string[] = [];
@@ -188,6 +240,13 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
         if (safe && info) { paths.add(safe); manifests.push(safe); }
       } catch (error) { errors(layout.manifestPath, error); }
     }
+    if (platform === "darwin") {
+      try {
+        if (stopRecord !== undefined) await assertStopRecordUnchanged();
+        stopRecord = await readStopRecord();
+        if (stopRecord !== undefined) paths.add(stopRecord.path);
+      } catch (error) { errors(stopRecordPath, error); }
+    }
     for (const state of [layout.stateRoot, ...(platform === "linux" && mode === "system" ? ["/var/lib/runmesh-runner"] : [])]) {
       for (const name of ["active-policy.json", "previous-policy.json"]) {
         const path = join(state, "policy", name);
@@ -239,12 +298,27 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
         }
       }
     } else if (platform === "darwin") {
-      const target = mode === "system" ? "system/io.alone.runmesh.runner" : `gui/${process.getuid?.() ?? 0}/io.alone.runmesh.runner`;
-      const found = await executor.execute("launchctl", ["print", target]);
+      const found = await executor.execute("launchctl", ["print", launchdTarget]);
+      if (!nativeProbeReliable(found, "query")) throw new Error("launchd status is unavailable");
       if (found.exitCode === 0) {
         if (!manifests.length || !(found.stdout ?? "").includes("runmesh")) throw new Error("unrecognized launchd registration");
-        await run("launchctl", ["bootout", target]);
-      } else if (![3, 113].includes(found.exitCode)) throw new Error("launchd status is unavailable");
+        const rawPid = /\bpid\s*=\s*(\d+)\b/u.exec(found.stdout ?? "")?.[1];
+        const pid = rawPid === undefined ? undefined : Number(rawPid);
+        if ((pid !== undefined && !Number.isSafeInteger(pid)) || (/\bstate\s*=\s*running\b/u.test(found.stdout ?? "") && (pid === undefined || pid === 0))) throw new Error("Runner process identity is unavailable");
+        if (stopRecord !== undefined && stopRecord.pid !== pid) {
+          // A later registration cannot make the previous process safe to
+          // forget. Never stop the new one until the recorded PID is gone.
+          if (!await launchdProcessExited(executor, stopRecord.pid)) throw new Error("Previous Runner process is still active; retain its stop recovery record");
+          await assertStopRecordUnchanged();
+          await io.file(stopRecord.path);
+          paths.delete(stopRecord.path); stopRecord = undefined;
+        }
+        if (pid !== undefined && pid > 0 && stopRecord === undefined) await rememberStoppedProcess(pid);
+        // The same PID may still be registered if an earlier attempt stopped
+        // after publishing the record but before bootout. Retrying is valid.
+        await run("launchctl", ["bootout", launchdTarget]);
+        await waitForLaunchdExit(executor, launchdTarget, pid);
+      } else if (stopRecord !== undefined) await waitForLaunchdExit(executor, launchdTarget, stopRecord.pid);
     } else {
       const inspect = `$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); try {$t=$s.GetFolder('\\').GetTask('RunmeshRunner')} ${windowsTaskMissingCatch("text")}; Write-Output 'present'`;
       const state = (await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", inspect])).trim();
@@ -282,10 +356,14 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
     await io.directory(path);
   }
   // An earlier failure leaves the installed maintenance CLI usable.
-  const ordered = [...paths].sort((a, b) => Number(a === layout.installRoot) - Number(b === layout.installRoot) || b.length - a.length);
+  const ordered = [...paths].sort((a, b) => Number(a === stopRecord?.path) - Number(b === stopRecord?.path) || Number(a === layout.installRoot) - Number(b === layout.installRoot) || b.length - a.length);
   for (const path of ordered) {
     try {
       if (path === layout.installRoot && result.failures.length) throw new Error("retained maintenance CLI because another cleanup failed");
+      if (path === stopRecord?.path) {
+        if (result.failures.length) throw new Error("retained stop recovery record because another cleanup failed");
+        await assertStopRecordUnchanged();
+      }
       const safe = await safeParent(path); if (safe !== path) { if (!safe) { result.absent.push(path); continue; } throw new Error("parent changed during cleanup"); }
       const info = await io.stat(path); if (!info) { result.absent.push(path); continue; }
       await assertWorkspaceProtection(path);

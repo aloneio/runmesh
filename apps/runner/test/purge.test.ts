@@ -179,6 +179,22 @@ it.skipIf(process.platform !== "linux")("pins cleanup enumeration when the direc
   } finally { await f.cleanup(); }
 });
 
+it.skipIf(process.platform === "win32")("persists stop records exclusively without replacing existing files or links", async () => {
+  const f = await fixture();
+  try {
+    await f.file("/records/keep", "original");
+    const record = f.path("/records/stop.json");
+    await hostPurgeFilesystem.createFile!(record, "first");
+    expect(await readFile(record, "utf8")).toBe("first");
+    expect((await lstat(record)).mode & 0o777).toBe(0o600);
+    await expect(hostPurgeFilesystem.createFile!(record, "replacement")).rejects.toThrow();
+    expect(await readFile(record, "utf8")).toBe("first");
+    await f.link("/records/linked.json", "/records/keep");
+    await expect(hostPurgeFilesystem.createFile!(f.path("/records/linked.json"), "replacement")).rejects.toThrow();
+    expect(await readFile(f.path("/records/keep"), "utf8")).toBe("original");
+  } finally { await f.cleanup(); }
+});
+
 // These exercise the same policy normalization/persistence used by enrollment,
 // but every filesystem path and service call belongs to the synthetic fixture.
 it.skipIf(process.platform === "win32").each(["direct", "root-alias", "parent-alias", "external"])("GA-014 preserves configured workspace through %s", async (kind) => {
