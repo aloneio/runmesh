@@ -3,7 +3,7 @@ import { serviceCommand, uninstall } from "../src/cli/lifecycle.js";
 import { runMaintenanceCli } from "../src/maintenance-cli.js";
 import type { MaintenanceCliDependencies, ParsedCommand, ServiceProfilePort } from "../src/cli/contracts.js";
 import type { RunnerProfile } from "../src/profile.js";
-import { renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
+import { createServiceManager, renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
 import type { MaintenanceManagerOptions } from "../src/updates/manager-install.js";
 
 function fixture() {
@@ -102,4 +102,46 @@ it("keeps the independent CLI available when cleanup fails after preflight", asy
   })).rejects.toThrow("uninstall incomplete");
   expect(test.calls).toEqual(["uninstall-manager"]);
   expect(test.maintenanceCalls[0]?.preservePackage).toBe(true);
+});
+
+it.each(["enabled", "disabled", "disable-failure"] as const)("restores an active Linux service's %s state after maintenance installation fails", async initial => {
+  const test = fixture();
+  const state = { enabled: initial === "enabled", active: true, failDisable: initial === "disable-failure", failMaintenance: true };
+  const calls: string[][] = [];
+  const serviceManager = createServiceManager({ platform: "linux", mode: "system", filesystem: test.dependencies.serviceFilesystem!, executor: {
+    execute: async (file, args) => {
+      expect(file).toBe("systemctl"); calls.push([...args]);
+      if (args[0] === "is-enabled") return { exitCode: state.enabled ? 0 : 1, stdout: state.enabled ? "enabled\n" : "disabled\n" };
+      if (args[0] === "is-active") return { exitCode: state.active ? 0 : 3 };
+      if (args[0] === "show") return { exitCode: 0, stdout: "runmesh\n" };
+      if (args[0] === "enable") { state.enabled = true; state.active = true; return { exitCode: 0 }; }
+      if (args[0] === "disable") {
+        if (state.failDisable) return { exitCode: 1, stderr: "fixture disable failure" };
+        state.enabled = false; if (args.includes("--now")) state.active = false; return { exitCode: 0 };
+      }
+      if (args[0] === "restart") { state.active = true; return { exitCode: 0 }; }
+      if (args[0] === "stop") { state.active = false; return { exitCode: 0 }; }
+      if (args[0] === "daemon-reload") return { exitCode: 0 };
+      throw new Error(`unexpected systemctl command: ${args.join(" ")}`);
+    },
+  } });
+  const dependencies = { ...test.dependencies, serviceManager,
+    maintenanceManager: { install: async () => { if (state.failMaintenance) throw new Error("fixture maintenance failure"); }, uninstall: async () => undefined } };
+  const install = () => serviceCommand(command("install", { executablePath: "/fixture/new/bin/runmesh" }), test.store, () => undefined, dependencies);
+  const result = await install().then(() => undefined, error => error as Error);
+  expect(result?.message).toContain("fixture maintenance failure");
+  if (initial === "disable-failure") {
+    expect(result?.message).toContain("rollback incomplete");
+    expect(result?.message).toContain("fixture disable failure");
+    expect(result?.cause).toBeInstanceOf(Error);
+  } else expect(state.enabled).toBe(initial === "enabled");
+  expect(state.active).toBe(true);
+  expect(test.contents.get(test.manifest.path)).toBe(test.manifest.content);
+  expect(calls.some(args => args[0] === "stop" || args.includes("--now") && args[0] === "disable")).toBe(false);
+  state.failDisable = false; state.failMaintenance = false;
+  await install();
+  expect(state).toMatchObject({ enabled: true, active: true });
+  await uninstall(command("uninstall"), test.store, () => undefined, dependencies);
+  expect(state).toMatchObject({ enabled: false, active: false });
+  expect(test.contents.has(test.manifest.path)).toBe(false);
 });

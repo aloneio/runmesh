@@ -17,8 +17,18 @@ export interface EnrollmentOptions {
   readonly confirmPrivilegedHost?: boolean;
   /** Explicit acknowledgement required before replacing an existing profile's credentials. */
   readonly reEnroll?: boolean;
+  /** CLI activation remains inside the profile transaction. */
+  readonly afterEnroll?: (result: EnrollmentResult) => Promise<void>;
+  /** Cleanup receives the exact snapshots owned by this transaction. */
+  readonly onFailure?: (error: unknown, attempt: EnrollmentAttempt) => Promise<void>;
 }
 export interface EnrollmentResult { readonly profile: RunnerProfile; }
+export interface EnrollmentAttempt {
+  readonly previousProfile: RunnerProfile | undefined;
+  readonly attemptedProfile: RunnerProfile | undefined;
+  readonly enrolled: boolean;
+  assertHeld(): void;
+}
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MAX_ENROLLMENT_RESPONSE_BYTES = 64 * 1024;
 
@@ -63,10 +73,37 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
   if (options.executionMode !== undefined && options.executionMode !== "dedicated_user" && options.executionMode !== "privileged_host") throw new Error("--execution-mode must be dedicated_user or privileged_host");
   if (options.executionMode === "privileged_host" && options.confirmPrivilegedHost !== true) throw new Error("privileged_host execution mode requires --confirm-privileged-host");
   const store = options.store ?? new ProfileStore();
-  const existing = await store.load();
-  if (existing !== undefined && options.reEnroll !== true) throw new Error("an existing Runner profile was found; use --re-enroll to replace its connection credentials");
   const endpoint = enrollmentEndpoint(options.server, options.insecureLocal === true);
   if (!/^[A-Za-z0-9_-]{20,256}$/.test(options.code)) throw new Error("--code must be a one-time enrollment code");
+  const lease = await store.acquireEnrollmentLease();
+  if (lease === undefined) throw new EnrollmentConflictError("enrollment is already in progress for this profile; wait for it to finish and retry");
+  const attempt = { previousProfile: undefined as RunnerProfile | undefined, attemptedProfile: undefined as RunnerProfile | undefined, enrolled: false, assertHeld: () => lease.assertHeld() };
+  let failed = false, failure: unknown;
+  try {
+    const existing = await store.load();
+    attempt.previousProfile = existing;
+    lease.assertHeld();
+    if (existing !== undefined && options.reEnroll !== true) throw new Error("an existing Runner profile was found; use --re-enroll to replace its connection credentials");
+    const result = await redeemEnrollment(options, store, endpoint, existing, attempt);
+    attempt.enrolled = true;
+    if (options.afterEnroll !== undefined) await options.afterEnroll(result);
+    lease.assertHeld();
+    return result;
+  } catch (error) {
+    failed = true; failure = error;
+    if (options.onFailure !== undefined) await options.onFailure(error, attempt);
+    throw error;
+  } finally {
+    try { await lease.release(); }
+    catch (error) {
+      if (!failed) throw error;
+      if (failure instanceof Error && failure.cause === undefined) failure.cause = error;
+    }
+  }
+}
+
+async function redeemEnrollment(options: EnrollmentOptions, store: ProfileStore, endpoint: string, existing: RunnerProfile | undefined,
+  attempt: { attemptedProfile: RunnerProfile | undefined; assertHeld(): void }): Promise<EnrollmentResult> {
   const body = await requestEnrollment(endpoint, JSON.stringify({
     enrollment_code: options.code,
     runner_public_info: {
@@ -96,7 +133,10 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
       execution_mode: options.executionMode ?? existing?.execution_mode ?? "dedicated_user",
       management_mode: "central",
     };
-    await store.save(profile);
+    attempt.attemptedProfile = profile;
+    attempt.assertHeld();
+    await store.save(profile, { assertHeld: attempt.assertHeld });
+    attempt.assertHeld();
   } catch {
     // A successful response means the remote credential is authoritative even
     // when URL validation or the local atomic write fails.  Never leave an old

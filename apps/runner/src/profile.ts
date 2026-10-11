@@ -1,13 +1,14 @@
 import { constants } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { chmod, chown, lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, chown, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
+import { basename, dirname, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { maintenanceIdentity, type RunnerMaintenanceIdentity } from "./maintenance-contract.js";
 import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
 import type { HostPlatform } from "./platform-types.js";
+import { acquireEnrollmentLock, type InstallationLease } from "./updates/installation-lock.js";
 
 /** The only supported persisted profile execution contract. */
 export type ProfileExecutionMode = ExecutionMode;
@@ -56,14 +57,11 @@ export interface ProfilePermissions {
   readonly file_gid?: number;
 }
 
-/**
- * Save-time security overrides used only by transaction rollback.  A normal
- * save preserves the access shape required by a dedicated service (root:
- * runmesh/0640); a security rollback can instead return to an owner-only
- * root:root profile before any service can consume it.
- */
+/** Guard profile publication and allow rollback to restore owner-only access. */
 export interface ProfileSaveOptions {
   readonly privateOwnerOnly?: boolean;
+  /** Recheck transaction ownership after asynchronous file preparation. */
+  readonly assertHeld?: () => void;
 }
 
 export interface ProfileOwnershipCheck {
@@ -125,6 +123,18 @@ export class ProfileStore {
   }
   /** Service manifests must not depend on the service manager's working cwd. */
   public get filePath(): string { return this.absolutePath; }
+  public async acquireEnrollmentLease(): Promise<InstallationLease | undefined> {
+    const directory = dirname(this.absolutePath);
+    const info = await ensureProfileDirectory(directory);
+    if (this.shouldCheckServiceOwnership()) assertRootOwnedDirectory(info, "runner profile directory");
+    const existing = await lstat(this.absolutePath).catch((error: unknown) => isErrno(error, "ENOENT") ? undefined : Promise.reject(error));
+    if (existing !== undefined && (!existing.isFile() || existing.isSymbolicLink())) throw new Error("runner profile is not a regular file");
+    // Windows extended and short paths must share the same mutex identity.
+    const canonical = existing === undefined
+      ? join(await realpath(directory), basename(this.absolutePath))
+      : await realpath(this.absolutePath);
+    return acquireEnrollmentLock(canonical);
+  }
   public async load(): Promise<RunnerProfile | undefined> {
     return validateProfile(await this.loadDocument());
   }
@@ -217,7 +227,9 @@ export class ProfileStore {
           }
         }
       } else await this.chmodPrivate(temporary, 0o600, "file");
+      options.assertHeld?.();
       await rename(temporary, target);
+      options.assertHeld?.();
       if (forceCanonicalOwner) await chown(target, 0, 0);
       await this.chmodPrivate(target, fileMode, "file");
     } finally {
