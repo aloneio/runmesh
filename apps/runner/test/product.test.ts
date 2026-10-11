@@ -326,6 +326,69 @@ describe("runner product profile and enrollment", () => {
       await expect(test.store.load()).resolves.toBeUndefined();
     } finally { finishCancellation(); await pending; await test.cleanup(); }
   });
+  it("times out a stalled enrollment request and discards a late response without saving its credential", async () => {
+    const test = await fixture();
+    vi.useFakeTimers();
+    const load = vi.spyOn(test.store, "load").mockResolvedValue(profile());
+    const save = vi.spyOn(test.store, "save").mockResolvedValue(undefined);
+    const remove = vi.spyOn(test.store, "remove").mockResolvedValue(undefined);
+    let respond!: (response: Response) => void, signal: AbortSignal | null | undefined, settled = false;
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      signal = init?.signal; return new Promise<Response>(resolve => { respond = resolve; });
+    });
+    const errors: string[] = [];
+    const pending = runEnrollCli(["--server", "https://example.test", "--code", "a".repeat(43), "--re-enroll"], {
+      store: test.store, fetch, stderr: line => errors.push(line), stdout: () => undefined,
+    }).then(() => { settled = true; return undefined; }, error => { settled = true; return error as Error; });
+    const late = Response.json({ runner_id: "late-runner", server_url: "https://example.test/runner/connect", token: "late-token-0123456789" });
+    const cancel = vi.spyOn(late.body!, "cancel");
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(true); expect(await pending).toMatchObject({ outcomeUnknown: true, message: expect.stringContaining("timed out") });
+      expect(signal?.aborted).toBe(true); expect(remove).toHaveBeenCalledTimes(1);
+      respond(late); await vi.advanceTimersByTimeAsync(0);
+      expect(save).not.toHaveBeenCalled(); expect(cancel).toHaveBeenCalledTimes(1); expect(fetch).toHaveBeenCalledTimes(1);
+      expect(errors.join("\n")).toContain("generate a new enrollment code"); expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      respond(late); await pending; load.mockRestore(); save.mockRestore(); remove.mockRestore(); vi.useRealTimers(); await test.cleanup();
+    }
+  });
+  it("bounds the full enrollment response by one deadline even when body cancellation stalls", async () => {
+    const test = await fixture();
+    vi.useFakeTimers();
+    const load = vi.spyOn(test.store, "load").mockResolvedValue(undefined), save = vi.spyOn(test.store, "save").mockResolvedValue(undefined);
+    let stream!: ReadableStreamDefaultController<Uint8Array>, finishCancellation!: () => void, settled = false;
+    const cancel = vi.fn(() => new Promise<void>(resolve => { finishCancellation = resolve; }));
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; controller.enqueue(new TextEncoder().encode('{"runner_id":')); }, cancel }));
+    const fetch = vi.fn(async () => { await new Promise(resolve => setTimeout(resolve, 25_000)); return response; });
+    const pending = enrollRunner({ server: "https://example.test", code: "a".repeat(43), store: test.store, fetch })
+      .then(() => { settled = true; return undefined; }, error => { settled = true; return error as Error; });
+    try {
+      await vi.advanceTimersByTimeAsync(29_999); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1); expect(settled).toBe(true);
+      expect(await pending).toMatchObject({ outcomeUnknown: true, message: expect.stringContaining("timed out") });
+      expect(cancel).toHaveBeenCalledTimes(1); expect(response.body!.locked).toBe(false);
+      expect(save).not.toHaveBeenCalled(); expect(fetch).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (cancel.mock.calls.length === 0) stream.close(); else finishCancellation();
+      await pending; load.mockRestore(); save.mockRestore(); vi.useRealTimers(); await test.cleanup();
+    }
+  });
+  it("clears the network deadline before saving a successfully enrolled profile", async () => {
+    const test = await fixture();
+    vi.useFakeTimers();
+    const load = vi.spyOn(test.store, "load").mockResolvedValue(undefined);
+    let finishSave!: () => void, settled = false;
+    const save = vi.spyOn(test.store, "save").mockImplementation(() => new Promise<void>(resolve => { finishSave = resolve; }));
+    const pending = enrollRunner({ server: "https://example.test", code: "a".repeat(43), store: test.store,
+      fetch: async () => Response.json({ runner_id: "runner-saved", server_url: "https://example.test/runner/connect", token: "saved-token-0123456789" }),
+    }).then(value => { settled = true; return value; });
+    try {
+      await vi.advanceTimersByTimeAsync(0); expect(save).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000); expect(settled).toBe(false);
+      finishSave(); expect((await pending).profile.runner_id).toBe("runner-saved");
+    } finally { finishSave(); await pending; load.mockRestore(); save.mockRestore(); vi.useRealTimers(); await test.cleanup(); }
+  });
   it("re-enrollment replaces connection credentials without adding a workspace", async () => {
     const test = await fixture();
     try {

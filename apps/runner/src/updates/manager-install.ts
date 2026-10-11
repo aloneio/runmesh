@@ -445,7 +445,18 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
       let generated: string | undefined;
       if (await filesystem.stat(helper) === undefined) {
         generated = renderWindowsMaintenanceUninstall();
-        await filesystem.write(helper, generated);
+        const temporaryHelper = `${helper}.${randomUUID()}.tmp`;
+        let cleanupTemporary = true;
+        try {
+          try { await filesystem.write(temporaryHelper, generated); }
+          catch (error) {
+            if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") cleanupTemporary = false;
+            throw error;
+          }
+          await host.trustedTreePath(temporaryHelper, "file", layout.installRoot);
+          if (await filesystem.read(temporaryHelper) !== generated || await filesystem.stat(helper) !== undefined) throw new Error("maintenance uninstall helper changed during installation");
+          await filesystem.rename(temporaryHelper, helper);
+        } finally { if (cleanupTemporary) await filesystem.remove(temporaryHelper).catch(() => undefined); }
       }
       await host.trustedTreePath(helper, "file", layout.installRoot);
       if (generated !== undefined && await filesystem.read(helper) !== generated) throw new Error("maintenance uninstall helper changed during installation");
