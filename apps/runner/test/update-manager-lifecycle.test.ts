@@ -75,17 +75,30 @@ it("does not purge when the independent manager still needs recovery", async () 
   await expect(uninstall(command("uninstall", { purge: true, yes: true }), test.store, () => undefined, {
     ...test.dependencies,
     maintenanceManager: { install: async () => undefined, uninstall: async () => { throw new Error("maintenance is unfinished"); } },
-    purgeInstallation: async () => { purged = true; throw new Error("unexpected purge"); },
+    purgeInstallation: async options => { await options?.beforeServiceStop?.(); purged = true; throw new Error("unexpected purge"); },
   })).rejects.toThrow("maintenance is unfinished");
   expect(purged).toBe(false);
   expect(test.contents.get(test.manifest.path)).toBe(test.manifest.content);
 });
 
-it("keeps the independent CLI available when complete purge reports a cleanup failure", async () => {
+it("keeps the manager registered when complete purge reports a preflight failure", async () => {
   const test = fixture();
   await expect(uninstall(command("uninstall", { purge: true, yes: true }), test.store, () => undefined, {
     ...test.dependencies,
     purgeInstallation: async () => ({ action: "uninstall", purged: false, removed: [], absent: [], failures: [{ path: "/var/lib/runmesh", reason: "workspace retained" }], preserved: ["project workspaces"] }),
+  })).rejects.toThrow("uninstall incomplete");
+  expect(test.calls).toEqual([]);
+  expect(test.maintenanceCalls).toEqual([]);
+});
+
+it("keeps the independent CLI available when cleanup fails after preflight", async () => {
+  const test = fixture();
+  await expect(uninstall(command("uninstall", { purge: true, yes: true }), test.store, () => undefined, {
+    ...test.dependencies,
+    purgeInstallation: async options => {
+      await options?.beforeServiceStop?.();
+      return { action: "uninstall", purged: false, removed: [], absent: [], failures: [{ path: "/var/log/runmesh", reason: "removal failed" }], preserved: ["project workspaces"] };
+    },
   })).rejects.toThrow("uninstall incomplete");
   expect(test.calls).toEqual(["uninstall-manager"]);
   expect(test.maintenanceCalls[0]?.preservePackage).toBe(true);

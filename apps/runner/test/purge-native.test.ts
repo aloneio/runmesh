@@ -2,7 +2,9 @@ import type { Stats } from "node:fs";
 import { dirname, join, parse, sep } from "node:path";
 import { expect, it } from "vitest";
 import { purgeInstallation, purgeLayout, type PurgeFilesystem } from "../src/purge.js";
-import { currentServicePlatform, renderService } from "../src/service.js";
+import { currentServicePlatform, renderService, serviceProfilePath } from "../src/service.js";
+import { runMaintenanceCli } from "../src/maintenance-cli.js";
+import type { MaintenanceManagerInstaller } from "../src/updates/manager-install.js";
 
 function memoryHost(withManifest = true) {
   const platform = currentServicePlatform(); const layout = purgeLayout(platform, "system");
@@ -53,6 +55,73 @@ function memoryHost(withManifest = true) {
 function policy(host: ReturnType<typeof memoryHost>, roots: string[], name = "active-policy.json") {
   host.file(join(host.layout.stateRoot, "policy", name), JSON.stringify({ workspaces: roots.map(root_path => ({ root_path })) }));
 }
+
+function uninstallHost(host: ReturnType<typeof memoryHost>, maintenanceManager: MaintenanceManagerInstaller) {
+  return runMaintenanceCli(["uninstall", "--purge", "--yes", "--json"], {
+    store: { filePath: serviceProfilePath(host.layout), load: async () => { throw new Error("unexpected profile read"); },
+      save: async () => { throw new Error("unexpected profile write"); }, remove: async () => { throw new Error("unexpected profile removal"); }, assertServiceOwnership: async () => undefined },
+    isAdministrator: () => true, servicePlatform: host.platform, stdout: () => undefined, maintenanceManager,
+    purgeInstallation: options => purgeInstallation({ ...options, filesystem: host.io, executor: host.executor }),
+  });
+}
+
+it.each(["workspace", "mount", "foreign-manifest"])("keeps the manager registered when CLI purge preflight rejects %s", async failure => {
+  const host = memoryHost();
+  if (failure === "workspace") policy(host, [host.layout.installRoot]);
+  if (failure === "mount") host.io.mounts = async () => [join(host.layout.stateRoot, "mounted-data")];
+  if (failure === "foreign-manifest") host.file(host.layout.manifestPath, "unrelated service");
+  const before = [...host.entries]; let managerInstalled = true;
+  await expect(uninstallHost(host, { install: async () => undefined, uninstall: async () => { managerInstalled = false; } })).rejects.toThrow("uninstall incomplete");
+  expect(managerInstalled).toBe(true);
+  expect([...host.entries]).toEqual(before); expect(host.calls).toEqual([]);
+});
+
+it("awaits manager removal before CLI purge changes the Runner installation", async () => {
+  const host = memoryHost(), before = [...host.entries]; let managerRemoved = false;
+  const execute = host.executor.execute;
+  host.executor.execute = async (...args) => { expect(managerRemoved).toBe(true); return execute(...args); };
+  await uninstallHost(host, { install: async () => undefined, uninstall: async options => {
+    expect([...host.entries]).toEqual(before); expect(host.calls).toEqual([]);
+    expect(options.preservePackage).toBe(true);
+    await Promise.resolve(); managerRemoved = true;
+  } });
+  expect(managerRemoved).toBe(true); expect(host.entries.has(host.layout.installRoot)).toBe(false);
+});
+
+it("keeps Runner files and services when the manager requires recovery", async () => {
+  const host = memoryHost(), before = [...host.entries];
+  await expect(uninstallHost(host, { install: async () => undefined, uninstall: async () => { throw new Error("maintenance is unfinished"); } })).rejects.toThrow("maintenance is unfinished");
+  expect([...host.entries]).toEqual(before); expect(host.calls).toEqual([]);
+});
+
+it.each(["policy", "mount", "manifest"])("rechecks %s after the manager has stopped", async change => {
+  const host = memoryHost(); policy(host, [parse(host.layout.installRoot).root]);
+  let afterStop: typeof host.entries;
+  await expect(uninstallHost(host, { install: async () => undefined, uninstall: async () => {
+    if (change === "policy") policy(host, [host.layout.installRoot], "previous-policy.json");
+    if (change === "mount") host.io.mounts = async () => [join(host.layout.stateRoot, "mounted-data")];
+    if (change === "manifest") host.file(host.layout.manifestPath, "unrelated service");
+    afterStop = new Map(host.entries);
+  } })).rejects.toThrow("uninstall incomplete");
+  expect(host.entries).toEqual(afterStop!); expect(host.calls).toEqual([]);
+});
+
+it.each(["policy", "mount"])("rechecks %s received while the Runner was stopping", async change => {
+  const host = memoryHost(); policy(host, [parse(host.layout.installRoot).root]);
+  let afterChange: typeof host.entries | undefined;
+  const execute = host.executor.execute;
+  host.executor.execute = async (...args) => {
+    const result = await execute(...args);
+    if (!afterChange) {
+      if (change === "policy") policy(host, [host.layout.installRoot]);
+      if (change === "mount") host.io.mounts = async () => [join(host.layout.stateRoot, "mounted-data")];
+      afterChange = new Map(host.entries);
+    }
+    return result;
+  };
+  await expect(uninstallHost(host, { install: async () => undefined, uninstall: async () => undefined })).rejects.toThrow("uninstall incomplete");
+  expect(afterChange).toBeDefined(); expect(host.entries).toEqual(afterChange);
+});
 
 it("cleans the current native layout with injected OS adapters", async () => {
   const host = memoryHost();

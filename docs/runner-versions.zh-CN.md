@@ -28,14 +28,16 @@ Runmesh 会验证发行包，暂停向这台 Runner 发送新请求，并等待�
 
 切换版本后，`restart`、`install`、`uninstall` 等服务管理命令也继续使用独立管理器。服务卸载和完整清理步骤见 [Runner 卸载指南](runner-uninstall.md)。
 
-旧安装首次启用时，先部署上述已经验签的开发包，保留原配置和服务布局。用更新后的服务程序运行 `--help`，确认包含 `maintenance-agent`，再使用原配置执行 `install`。系统服务使用管理员会话；用户级服务使用所属账号，并添加 `--user`。确认安装结果显示 `remote_version_management: available`。
+尚无管理器的标准系统服务，按[标准受管 Runner 升级流程](upgrading.zh-CN.md#更新尚未启用版本管理器的标准受管-runner)执行共用命令，并完成[管理器首次启用](upgrading.zh-CN.md#切换程序后首次启用管理器)。流程适用于 `0.1.6-dev.26` 等旧开发包，验证精确签名目标及独立维护包，保留原配置、状态、Runner 身份和服务参数，无需重新注册或完整卸载。已安装的管理器在 Runner 回退到旧版后仍然保留，选择首次启用流程前先核对主机。
 
-标准受管安装使用 `current` 链接和 `versions` 目录。自定义部署路径的服务，按原来的程序包部署流程更新。
+首次启用使用原 profile 和执行模式运行 `install`；已有 `privileged_host` 系统服务仍须添加 `--confirm-privileged-host`。确认结果为 `remote_version_management: available`，本机管理器服务正在运行，控制台请求继续推进。启动前先核对未完成目标：不同版本的排队请求不能通过表单覆盖，管理器会先处理它；升级指南说明了可继续执行与应停在启用前的情况。
+
+标准受管安装使用 `current` 链接和 `versions` 目录。用户级服务按[对应流程](upgrading.zh-CN.md#更新用户级服务)使用所属账号和 `--user`；自定义部署路径按原来的程序包部署方式更新。出现 `manual` / `custom_service_layout` 时，检查实际服务定义。
 
 ## 请求一直等待或安装器提示版本不同
 
 如果页面一直显示“等待主机管理器领取”，先在主机上检查版本管理器服务。早于管理器功能的 Runner 需要完成上面的首次启用步骤；重新提交版本请求不会安装管理器。
 
-安装器提示 `installed Runner version differs from the fixed release` 时，已有安装仍在。托管安装命令用于首次安装或同版本重新注册；更换版本按[升级指南](upgrading.zh-CN.md)暂存验签包并切换程序，保留现有身份、配置与任务记录。
+安装器提示 `installed Runner version differs from the fixed release` 时，已有安装仍在。托管安装命令用于首次安装或同版本重新注册；尚无管理器的标准受管安装按[参数化包迁移流程](upgrading.zh-CN.md#更新尚未启用版本管理器的标准受管-runner)暂存验签包并切换程序，保留现有身份、配置与任务记录。
 
 完整卸载用于移除安装，会清除本地任务记录。旧维护包可能把 `/` 工作区误判为与全部 Runmesh 目录重叠；出现这种结果时使用包含根工作区清理修复的已签名维护包重试。仅更新 Worker 不会改变已发布维护包的清理逻辑。

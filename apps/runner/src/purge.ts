@@ -87,6 +87,8 @@ export interface PurgeOptions {
   readonly filesystem?: PurgeFilesystem;
   readonly executor?: ServiceCommandExecutor;
   readonly progress?: (message: string) => void;
+  /** Runs after read-only preflight, before changing services or files. */
+  readonly beforeServiceStop?: () => Promise<void>;
 }
 const within = (child: string, parent: string) => child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 const same = (a: PurgeStat, b: PurgeStat | undefined) => b !== undefined && a.dev === b.dev && a.ino === b.ino && a.isDirectory() === b.isDirectory() && a.isSymbolicLink() === b.isSymbolicLink();
@@ -97,7 +99,7 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
   const layout = purgeLayout(platform, mode, options.home);
   const progress = options.progress ?? (() => undefined);
   const result: PurgeResult = { action: "uninstall", purged: false, removed: [], absent: [], failures: [], preserved: ["project workspaces", "system accounts", "shared system journal", "other users' installations"] };
-  const paths = new Set<string>(); const mounts = await io.mounts();
+  const paths = new Set<string>(); let mounts: string[] = [];
   const errors = (path: string, error: unknown) => result.failures.push({ path, reason: error instanceof Error ? error.message : "cleanup failed" });
   const acceptedAlias = (path: string, target: string) => {
     if (platform === "darwin" && path === "/var") return target === "/private/var";
@@ -120,52 +122,8 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
     if (safe === undefined || !await io.stat(safe)) { result.absent.push(path); return; }
     paths.add(safe);
   }
-  progress("[1/4] Checking Runmesh installation");
-  for (const path of layout.directories) { try { await add(path); } catch (error) { errors(path, error); } }
   const manifests: string[] = [];
-  for (const dir of layout.unitDirectories) {
-    const unit = join(dir, "runmesh-runner.service");
-    try {
-      const safe = await safeParent(unit); if (!safe) continue;
-      const info = await io.stat(safe);
-      if (info?.isFile() && !info.isSymbolicLink()) {
-        const body = await io.text(safe, 128 * 1024) ?? "";
-        if (!isManagedService(body) && !/^ExecStart\s*=\s*"?\/opt\/runmesh\//m.test(body)) throw new Error("same-named service is not owned by Runmesh");
-        manifests.push(safe);
-      } else if (info?.isSymbolicLink()) {
-        const target = await io.link(safe);
-        if (target !== "/dev/null" && !layout.unitDirectories.some((d) => resolve(dirname(safe), target) === join(d, "runmesh-runner.service"))) throw new Error("unit points outside Runmesh service locations");
-      } else if (info) throw new Error("unexpected service file type");
-      if (info) paths.add(safe);
-      await add(join(dir, "runmesh-runner.service.d"));
-      for (const entry of await io.list(dirname(safe))) {
-        if (!/\.(?:wants|requires)$/.test(entry)) continue;
-        const parent = join(dirname(safe), entry); const metadata = await io.stat(parent);
-        if (!metadata?.isDirectory() || metadata.isSymbolicLink()) continue;
-        const link = join(parent, "runmesh-runner.service"); const item = await io.stat(link);
-        if (item?.isSymbolicLink()) paths.add(link);
-        else if (item) throw new Error("unit enablement entry is not a symlink");
-      }
-    } catch (error) { errors(unit, error); }
-  }
-  if (platform !== "win32" && mode === "system") {
-    for (const base of ["/usr/local/bin", "/usr/bin"]) for (const name of ["runmesh", "runmesh-runner"]) {
-      const shim = join(base, name);
-      try { const info = await io.stat(shim); if (info?.isSymbolicLink() && within(resolve(base, await io.link(shim)), layout.installRoot)) await add(shim); }
-      catch (error) { errors(shim, error); }
-    }
-  }
-  if (platform !== "linux") {
-    try {
-      const safe = await safeParent(layout.manifestPath);
-      const info = safe === undefined ? undefined : await io.stat(safe);
-      if (info && (info.isSymbolicLink() || !isManagedService(await io.text(safe!, 128 * 1024) ?? ""))) throw new Error("service manifest is not owned by Runmesh");
-      if (safe && info) { paths.add(safe); manifests.push(safe); }
-    } catch (error) { errors(layout.manifestPath, error); }
-  }
-  // Preserve lexical AND canonical workspace identities. A policy root may
-  // legitimately be a symlink (or have a symlinked ancestor); comparing only
-  // its spelling can erase the real project during installation cleanup.
+  // Preserve both identities so an alias cannot hide a configured project.
   const protectedWorkspaces: string[] = [];
   const comparable = (path: string) => platform === "win32" || platform === "darwin" ? resolve(path).toLowerCase() : resolve(path);
   const overlaps = (left: string, right: string) => within(comparable(left), comparable(right)) || within(comparable(right), comparable(left));
@@ -186,24 +144,76 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
       }
     }
   }
-  for (const state of [layout.stateRoot, ...(platform === "linux" && mode === "system" ? ["/var/lib/runmesh-runner"] : [])]) {
-    for (const name of ["active-policy.json", "previous-policy.json"]) {
-      const path = join(state, "policy", name);
+  async function preflight(): Promise<boolean> {
+    paths.clear(); manifests.length = 0; protectedWorkspaces.length = 0; result.absent.length = 0;
+    mounts = await io.mounts();
+    for (const path of layout.directories) { try { await add(path); } catch (error) { errors(path, error); } }
+    for (const dir of layout.unitDirectories) {
+      const unit = join(dir, "runmesh-runner.service");
       try {
-        const safe = await safeParent(path); if (!safe) continue;
-        const text = await io.text(safe, 2 * 1024 * 1024); if (!text) continue;
-        const policy = JSON.parse(text) as { workspaces?: { root_path?: unknown }[] };
-        if (!Array.isArray(policy.workspaces)) throw new Error("workspace policy is malformed; refusing cleanup");
-        for (const workspace of policy.workspaces) {
-          if (typeof workspace?.root_path !== "string" || workspace.root_path.length === 0) throw new Error("workspace identity is malformed; refusing cleanup");
-          protectedWorkspaces.push(workspace.root_path);
+        const safe = await safeParent(unit); if (!safe) continue;
+        const info = await io.stat(safe);
+        if (info?.isFile() && !info.isSymbolicLink()) {
+          const body = await io.text(safe, 128 * 1024) ?? "";
+          if (!isManagedService(body) && !/^ExecStart\s*=\s*"?\/opt\/runmesh\//m.test(body)) throw new Error("same-named service is not owned by Runmesh");
+          manifests.push(safe);
+        } else if (info?.isSymbolicLink()) {
+          const target = await io.link(safe);
+          if (target !== "/dev/null" && !layout.unitDirectories.some((d) => resolve(dirname(safe), target) === join(d, "runmesh-runner.service"))) throw new Error("unit points outside Runmesh service locations");
+        } else if (info) throw new Error("unexpected service file type");
+        if (info) paths.add(safe);
+        await add(join(dir, "runmesh-runner.service.d"));
+        for (const entry of await io.list(dirname(safe))) {
+          if (!/\.(?:wants|requires)$/.test(entry)) continue;
+          const parent = join(dirname(safe), entry); const metadata = await io.stat(parent);
+          if (!metadata?.isDirectory() || metadata.isSymbolicLink()) continue;
+          const link = join(parent, "runmesh-runner.service"); const item = await io.stat(link);
+          if (item?.isSymbolicLink()) paths.add(link);
+          else if (item) throw new Error("unit enablement entry is not a symlink");
         }
-      } catch (error) { errors(path, error); }
+      } catch (error) { errors(unit, error); }
     }
+    if (platform !== "win32" && mode === "system") {
+      for (const base of ["/usr/local/bin", "/usr/bin"]) for (const name of ["runmesh", "runmesh-runner"]) {
+        const shim = join(base, name);
+        try { const info = await io.stat(shim); if (info?.isSymbolicLink() && within(resolve(base, await io.link(shim)), layout.installRoot)) await add(shim); }
+        catch (error) { errors(shim, error); }
+      }
+    }
+    if (platform !== "linux") {
+      try {
+        const safe = await safeParent(layout.manifestPath);
+        const info = safe === undefined ? undefined : await io.stat(safe);
+        if (info && (info.isSymbolicLink() || !isManagedService(await io.text(safe!, 128 * 1024) ?? ""))) throw new Error("service manifest is not owned by Runmesh");
+        if (safe && info) { paths.add(safe); manifests.push(safe); }
+      } catch (error) { errors(layout.manifestPath, error); }
+    }
+    for (const state of [layout.stateRoot, ...(platform === "linux" && mode === "system" ? ["/var/lib/runmesh-runner"] : [])]) {
+      for (const name of ["active-policy.json", "previous-policy.json"]) {
+        const path = join(state, "policy", name);
+        try {
+          const safe = await safeParent(path); if (!safe) continue;
+          const text = await io.text(safe, 2 * 1024 * 1024); if (!text) continue;
+          const policy = JSON.parse(text) as { workspaces?: { root_path?: unknown }[] };
+          if (!Array.isArray(policy.workspaces)) throw new Error("workspace policy is malformed; refusing cleanup");
+          for (const workspace of policy.workspaces) {
+            if (typeof workspace?.root_path !== "string" || workspace.root_path.length === 0) throw new Error("workspace identity is malformed; refusing cleanup");
+            protectedWorkspaces.push(workspace.root_path);
+          }
+        } catch (error) { errors(path, error); }
+      }
+    }
+    for (const path of paths) { try { await assertWorkspaceProtection(path); } catch (error) { errors(path, error); } }
+    for (const path of paths) if (mounts.some((mount) => within(mount, path))) errors(path, new Error("contains a mounted filesystem; unmount it before purging"));
+    return result.failures.length === 0;
   }
-  for (const path of paths) { try { await assertWorkspaceProtection(path); } catch (error) { errors(path, error); } }
-  for (const path of paths) if (mounts.some((mount) => within(mount, path))) errors(path, new Error("contains a mounted filesystem; unmount it before purging"));
-  if (result.failures.length) return result;
+  progress("[1/4] Checking Runmesh installation");
+  if (!await preflight()) return result;
+  if (options.beforeServiceStop) {
+    await options.beforeServiceStop();
+    // The manager may finish an update while it is being stopped.
+    if (!await preflight()) return result;
+  }
   const run = async (file: string, args: string[]) => {
     const response = await executor.execute(file, args);
     if (response.exitCode !== 0) throw new Error(`${file} command failed; installation files retained where possible`);
@@ -246,6 +256,8 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
       } else if (state !== "absent") throw new Error("unexpected task status");
     }
   } catch (error) { errors(layout.manifestPath, error); return result; }
+  // The Runner can apply policy until its native service has stopped.
+  if (!await preflight()) return result;
   progress("[3/4] Removing installation, configuration, state and logs");
   let visited = 0;
   async function removeTree(path: string, expected: PurgeStat, device: number, depth = 0): Promise<void> {
