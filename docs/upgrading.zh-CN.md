@@ -119,7 +119,7 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 
 在管理员 PowerShell 中执行[共用 Windows 暂存与切换命令](upgrading.md#stage-and-switch-on-windows)，填写上述输入。命令验证发行资产，并确认当前 junction 和两个版本目录均位于标准安装根目录内；不修改原注册信息。
 
-暂存步骤复制所选兼容 Node 并保留相对路径启动器，安装并核对新 Runner 和所需维护包。确认新文件继承安装根目录的访问策略，原服务账号可读取和执行。切换时保存任务原启用状态，暂时禁用并停止任务，等待退出后，将旧 junction 保留为 `$Previous`，再将新 junction 命名为 `current`。保留同一 PowerShell 会话中的 `$Old`、`$Previous`、`$New`、`$OriginalMode` 等变量。
+暂存步骤复制所选兼容 Node 并保留相对路径启动器，安装并核对新 Runner 和所需维护包。确认新文件继承安装根目录的访问策略，原服务账号可读取和执行。切换时保存任务原启用状态，暂时禁用并停止任务，通过 Task Scheduler COM 接口确认运行实例数为 0，且任务仍禁用、状态为 Disabled 或 Ready。已禁用的任务也可能仍有运行实例。确认退出后，将旧 junction 保留为 `$Previous`，再将新 junction 命名为 `current`。保留同一 PowerShell 会话中的 `$Old`、`$Previous`、`$New`、`$OriginalMode` 等变量。
 
 只更新程序包时，原本禁用的任务保持禁用。首次启用管理器需要启动 Runner，因此脚本会拒绝直接改变已禁用任务；先安排明确的服务启用窗口。运行中的 Runner 通过 `doctor --json` 后，选择 `$EnableManager = $true` 的安装继续下面步骤。
 

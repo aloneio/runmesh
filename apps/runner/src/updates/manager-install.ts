@@ -443,11 +443,15 @@ export async function managerUninstall(options: MaintenanceManagerOptions): Prom
   const host = managerHost(options);
   const existing = await host.filesystem.read(host.manifestPath);
   if (existing === undefined) {
+    // Native registration can outlive both the manifest and its package after
+    // interrupted/manual cleanup. Missing files are not evidence of absence;
+    // refuse an unknown registration without stopping or deleting it.
+    if (await host.registered()) throw new Error("maintenance manager manifest is missing; refusing to manage an unverified native service");
     if (await host.filesystem.stat(host.managerRoot) !== undefined) {
       const metadata = host.path.join(host.managerRoot, "installation.json");
       await host.trustedTreePath(metadata, "file", host.layout.installRoot);
       const expected = JSON.stringify({ schema_version: 1, platform: host.platform, mode: host.mode, profile_path: options.profilePath, install_root: host.layout.installRoot });
-      if (await host.filesystem.read(metadata) !== expected || await host.registered()) throw new Error("maintenance manager manifest is missing; refusing to remove an unverified package");
+      if (await host.filesystem.read(metadata) !== expected) throw new Error("maintenance manager manifest is missing; refusing to remove an unverified package");
       await assertFinishedManagerJournal(host);
       if (!options.preservePackage) await host.filesystem.remove(host.managerRoot);
     }

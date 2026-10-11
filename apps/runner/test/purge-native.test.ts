@@ -6,8 +6,8 @@ import { currentServicePlatform, renderService, serviceProfilePath } from "../sr
 import { runMaintenanceCli } from "../src/maintenance-cli.js";
 import type { MaintenanceManagerInstaller } from "../src/updates/manager-install.js";
 
-function memoryHost(withManifest = true) {
-  const platform = currentServicePlatform(); const layout = purgeLayout(platform, "system");
+function memoryHost(withManifest = true, platform = currentServicePlatform()) {
+  const layout = purgeLayout(platform, "system");
   const entries = new Map<string, { ino: number; dir: boolean; text: string }>(); let index = 1; let native = true;
   const task = { stops: true };
   const calls: string[][] = [];
@@ -28,6 +28,10 @@ function memoryHost(withManifest = true) {
     canonical: async (path) => path,
     list: async (path) => [...entries.keys()].filter((p) => p !== path && dirname(p) === path).map((p) => p.slice(path.length + (path.endsWith(sep) ? 0 : 1))),
     text: async (path) => entries.get(path)?.text,
+    createFile: async (path, content) => {
+      if (entries.has(path)) throw new Error("stop record already exists");
+      file(path, content);
+    },
     link: async () => { throw new Error("unexpected link"); },
     file: async (path) => { entries.delete(path); },
     directory: async (path) => {
@@ -44,7 +48,7 @@ function memoryHost(withManifest = true) {
     }
     if (program === "schtasks" && args.includes("/End") && !task.stops) return { exitCode: 1 };
     if (program === "schtasks") { if (args.includes("/Delete")) native = false; return { exitCode: 0, stdout: layout.installRoot }; }
-    if (program === "launchctl") { if (args[0] === "bootout") { native = false; return { exitCode: 0 }; } return { exitCode: native ? 0 : 113, stdout: layout.installRoot }; }
+    if (program === "launchctl") { if (args[0] === "bootout") { native = false; return { exitCode: 0 }; } return native ? { exitCode: 0, stdout: layout.installRoot } : { exitCode: 113, stderr: "Could not find service" }; }
     if (args.includes("--property=ActiveState")) return { exitCode: 0, stdout: "inactive" };
     if (args.includes("--property=LoadState")) return { exitCode: 0, stdout: "not-found" };
     return { exitCode: 0, stdout: "LoadState=loaded\nActiveState=inactive\nExecStart=path=" + (withManifest ? layout.installRoot + "/bin/runmesh" : "/unrelated/service") };
@@ -55,6 +59,141 @@ function memoryHost(withManifest = true) {
 function policy(host: ReturnType<typeof memoryHost>, roots: string[], name = "active-policy.json") {
   host.file(join(host.layout.stateRoot, "policy", name), JSON.stringify({ workspaces: roots.map(root_path => ({ root_path })) }));
 }
+
+const stopRecord = (host: ReturnType<typeof memoryHost>) => host.layout.manifestPath + ".purge-stop.json";
+const installationEntries = (host: ReturnType<typeof memoryHost>) => new Map([...host.entries].filter(([path]) => path !== stopRecord(host)));
+
+it.skipIf(process.platform === "win32").each(["missing-pid", "registration-probe", "process-probe"])("retains macOS files when stop confirmation fails at %s", async failure => {
+  const host = memoryHost(true, "darwin"), before = new Map(host.entries);
+  const execute = host.executor.execute; let prints = 0;
+  host.executor.execute = async (program, args) => {
+    if (program === "launchctl" && args[0] === "print") {
+      if (++prints === 1) return { exitCode: 0, stdout: host.layout.installRoot + "\nstate = running\n" + (failure === "missing-pid" ? "" : "pid = 4321\n") };
+      if (failure === "registration-probe") return { exitCode: 3, stderr: "Operation not permitted" };
+    }
+    if (program === "ps") return { exitCode: 1, stderr: "Permission denied" };
+    return execute(program, args);
+  };
+  const result = await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor });
+  expect(result.purged).toBe(false); expect(result.failures).not.toEqual([]);
+  expect(installationEntries(host)).toEqual(before);
+});
+
+it.skipIf(process.platform === "win32").each([false, true])("waits for the old macOS process and refreshes its final policy (changed: %s)", async changed => {
+  const host = memoryHost(true, "darwin"); let expected = new Map(host.entries);
+  const execute = host.executor.execute; let prints = 0, processes = 0;
+  host.executor.execute = async (program, args) => {
+    if (program === "launchctl" && args[0] === "print" && ++prints === 1) return { exitCode: 0, stdout: host.layout.installRoot + "\nstate = running\npid = 4321\n" };
+    if (program === "ps") {
+      expect(args).toEqual(["-p", "4321", "-o", "pid="]);
+      expect(installationEntries(host)).toEqual(expected);
+      if (++processes === 1) {
+        if (changed) { policy(host, [host.layout.installRoot]); expected = installationEntries(host); }
+        return { exitCode: 0, stdout: "4321\n" };
+      }
+      return { exitCode: 1, stdout: "" };
+    }
+    return execute(program, args);
+  };
+  const result = await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor });
+  expect(processes).toBe(2); expect(result.purged).toBe(!changed);
+  if (changed) expect(installationEntries(host)).toEqual(expected);
+  else expect(host.entries.has(host.layout.installRoot)).toBe(false);
+});
+
+it.skipIf(process.platform === "win32")("rechecks the old macOS process across failed purge attempts after bootout", async () => {
+  const host = memoryHost(true, "darwin"), before = installationEntries(host);
+  const execute = host.executor.execute; let prints = 0, processes = 0;
+  host.executor.execute = async (program, args) => {
+    if (program === "launchctl" && args[0] === "print" && ++prints === 1) return { exitCode: 0, stdout: host.layout.installRoot + "\nstate = running\npid = 4321\n" };
+    if (program === "ps") {
+      expect(args).toEqual(["-p", "4321", "-o", "pid="]);
+      return ++processes <= 2 ? { exitCode: 1, stderr: "Permission denied" } : { exitCode: 1 };
+    }
+    return execute(program, args);
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(false);
+    expect(installationEntries(host)).toEqual(before);
+  }
+  expect(host.entries.has(stopRecord(host))).toBe(true);
+  expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(true);
+  expect(processes).toBe(3); expect(host.entries.has(stopRecord(host))).toBe(false);
+});
+
+it.skipIf(process.platform === "win32")("retries macOS bootout after interruption with a persisted process identity", async () => {
+  const host = memoryHost(true, "darwin"), before = installationEntries(host);
+  const execute = host.executor.execute; let bootouts = 0;
+  host.executor.execute = async (program, args) => {
+    if (program === "launchctl" && args[0] === "print" && bootouts < 2) return { exitCode: 0, stdout: host.layout.installRoot + "\nstate = running\npid = 4321\n" };
+    if (program === "launchctl" && args[0] === "bootout") {
+      expect(JSON.parse(host.entries.get(stopRecord(host))!.text).pid).toBe(4321);
+      if (++bootouts === 1) return { exitCode: 1, stderr: "interrupted" };
+    }
+    if (program === "ps") return { exitCode: 1 };
+    return execute(program, args);
+  };
+  expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(false);
+  expect(installationEntries(host)).toEqual(before);
+  expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(true);
+  expect(bootouts).toBe(2);
+});
+
+it.skipIf(process.platform === "win32")("retains a previous macOS stop identity until it exits before stopping a replacement", async () => {
+  const host = memoryHost(true, "darwin"), before = installationEntries(host);
+  const execute = host.executor.execute; let attempt = 0, bootouts = 0;
+  host.executor.execute = async (program, args) => {
+    if (program === "launchctl" && args[0] === "print" && bootouts < 2) return { exitCode: 0, stdout: host.layout.installRoot + "\nstate = running\npid = " + (attempt === 0 ? "4321" : "8765") + "\n" };
+    if (program === "launchctl" && args[0] === "bootout") {
+      expect(JSON.parse(host.entries.get(stopRecord(host))!.text).pid).toBe(attempt === 0 ? 4321 : 8765);
+      if (++bootouts === 1) return { exitCode: 1, stderr: "interrupted" };
+    }
+    if (program === "ps") return attempt === 1 ? { exitCode: 0, stdout: "4321" } : { exitCode: 1 };
+    return execute(program, args);
+  };
+  for (; attempt < 2; attempt++) {
+    expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(false);
+    expect(installationEntries(host)).toEqual(before);
+    expect(bootouts).toBe(1);
+  }
+  expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(true);
+  expect(bootouts).toBe(2);
+});
+
+it.skipIf(process.platform === "win32")("retains macOS installation and registration when its stop record cannot be persisted", async () => {
+  const host = memoryHost(true, "darwin"), before = new Map(host.entries);
+  const execute = host.executor.execute;
+  host.io.createFile = async () => { throw new Error("disk full"); };
+  host.executor.execute = async (program, args) => program === "launchctl" && args[0] === "print"
+    ? { exitCode: 0, stdout: host.layout.installRoot + "\nstate = running\npid = 4321\n" }
+    : execute(program, args);
+  const result = await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor });
+  expect(result.purged).toBe(false); expect(result.failures.some(item => item.reason.includes("disk full"))).toBe(true);
+  expect(host.entries).toEqual(before); expect(host.calls.some(call => call.includes("bootout"))).toBe(false);
+});
+
+it.skipIf(process.platform === "win32").each(["{", '{"schema_version":1,"target":"other","mode":"system","pid":4321}', '{"schema_version":1,"target":"system/io.alone.runmesh.runner","mode":"user","pid":4321}', '{"schema_version":1,"target":"system/io.alone.runmesh.runner","mode":"system","pid":0}'])("retains macOS files before native changes when a stop record is invalid: %s", async content => {
+  const host = memoryHost(true, "darwin"); host.file(stopRecord(host), content);
+  const before = new Map(host.entries); let managerStops = 0;
+  expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor, beforeServiceStop: async () => { managerStops++; } })).purged).toBe(false);
+  expect(host.entries).toEqual(before); expect(host.calls).toEqual([]); expect(managerStops).toBe(0);
+});
+
+it.skipIf(process.platform === "win32")("checks the recorded macOS process even after the service manifest is missing", async () => {
+  const host = memoryHost(false, "darwin"); let exited = false;
+  host.file(stopRecord(host), JSON.stringify({ schema_version: 1, target: "system/io.alone.runmesh.runner", mode: "system", pid: 4321 }));
+  const before = new Map(host.entries);
+  host.executor.execute = async (program, args) => {
+    if (program === "launchctl") { expect(args[0]).toBe("print"); return { exitCode: 113, stderr: "Could not find service" }; }
+    expect(program).toBe("ps"); expect(args).toEqual(["-p", "4321", "-o", "pid="]);
+    return exited ? { exitCode: 1 } : { exitCode: 1, stderr: "Permission denied" };
+  };
+  expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(false);
+  expect(host.entries).toEqual(before);
+  exited = true;
+  expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(true);
+  expect(host.entries.has(stopRecord(host))).toBe(false);
+});
 
 function uninstallHost(host: ReturnType<typeof memoryHost>, maintenanceManager: MaintenanceManagerInstaller) {
   return runMaintenanceCli(["uninstall", "--purge", "--yes", "--json"], {

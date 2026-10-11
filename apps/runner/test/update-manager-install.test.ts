@@ -131,6 +131,54 @@ it("retains the stable management package across ordinary uninstall and reinstal
   expect(test.stats.has(test.paths.managerRoot)).toBe(false);
 });
 
+it.each(["linux", "darwin", "win32"] as const)("refuses to overlook an orphaned %s manager registration when its files are gone", async platform => {
+  const test = fixture(platform); await managerInstall(test.options);
+  await test.options.filesystem.remove(test.paths.manifestPath);
+  await test.options.filesystem.remove(test.paths.managerRoot);
+  const beforeFiles = new Map(test.files), beforeStats = new Map(test.stats);
+  test.calls.length = 0;
+  await expect(managerUninstall({ ...test.options, preservePackage: true })).rejects.toThrow("manifest is missing");
+  expect(test.calls).toHaveLength(1);
+  expect(test.files).toEqual(beforeFiles); expect(test.stats).toEqual(beforeStats);
+  expect(test.isActive()).toBe(true);
+});
+
+it.each(["linux", "darwin", "win32"] as const)("requires a reliable %s absence probe when no manager files remain", async platform => {
+  const test = fixture(platform), beforeFiles = new Map(test.files), beforeStats = new Map(test.stats);
+  const calls: string[][] = [];
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    calls.push([name, ...args]);
+    return { exitCode: 1, stderr: "native service query unavailable" };
+  } };
+  await expect(managerUninstall({ ...test.options, executor, preservePackage: true })).rejects.toThrow();
+  expect(calls).toHaveLength(1);
+  expect(test.files).toEqual(beforeFiles); expect(test.stats).toEqual(beforeStats);
+});
+
+it.each(["linux", "darwin", "win32"] as const)("accepts a reliably absent %s manager when both its manifest and package are absent", async platform => {
+  const test = fixture(platform), beforeFiles = new Map(test.files), beforeStats = new Map(test.stats);
+  await expect(managerUninstall({ ...test.options, preservePackage: true })).resolves.toBeUndefined();
+  expect(test.calls).toHaveLength(1);
+  expect(test.files).toEqual(beforeFiles); expect(test.stats).toEqual(beforeStats);
+});
+
+it.each(["linux", "darwin", "win32"] as const)("retains %s package identity and recovery checks after its native manager was removed", async platform => {
+  const test = fixture(platform); await managerInstall(test.options);
+  await managerUninstall({ ...test.options, preservePackage: true });
+  const metadata = test.paths.path.join(test.paths.managerRoot, "installation.json");
+  const originalMetadata = test.files.get(metadata)!;
+  test.files.set(metadata, "another installation");
+  await expect(managerUninstall(test.options)).rejects.toThrow("manifest is missing");
+  test.files.set(metadata, originalMetadata);
+  const stateDirectory = test.paths.path.join(test.paths.managerRoot, "state");
+  await test.options.filesystem.mkdir(stateDirectory, 0o700);
+  const journal = test.paths.path.join(stateDirectory, "active-operation.json");
+  await test.options.filesystem.write(journal, JSON.stringify({ phase: "switching" }));
+  const beforeFiles = new Map(test.files), beforeStats = new Map(test.stats);
+  await expect(managerUninstall(test.options)).rejects.toThrow("maintenance is unfinished");
+  expect(test.files).toEqual(beforeFiles); expect(test.stats).toEqual(beforeStats);
+});
+
 it.each([false, true])("retains the installed Windows uninstall helper when another CLI installs the Runner (retained package: %s)", async retained => {
   const test = fixture("win32"); await managerInstall(test.options);
   const helper = test.paths.path.join(test.paths.managerRoot, "uninstall.ps1");
