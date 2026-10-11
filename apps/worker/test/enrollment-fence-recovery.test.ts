@@ -194,7 +194,7 @@ it.each(["warm", "reconstructed", "cleanup-unavailable", "cleanup-oversized", "c
       }), { ...workerEnv, RUNNER: runnerBinding }, {} as ExecutionContext);
       if (mode === "issuance-unknown" || (mode === "issuance-response-lost" && attempt === 0)) {
         expect(response.status).toBe(503);
-        expect(await response.text()).not.toContain('<code class="mono" data-no-i18n>');
+        expect(await response.text()).not.toMatch(/<code\b(?=[^>]*\bdata-no-i18n(?:\s|>))(?=[^>]*\bdata-enrollment-code(?:\s|>))[^>]*>/u);
       } else if (mode === "cleanup-unavailable" || mode === "cleanup-oversized" || (mode.startsWith("cleanup-retry") && attempt === 0)) {
         expect(response.status).toBe(503);
         expect(response.headers.get("x-runmesh-error-code")).toBe(mode === "cleanup-oversized" ? "cleanup_unavailable" : "mutation_state_changed");
@@ -202,12 +202,12 @@ it.each(["warm", "reconstructed", "cleanup-unavailable", "cleanup-oversized", "c
         const text = await response.text();
         expect(text).toContain("Generate a new enrollment code to try again.");
         expect(text).not.toContain("PRIVATE_UPSTREAM_SENTINEL");
-        expect(text).not.toContain('<code class="mono" data-no-i18n>');
+        expect(text).not.toMatch(/<code\b(?=[^>]*\bdata-no-i18n(?:\s|>))(?=[^>]*\bdata-enrollment-code(?:\s|>))[^>]*>/u);
       } else {
         expect(response.status).toBe(200);
         const text = await response.text();
         expect(text).not.toContain("cleanup is uncertain");
-        expect(text).toContain('<code class="mono" data-no-i18n>');
+        expect(text).toMatch(/<code\b(?=[^>]*\bdata-no-i18n(?:\s|>))(?=[^>]*\bdata-enrollment-code(?:\s|>))[^>]*>[A-Za-z0-9_-]{43}<\/code>/u);
       }
     }
     expect(await control(current, f.runnerId).admission()).toMatchObject({ fenced: true, reconciled: false,
