@@ -126,3 +126,37 @@ it("keeps the selected default 4 KiB when paging from the beginning", async () =
   expect(page.body).toContain("cursor=16384&amp;bytes=4096");
   expect(page.body).toContain('<option value="head" selected>');
 });
+
+it.each([1024, 4096, 16384])("renders an aligned %i-byte UTF-8 tail through EOF", async bytes => {
+  for (const [stream, character, width] of [["stdout", "中", 3], ["stderr", "😀", 4]] as const) {
+    const f = fixture(), data = character.repeat(Math.floor(bytes / width)) + "END";
+    expect(new TextEncoder().encode(data).length).toBeGreaterThan(bytes);
+    expect(new TextEncoder().encode(data).length).toBeLessThanOrEqual(bytes + 3);
+    f.logs.mockResolvedValue(Response.json({ result: { job_id: "test-job", stream, data, offset: 177, next_cursor: null } }));
+    const page = await f.open(`?stream=${stream}&bytes=${bytes}&view=tail`);
+    expect(page.ok).toBe(true); if (!page.ok) return;
+    expect(page.body).toContain(`<code>${data}</code>`);
+    expect(page.body).not.toContain("Next log chunk");
+  }
+});
+
+it.each([1024, 4096, 16384])("bounds an oversized %i-byte tail from the end and escapes its HTML", async bytes => {
+  const f = fixture(), data = "OLD".repeat(bytes) + "😀".repeat(bytes / 4) + "<END>&\n";
+  f.logs.mockResolvedValue(Response.json({ result: { job_id: "test-job", stream: "stdout", data, next_cursor: "99999" } }));
+  const page = await f.open(`?stream=stdout&bytes=${bytes}&view=tail`);
+  expect(page.ok).toBe(true); if (!page.ok) return;
+  const expected = "😀".repeat(bytes / 4 - 1) + "&lt;END&gt;&amp;\n";
+  expect(page.body).toContain(`<code>${expected}</code>`);
+  expect(page.body).not.toContain("OLD");
+  expect(page.body).not.toContain("<END>");
+  expect(page.body).not.toContain("Next log chunk");
+});
+
+it.each(["head", "chunk"])("keeps prefix selection for an oversized %s log view", async view => {
+  const f = fixture(), data = "BEGIN" + "中".repeat(400) + "END";
+  f.logs.mockResolvedValue(Response.json({ result: { job_id: "test-job", stream: "stdout", data, next_cursor: "1024" } }));
+  const page = await f.open(`?stream=stdout&bytes=1024&view=${view}${view === "chunk" ? "&cursor=0" : ""}`);
+  expect(page.ok).toBe(true); if (!page.ok) return;
+  expect(page.body).toContain(`<code>BEGIN${"中".repeat(339)}</code>`);
+  expect(page.body).toContain("Next log chunk");
+});

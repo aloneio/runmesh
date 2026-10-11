@@ -176,3 +176,61 @@ it("shares pending initialization and retries a failed storage setup", async () 
     expect(JSON.parse(await readFile(join(f.stateDir, "runner.json"), "utf8"))).toMatchObject({ workspaces: ["w"] });
   } finally { release(); await Promise.allSettled(pending); await manager.flushPersistence(); await f.cleanup(); }
 });
+
+it("recovers a launched command with 256 arguments and reuses its request ID after restart", async () => {
+  const f = await fixture(), probe = createJobProcessProbe();
+  const manager = new JobManager({ policy: f.policy, stateDir: f.stateDir }, { processes: probe.processes });
+  const args = ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))",
+    ...Array.from({ length: 254 }, (_, index) => index === 0 ? "" : `arg-${index}`)];
+  const input = { workspace_id: "w", command: process.execPath, args, request_id: "full-argument-vector" };
+  let restored: JobManager | undefined;
+  try {
+    await manager.initialize();
+    const job = await manager.start(input);
+    expect(job.command).toHaveLength(257);
+    await vi.waitFor(() => expect(manager.get(job.job_id)).toMatchObject({ status: "succeeded", exit_code: 0 }), { timeout: 10_000 });
+    await manager.flushPersistence();
+    const completed = manager.get(job.job_id);
+    restored = new JobManager({ policy: f.policy, stateDir: f.stateDir }, { processes: probe.processes });
+    await restored.initialize();
+    expect(restored.get(job.job_id)).toEqual(completed);
+    expect(await restored.logs(job.job_id)).toMatchObject({ data: JSON.stringify(args.slice(2)) });
+    expect(await restored.start(input)).toEqual(completed);
+    expect(probe.children).toHaveLength(1);
+  } finally {
+    await Promise.all(probe.children.map(child => new Promise<void>((resolve, reject) => {
+      if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+      const timer = setTimeout(() => reject(new Error("test child did not close")), 5_000);
+      child.once("close", () => { clearTimeout(timer); resolve(); });
+      child.kill("SIGKILL");
+    })));
+    await manager.flushPersistence();
+    await restored?.flushPersistence();
+    await f.cleanup();
+  }
+});
+
+it.each([257, 258])("restores process ownership only for a valid %i-element stored command", async count => {
+  const f = await fixture(), probe = createJobProcessProbe();
+  const job = jobRecord({ workspace_id: "w", command: [process.execPath, ...Array(count - 1).fill("arg")] });
+  const inspectProcess = vi.fn(async () => ({ alive: true, fingerprintMatches: true }));
+  const manager = new JobManager({ policy: f.policy, stateDir: f.stateDir, maxConcurrentJobs: 1 }, {
+    processes: { ...probe.processes, inspectProcess },
+  });
+  try {
+    const directory = join(f.stateDir, "jobs", job.job_id);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(join(directory, "meta.json"), JSON.stringify(job));
+    await manager.initialize();
+    if (count === 257) {
+      expect(manager.get(job.job_id)).toMatchObject({ command: job.command, status: "unknown", recovery_liveness: { alive: true } });
+      expect(manager.queueStatus()).toMatchObject({ running: 1, available_slots: 0 });
+      expect(inspectProcess).toHaveBeenCalledExactlyOnceWith(job.pid, job.process_start_fingerprint);
+    } else {
+      expect(manager.list()).toEqual([]);
+      expect(manager.queueStatus()).toMatchObject({ running: 0, available_slots: 1 });
+      expect(inspectProcess).not.toHaveBeenCalled();
+    }
+    expect(probe.children).toEqual([]);
+  } finally { await manager.flushPersistence(); await f.cleanup(); }
+});

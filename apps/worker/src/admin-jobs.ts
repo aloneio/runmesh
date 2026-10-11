@@ -67,7 +67,8 @@ export async function loadAdminJobPage(url: URL, runnerId: string, jobId: string
           const next = typeof result.next_cursor === "string" && validCursor(result.next_cursor) && Number(result.next_cursor) > Number(cursor ?? 0) ? result.next_cursor : undefined;
           const offset = typeof result.offset === "number" && Number.isSafeInteger(result.offset) && result.offset > 0 ? result.offset : undefined;
           const older = offset === undefined ? "" : `<a class="button secondary" href="${escapeHtml(link(`stream=${stream}&cursor=${Math.max(0,offset-limit)}&bytes=${limit}`))}">Previous log chunk</a>`;
-          logPanel = `<h3>${escapeHtml(stream)} · ${limit/1024} KiB</h3><pre class="code-block" style="white-space:pre-wrap;overflow-wrap:anywhere"><code>${escapeHtml(bytePrefix(result.data,limit))}</code></pre>${older}${next === undefined || view === "tail" ? "" : `<a class="button secondary" href="${escapeHtml(link(`stream=${stream}&cursor=${next}&bytes=${limit}`))}">Next log chunk</a>`}`;
+          const output = view === "tail" ? byteSuffix(result.data, limit + 3) : bytePrefix(result.data, limit);
+          logPanel = `<h3>${escapeHtml(stream)} · ${limit/1024} KiB</h3><pre class="code-block" style="white-space:pre-wrap;overflow-wrap:anywhere"><code>${escapeHtml(output)}</code></pre>${older}${next === undefined || view === "tail" ? "" : `<a class="button secondary" href="${escapeHtml(link(`stream=${stream}&cursor=${next}&bytes=${limit}`))}">Next log chunk</a>`}`;
         }
       } catch { /* Local logs are best effort; keep the saved metadata visible. */ }
     }
@@ -106,6 +107,18 @@ function bytePrefix(value: string, max: number): string {
   let length=0, out="";
   for (const c of value) { const n=encoder.encode(c).length; if (length+n>max) break; out+=c; length+=n; }
   return out;
+}
+
+function byteSuffix(value: string, max: number): string {
+  const encoder = new TextEncoder();
+  let length = 0, start = value.length;
+  for (const c of Array.from(value).reverse()) {
+    const bytes = encoder.encode(c).length;
+    if (length + bytes > max) break;
+    length += bytes;
+    start -= c.length;
+  }
+  return value.slice(start);
 }
 
 export { JOBS_EXPLANATION } from "./admin/job-views.js";
