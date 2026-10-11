@@ -22,14 +22,14 @@ function section(source, start, end) {
   assert.ok(first >= 0 && last > first);
   return source.slice(first, last);
 }
-function startScript(path, environment) {
+function startScript(path, environment, timeoutMs = 10000) {
   const child = spawn(windows ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/sh",
     windows ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path] : [path],
     { windowsHide: true, env: { ...process.env, ...environment } });
   let stdout = "", stderr = "";
   child.stdout.on("data", value => { stdout += value; });
   child.stderr.on("data", value => { stderr += value; });
-  const timer = setTimeout(() => child.kill(), 10000);
+  const timer = setTimeout(() => child.kill(), timeoutMs);
   const completed = new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("close", code => resolve({ code, stdout, stderr }));
@@ -197,6 +197,118 @@ fi
   }
 });
 
+for (const scenario of [
+  { name: "nonzero uninstall", exitCode: 23, retain: true, expected: "maintenance" },
+  { name: "uninstall exception", throws: true, retain: true, expected: "maintenance" },
+  { name: "missing runtime", missingRuntime: true, retain: true },
+  { name: "missing entry", missingEntry: true, retain: true },
+  { name: "successful uninstall", expected: "maintenance" },
+  { name: "missing mutable launcher", noWrapper: true, expected: "maintenance" },
+  { name: "failure before service attempt", attempted: false },
+  { name: "retained manager failure", manager: true, managerExitCode: 29, retain: true, expected: "manager" },
+  { name: "incomplete retained manager", manager: true, incompleteManager: true, retain: true },
+  { name: "retained manager success", manager: true, exitCode: 23, expected: "manager" },
+  { name: "legacy entry fallback", legacy: true, expected: "runner" },
+]) test(`hosted service rollback handles ${scenario.name}`, async () => {
+  const temporary = await realpath(await mkdtemp(join(tmpdir(), "runmesh-service-rollback-")));
+  const root = join(temporary, "managed installation");
+  const version = join(root, "versions", "fixture-version");
+  const current = join(root, "current");
+  const manager = join(root, "manager");
+  const profile = join(root, "profile.json");
+  const callsFile = join(temporary, "calls.jsonl");
+  const fixtureFile = join(temporary, "fixture.json");
+  const file = join(temporary, windows ? "rollback.ps1" : "rollback.sh");
+  const runtime = join(version, "runtime", windows ? "node.exe" : "node");
+  const dist = join(version, ...(windows ? [] : ["lib"]), "node_modules/@aloneio/runmesh-runner/dist");
+  const entry = scenario.legacy ? join(version, ...(windows ? ["runmesh.cjs"] : ["lib/node_modules/@aloneio/runmesh-runner/dist/runmesh.cjs"])) : join(dist, "maintenance.cjs");
+  const attempted = scenario.attempted !== false;
+  const program = role => `const fs=require('node:fs'),assert=require('node:assert/strict');
+const c=JSON.parse(fs.readFileSync(process.env.RUNMESH_ROLLBACK_FIXTURE,'utf8')),args=process.argv.slice(2),role=${JSON.stringify(role)};
+assert.deepEqual(args,['uninstall','--profile',c.profile,'--json']);
+fs.appendFileSync(c.callsFile,JSON.stringify({role,args})+'\\n');
+if(c.throws)throw Error('fixture uninstall exception');
+process.exit(role==='manager'?c.managerExitCode:c.exitCode);
+`;
+  try {
+    for (const path of [join(version, "runtime"), dist, join(version, "bin"), join(root, "stage"), join(root, "temp")]) await mkdir(path, { recursive: true });
+    if (!scenario.missingRuntime) await copyFile(process.execPath, runtime);
+    if (!scenario.missingEntry) await writeFile(entry, program(scenario.legacy ? "runner" : "maintenance"));
+    if (scenario.manager) {
+      await mkdir(join(manager, "runtime"), { recursive: true });
+      await copyFile(process.execPath, join(manager, "runtime", windows ? "node.exe" : "node"));
+      if (!scenario.incompleteManager) await writeFile(join(manager, "runmesh.cjs"), program("manager"));
+      await writeFile(join(manager, "recovery-marker"), "retained manager state");
+    }
+    await writeFile(profile, "owned profile for recovery");
+    await writeFile(join(version, "recovery-marker"), "owned version for recovery");
+    await writeFile(join(root, "temp", "private-download"), "private installer download");
+    await symlink(version, current, windows ? "junction" : "dir");
+    await writeFile(fixtureFile, JSON.stringify({ profile, callsFile, throws: scenario.throws === true, exitCode: scenario.exitCode ?? 0, managerExitCode: scenario.managerExitCode ?? 0 }));
+    if (!scenario.noWrapper) {
+      if (windows) await writeFile(join(version, "runmesh.cmd"), `@echo off\r\n"${runtime}" "${entry}" %*\r\n`);
+      else await writeFile(join(version, "bin", "runmesh"), `#!/bin/sh\nexec "${runtime}" "${entry}" "$@"\n`, { mode: 0o755 });
+    }
+    const source = windows ? `$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+$InstallRoot=$env:RUNMESH_ROLLBACK_ROOT
+$Profile=Join-Path $InstallRoot 'profile.json'
+$CurrentRoot=Join-Path $InstallRoot 'current'
+$CurrentNew=Join-Path $InstallRoot 'current.new'
+$Stage=Join-Path $InstallRoot 'stage'
+$VersionRoot=Join-Path $InstallRoot 'versions\\fixture-version'
+$TempRoot=Join-Path $InstallRoot 'temp'
+$CurrentRunner=Join-Path $CurrentRoot 'runmesh.cmd'
+$Succeeded=$false; $MaintenanceAction='install'; $EnrollmentAttempted=$true; $ServiceAttempted=${attempted ? "$true" : "$false"}
+$ProfileCreated=$true; $CurrentCreated=$true; $CurrentNewCreated=$false; $StageCreated=$true; $VersionCreated=$true
+$global:LASTEXITCODE=37
+${section(powershell, "$script:StepIndex = 0", "function Refresh-Existing")}
+try { throw 'fixture original install failure' } finally {
+${section(powershell, "  if (-not $Succeeded -and $MaintenanceAction", "\n}\n} finally {")}
+Write-Host ('ROLLBACK_EXIT_CODE=' + $LASTEXITCODE)
+}
+` : `#!/bin/sh
+set -eu
+INSTALL_ROOT="$RUNMESH_ROLLBACK_ROOT"
+PROFILE="$INSTALL_ROOT/profile.json"
+CURRENT_NEW="$INSTALL_ROOT/current.new"
+STAGE="$INSTALL_ROOT/stage"
+FINAL="$INSTALL_ROOT/versions/fixture-version"
+TMP="$INSTALL_ROOT/temp"
+TTY_ECHO_DISABLED=0; INSTALL_PHASE=service_install; RUNMESH_ACTION=install; ENROLLMENT_ATTEMPTED=1
+PROFILE_CREATED=1; CURRENT_CREATED=1; CURRENT_NEW_CREATED=0; STAGE_CREATED=1; FINAL_CREATED=1; SERVICE_ATTEMPTED=${attempted ? "1" : "0"}
+release_install_lock() { printf '%s' released > "$RUNMESH_ROLLBACK_LOCK_RELEASE"; }
+${section(posix, "cleanup_tty()", "on_exit()")}
+rollback 37
+`;
+    await writeFile(file, source);
+    const releasedLock = join(temporary, "lock-released");
+    const result = await startScript(file, { RUNMESH_ROLLBACK_ROOT: root, RUNMESH_ROLLBACK_FIXTURE: fixtureFile, RUNMESH_ROLLBACK_LOCK_RELEASE: releasedLock, NODE_OPTIONS: "", NODE_PATH: "" }, 30000).completed;
+    const output = result.stdout + result.stderr;
+    assert.equal(result.code, windows ? 1 : 37, output);
+    if (windows) {
+      assert.match(output, /fixture original install failure/);
+      assert.match(output, /ROLLBACK_EXIT_CODE=37/);
+    } else assert.equal(await readFile(releasedLock, "utf8"), "released");
+    const retain = scenario.retain === true;
+    for (const path of [profile, current, version]) assert.equal(await lstat(path).then(() => true, () => false), retain, `${path}: recovery state ${retain ? "must remain" : "must be cleaned"}`);
+    if (retain) {
+      assert.equal(await realpath(current), await realpath(version));
+      assert.equal(await readFile(profile, "utf8"), "owned profile for recovery");
+      assert.equal(await readFile(join(version, "recovery-marker"), "utf8"), "owned version for recovery");
+      assert.match(output, /retained.*recovery/i);
+    }
+    if (scenario.manager) assert.equal(await readFile(join(manager, "recovery-marker"), "utf8"), "retained manager state");
+    for (const path of ["stage", "temp"]) assert.equal(await lstat(join(root, path)).then(() => true, () => false), false, `${path} is private installer state`);
+    const called = await readFile(callsFile, "utf8").catch(error => { if (error.code === "ENOENT") return ""; throw error; });
+    const calls = called.trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+    assert.deepEqual(calls.map(call => call.role), scenario.expected ? [scenario.expected] : []);
+  } finally {
+    assert.equal(dirname(temporary), await realpath(tmpdir()));
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
 for (const owned of [false, true]) test(`installer rollback ${owned ? "removes owned" : "preserves another attempt's"} profile and paths`, async () => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-installer-rollback-"));
   const file = join(root, windows ? "rollback.ps1" : "rollback.sh");
@@ -237,6 +349,7 @@ TTY_ECHO_DISABLED=0
 INSTALL_PHASE=enrollment
 RUNMESH_ACTION=install
 ENROLLMENT_ATTEMPTED=1
+SERVICE_ATTEMPTED=0
 PROFILE_CREATED=${flag}
 CURRENT_CREATED=${flag}
 CURRENT_NEW_CREATED=${flag}
@@ -332,7 +445,7 @@ CURRENT_NEW="$INSTALL_ROOT/current.new"
 NODE="$RUNMESH_TEST_NODE"
 NPM_CLI="$RUNMESH_TEST_NPM"
 NPM_CONFIG_USERCONFIG=fixture; NPM_CONFIG_GLOBALCONFIG=fixture; ARTIFACT=fixture.tgz
-RUNMESH_ACTION=${action}; INSTALL_PHASE=release_verification; ENROLLMENT_ATTEMPTED=0; TTY_ECHO_DISABLED=0
+RUNMESH_ACTION=${action}; INSTALL_PHASE=release_verification; ENROLLMENT_ATTEMPTED=0; SERVICE_ATTEMPTED=0; TTY_ECHO_DISABLED=0
 PROFILE_CREATED=1; STAGE_CREATED=1; FINAL_CREATED=1; CURRENT_CREATED=0; CURRENT_NEW_CREATED=0
 C_CYAN=''; C_GREEN=''; C_RED=''; C_RESET=''
 ${section(posix, "STEP_INDEX=0", "printf '\\n%bRunmesh Runner")}

@@ -1,14 +1,15 @@
 import { expect, it } from "vitest";
-import { uninstall } from "../src/cli/lifecycle.js";
+import { serviceCommand, uninstall } from "../src/cli/lifecycle.js";
 import { createServiceManager, renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
 import type { ServiceManagerOptions } from "../src/services/contracts.js";
+import type { RunnerProfile } from "../src/profile.js";
 
 function fixture() {
   const manifest = renderService({ platform: "darwin", mode: "system", executionMode: "privileged_host" });
   const recordPath = `${manifest.path}.purge-stop.json`;
   const files = new Map([[manifest.path, manifest.content]]);
   const calls: string[][] = [];
-  const state = { loaded: true, process: "denied" as "denied" | "alive" | "gone", clock: 0, bootstrapFailures: 0 };
+  const state = { loaded: true, process: "denied" as "denied" | "alive" | "gone", clock: 0, bootstrapFailures: 0, enableFailures: 0, bootoutFailures: 0 };
   const filesystem = {
     read: async (path: string) => files.get(path),
     write: async (path: string, text: string) => { files.set(path, text); },
@@ -34,12 +35,17 @@ function fixture() {
     if (file !== "launchctl") throw new Error(`unexpected program: ${file}`);
     if (args[0] === "print") return state.loaded ? { exitCode: 0, stdout: "state = running\npid = 4321\n" }
       : { exitCode: 113, stderr: "Could not find service" };
-    if (args[0] === "bootout") { state.loaded = false; return { exitCode: 0 }; }
+    if (args[0] === "bootout") {
+      if (state.bootoutFailures-- > 0) return { exitCode: 1, stderr: "fixture bootout failure" };
+      state.loaded = false;
+      return { exitCode: 0 };
+    }
     if (args[0] === "bootstrap") {
       if (state.bootstrapFailures-- > 0) return { exitCode: 5, stderr: "Service already loaded" };
       state.loaded = true;
       return { exitCode: 0 };
     }
+    if (args[0] === "enable" && state.enableFailures-- > 0) return { exitCode: 1, stderr: "fixture enable failure" };
     if (args[0] === "enable" || args[0] === "kickstart") return { exitCode: 0 };
     throw new Error(`unexpected command: ${args.join(" ")}`);
   } };
@@ -113,4 +119,69 @@ it("requires an explicit durable recovery port for an injected macOS manifest fi
   await expect(createServiceManager(options).stop(test.manifest)).rejects.toThrow(/durab|recovery/iu);
   expect(test.calls.some(call => call[1] === "bootout")).toBe(false);
   expect(test.files.has(test.recordPath)).toBe(false);
+});
+
+function firstInstallFixture() {
+  const test = fixture();
+  test.files.delete(test.manifest.path);
+  test.state.loaded = false;
+  test.state.enableFailures = 1;
+  const before: RunnerProfile = { version: 1, server_url: "wss://fixture.example/runner/connect", runner_id: "fixture-runner",
+    token: "fixture-token", management_mode: "central", execution_mode: "dedicated_user", workspaces: [] };
+  let profile = before;
+  const store = { filePath: serviceProfilePath(serviceLayout({ platform: "darwin", mode: "system" })), load: async () => profile,
+    save: async (value: RunnerProfile) => { profile = value; }, remove: async () => undefined, assertServiceOwnership: async () => undefined };
+  const dependencies = { servicePlatform: "darwin" as const, serviceManager: test.manager(), serviceFilesystem: test.filesystem,
+    serviceProvisioner: { platform: "darwin" as const, provision: async () => ({ identity: "root", profileSecured: true }) }, isAdministrator: () => true };
+  const install = () => serviceCommand({ command: "install", json: true, values: { executionMode: "privileged_host", confirmPrivilegedHost: true }, passthrough: [] }, store, () => undefined, dependencies);
+  const remove = () => uninstall({ command: "uninstall", json: true, values: {}, passthrough: [] }, store, () => undefined,
+    { ...dependencies, serviceManager: test.manager() });
+  return { ...test, store, dependencies, before, profile: () => profile, install, remove };
+}
+
+it.each(["bootout", "process-probe"] as const)("keeps a first macOS install retryable when rollback fails at %s", async failure => {
+  const test = firstInstallFixture();
+  if (failure === "bootout") test.state.bootoutFailures = 1;
+  const result = await test.install().then(() => undefined, error => error as Error);
+  expect(result?.message).toContain("fixture enable failure");
+  expect(result?.message).toContain("rollback incomplete");
+  expect(result?.cause).toBeInstanceOf(Error);
+  expect(test.files.get(test.manifest.path)).toBe(test.manifest.content);
+  expect(test.profile()).toEqual({ ...test.before, execution_mode: "privileged_host" });
+  expect(JSON.parse(test.files.get(test.recordPath)!)).toMatchObject({ pid: 4321 });
+  expect(test.state.loaded).toBe(failure === "bootout");
+  test.state.process = "gone";
+  await test.remove();
+  expect(test.files.has(test.manifest.path)).toBe(false);
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.state.loaded).toBe(false);
+  expect(test.calls.some(call => call[0] === "ps")).toBe(true);
+});
+
+it("restores the original profile after a first macOS install is confirmed stopped", async () => {
+  const test = firstInstallFixture();
+  test.state.process = "gone";
+  await expect(test.install()).rejects.toThrow("fixture enable failure");
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.has(test.manifest.path)).toBe(false);
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.state.loaded).toBe(false);
+  expect(test.calls.filter(call => call[1] === "bootout")).toHaveLength(1);
+});
+
+it("retains a failed first user install when an injected adapter cannot prove prior native ownership", async () => {
+  const test = firstInstallFixture();
+  const calls: string[] = [];
+  const serviceManager = { platform: "darwin" as const, mode: "user" as const,
+    install: async () => { throw new Error("fixture install failure"); }, stop: async () => { calls.push("stop"); },
+    restart: async () => { calls.push("restart"); }, uninstall: async () => { calls.push("uninstall"); } };
+  const manifest = renderService({ platform: "darwin", mode: "user", profilePath: test.store.filePath });
+  const result = await serviceCommand({ command: "install", json: true, values: { user: true }, passthrough: [] }, test.store, () => undefined,
+    { ...test.dependencies, serviceManager }).then(() => undefined, error => error as Error);
+  expect(result?.message).toContain("fixture install failure");
+  expect(result?.message).toContain("rollback incomplete");
+  expect(result?.cause).toBeInstanceOf(Error);
+  expect(test.files.get(manifest.path)).toBe(manifest.content);
+  expect(test.profile()).toEqual(test.before);
+  expect(calls).toEqual([]);
 });
