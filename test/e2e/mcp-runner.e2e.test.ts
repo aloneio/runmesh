@@ -11,7 +11,7 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic } from "../../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
 import { spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../../scripts/worker-fixture.mjs";
 import { createTestHttpScope } from "../../scripts/test-http-scope.mjs";
 import WebSocket from "ws";
@@ -676,8 +676,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(existsSync(join(workspace, "denied-by-scope.txt"))).toBe(false);
   });
 
-  it("AUTH-E2E-02 task read-sharing does not grant input or cancellation rights", async () => {
-    const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdin.setEncoding('utf8');process.stdin.on('data',d=>process.stdout.write(d))"), background: true });
+  it("AUTH-E2E-02 task read-sharing does not grant input or cancellation rights", async ({ onTestFailed }) => {
+    const progress = fixtureProgress("job_sharing", onTestFailed);
+    const started = await progress.run("shell", () => mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdin.setEncoding('utf8');process.stdin.on('data',d=>process.stdout.write(d))"), background: true }));
     const id = started.structuredContent?.job_id as string;
     expect(typeof id).toBe("string");
     const workspaceId = started.structuredContent?.workspace_id;
@@ -686,23 +687,22 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // This is a live authorization test, not an archive timing assertion.
     // Use the launch receipt's workspace before optional history is uploaded;
     // the separate offline-snapshot case covers archived read sharing.
-    try {
-      const shared = await mcpTool("job", { action: "get", ...address }, clientB);
+    await runMcpFixtureWithCleanup("job_sharing", { primary: async () => {
+      const shared = await progress.run("job_share_read", () => mcpTool("job", { action: "get", ...address }, clientB));
       expect(shared.isError, JSON.stringify(shared)).not.toBe(true);
       expect(shared.structuredContent).toMatchObject({ ...address, status: "running" });
-      const denied = await mcpTool("job", { action: "input", ...address, data: "unauthorized-input" }, clientB);
+      const denied = await progress.run("job_input_denied", () => mcpTool("job", { action: "input", ...address, data: "unauthorized-input" }, clientB));
       expect(denied).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
-      const deniedCancellation = await mcpTool("job", { action: "cancel", ...address }, clientB);
+      const deniedCancellation = await progress.run("job_cancel_denied", () => mcpTool("job", { action: "cancel", ...address }, clientB));
       expect(deniedCancellation).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
-      expect((await mcpTool("job", { action: "get", ...address })).structuredContent?.status).toBe("running");
-      expect((await mcpTool("job", { action: "input", ...address, data: "authorized-input\n" })).isError).not.toBe(true);
-      await waitFor(async () => String((await mcpTool("job", { action: "logs", ...address }, clientB)).structuredContent?.data).includes("authorized-input"), 10000);
-      const log = await mcpTool("job", { action: "logs", ...address }, clientB);
+      expect((await progress.run("job_owner_read", () => mcpTool("job", { action: "get", ...address }))).structuredContent?.status).toBe("running");
+      expect((await progress.run("job_input", () => mcpTool("job", { action: "input", ...address, data: "authorized-input\n" }))).isError).not.toBe(true);
+      await progress.run("job_logs", () => waitFor(async () => String((await mcpTool("job", { action: "logs", ...address }, clientB)).structuredContent?.data).includes("authorized-input"), 10000), "poll");
+      const log = await progress.run("job_logs", () => mcpTool("job", { action: "logs", ...address }, clientB));
       expect(String(log.structuredContent?.data)).not.toContain("unauthorized-input");
-    } finally {
-      await mcpTool("job", { action: "cancel", ...address });
-      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", ...address })).structuredContent?.status)), 12000);
-    }
+    }, cancel: () => progress.run("job_cancel", () => mcpTool("job", { action: "cancel", ...address })),
+    observe: () => progress.run("job_poll", () => waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", ...address })).structuredContent?.status)), 12000), "poll"),
+    }, (diagnostic: string) => { progress.captureFailure(); process.stderr.write(diagnostic); });
   });
 
   it("R08 real MCP inventories Context and prunes only reviewed superseded records", async () => {
@@ -1141,7 +1141,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     return readMcp(response);
   }
 
-  function fixtureProgress(fixture: "job_recording" | "job_history", onTestFailed: (handler: () => void) => void) {
+  function fixtureProgress(fixture: "job_recording" | "job_history" | "job_sharing", onTestFailed: (handler: () => void) => void) {
     let phase = "admin_login_page", boundary = "headers", enteredAt = performance.now();
     const mark: FixtureProgress = (nextPhase, nextBoundary) => { phase = nextPhase; boundary = nextBoundary; enteredAt = performance.now(); };
     const observe = () => ({ phase, boundary, elapsed_ms: Math.min(900000, Math.max(0, Math.floor(performance.now() - enteredAt))) });
