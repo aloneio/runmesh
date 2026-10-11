@@ -73,6 +73,41 @@ ${invocation}\n`;
 const posix = section("AUTO_INSTALL_DEPS=1\n", 'INSTALL_PHASE=preflight\n');
 const powershell = section("$EnrollmentCodeArgument = $null\n", "$InstallRoot = Join-Path");
 const codes = ["A".repeat(43), "--" + "a".repeat(41), "_" + "b".repeat(41) + "-"];
+for (const platform of ["POSIX", "PowerShell"]) test(`${platform}: manual reenrollment restarts before doctor and stops on restart failure`, { skip: (platform === "PowerShell") !== (process.platform === "win32") }, () => {
+  const compiled = buildSync({ entryPoints: [fileURLToPath(new URL("../apps/worker/src/admin/enrollment-view.ts", import.meta.url))], platform: "node", format: "cjs", bundle: true, write: false }).outputFiles[0].text;
+  const loaded = { exports: {} };
+  new Function("module", "exports", compiled)(loaded, loaded.exports);
+  for (const executionMode of ["dedicated_user", "privileged_host"]) for (const reEnroll of [false, true]) for (const failRestart of [false, true]) {
+    const html = loaded.exports.enrollmentDocument({ publicBase: "https://worker.example", runnerId: "runner-test", code: codes[0], csrf: "csrf", reEnroll, bootstrap: false, executionMode, maxValidityDays: 30 });
+    const commands = [...html.matchAll(/<pre><code>(.*?)<\/code><\/pre>/gs)].slice(0, 3).map(match => match[1]
+      .replaceAll("&#039;", "'").replaceAll("&quot;", '"').replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&"));
+    assert.equal(commands[0], commands[1]);
+    const directory = mkdtempSync(join(tmpdir(), "runmesh-manual-command-"));
+    try {
+      const trace = join(directory, "calls.txt");
+      const runner = join(directory, platform === "PowerShell" ? "runner.cmd" : "runner");
+      const scriptPath = join(directory, platform === "PowerShell" ? "command.ps1" : "command.sh");
+      const command = platform === "PowerShell"
+        ? commands[2].replace("'C:\\Program Files\\Runmesh\\current\\runmesh.cmd'", "'" + runner.replaceAll("'", "''") + "'")
+        : commands[0].replace("RUNNER=/opt/runmesh/current/bin/runmesh", "RUNNER='" + runner.replaceAll("'", "'\\''") + "'");
+      assert.ok(command.includes(runner), "the generated command must use only the fixture Runner");
+      writeFileSync(runner, platform === "PowerShell"
+        ? '@echo off\r\necho %~1>>"%RUNMESH_MANUAL_TRACE%"\r\nif "%~1"=="restart" if "%RUNMESH_MANUAL_FAIL_RESTART%"=="1" exit /b 17\r\nexit /b 0\r\n'
+        : '#!/bin/sh\nprintf "%s\\n" "$1" >> "$RUNMESH_MANUAL_TRACE"\nif [ "$1" = restart ] && [ "$RUNMESH_MANUAL_FAIL_RESTART" = 1 ]; then exit 17; fi\n', { mode: 0o755 });
+      writeFileSync(scriptPath, (platform === "PowerShell"
+        ? "function Read-Host { $fixtureCode = [System.Security.SecureString]::new(); foreach ($letter in 'synthetic-enrollment-code'.ToCharArray()) { $fixtureCode.AppendChar($letter) }; return $fixtureCode }\n"
+        : 'sudo() { "$@"; }\n') + command + "\n");
+      const executable = platform === "PowerShell" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/bash";
+      const args = platform === "PowerShell" ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath] : [scriptPath];
+      const result = spawnSync(executable, args, { encoding: "utf8", input: codes[0] + "\n", timeout: 15_000,
+        env: { ...process.env, RUNMESH_MANUAL_TRACE: trace, RUNMESH_MANUAL_FAIL_RESTART: failRestart ? "1" : "0" } });
+      assert.equal(result.error, undefined);
+      const shouldFail = reEnroll && failRestart;
+      assert.equal(result.status, shouldFail ? platform === "PowerShell" ? 1 : 17 : 0, result.stderr);
+      assert.deepEqual(readFileSync(trace, "utf8").trim().split(/\r?\n/u), ["enroll", "install", ...(reEnroll ? ["restart"] : []), ...(shouldFail ? [] : ["doctor"])]);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }
+});
 function posixParse(args, action = "install") {
   return spawnSync("/bin/sh", ["-c", posix.replaceAll("__ACTION__", action).replaceAll("__CODE_EQUALS_VALUE__", "${1#--code=}") + '\nprintf "%s|%s" "$CODE_ARG_SET" "$ENROLLMENT_CODE_ARG"\n', "parser-fixture", ...args], { encoding: "utf8", timeout: 5_000 });
 }

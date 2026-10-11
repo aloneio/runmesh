@@ -50,7 +50,7 @@ printf '\\n' >&2
 printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin${reEnrollFlag} ${modeFlags}
 unset RUNMESH_ENROLLMENT_CODE
 sudo "$RUNNER" install ${modeFlags} --executable-path "$RUNNER"
-sudo "$RUNNER" doctor --json`,
+${reEnroll ? 'sudo "$RUNNER" restart\n' : ""}sudo "$RUNNER" doctor --json`,
     macos: `set -euo pipefail
 RUNNER=/opt/runmesh/current/bin/runmesh # replace with the verified absolute path if different
 test -x "$RUNNER"
@@ -60,7 +60,7 @@ printf '\\n' >&2
 printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin${reEnrollFlag} ${modeFlags}
 unset RUNMESH_ENROLLMENT_CODE
 sudo "$RUNNER" install ${modeFlags} --executable-path "$RUNNER"
-sudo "$RUNNER" doctor --json`,
+${reEnroll ? 'sudo "$RUNNER" restart\n' : ""}sudo "$RUNNER" doctor --json`,
     windows: `# Run this in an elevated PowerShell session
 $ErrorActionPreference = 'Stop'
 $RunnerPath = 'C:\\Program Files\\Runmesh\\current\\runmesh.cmd' # replace with the verified absolute shim path if different
@@ -77,7 +77,7 @@ try {
 }
 & $RunnerPath install ${modeFlags} --executable-path $RunnerPath
 if ($LASTEXITCODE -ne 0) { throw 'Runner service installation failed.' }
-& $RunnerPath doctor --json
+${reEnroll ? "& $RunnerPath restart\nif ($LASTEXITCODE -ne 0) { throw 'Runner service restart failed.' }\n" : ""}& $RunnerPath doctor --json
 if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
   };
   // Both reviewed execution modes use one command after release verification.

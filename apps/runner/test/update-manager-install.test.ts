@@ -219,6 +219,42 @@ it.each(["linux", "darwin", "win32"] as const)("rolls back a failed %s manager r
   await managerUninstall(options);
 });
 
+it.each(["darwin", "win32"] as const)("rolls back a newly restored %s registration after startup fails while keeping its existing files", async platform => {
+  const test = fixture(platform);
+  await managerInstall(test.options);
+  const prior = test.files.get(test.paths.manifestPath)!;
+  if (platform === "darwin") await test.options.executor.execute("launchctl", ["bootout", "system/io.alone.runmesh.manager"]);
+  else {
+    await test.options.executor.execute("powershell.exe", ["-Command", "$t.Stop(0)"]);
+    await test.options.executor.execute("schtasks", ["/Delete", "/TN", "RunmeshManager", "/F"]);
+  }
+  expect(test.isActive()).toBe(false);
+  test.calls.length = 0;
+  let failStart = true;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    const result = await test.options.executor.execute(name, args);
+    if (failStart && ((name === "launchctl" && args[0] === "kickstart") || (name === "schtasks" && args[0] === "/Run"))) return { exitCode: 1 };
+    return result;
+  } };
+  const options = { ...test.options, executor };
+  await expect(managerInstall(options)).rejects.toThrow("maintenance manager command failed");
+  expect(test.isActive()).toBe(false);
+  const registered = platform === "darwin"
+    ? await test.options.executor.execute("launchctl", ["print", "system/io.alone.runmesh.manager"])
+    : await test.options.executor.execute("powershell.exe", ["-Command", "[Console]::Write('present')"]);
+  if (platform === "darwin") expect(registered.exitCode).toBe(113);
+  else expect(registered.stdout).toBe("absent");
+  expect(test.files.get(test.paths.manifestPath)).toBe(prior);
+  expect(test.files.get(test.paths.runtimePath)).toBe("runtime bytes");
+  expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  expect(test.copies).toHaveLength(2);
+  failStart = false;
+  await managerInstall(options);
+  expect(test.isActive()).toBe(true);
+  expect(test.copies).toHaveLength(2);
+  await managerUninstall(options);
+});
+
 it("retains the stable management package across ordinary uninstall and reinstall of an older Runner", async () => {
   const test = fixture("linux"); await managerInstall(test.options);
   await managerUninstall({ ...test.options, preservePackage: true });

@@ -18,6 +18,8 @@ Hidden interactive enrollment-code input requires `stty` and a terminal on POSIX
 
 To refresh enrollment for a complete managed installation, select an installer matching the installed Runner version. It uses the existing runtime, updates enrollment and service configuration, and restarts the service while retaining the installed package. Drain Jobs before refreshing enrollment. To change the package version, follow the [upgrade guide](upgrading.md).
 
+When using the manual setup commands for an existing service, run `restart` after `enroll --re-enroll` and `install`, then run `doctor --json`. The restart loads the new credentials even when the service configuration is unchanged. The enrollment page's manual commands include this sequence.
+
 The hosted installation, enrollment refresh and uninstall commands share a lock. Run one at a time. After an interruption, check for running maintenance processes before removing a stale lock or changing installation files.
 
 ## Resolve an installation error

@@ -604,6 +604,35 @@ describe("runner product profile and enrollment", () => {
       await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", code, "--code-stdin"], { store: test.store, readStdin: async () => code })).rejects.toThrow("cannot be used together");
     } finally { await test.cleanup(); }
   });
+  it.each(["main", "enrollment"] as const)("accepts valid double-hyphen enrollment codes through the %s CLI", async entry => {
+    const test = await fixture();
+    const code = `--${"a".repeat(41)}`;
+    const output: string[] = [];
+    const request = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ enrollment_code: code });
+      return Response.json({ runner_id: "runner-hyphen", server_url: "https://example.test/runner/connect", token: "hyphen-code-test-credential" });
+    });
+    try {
+      const argv = ["--server", "https://example.test/runner/enroll", "--code", code, "--json"];
+      const dependencies = { store: test.store, stdout: (line: string) => output.push(line), stderr: (line: string) => output.push(line), fetch: request };
+      if (entry === "main") await runCli(["enroll", ...argv], dependencies);
+      else await runEnrollCli(argv, dependencies);
+      expect(request).toHaveBeenCalledTimes(1);
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "runner-hyphen" });
+      expect(output.join("\n")).not.toContain(code);
+    } finally { await test.cleanup(); }
+  });
+  it("keeps missing and malformed option-like enrollment values as argument errors", () => {
+    for (const argv of [
+      ["enroll", "--code"],
+      ["enroll", "--code", "--server", "https://example.test/runner/enroll"],
+      ["enroll", "--code", "--confirm-privileged-host"],
+      ["enroll", "--code", `--${"a".repeat(17)}`],
+      ["enroll", "--code", `--${"a".repeat(255)}`],
+      ["enroll", "--code", `--${"a".repeat(20)} invalid`],
+      ["enroll", "--server", `--${"a".repeat(41)}`],
+    ]) expect(() => parseProductArgs(argv)).toThrow("unknown or incomplete option");
+  });
   it("passes injected enrollment execution mode and privileged-host confirmation through the main CLI", async () => {
     const test = await fixture();
     try {
