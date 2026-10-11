@@ -65,8 +65,19 @@ describe("verified one-command enrollment", () => {
       const enroll = script.split("\n").filter((line) => / enroll --profile /.test(line));
       const install = script.split("\n").filter((line) => / install --profile /.test(line));
       expect(enroll).toHaveLength(2);
-      expect(install).toHaveLength(2);
-      for (const line of [...enroll, ...install]) expect(line).toContain(`--execution-mode ${mode}`);
+      if (extension === "sh") expect(install).toHaveLength(2);
+      else {
+        expect(install).toHaveLength(1);
+        const helper = script.slice(script.indexOf("function Invoke-InstalledServiceInstall("), script.indexOf("function Refresh-Existing"));
+        expect(helper).toContain(install[0]!);
+        expect(script.match(/^function Invoke-InstalledServiceInstall\(/gm)).toHaveLength(1);
+        const calls = [...script.matchAll(/^\s*Invoke-InstalledServiceInstall (\$\w+)\b/gm)].map((match) => match[1]);
+        expect(calls).toEqual(["$ExistingRunner", "$CurrentRunner"]);
+      }
+      for (const line of [...enroll, ...install]) {
+        expect(line).toContain(`--execution-mode ${mode}`);
+        if (mode === "privileged_host") expect(line).toContain("--confirm-privileged-host");
+      }
     }
   });
 
