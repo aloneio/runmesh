@@ -53,6 +53,7 @@ export interface UpdateJournal {
   readonly operation: CloudUpdateOperation;
   readonly manager_id: string;
   readonly recovery_identity?: string;
+  readonly authority_identity?: string;
   readonly previous: InstalledRelease;
   readonly service: NativeServiceSnapshot;
   readonly next?: InstalledRelease;
@@ -65,6 +66,7 @@ export interface UpdatePreparation {
   readonly operation: CloudUpdateOperation;
   readonly manager_id: string;
   readonly recovery_identity?: string;
+  readonly authority_identity?: string;
   readonly phase: "preparing";
 }
 export type UpdateJournalRecord = UpdateJournal | UpdatePreparation;
@@ -77,6 +79,7 @@ export interface LocalJobDrainObservation { readonly idle: boolean; readonly act
 export interface UpdateCoordinatorOptions {
   readonly managerId: string;
   readonly recoveryIdentity: () => Promise<string>;
+  readonly authorityIdentity: () => Promise<string>;
   readonly cloud: CloudMaintenancePort;
   readonly journal: UpdateJournalPort;
   readonly installation: InstallationPointerPort;

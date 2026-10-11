@@ -9,7 +9,7 @@ function fixture() {
   const recordPath = `${manifest.path}.purge-stop.json`;
   const files = new Map([[manifest.path, manifest.content]]);
   const calls: string[][] = [];
-  const state = { loaded: true, process: "denied" as "denied" | "alive" | "gone", clock: 0, bootstrapFailures: 0, enableFailures: 0, bootoutFailures: 0 };
+  const state = { loaded: true, identity: "root", process: "denied" as "denied" | "alive" | "gone", clock: 0, bootstrapFailures: 0, enableFailures: 0, bootoutFailures: 0 };
   const filesystem = {
     read: async (path: string) => files.get(path),
     write: async (path: string, text: string) => { files.set(path, text); },
@@ -33,7 +33,7 @@ function fixture() {
         : state.process === "alive" ? { exitCode: 0, stdout: "4321\n" } : { exitCode: 1 };
     }
     if (file !== "launchctl") throw new Error(`unexpected program: ${file}`);
-    if (args[0] === "print") return state.loaded ? { exitCode: 0, stdout: "state = running\npid = 4321\n" }
+    if (args[0] === "print") return state.loaded ? { exitCode: 0, stdout: `state = running\npid = 4321\nuser = ${state.identity}\n` }
       : { exitCode: 113, stderr: "Could not find service" };
     if (args[0] === "bootout") {
       if (state.bootoutFailures-- > 0) return { exitCode: 1, stderr: "fixture bootout failure" };
@@ -43,6 +43,7 @@ function fixture() {
     if (args[0] === "bootstrap") {
       if (state.bootstrapFailures-- > 0) return { exitCode: 5, stderr: "Service already loaded" };
       state.loaded = true;
+      state.identity = (files.get(manifest.path) ?? "").includes("<key>UserName</key>") ? "runmesh" : "root";
       return { exitCode: 0 };
     }
     if (args[0] === "enable" && state.enableFailures-- > 0) return { exitCode: 1, stderr: "fixture enable failure" };
@@ -240,4 +241,106 @@ it("does not start a previously unloaded macOS service while rolling back a fail
   expect(test.state.loaded).toBe(false);
   expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
   expect(test.calls.some(call => call[1] === "bootout")).toBe(false);
+});
+
+function activeManagedFixture(failure?: "bootout" | "process-probe") {
+  const test = stoppedManagedFixture();
+  test.state.loaded = true;
+  test.state.identity = "runmesh";
+  test.state.process = "gone";
+  const executor = { execute: async (file: string, args: readonly string[]) => {
+    // A loaded launchd label rejects bootstrap. Its process identity only
+    // changes after bootout and a successful bootstrap of the new definition.
+    if (file === "launchctl" && args[0] === "bootstrap" && test.state.loaded) {
+      test.calls.push([file, ...args]);
+      return { exitCode: 5, stderr: "Service already loaded" };
+    }
+    const result = await test.options.executor.execute(file, args);
+    if (file === "launchctl" && args[0] === "enable" && result.exitCode !== 0) {
+      if (failure === "bootout") test.state.bootoutFailures = 2;
+      if (failure === "process-probe") test.state.process = "denied";
+    }
+    return result;
+  } };
+  test.dependencies.serviceManager = createServiceManager({ ...test.options, executor });
+  return test;
+}
+
+it("migrates an active macOS service after stopping its previous identity", async () => {
+  const test = activeManagedFixture();
+  test.state.enableFailures = 0;
+  await serviceCommand({ command: "migrate", json: true, values: { executionMode: "privileged_host", confirmPrivilegedHost: true }, passthrough: [] },
+    test.store, () => undefined, test.dependencies);
+  expect(test.profile()).toEqual({ ...test.before, execution_mode: "privileged_host" });
+  expect(test.files.get(test.manifest.path)).toBe(test.manifest.content);
+  expect(test.provisionedModes).toEqual(["privileged_host"]);
+  expect(test.state).toMatchObject({ loaded: true, identity: "root" });
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.calls.filter(call => call[1] === "bootout")).toHaveLength(1);
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+});
+
+it.each(["bootout", "process-probe"] as const)("retains the old active macOS contract when migration cannot stop it at %s", async failure => {
+  const test = activeManagedFixture();
+  if (failure === "bootout") test.state.bootoutFailures = 1;
+  else test.state.process = "denied";
+  await expect(test.install()).rejects.toThrow(/bootout|could not be confirmed/u);
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.provisionedModes).toEqual([]);
+  expect(test.calls.some(call => call[1] === "bootstrap")).toBe(false);
+  expect(JSON.parse(test.files.get(test.recordPath)!)).toMatchObject({ pid: 4321 });
+  test.state.bootoutFailures = 0;
+  test.state.process = "gone";
+  await test.remove();
+  expect(test.state.loaded).toBe(false);
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.files.has(test.manifest.path)).toBe(false);
+});
+
+it.each(["bootout", "process-probe"] as const)("keeps an active macOS migration retryable when candidate rollback fails at %s", async failure => {
+  const test = activeManagedFixture(failure);
+  const result = await test.install().then(() => undefined, error => error as Error);
+  expect(test.profile()).toEqual({ ...test.before, execution_mode: "privileged_host" });
+  expect(test.files.get(test.manifest.path)).toBe(test.manifest.content);
+  expect(test.provisionedModes).toEqual(["privileged_host"]);
+  expect(result?.message).toContain("fixture enable failure");
+  expect(result?.message).toContain("rollback incomplete");
+  expect(result?.cause).toBeInstanceOf(Error);
+  expect(JSON.parse(test.files.get(test.recordPath)!)).toMatchObject({ pid: 4321 });
+  test.state.bootoutFailures = 0;
+  test.state.process = "gone";
+  await test.remove();
+  expect(test.state.loaded).toBe(false);
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.files.has(test.manifest.path)).toBe(false);
+});
+
+it("restores the old active macOS service only after stopping a failed migration candidate", async () => {
+  const test = activeManagedFixture();
+  await expect(test.install()).rejects.toThrow("fixture enable failure");
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.provisionedModes).toEqual(["privileged_host", "dedicated_user"]);
+  expect(test.state).toMatchObject({ loaded: true, identity: "runmesh" });
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.calls.filter(call => call[1] === "bootout")).toHaveLength(2);
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(2);
+});
+
+it("restarts the old active macOS service when migration provisioning fails after stopping it", async () => {
+  const test = activeManagedFixture();
+  test.state.enableFailures = 0;
+  test.dependencies.serviceProvisioner.provision = async candidate => {
+    test.provisionedModes.push(candidate.executionMode);
+    if (candidate.executionMode === "privileged_host") throw new Error("fixture provisioning failure");
+    return { identity: "runmesh", profileSecured: true };
+  };
+  await expect(test.install()).rejects.toThrow("fixture provisioning failure");
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.state).toMatchObject({ loaded: true, identity: "runmesh" });
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.calls.filter(call => call[1] === "bootout")).toHaveLength(1);
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
 });

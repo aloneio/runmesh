@@ -141,9 +141,17 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
     let manifestChanged = false;
     let manifestWriteAttempted = false;
     let lifecycleAttempted = false;
+    let previousServiceStopped = false;
     let provisioningAttempted = false;
     const profileTarget = { ...profileBefore, execution_mode: manifest.executionMode } as RunnerProfile;
     try {
+      // An active launchd migration must stop the old identity before its
+      // profile and permissions change. If stopping fails, the old contract
+      // still describes the live process and ordinary uninstall can retry.
+      if (manifest.platform === "darwin" && existingManaged && modeChanged && previousStatus?.active === true) {
+        await manager.stop(previousManifest);
+        previousServiceStopped = true;
+      }
       // Persist the selected mode before provisioning so the final profile
       // inode is the one whose ownership/ACLs the provisioner secures.  This
       // matters on Windows, where ProfileStore's atomic replacement cannot
@@ -233,13 +241,14 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
       });
       return;
     } catch (cause) {
-      if (lifecycleAttempted && (!existingManaged || previousNativeAbsent)) {
+      if (lifecycleAttempted && (!existingManaged || previousNativeAbsent || previousServiceStopped)) {
         // Installing a previously absent native service can start its process
         // before a later step fails, even when an old managed plist exists.
-        // Preserve the candidate profile, ownership and managed definition
-        // until stopping succeeds, so a later uninstall can retry.
+        // A migration whose old service was already stopped has the same
+        // boundary: retain the candidate contract until stopping succeeds,
+        // so a later uninstall can retry before restoring the old service.
         const incomplete = (detail: string) => new Error(`${cause instanceof Error ? cause.message : String(cause)}; rollback incomplete: ${detail}; service manifest and profile retained`, { cause });
-        if (!previousNativeAbsent) {
+        if (!previousNativeAbsent && !previousServiceStopped) {
           // Legacy injected user adapters can omit status. An unknown prior
           // registration must never become authority to stop another service.
           throw incomplete("the prior native service state could not be confirmed");
@@ -299,7 +308,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
         // provisioner even when no profile migration was requested.
         await provisioner.provision(previousManifest, store.filePath).catch(() => undefined);
       }
-      if (lifecycleAttempted && !previousNativeAbsent) {
+      if ((lifecycleAttempted || previousServiceStopped) && !previousNativeAbsent) {
         if (existingManaged && existingManifest !== undefined) {
           const hadNativeService = statusProbeReliable && previousStatus !== undefined
             && (previousStatus.registered === true || previousStatus.installed === true || previousStatus.active === true);
