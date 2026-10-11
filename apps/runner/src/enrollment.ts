@@ -97,7 +97,8 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
     try { await lease.release(); }
     catch (error) {
       if (!failed) throw error;
-      if (failure instanceof Error && failure.cause === undefined) failure.cause = error;
+      try { if (failure instanceof Error && failure.cause === undefined) failure.cause = error; }
+      catch { /* Secondary diagnostics must preserve a frozen or readonly primary error. */ }
     }
   }
 }
