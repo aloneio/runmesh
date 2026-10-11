@@ -143,6 +143,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
     let lifecycleAttempted = false;
     let previousServiceStopped = false;
     let provisioningAttempted = false;
+    let installationReport: unknown;
     const profileTarget = { ...profileBefore, execution_mode: manifest.executionMode } as RunnerProfile;
     try {
       // A loaded launchd job can start while waiting. Unload it before changing
@@ -223,7 +224,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
       }
       const maintenance = await maintenanceInstaller(dependencies)?.install(maintenanceOptions(manifest.platform, manifest.mode, store.filePath));
       const identity = verified?.identity ?? provisioned.identity;
-      report(output, parsed.json, {
+      installationReport = {
         action: parsed.command,
         manifest: manifest.path,
         mode: manifest.mode,
@@ -238,8 +239,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
         remote_version_management: maintenance?.enabled === true ? "available" : "manual",
         ...(maintenance?.reason === undefined ? {} : { remote_version_management_reason: maintenance.reason }),
         commands: serviceCommandNames("install", manifest),
-      });
-      return;
+      };
     } catch (cause) {
       const incomplete = (detail: string) => new Error(`${cause instanceof Error ? cause.message : String(cause)}; rollback incomplete: ${detail}; service manifest and profile retained`, { cause });
       if (lifecycleAttempted && (!existingManaged || previousNativeAbsent || previousServiceStopped)) {
@@ -387,6 +387,10 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
       }
       throw cause;
     }
+    // Reporting can fail after service setup is committed. Preserve the
+    // completed installation and let the caller report the output error.
+    report(output, parsed.json, installationReport);
+    return;
   }
   const managed = await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
   if (!managed) throw new Error("managed service manifest is not installed; refusing to stop or restart an unknown service");
