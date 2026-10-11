@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { lstat, open, readFile, readlink, readdir, realpath, rmdir, unlink } from "node:fs/promises";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, posix, resolve, sep, win32 } from "node:path";
 import { homedir } from "node:os";
 import { currentServicePlatform, hostServiceCommandExecutor, isManagedService, serviceLayout, type ServiceCommandExecutor, type ServiceMode, type ServicePlatform } from "./service.js";
 import { stopWindowsTask, windowsTaskMissingCatch } from "./services/task-scheduler.js";
@@ -169,6 +169,8 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
   const protectedWorkspaces: string[] = [];
   const comparable = (path: string) => platform === "win32" || platform === "darwin" ? resolve(path).toLowerCase() : resolve(path);
   const overlaps = (left: string, right: string) => within(comparable(left), comparable(right)) || within(comparable(right), comparable(left));
+  const workspacePaths = platform === "win32" ? win32 : posix;
+  const isFilesystemRoot = (path: string) => workspacePaths.isAbsolute(path) && workspacePaths.normalize(path) === workspacePaths.parse(workspacePaths.normalize(path)).root;
   async function assertWorkspaceProtection(target: string): Promise<void> {
     const targetInfo = await io.stat(target);
     if (!targetInfo) return;
@@ -177,6 +179,9 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
       // Unknown/missing/denied roots are not proof that their data is safe.
       const canonicalRoot = await io.canonical(configured);
       for (const root of [configured, canonicalRoot]) {
+        // A filesystem root is an access scope, not a project directory.
+        // Check each identity so an alias inside the installation stays protected.
+        if (isFilesystemRoot(root)) continue;
         if (overlaps(root, target) || overlaps(root, canonicalTarget)) throw new Error("contains or overlaps a configured workspace; move it before purging");
       }
     }

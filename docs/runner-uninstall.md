@@ -43,6 +43,8 @@ The independent `runmesh-manager.service` on Linux and `io.alone.runmesh.manager
 
 Project workspaces, other services and installations, system accounts/groups and the shared system journal remain. Keep project data outside Runmesh runtime directories. If a cached policy identifies a workspace inside a purge directory, move that workspace before continuing. Use the appropriate package manager for custom or npm-managed layouts.
 
+A filesystem-root workspace, such as `/` or `C:\`, represents access to the host or volume. Complete removal still cleans only the managed Runmesh paths listed above. A specific project directory overlapping those paths remains protected, including paths retained in the previous policy.
+
 ## Handle an interrupted cleanup
 
 Run one installation, enrollment refresh or uninstall at a time. Hosted maintenance commands share an installation lock. After an interruption, check for running maintenance processes before removing a stale lock or changing installation files.

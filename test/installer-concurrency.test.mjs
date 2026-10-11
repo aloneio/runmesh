@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Run only locking/rollback fragments from the actual generated installer.
+// Run only locking/rollback/maintenance fragments from the generated installer.
 // All filesystem paths and mutex names belong to private test fixtures.
 const compiled = buildSync({ entryPoints: [fileURLToPath(new URL("../apps/worker/src/installer.ts", import.meta.url))], platform: "node", format: "cjs", bundle: true, write: false }).outputFiles[0].text;
 const loaded = { exports: {} };
@@ -160,5 +160,92 @@ test("generated installers remain syntactically valid after cleanup guards", asy
       const result = await startScript(parse, { RUNMESH_PARSE_FILE: file }).completed;
       assert.equal(result.code, 0, result.stdout + result.stderr);
     }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const scenario of [
+  { name: "successful cleanup", preparation: 0, purge: 0 },
+  { name: "cleanup tool failure", preparation: 17, purge: 0 },
+  { name: "incomplete cleanup", preparation: 0, purge: 23 },
+  { name: "verification failure before cleanup", preparation: 0, purge: 0, verification: 19 },
+  { name: "installation failure keeps enrollment guidance", preparation: 0, purge: 0, verification: 19, action: "install" },
+]) test(`hosted maintenance reports ${scenario.name} without losing its outcome`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-maintenance-result-"));
+  const action = scenario.action ?? "uninstall";
+  const file = join(root, windows ? "maintenance.ps1" : "maintenance.sh");
+  const temp = join(root, "temp");
+  const maintenance = join(temp, "maintenance", ...(windows ? [] : ["lib"]), "node_modules/@aloneio/runmesh-runner/dist");
+  await mkdir(maintenance, { recursive: true });
+  for (const name of ["stage", "version"]) {
+    await mkdir(join(root, name));
+    await writeFile(join(root, name, "marker"), "existing installation");
+  }
+  await writeFile(join(root, "profile.json"), "existing profile");
+  const npmFixture = join(root, "npm-fixture.cjs");
+  const npmCommand = join(root, "npm-fixture.ps1");
+  await writeFile(npmFixture, `process.stdout.write("fixture preparation\\n"); process.exit(${scenario.preparation});\n`);
+  await writeFile(npmCommand, '& $env:RUNMESH_TEST_NODE $env:RUNMESH_TEST_NPM\nexit $LASTEXITCODE\n');
+  await writeFile(join(maintenance, "runmesh.cjs"), `require("node:assert/strict").deepEqual(process.argv.slice(2), ["uninstall", "--purge", "--yes"]); process.stdout.write("fixture cleanup\\n"); process.exit(${scenario.purge});\n`);
+  const source = windows ? `$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+$InstallRoot=$env:RUNMESH_TEST_ROOT
+$TempRoot=Join-Path $InstallRoot 'temp'
+$Profile=Join-Path $InstallRoot 'profile.json'
+$Stage=Join-Path $InstallRoot 'stage'
+$VersionRoot=Join-Path $InstallRoot 'version'
+$CurrentRoot=Join-Path $InstallRoot 'current'
+$CurrentNew=Join-Path $InstallRoot 'current.new'
+$NodePath=$env:RUNMESH_TEST_NODE; $NpmPath=$env:RUNMESH_TEST_NPM_COMMAND
+$EmptyUserConfig='fixture'; $EmptyGlobalConfig='fixture'; $ArtifactName='fixture.tgz'
+$MaintenanceAction='${action}'; $RuntimePhase='release_verification'; $EnrollmentAttempted=$false
+$Succeeded=$false; $ServiceAttempted=$false; $CurrentRunner=$null; $HttpClient=$null; $HttpHandler=$null
+$ProfileCreated=$true; $StageCreated=$true; $VersionCreated=$true; $CurrentCreated=$false; $CurrentNewCreated=$false
+$global:LASTEXITCODE=0
+${section(powershell, "$script:StepIndex = 0", "function Refresh-Existing")}
+try {
+${scenario.verification ? "throw 'fixture verification failure'" : ""}
+${section(powershell, "  if ($MaintenanceAction -eq 'uninstall') {", "  New-Item -ItemType Directory -Path $VersionsRoot")}
+  throw 'Unexpected installation path'
+${section(powershell.slice(powershell.indexOf("  Write-Host ('  Status:")), "} catch {", "\n} finally {\n  if ($InstallerLockHeld)")}
+` : `#!/bin/sh
+set -eu
+INSTALL_ROOT="$RUNMESH_TEST_ROOT"
+TMP="$INSTALL_ROOT/temp"
+PROFILE="$INSTALL_ROOT/profile.json"
+STAGE="$INSTALL_ROOT/stage"
+FINAL="$INSTALL_ROOT/version"
+CURRENT_NEW="$INSTALL_ROOT/current.new"
+NODE="$RUNMESH_TEST_NODE"
+NPM_CLI="$RUNMESH_TEST_NPM"
+NPM_CONFIG_USERCONFIG=fixture; NPM_CONFIG_GLOBALCONFIG=fixture; ARTIFACT=fixture.tgz
+RUNMESH_ACTION=${action}; INSTALL_PHASE=release_verification; ENROLLMENT_ATTEMPTED=0; TTY_ECHO_DISABLED=0
+PROFILE_CREATED=1; STAGE_CREATED=1; FINAL_CREATED=1; CURRENT_CREATED=0; CURRENT_NEW_CREATED=0
+C_CYAN=''; C_GREEN=''; C_RED=''; C_RESET=''
+${section(posix, "STEP_INDEX=0", "printf '\\n%bRunmesh Runner")}
+release_install_lock() { :; }
+${section(posix, "cleanup_tty()", "# Follow redirects one hop")}
+${scenario.verification ? `printf '%s\\n' 'fixture verification failure' >&2; exit ${scenario.verification}` : ""}
+${section(posix, "ok 'Runner verified.'", 'mkdir -p "$INSTALL_ROOT/versions"')}
+exit 99
+`;
+  await writeFile(file, source);
+  try {
+    const result = await startScript(file, { RUNMESH_TEST_ROOT: root, RUNMESH_TEST_NODE: process.execPath,
+      RUNMESH_TEST_NPM: npmFixture, RUNMESH_TEST_NPM_COMMAND: npmCommand }).completed;
+    const expected = scenario.verification || scenario.preparation || scenario.purge;
+    const output = result.stdout + result.stderr;
+    assert.equal(result.code, windows && expected ? 1 : expected, output);
+    if (expected) {
+      const phase = scenario.verification ? "release_verification" : "cleanup";
+      assert.ok(output.includes(`[RMI_${action === "install" ? "INSTALL" : "UNINSTALL"}_FAILED] stage=${phase}`), output);
+      if (action === "uninstall") assert.doesNotMatch(output, /RMI_INSTALL_FAILED|Enrollment|rolled back/);
+      else assert.match(output, /Enrollment was not attempted/);
+      assert.match(output, scenario.verification ? /fixture verification failure/ : scenario.preparation ? /fixture preparation/ : /fixture cleanup/);
+    } else assert.doesNotMatch(output, /RMI_.*_FAILED|Enrollment/);
+    if (scenario.verification || scenario.preparation) assert.doesNotMatch(output, /fixture cleanup/);
+    if (action === "uninstall") for (const path of ["profile.json", "stage/marker", "version/marker"]) {
+      assert.match(await readFile(join(root, path), "utf8"), /^existing /, `${path} must survive uninstall failure reporting`);
+    }
+    assert.equal(await lstat(temp).then(() => true, () => false), false, "private maintenance files must be removed");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

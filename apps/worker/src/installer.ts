@@ -291,13 +291,16 @@ cleanup_tty() { if [ "$TTY_ECHO_DISABLED" -eq 1 ]; then stty echo < /dev/tty 2>/
 cleanup() { cleanup_tty; rm -rf "$TMP"; release_install_lock; }
 rollback() {
   rc="$1"
+  if [ "$RUNMESH_ACTION" = uninstall ]; then
+    printf 'error [RMI_UNINSTALL_FAILED] stage=%s: uninstall did not complete.\n' "$INSTALL_PHASE" >&2
+    cleanup; trap - EXIT HUP INT TERM; exit "$rc"
+  fi
   printf 'error [RMI_INSTALL_FAILED] stage=%s: installation did not complete.\n' "$INSTALL_PHASE" >&2
   if [ "$ENROLLMENT_ATTEMPTED" -eq 0 ]; then
     printf '%s\n' '  Enrollment was not attempted. Retry after fixing the prerequisite; the code may still expire by its own validity window.' >&2
   else
     printf '%s\n' '  Enrollment was attempted and the code may have been consumed. Check credentials before retrying; do not repeatedly redeem the same code.' >&2
   fi
-  if [ "$RUNMESH_ACTION" = uninstall ]; then cleanup; trap - EXIT HUP INT TERM; exit "$rc"; fi
   cleanup_tty
   if [ "$CURRENT_NEW_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
   if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/runmesh" uninstall --profile "$PROFILE" --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
@@ -389,6 +392,7 @@ RUNMESH_VERIFY
 then :; else rc=$?; report_failure 'Verifying Runner' "$VERIFY_LOG" "$rc"; exit "$rc"; fi
 ok 'Runner verified.'
 if [ "$RUNMESH_ACTION" = uninstall ]; then
+  INSTALL_PHASE=cleanup
   step 'Preparing cleanup tools'
   MAINTENANCE="$TMP/maintenance"
   INSTALL_LOG="$TMP/maintenance-install.log"
@@ -791,6 +795,7 @@ __VERIFIER__
 '@ | & $NodePath --input-type=module - $TempRoot
   }
   if ($MaintenanceAction -eq 'uninstall') {
+    $RuntimePhase = 'cleanup'
     $Maintenance = Join-Path $TempRoot 'maintenance'
     $MaintenanceLog = Join-Path $TempRoot 'maintenance-install.log'
     Push-Location -LiteralPath $TempRoot
@@ -863,10 +868,15 @@ __VERIFIER__
   Write-Host '  Service started automatically.'
   Write-Host ('  Status: & "' + $CurrentRunner + '" status --json')
 } catch {
-  Write-Fail ("[RMI_INSTALL_FAILED] stage={0}: Runmesh Runner installation failed." -f $RuntimePhase)
-  if ($EnrollmentAttempted) { Write-Host '  Enrollment may have consumed the code. Verify credentials before retrying; do not repeatedly redeem it.' }
-  else { Write-Host ('  ' + ($_.Exception.Message -replace '[A-Za-z0-9_-]{43,}', '[redacted]')); Write-Host '  Enrollment was not attempted; existing credentials were not changed.' }
-  Write-Host '  Any local files created by this attempt will be rolled back where safe.' -ForegroundColor DarkGray
+  if ($MaintenanceAction -eq 'uninstall') {
+    Write-Fail ("[RMI_UNINSTALL_FAILED] stage={0}: Runmesh Runner uninstall failed." -f $RuntimePhase)
+    Write-Host ('  ' + ($_.Exception.Message -replace '[A-Za-z0-9_-]{43,}', '[redacted]'))
+  } else {
+    Write-Fail ("[RMI_INSTALL_FAILED] stage={0}: Runmesh Runner installation failed." -f $RuntimePhase)
+    if ($EnrollmentAttempted) { Write-Host '  Enrollment may have consumed the code. Verify credentials before retrying; do not repeatedly redeem it.' }
+    else { Write-Host ('  ' + ($_.Exception.Message -replace '[A-Za-z0-9_-]{43,}', '[redacted]')); Write-Host '  Enrollment was not attempted; existing credentials were not changed.' }
+    Write-Host '  Any local files created by this attempt will be rolled back where safe.' -ForegroundColor DarkGray
+  }
   throw
 } finally {
   if ($null -ne $HttpClient) { $HttpClient.Dispose() }

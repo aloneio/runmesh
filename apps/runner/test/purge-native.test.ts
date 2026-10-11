@@ -1,5 +1,5 @@
 import type { Stats } from "node:fs";
-import { dirname, sep } from "node:path";
+import { dirname, join, parse, sep } from "node:path";
 import { expect, it } from "vitest";
 import { purgeInstallation, purgeLayout, type PurgeFilesystem } from "../src/purge.js";
 import { currentServicePlatform, renderService } from "../src/service.js";
@@ -47,7 +47,11 @@ function memoryHost(withManifest = true) {
     if (args.includes("--property=LoadState")) return { exitCode: 0, stdout: "not-found" };
     return { exitCode: 0, stdout: "LoadState=loaded\nActiveState=inactive\nExecStart=path=" + (withManifest ? layout.installRoot + "/bin/runmesh" : "/unrelated/service") };
   } };
-  return { platform, layout, entries, io, executor, calls, task };
+  return { platform, layout, entries, io, executor, calls, task, file, dir };
+}
+
+function policy(host: ReturnType<typeof memoryHost>, roots: string[], name = "active-policy.json") {
+  host.file(join(host.layout.stateRoot, "policy", name), JSON.stringify({ workspaces: roots.map(root_path => ({ root_path })) }));
 }
 
 it("cleans the current native layout with injected OS adapters", async () => {
@@ -59,6 +63,7 @@ it("cleans the current native layout with injected OS adapters", async () => {
 });
 it("does not stop an unrecognized native service when the manifest is missing", async () => {
   const host = memoryHost(false);
+  policy(host, [parse(host.layout.installRoot).root]);
   const result = await purgeInstallation({ platform: host.platform, filesystem: host.io, executor: host.executor });
   expect(result.purged).toBe(false);
   expect(host.entries.has(host.layout.installRoot)).toBe(true);
@@ -67,10 +72,80 @@ it("does not stop an unrecognized native service when the manifest is missing", 
 
 it.skipIf(process.platform !== "win32")("retains the Windows task and installation when its process cannot be stopped", async () => {
   const host = memoryHost(); host.task.stops = false;
+  policy(host, [parse(host.layout.installRoot).root]);
   const result = await purgeInstallation({ platform: host.platform, filesystem: host.io, executor: host.executor });
   expect(result.purged).toBe(false);
   expect(result.failures).toEqual([expect.objectContaining({ reason: "Runner task could not be confirmed stopped" })]);
   for (const root of host.layout.directories) expect(host.entries.has(root)).toBe(true);
   expect(host.entries.has(host.layout.manifestPath)).toBe(true);
   expect(host.calls.some(call => call.includes("/Delete"))).toBe(false);
+});
+
+it.each(["active-policy.json", "previous-policy.json"])("cleans only owned native paths with a filesystem-root workspace in %s", async name => {
+  const host = memoryHost(), root = parse(host.layout.installRoot).root;
+  const project = join(root, "unrelated-project", "keep.txt");
+  const otherService = join(dirname(host.platform === "win32" ? host.layout.configRoot : host.layout.manifestPath), "unrelated-service.fixture");
+  host.file(project, "keep-project"); host.file(otherService, "keep-service");
+  policy(host, [root], name);
+  const before = new Map(host.entries);
+  const result = await purgeInstallation({ platform: host.platform, filesystem: host.io, executor: host.executor });
+  expect(result.failures).toEqual([]); expect(result.purged).toBe(true);
+  for (const directory of host.layout.directories) expect(host.entries.has(directory)).toBe(false);
+  expect(host.entries.has(host.layout.manifestPath)).toBe(false);
+  for (const [path, entry] of before) {
+    const owned = path === host.layout.manifestPath || host.layout.directories.some(directory => path === directory || path.startsWith(directory + sep));
+    if (!owned) expect(host.entries.get(path)).toEqual(entry);
+  }
+  expect(host.entries.get(project)?.text).toBe("keep-project"); expect(host.entries.get(otherService)?.text).toBe("keep-service");
+  const again = await purgeInstallation({ platform: host.platform, filesystem: host.io, executor: host.executor });
+  expect(again.purged).toBe(true); expect(again.removed).toEqual([]);
+});
+
+it.each(["ancestor", "same", "inside"])("preserves a concrete %s workspace alongside a root access scope", async kind => {
+  const host = memoryHost(), install = host.layout.installRoot;
+  const workspace = kind === "ancestor" ? dirname(install) : kind === "same" ? install : join(install, "project");
+  host.dir(workspace); policy(host, [parse(install).root]); policy(host, [workspace], "previous-policy.json");
+  const before = [...host.entries];
+  const result = await purgeInstallation({ platform: host.platform, filesystem: host.io, executor: host.executor });
+  expect(result.purged).toBe(false);
+  expect(result.failures.some(item => item.reason.includes("overlaps a configured workspace"))).toBe(true);
+  expect([...host.entries]).toEqual(before); expect(host.calls).toEqual([]);
+});
+
+it.each(["outside", "inside"])("preserves the lexical identity of a root alias %s the installation", async location => {
+  const host = memoryHost(), root = parse(host.layout.installRoot).root;
+  const alias = join(location === "inside" ? host.layout.installRoot : root, "root-access-alias");
+  host.dir(alias); policy(host, [alias]);
+  const io = { ...host.io, canonical: async (path: string) => path === alias ? root : host.io.canonical(path) };
+  const before = [...host.entries];
+  const result = await purgeInstallation({ platform: host.platform, filesystem: io, executor: host.executor });
+  expect(result.purged).toBe(location === "outside");
+  if (location === "inside") {
+    expect(result.failures.some(item => item.reason.includes("overlaps a configured workspace"))).toBe(true);
+    expect([...host.entries]).toEqual(before); expect(host.calls).toEqual([]);
+  } else expect(host.entries.has(alias)).toBe(true);
+});
+
+it("requires canonical lookup even for a filesystem-root workspace", async () => {
+  const host = memoryHost(), root = parse(host.layout.installRoot).root;
+  policy(host, [root]);
+  const before = [...host.entries];
+  const io = { ...host.io, canonical: async (path: string) => {
+    if (path === root) throw new Error("workspace root lookup unavailable");
+    return host.io.canonical(path);
+  } };
+  const result = await purgeInstallation({ platform: host.platform, filesystem: io, executor: host.executor });
+  expect(result.purged).toBe(false);
+  expect(result.failures.some(item => item.reason === "workspace root lookup unavailable")).toBe(true);
+  expect([...host.entries]).toEqual(before); expect(host.calls).toEqual([]);
+});
+
+it("retains mounted data with a filesystem-root workspace", async () => {
+  const host = memoryHost(); policy(host, [parse(host.layout.installRoot).root]);
+  const before = [...host.entries];
+  const io = { ...host.io, mounts: async () => [join(host.layout.stateRoot, "mounted-data")] };
+  const result = await purgeInstallation({ platform: host.platform, filesystem: io, executor: host.executor });
+  expect(result.purged).toBe(false);
+  expect(result.failures.some(item => item.reason.includes("mounted filesystem"))).toBe(true);
+  expect([...host.entries]).toEqual(before); expect(host.calls).toEqual([]);
 });

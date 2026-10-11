@@ -31,3 +31,11 @@ Service commands such as `restart`, `install` and `uninstall` also use this inde
 To enable it on an older installation, deploy one of these verified development packages while retaining the existing profile and service layout. Run the updated service executable's `--help` and confirm it lists `maintenance-agent`, then run `install` with the existing profile. Use an administrator session for a system service, or the owning account with `--user` for a user service. Confirm the installation result reports `remote_version_management: available`.
 
 The standard managed layout uses a `current` link and a `versions` directory. For a custom deployment layout, use the same package deployment process that created the service.
+
+## A request stays queued or the installer reports a version mismatch
+
+If a request keeps waiting for the host manager, check the version manager service on the computer. Runners predating this feature need the initial setup above; submitting another version request does not install the manager.
+
+If the installer reports `installed Runner version differs from the fixed release`, the existing installation is still present. Hosted setup handles fresh installations and same-version enrollment refresh. To change versions, follow the [upgrade guide](upgrading.md) to stage a verified package and switch the executable while retaining the identity, configuration and task records.
+
+Complete removal retires the installation and deletes local task records. Older maintenance packages may incorrectly report a `/` workspace as overlapping every Runmesh directory. Retry that removal with a signed maintenance package containing the root-workspace cleanup fix. Updating the Worker alone does not change cleanup code in an already published maintenance package.

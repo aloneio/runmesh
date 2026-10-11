@@ -64,6 +64,61 @@ describe.skipIf(process.platform === "win32")("complete purge in synthetic files
     try { await f.file("/etc/runmesh/profile.json", "{corrupt"); expect((await purgeInstallation({ platform: "linux", filesystem: f.filesystem, executor: f.executor })).purged).toBe(true); }
     finally { await f.cleanup(); }
   });
+  it.each(["active-policy.json", "previous-policy.json"])("purges owned paths with a full-host workspace in %s", async name => {
+    const f = await fixture();
+    try {
+      await f.installed();
+      await f.file("/var/lib/runmesh/policy/" + name, JSON.stringify({ workspaces: [{ root_path: "/" }] }));
+      const result = await purgeInstallation({ platform: "linux", filesystem: f.filesystem, executor: f.executor });
+      expect(result.failures).toEqual([]); expect(result.purged).toBe(true);
+      for (const path of purgeLayout("linux", "system").directories) expect(await f.filesystem.stat(path)).toBeUndefined();
+      expect(await f.filesystem.stat("/etc/systemd/system/runmesh-runner.service")).toBeUndefined();
+      expect(await f.filesystem.stat("/etc/systemd/system/multi-user.target.wants/runmesh-runner.service")).toBeUndefined();
+      expect(await readFile(f.path("/home/operator/project/database.sql"), "utf8")).toBe("preserve-project");
+      expect(await readFile(f.path("/etc/systemd/system/unrelated.service"), "utf8")).toBe("preserve-service");
+      expect((await purgeInstallation({ platform: "linux", filesystem: f.filesystem, executor: f.executor })).purged).toBe(true);
+    } finally { await f.cleanup(); }
+  });
+  it.each(["/opt", "/opt/runmesh", "/opt/runmesh/project", "/opt/runmesh/root-alias"])("protects concrete workspace %s alongside a root access scope", async workspace => {
+    const f = await fixture();
+    try {
+      await f.installed();
+      if (workspace.endsWith("root-alias")) await f.link(workspace, "/");
+      else await f.file(workspace + "/important.txt", "keep-workspace");
+      await f.file("/var/lib/runmesh/policy/active-policy.json", JSON.stringify({ workspaces: [{ root_path: "/" }] }));
+      await f.file("/var/lib/runmesh/policy/previous-policy.json", JSON.stringify({ workspaces: [{ root_path: workspace }] }));
+      const result = await purgeInstallation({ platform: "linux", filesystem: f.filesystem, executor: f.executor });
+      expect(result.purged).toBe(false);
+      expect(result.failures.some(item => item.reason.includes("overlaps a configured workspace"))).toBe(true);
+      expect(f.changes).toEqual([]); expect(f.calls).toEqual([]);
+    } finally { await f.cleanup(); }
+  });
+  it("allows a root access alias outside the installation while preserving its entry", async () => {
+    const f = await fixture();
+    try {
+      await f.installed(); await f.link("/home/operator/root-alias", "/");
+      await f.file("/var/lib/runmesh/policy/active-policy.json", JSON.stringify({ workspaces: [{ root_path: "/home/operator/root-alias" }] }));
+      const result = await purgeInstallation({ platform: "linux", filesystem: f.filesystem, executor: f.executor });
+      expect(result.failures).toEqual([]); expect(result.purged).toBe(true);
+      expect((await f.filesystem.stat("/home/operator/root-alias"))?.isSymbolicLink()).toBe(true);
+      expect(await readFile(f.path("/home/operator/project/database.sql"), "utf8")).toBe("preserve-project");
+    } finally { await f.cleanup(); }
+  });
+  it("retains installation when a full-host workspace cannot be resolved", async () => {
+    const f = await fixture();
+    try {
+      await f.installed();
+      await f.file("/var/lib/runmesh/policy/active-policy.json", JSON.stringify({ workspaces: [{ root_path: "/" }] }));
+      const io = { ...f.filesystem, canonical: async (path: string) => {
+        if (path === "/") throw new Error("root workspace lookup unavailable");
+        return f.filesystem.canonical(path);
+      } };
+      const result = await purgeInstallation({ platform: "linux", filesystem: io, executor: f.executor });
+      expect(result.purged).toBe(false);
+      expect(result.failures.some(item => item.reason === "root workspace lookup unavailable")).toBe(true);
+      expect(f.changes).toEqual([]); expect(f.calls).toEqual([]);
+    } finally { await f.cleanup(); }
+  });
   it("unlinks installation symlinks without deleting external targets", async () => {
     const f = await fixture();
     try {
@@ -76,9 +131,10 @@ describe.skipIf(process.platform === "win32")("complete purge in synthetic files
     const f = await fixture();
     try {
       await f.installed();
+      await f.file("/var/lib/runmesh/policy/active-policy.json", JSON.stringify({ workspaces: [{ root_path: "/" }] }));
       if (failure === "foreign-unit") await f.file("/etc/systemd/system/runmesh-runner.service", "[Service]\nExecStart=/usr/bin/unrelated\n");
       if (failure === "mounted-data") f.mounts.push("/var/lib/runmesh/data");
-      if (failure === "workspace") await f.file("/var/lib/runmesh/policy/active-policy.json", JSON.stringify({ workspaces: [{ root_path: "/opt/runmesh/my-project" }] }));
+      if (failure === "workspace") await f.file("/var/lib/runmesh/policy/previous-policy.json", JSON.stringify({ workspaces: [{ root_path: "/opt/runmesh/my-project" }] }));
       if (failure === "symlink-parent") { await rm(f.path("/var/log"), { recursive: true }); await f.link("/var/log", "/home/operator/project"); }
       if (failure === "stop-failure") f.stopFails();
       const result = await purgeInstallation({ platform: "linux", filesystem: f.filesystem, executor: f.executor });
