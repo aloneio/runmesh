@@ -460,10 +460,64 @@ it.each([false, true])("retains the installed Windows uninstall helper when anot
   expect(test.isActive()).toBe(true);
 });
 
-it("rejects a changed newly written Windows helper before registering its manager", async () => {
+it.each(["write", "validation", "rename"] as const)("retries adding a Windows uninstall helper after %s fails without retaining a partial helper", async failure => {
+  const test = fixture("win32"); await managerInstall(test.options);
+  const helper = test.paths.path.join(test.paths.managerRoot, "uninstall.ps1");
+  const completeHelper = test.files.get(helper)!;
+  await test.options.filesystem.remove(helper);
+  test.calls.length = 0;
+  let fail = true;
+  const helperCandidate = (path: string) => path === helper || path.startsWith(`${helper}.`) && path.endsWith(".tmp");
+  const filesystem: MaintenanceManagerFilesystem = { ...test.options.filesystem,
+    write: async (path, content) => {
+      if (fail && helperCandidate(path) && failure === "write") {
+        await test.options.filesystem.write(path, content.slice(0, 18));
+        throw new Error("helper write fixture");
+      }
+      await test.options.filesystem.write(path, fail && helperCandidate(path) && failure === "validation" ? content + "\r\npartial helper fixture" : content);
+    },
+    rename: async (source, destination) => {
+      if (fail && destination === helper && failure === "rename") throw new Error("helper rename fixture");
+      await test.options.filesystem.rename(source, destination);
+    },
+  };
+  await expect(managerInstall({ ...test.options, filesystem })).rejects.toThrow(failure === "validation" ? "helper changed during installation" : `helper ${failure} fixture`);
+  expect(test.files.has(helper)).toBe(false);
+  expect([...test.stats.keys()].filter(path => path.startsWith(`${helper}.`))).toEqual([]);
+  expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  expect(test.files.get(test.paths.runtimePath)).toBe("runtime bytes");
+  expect(test.calls.some(call => call.includes("/Create") || call.includes("/Run"))).toBe(false);
+  fail = false;
+  await expect(managerInstall({ ...test.options, filesystem })).resolves.toEqual({ enabled: true });
+  expect(test.files.get(helper)).toBe(completeHelper);
+  expect(test.copies).toHaveLength(2);
+});
+
+it.each(["temporary", "destination"] as const)("preserves another Windows helper %s created during publication", async collision => {
+  const test = fixture("win32"); await managerInstall(test.options);
+  const helper = test.paths.path.join(test.paths.managerRoot, "uninstall.ps1");
+  await test.options.filesystem.remove(helper); test.calls.length = 0;
+  let colliding: string | undefined;
+  const filesystem: MaintenanceManagerFilesystem = { ...test.options.filesystem, write: async (path, content) => {
+    if (path.startsWith(`${helper}.`) && path.endsWith(".tmp")) {
+      colliding = collision === "temporary" ? path : helper;
+      await test.options.filesystem.write(colliding, "another helper owner");
+      if (collision === "temporary") throw Object.assign(new Error("helper already exists"), { code: "EEXIST" });
+    }
+    await test.options.filesystem.write(path, content);
+  } };
+  await expect(managerInstall({ ...test.options, filesystem })).rejects.toThrow(collision === "temporary" ? "helper already exists" : "helper changed during installation");
+  expect(test.files.get(colliding!)).toBe("another helper owner");
+  expect([...test.stats.keys()].filter(path => path.startsWith(`${helper}.`))).toEqual(collision === "temporary" ? [colliding] : []);
+  expect(test.files.has(test.paths.bundlePath)).toBe(true);
+  expect(test.calls.some(call => call.includes("/Create") || call.includes("/Run"))).toBe(false);
+});
+
+it("rejects a changed published Windows helper before registering its manager", async () => {
   const test = fixture("win32"), helper = test.paths.path.join(test.paths.managerRoot, "uninstall.ps1");
-  const filesystem = { ...test.options.filesystem, write: async (path: string, content: string) => {
-    await test.options.filesystem.write(path, path === helper ? content + "\r\nchanged after creation" : content);
+  const filesystem = { ...test.options.filesystem, rename: async (source: string, destination: string) => {
+    await test.options.filesystem.rename(source, destination);
+    if (destination === helper) test.files.set(helper, test.files.get(helper)! + "\r\nchanged after creation");
   } };
   await expect(managerInstall({ ...test.options, filesystem })).rejects.toThrow("helper changed during installation");
   expect(test.stats.has(test.paths.managerRoot)).toBe(false);

@@ -67,50 +67,17 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
   if (existing !== undefined && options.reEnroll !== true) throw new Error("an existing Runner profile was found; use --re-enroll to replace its connection credentials");
   const endpoint = enrollmentEndpoint(options.server, options.insecureLocal === true);
   if (!/^[A-Za-z0-9_-]{20,256}$/.test(options.code)) throw new Error("--code must be a one-time enrollment code");
-  const request = options.fetch ?? globalThis.fetch;
-  let response: Response;
-  try {
-    response = await request(endpoint, {
-      method: "POST",
-      // The enrollment code is a bearer capability.  Never follow a
-      // redirect that could forward it (or the runner metadata) to a
-      // different origin; a redirect is handled as an unknown outcome below.
-      redirect: "error",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        enrollment_code: options.code,
-        runner_public_info: {
-          platform: process.platform,
-          architecture: process.arch,
-          hostname: hostname().slice(0, 256),
-          runner_version: RUNNER_VERSION,
-          protocol_version: PROTOCOL_CURRENT_VERSION,
-          ...(options.executionMode === undefined ? {} : { execution_mode: options.executionMode }),
-        },
-      }),
-    });
-  } catch {
-    throw new EnrollmentOutcomeUnknownError(`enrollment request failed; ${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}`);
-  }
-  if (!response.ok) {
-    void response.body?.cancel().catch(() => undefined);
-    // The Worker uses 503 for a fenced/possibly committed mutation.  Keep
-    // ordinary client-side 4xx responses actionable without deleting a still
-    // usable profile, but fail closed for every server/transport uncertainty.
-    if (response.status === 409) {
-      throw new EnrollmentConflictError();
-    }
-    if (enrollmentResponseOutcomeUnknown(response.status)) {
-      throw new EnrollmentOutcomeUnknownError(`${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE} (enrollment failed with HTTP ${response.status})`);
-    }
-    throw new Error(`enrollment failed (${response.status})`);
-  }
-  let body: unknown;
-  try {
-    body = await readCappedJson(response);
-  } catch {
-    throw new EnrollmentOutcomeUnknownError(`${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}; the server returned an unreadable or oversized response`);
-  }
+  const body = await requestEnrollment(endpoint, JSON.stringify({
+    enrollment_code: options.code,
+    runner_public_info: {
+      platform: process.platform,
+      architecture: process.arch,
+      hostname: hostname().slice(0, 256),
+      runner_version: RUNNER_VERSION,
+      protocol_version: PROTOCOL_CURRENT_VERSION,
+      ...(options.executionMode === undefined ? {} : { execution_mode: options.executionMode }),
+    },
+  }), options.fetch ?? globalThis.fetch);
   const enrolled = enrollmentResponse(body);
   if (enrolled === undefined) throw new EnrollmentOutcomeUnknownError(`${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}; the server returned an invalid response`);
   // Enrollment represents a machine Runner. It intentionally never infers a local
@@ -137,6 +104,43 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
     throw new EnrollmentOutcomeUnknownError(`${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}; the new local profile could not be saved`);
   }
   return { profile };
+}
+
+async function requestEnrollment(endpoint: string, body: string, request: typeof globalThis.fetch): Promise<unknown> {
+  const controller = new AbortController();
+  const timedOut = new EnrollmentOutcomeUnknownError(`enrollment timed out; ${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}`);
+  let timer!: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { controller.abort(timedOut); reject(timedOut); }, 30_000);
+  });
+  try {
+    let response: Response;
+    try {
+      response = await Promise.race([request(endpoint, {
+        method: "POST", redirect: "error", signal: controller.signal,
+        headers: { "content-type": "application/json" }, body,
+      }).then(value => {
+        if (controller.signal.aborted) { void value.body?.cancel().catch(() => undefined); throw timedOut; }
+        return value;
+      }), deadline]);
+    } catch {
+      if (controller.signal.aborted) throw timedOut;
+      throw new EnrollmentOutcomeUnknownError(`enrollment request failed; ${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}`);
+    }
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => undefined);
+      if (response.status === 409) throw new EnrollmentConflictError();
+      if (enrollmentResponseOutcomeUnknown(response.status)) {
+        throw new EnrollmentOutcomeUnknownError(`${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE} (enrollment failed with HTTP ${response.status})`);
+      }
+      throw new Error(`enrollment failed (${response.status})`);
+    }
+    try { return await Promise.race([readCappedJson(response, controller.signal), deadline]); }
+    catch {
+      if (controller.signal.aborted) throw timedOut;
+      throw new EnrollmentOutcomeUnknownError(`${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}; the server returned an unreadable or oversized response`);
+    }
+  } finally { clearTimeout(timer); }
 }
 
 function enrollmentEndpoint(value: string, insecureLocal: boolean): string {
@@ -180,7 +184,7 @@ function transportOrigin(url: URL): string {
   return `${secure ? "https" : "http"}://${url.host}`.toLowerCase();
 }
 
-async function readCappedJson(response: Response): Promise<unknown> {
+async function readCappedJson(response: Response, signal: AbortSignal): Promise<unknown> {
   const declared = response.headers.get("content-length");
   if (declared !== null) {
     const declaredBytes = Number(declared);
@@ -191,11 +195,15 @@ async function readCappedJson(response: Response): Promise<unknown> {
   }
   if (response.body === null) return undefined;
   const reader = response.body.getReader();
+  const abort = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", abort, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     for (;;) {
+      signal.throwIfAborted();
       const next = await reader.read();
+      signal.throwIfAborted();
       if (next.done) break;
       const chunk = next.value;
       total += chunk.byteLength;
@@ -207,6 +215,7 @@ async function readCappedJson(response: Response): Promise<unknown> {
       chunks.push(chunk);
     }
   } finally {
+    signal.removeEventListener("abort", abort);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(total);

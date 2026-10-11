@@ -241,13 +241,13 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
       });
       return;
     } catch (cause) {
+      const incomplete = (detail: string) => new Error(`${cause instanceof Error ? cause.message : String(cause)}; rollback incomplete: ${detail}; service manifest and profile retained`, { cause });
       if (lifecycleAttempted && (!existingManaged || previousNativeAbsent || previousServiceStopped)) {
         // Installing a previously absent native service can start its process
         // before a later step fails, even when an old managed plist exists.
         // A migration whose old service was already stopped has the same
         // boundary: retain the candidate contract until stopping succeeds,
         // so a later uninstall can retry before restoring the old service.
-        const incomplete = (detail: string) => new Error(`${cause instanceof Error ? cause.message : String(cause)}; rollback incomplete: ${detail}; service manifest and profile retained`, { cause });
         if (!previousNativeAbsent && !previousServiceStopped) {
           // Legacy injected user adapters can omit status. An unknown prior
           // registration must never become authority to stop another service.
@@ -255,6 +255,34 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
         }
         try { await manager.uninstall(manifest); }
         catch (cleanup) { throw incomplete(cleanup instanceof Error ? cleanup.message : "service stop could not be confirmed"); }
+      }
+      if (previousServiceStopped) {
+        // Both native identities are now stopped. A migration may restart the
+        // old service only after restoring and verifying its complete contract;
+        // best-effort writes could otherwise bootstrap the candidate plist again.
+        try {
+          const currentManifest = await filesystem.read(manifest.path);
+          if (currentManifest !== manifest.content && currentManifest !== existingManifest) throw new Error("managed service manifest changed during rollback");
+          const currentProfile = await store.load();
+          if (!sameEnrollmentProfile(currentProfile, profileBefore)) {
+            if (!profileUpdated || !sameEnrollmentProfile(currentProfile, profileTarget)) throw new Error("Runner profile changed during rollback");
+            await store.save(profileBefore);
+          }
+          const restored = await provisioner.provision(previousManifest, store.filePath);
+          if (!restored.profileSecured) throw new Error(restored.detail ?? "previous Runner profile could not be secured");
+          await store.assertServiceOwnership(previousManifest.executionMode, previousManifest.serviceGroup);
+          if (manifestWriteAttempted || manifestChanged) await restoreManifestSnapshot(filesystem, manifest, existingManifest, true);
+          if (await filesystem.read(manifest.path) !== existingManifest) throw new Error("previous service manifest could not be restored");
+          if (!sameEnrollmentProfile(await store.load(), profileBefore)) throw new Error("previous Runner profile could not be restored");
+          await manager.install(previousManifest);
+          await manager.restart(previousManifest);
+          const status = await manager.status?.(previousManifest);
+          const privilegeState = servicePrivilegeState(previousManifest, status?.identity, status?.active ?? false);
+          if (status === undefined || status.reliable === false || !status.installed || !status.active || (privilegeState !== "restricted" && privilegeState !== "privileged")) {
+            throw new Error("previous Runner service could not be verified after rollback");
+          }
+        } catch (cleanup) { throw incomplete(cleanup instanceof Error ? cleanup.message : "previous Runner service contract could not be restored"); }
+        throw cause;
       }
       // A failed lifecycle operation must not leave the profile claiming a
       // mode that was never activated. Restore the prior managed manifest and
@@ -308,7 +336,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
         // provisioner even when no profile migration was requested.
         await provisioner.provision(previousManifest, store.filePath).catch(() => undefined);
       }
-      if ((lifecycleAttempted || previousServiceStopped) && !previousNativeAbsent) {
+      if (lifecycleAttempted && !previousNativeAbsent) {
         if (existingManaged && existingManifest !== undefined) {
           const hadNativeService = statusProbeReliable && previousStatus !== undefined
             && (previousStatus.registered === true || previousStatus.installed === true || previousStatus.active === true);

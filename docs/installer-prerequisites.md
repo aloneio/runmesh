@@ -40,6 +40,8 @@ If `/tmp` is mounted with `noexec`, use the standard `TMPDIR` variable to choose
 
 Use the error codes above to investigate an interrupted download. A failure before enrollment leaves the code available until its normal expiry. After an enrollment attempt, check the Runner's state before retrying; generate a replacement code if the original has been consumed.
 
+Enrollment waits up to 30 seconds for the request and complete response. A timeout reports an unknown enrollment result: check connectivity and the Runner's state, then obtain a new enrollment code before retrying.
+
 After a failed fresh installation, review the cleanup result, service status and remaining files before retrying. If enrollment refresh was interrupted, compare the local profile and dashboard first: the credential may already have been replaced.
 
 ## Verify the result

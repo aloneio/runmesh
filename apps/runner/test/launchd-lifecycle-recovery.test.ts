@@ -344,3 +344,63 @@ it("restarts the old active macOS service when migration provisioning fails afte
   expect(test.calls.filter(call => call[1] === "bootout")).toHaveLength(1);
   expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
 });
+
+it.each(["profile", "manifest", "provision-throws", "provision-unsecured", "ownership"] as const)("keeps a failed macOS migration stopped when restoring its old %s contract fails", async failure => {
+  const test = activeManagedFixture();
+  let failRestore = true;
+  const save = test.store.save;
+  test.store.save = async value => {
+    if (failRestore && failure === "profile" && value.execution_mode === "dedicated_user") throw new Error("fixture profile restore failure");
+    await save(value);
+  };
+  const write = test.filesystem.write;
+  test.filesystem.write = async (path, content) => {
+    if (failRestore && failure === "manifest" && content === test.previous.content) throw new Error("fixture manifest restore failure");
+    await write(path, content);
+  };
+  const provision = test.dependencies.serviceProvisioner.provision;
+  test.dependencies.serviceProvisioner.provision = async candidate => {
+    if (failRestore && candidate.executionMode === "dedicated_user") {
+      if (failure === "provision-throws") throw new Error("fixture provisioning restore failure");
+      if (failure === "provision-unsecured") return { identity: "runmesh", profileSecured: false };
+    }
+    return provision(candidate);
+  };
+  test.store.assertServiceOwnership = async () => {
+    if (failRestore && failure === "ownership" && test.profile().execution_mode === "dedicated_user") throw new Error("fixture ownership restore failure");
+    return undefined;
+  };
+  const result = await test.install().then(() => undefined, error => error as Error);
+  expect(result?.message).toContain("fixture enable failure");
+  expect(result?.message).toContain("rollback incomplete");
+  expect(result?.cause).toBeInstanceOf(Error);
+  expect(test.state.loaded).toBe(false);
+  expect(test.files.has(test.manifest.path)).toBe(true);
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+  expect(test.calls.some(call => call[1] === "kickstart")).toBe(false);
+  failRestore = false;
+  await test.install();
+  expect(test.state).toMatchObject({ loaded: true, identity: "root" });
+  expect(test.profile()).toEqual({ ...test.before, execution_mode: "privileged_host" });
+  expect(test.files.get(test.manifest.path)).toBe(test.manifest.content);
+  await test.remove();
+  expect(test.state.loaded).toBe(false);
+  expect(test.files.has(test.manifest.path)).toBe(false);
+});
+
+it("restores the old active macOS service when the new profile save failed before replacement", async () => {
+  const test = activeManagedFixture();
+  test.state.enableFailures = 0;
+  const save = test.store.save;
+  test.store.save = async value => {
+    if (value.execution_mode === "privileged_host") throw new Error("fixture profile save failure");
+    await save(value);
+  };
+  const result = await test.install().then(() => undefined, error => error as Error);
+  expect(result?.message).toBe("fixture profile save failure");
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.state).toMatchObject({ loaded: true, identity: "runmesh" });
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+});
