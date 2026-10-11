@@ -18,7 +18,7 @@ Hidden interactive enrollment-code input requires `stty` and a terminal on POSIX
 
 To refresh enrollment for a complete managed installation, select an installer matching the installed Runner version. It uses the existing runtime, updates enrollment and service configuration, and restarts the service while retaining the installed package. Drain Jobs before refreshing enrollment. To change the package version, follow the [upgrade guide](upgrading.md).
 
-Run one installation, enrollment refresh or uninstall at a time. These operations share a lock. After an interruption, check for running maintenance processes before removing a stale lock or changing installation files.
+The hosted installation, enrollment refresh and uninstall commands share a lock. Run one at a time. After an interruption, check for running maintenance processes before removing a stale lock or changing installation files.
 
 ## Resolve an installation error
 
@@ -41,6 +41,8 @@ If `/tmp` is mounted with `noexec`, use the standard `TMPDIR` variable to choose
 Use the error codes above to investigate an interrupted download. A failure before enrollment leaves the code available until its normal expiry. After an enrollment attempt, check the Runner's state before retrying; generate a replacement code if the original has been consumed.
 
 Enrollment waits up to 30 seconds for the request and complete response. A timeout reports an unknown enrollment result: check connectivity and the Runner's state, then obtain a new enrollment code before retrying.
+
+Enrollment commands targeting the same local profile run one at a time. If enrollment is already in progress, wait for it to finish and retry; the competing command leaves its code unused.
 
 After a failed fresh installation, review the cleanup result, service status and remaining files before retrying. If enrollment refresh was interrupted, compare the local profile and dashboard first: the credential may already have been replaced.
 

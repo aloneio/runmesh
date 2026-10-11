@@ -2,14 +2,10 @@ import { assertSupportedNodeVersion } from "./version.js";
 import type { CliDependencies } from "./cli/contracts.js";
 import { createServiceManager } from "./service.js";
 import { doctor } from "./cli/doctor.js";
-import { enrollmentCode } from "./cli/enrollment.js";
-import { enrollmentFailureMessage } from "./cli/enrollment.js";
-import { enrollRunner } from "./enrollment.js";
+import { runEnrollCli } from "./cli/enrollment.js";
 import { EnvironmentInfoService } from "./environment.js";
-import type { ExecutionMode } from "./service.js";
 import { HELP } from "./cli/help.js";
 import { hostServiceManifestFilesystem } from "./service.js";
-import { isEnrollmentOutcomeUnknown } from "./enrollment.js";
 import { isManagedService } from "./service.js";
 import { managedServiceManifestFromContent } from "./service.js";
 import type { ParsedCommand } from "./cli/contracts.js";
@@ -18,13 +14,11 @@ import { profileExecutionMode } from "./profile.js";
 import { profileManagementMode } from "./profile.js";
 import { ProfileStore } from "./profile.js";
 import { redactedProfile } from "./profile.js";
-import { removeEnrollmentProfileIfCurrent } from "./cli/enrollment.js";
 import { renderService } from "./service.js";
 import { report } from "./cli/reporting.js";
 import { requiredString } from "./cli/input.js";
 import { requireProfile } from "./cli/input.js";
 import { RUNNER_VERSION } from "./version.js";
-import type { RunnerProfile } from "./profile.js";
 import { serviceCommand } from "./cli/lifecycle.js";
 import type { ServiceManagerAdapter } from "./service.js";
 import type { ServiceManifest } from "./service.js";
@@ -45,9 +39,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   if (argv.length === 1 && argv[0] === "--version") { output(RUNNER_VERSION); return; }
   const parsed = parseProductArgs(argv);
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
-  let previousProfile: RunnerProfile | undefined;
-  let enrolledDuringThisInvocation = false;
-  let enrolledProfile: RunnerProfile | undefined;
+  if (parsed.command === "enroll") { await runEnrollCli(argv.slice(1), { ...dependencies, store }); return; }
   try {
     // Await startup inside the command boundary so initialization failures
     // flow through the same stderr handler as every other CLI command. A
@@ -56,26 +48,6 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "start") { await start(parsed, store, error, dependencies); return; }
     if (parsed.command === "maintenance-agent") {
       await (dependencies.startMaintenanceAgent ?? runMaintenanceAgent)({ profilePath: requiredString(parsed, "profilePath"), installRoot: requiredString(parsed, "installRoot"), mode: parsed.values.user === true ? "user" : "system", ...(dependencies.servicePlatform === undefined ? {} : { platform: dependencies.servicePlatform }), ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
-      return;
-    }
-    if (parsed.command === "enroll") {
-      const server = requiredString(parsed, "server"); const code = await enrollmentCode(parsed, dependencies.readStdin);
-      previousProfile = await store.load();
-      const result = await enrollRunner({
-        server,
-        code,
-        reEnroll: parsed.values.reEnroll === true,
-        insecureLocal: parsed.values.insecureLocal === true,
-        ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : dependencies.executionMode === undefined ? {} : { executionMode: dependencies.executionMode }),
-        ...(parsed.values.confirmPrivilegedHost === true || dependencies.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}),
-        ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}),
-        store,
-        ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
-      });
-      enrolledDuringThisInvocation = true;
-      enrolledProfile = result.profile;
-      if (dependencies.afterEnroll !== undefined) await dependencies.afterEnroll();
-      report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
       return;
     }
     if (parsed.command === "status") {
@@ -150,14 +122,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     throw new Error(HELP);
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
-    const outcomeUnknown = parsed.command === "enroll" && isEnrollmentOutcomeUnknown(cause);
-    const profileCleanup = parsed.command === "enroll" && (enrolledDuringThisInvocation || outcomeUnknown)
-      ? await removeEnrollmentProfileIfCurrent(store, enrolledProfile ?? previousProfile)
-      : undefined;
-    const message = parsed.command === "enroll"
-      ? enrollmentFailureMessage(detail, enrolledDuringThisInvocation, outcomeUnknown, profileCleanup)
-      : detail;
-    error(message); throw cause;
+    error(detail); throw cause;
   }
 }
 

@@ -9,7 +9,7 @@ function fixture() {
   const recordPath = `${manifest.path}.purge-stop.json`;
   const files = new Map([[manifest.path, manifest.content]]);
   const calls: string[][] = [];
-  const state = { loaded: true, identity: "root", process: "denied" as "denied" | "alive" | "gone", clock: 0, bootstrapFailures: 0, enableFailures: 0, bootoutFailures: 0 };
+  const state = { loaded: true, active: true, identity: "root", process: "denied" as "denied" | "alive" | "gone", clock: 0, bootstrapFailures: 0, enableFailures: 0, bootoutFailures: 0 };
   const filesystem = {
     read: async (path: string) => files.get(path),
     write: async (path: string, text: string) => { files.set(path, text); },
@@ -33,16 +33,18 @@ function fixture() {
         : state.process === "alive" ? { exitCode: 0, stdout: "4321\n" } : { exitCode: 1 };
     }
     if (file !== "launchctl") throw new Error(`unexpected program: ${file}`);
-    if (args[0] === "print") return state.loaded ? { exitCode: 0, stdout: `state = running\npid = 4321\nuser = ${state.identity}\n` }
+    if (args[0] === "print") return state.loaded ? { exitCode: 0, stdout: `state = ${state.active ? "running" : "waiting"}\n${state.active ? "pid = 4321\n" : ""}user = ${state.identity}\n` }
       : { exitCode: 113, stderr: "Could not find service" };
     if (args[0] === "bootout") {
       if (state.bootoutFailures-- > 0) return { exitCode: 1, stderr: "fixture bootout failure" };
       state.loaded = false;
+      state.active = false;
       return { exitCode: 0 };
     }
     if (args[0] === "bootstrap") {
       if (state.bootstrapFailures-- > 0) return { exitCode: 5, stderr: "Service already loaded" };
       state.loaded = true;
+      state.active = true;
       state.identity = (files.get(manifest.path) ?? "").includes("<key>UserName</key>") ? "runmesh" : "root";
       return { exitCode: 0 };
     }
@@ -403,4 +405,83 @@ it("restores the old active macOS service when the new profile save failed befor
   expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
   expect(test.state).toMatchObject({ loaded: true, identity: "runmesh" });
   expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+});
+
+it("retains a loaded inactive macOS contract when migration cannot unload it", async () => {
+  const test = activeManagedFixture();
+  test.state.active = false;
+  test.state.bootoutFailures = 1;
+  await expect(test.install()).rejects.toThrow("bootout");
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.state).toMatchObject({ loaded: true, active: false, identity: "runmesh" });
+  expect(test.provisionedModes).toEqual([]);
+  expect(test.calls.some(call => call[1] === "bootstrap")).toBe(false);
+  test.state.bootoutFailures = 0;
+  await test.remove();
+  expect(test.files.has(test.manifest.path)).toBe(false);
+});
+
+it.each(["bootout", "process-probe"] as const)("keeps a loaded inactive macOS migration retryable when candidate rollback fails at %s", async failure => {
+  const test = activeManagedFixture(failure);
+  test.state.active = false;
+  const result = await test.install().then(() => undefined, error => error as Error);
+  expect(result?.message).toContain("fixture enable failure");
+  expect(result?.message).toContain("rollback incomplete");
+  expect(test.profile()).toEqual({ ...test.before, execution_mode: "privileged_host" });
+  expect(test.files.get(test.manifest.path)).toBe(test.manifest.content);
+  expect(test.provisionedModes).toEqual(["privileged_host"]);
+  expect(JSON.parse(test.files.get(test.recordPath)!)).toMatchObject({ pid: 4321 });
+  test.state.bootoutFailures = 0;
+  test.state.process = "gone";
+  await test.remove();
+  expect(test.state.loaded).toBe(false);
+  expect(test.files.has(test.manifest.path)).toBe(false);
+  expect(test.files.has(test.recordPath)).toBe(false);
+});
+
+it("restores a loaded inactive macOS contract without bootstrapping the old service", async () => {
+  const test = activeManagedFixture();
+  test.state.active = false;
+  const result = await test.install().then(() => undefined, error => error as Error);
+  expect(result?.message).toBe("service command failed: launchctl enable system/io.alone.runmesh.runner (fixture enable failure)");
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.state).toMatchObject({ loaded: false, active: false });
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+  expect(test.calls.filter(call => call[1] === "bootout")).toHaveLength(2);
+  expect(test.calls.some(call => call[1] === "kickstart")).toBe(false);
+  await test.install();
+  expect(test.state).toMatchObject({ loaded: true, active: true, identity: "root" });
+  await test.remove();
+  expect(test.files.has(test.manifest.path)).toBe(false);
+});
+
+it.each(["unreliable", "active"] as const)("reports incomplete inactive macOS rollback when the restored native state is %s", async failure => {
+  const test = activeManagedFixture();
+  test.state.active = false;
+  const manager = test.dependencies.serviceManager;
+  const status = manager.status!;
+  let failProbe = true;
+  let restoredStateProbes = 0;
+  test.dependencies.serviceManager = { ...manager, status: async manifest => {
+    const current = await status(manifest);
+    if (!failProbe || !test.provisionedModes.includes("dedicated_user")) return current;
+    restoredStateProbes++;
+    return failure === "unreliable" ? { ...current, reliable: false } : { ...current, registered: true, active: true };
+  } };
+  const result = await test.install().then(() => undefined, error => error as Error);
+  const detail = failure === "unreliable" ? "previous Runner service state could not be verified after rollback" : "previous Runner service could not be kept stopped after rollback";
+  expect(result?.message).toBe(`service command failed: launchctl enable system/io.alone.runmesh.runner (fixture enable failure); rollback incomplete: ${detail}; service manifest and profile retained`);
+  expect(result?.cause).toBeInstanceOf(Error);
+  expect((result?.cause as Error).message).toBe("service command failed: launchctl enable system/io.alone.runmesh.runner (fixture enable failure)");
+  expect(restoredStateProbes).toBe(1);
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+  expect(test.calls.some(call => call[1] === "kickstart")).toBe(false);
+  failProbe = false;
+  await test.remove();
+  expect(test.files.has(test.manifest.path)).toBe(false);
 });

@@ -67,20 +67,18 @@ export type EnrollmentProfileCleanup = "absent" | "removed" | "changed" | "faile
  * enrollment while the first process was handling an uncertain response;
  * unconditional rm() would otherwise delete that valid credential.
  *
- * This is deliberately a best-effort compare-before-remove.  ProfileStore has
- * no portable atomic compare-and-delete primitive, so callers should still
- * serialize enrollment operations when strict cross-process exclusion is
- * required.  The identity check closes the common late-cleanup race without
- * changing ProfileStore's on-disk format.
+ * The enrollment lease stays held through the comparison and removal. The
+ * snapshot check also preserves changes made by other profile writers.
  */
-export async function removeEnrollmentProfileIfCurrent(store: ProfileStore, expected: RunnerProfile | undefined): Promise<EnrollmentProfileCleanup> {
+export async function removeEnrollmentProfileIfCurrent(store: ProfileStore, expected: readonly RunnerProfile[], assertHeld: () => void): Promise<EnrollmentProfileCleanup> {
   try {
     const current = await store.load();
+    assertHeld();
     if (current === undefined) return "absent";
     // An absent pre-enrollment snapshot is not an ownership proof.  The read
     // above is only for reporting; never remove a profile this invocation did
     // not observe, including one created after a stale read reported absence.
-    if (expected === undefined || !sameEnrollmentProfile(current, expected)) return "changed";
+    if (!expected.some(profile => sameEnrollmentProfile(current, profile))) return "changed";
     await store.remove();
     return "removed";
   } catch {
@@ -132,13 +130,11 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
   const error = dependencies.stderr ?? ((line) => process.stderr.write(`${line}\n`));
   const parsed = parseProductArgs(["enroll", ...argv]);
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
-  let previousProfile: RunnerProfile | undefined;
   let enrolled = false;
-  let enrolledProfile: RunnerProfile | undefined;
+  let profileCleanup: EnrollmentProfileCleanup | undefined;
   try {
     const server = requiredString(parsed, "server");
     const code = await enrollmentCode(parsed, dependencies.readStdin);
-    previousProfile = await store.load();
     const result = await enrollRunner({
       server, code, reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true,
       ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : dependencies.executionMode === undefined ? {} : { executionMode: dependencies.executionMode }),
@@ -146,17 +142,22 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
       ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}),
       ...(dependencies.store === undefined ? { store } : { store: dependencies.store }),
       ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
+      afterEnroll: async () => {
+        enrolled = true;
+        if (dependencies.afterEnroll !== undefined) await dependencies.afterEnroll();
+      },
+      onFailure: async (cause, attempt) => {
+        enrolled = attempt.enrolled;
+        if (enrolled || isEnrollmentOutcomeUnknown(cause)) {
+          const expected = [attempt.previousProfile, attempt.attemptedProfile].filter((profile): profile is RunnerProfile => profile !== undefined);
+          profileCleanup = await removeEnrollmentProfileIfCurrent(store, expected, attempt.assertHeld);
+        }
+      },
     });
-    enrolled = true;
-    enrolledProfile = result.profile;
-    if (dependencies.afterEnroll !== undefined) await dependencies.afterEnroll();
     report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     const outcomeUnknown = isEnrollmentOutcomeUnknown(cause);
-    const profileCleanup = enrolled || outcomeUnknown
-      ? await removeEnrollmentProfileIfCurrent(store, enrolledProfile ?? previousProfile)
-      : undefined;
     error(enrollmentFailureMessage(detail, enrolled, outcomeUnknown, profileCleanup));
     throw cause;
   }

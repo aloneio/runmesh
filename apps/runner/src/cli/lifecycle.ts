@@ -145,10 +145,10 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
     let provisioningAttempted = false;
     const profileTarget = { ...profileBefore, execution_mode: manifest.executionMode } as RunnerProfile;
     try {
-      // An active launchd migration must stop the old identity before its
-      // profile and permissions change. If stopping fails, the old contract
-      // still describes the live process and ordinary uninstall can retry.
-      if (manifest.platform === "darwin" && existingManaged && modeChanged && previousStatus?.active === true) {
+      // A loaded launchd job can start while waiting. Unload it before changing
+      // its execution contract, retaining the old contract if stopping fails.
+      if (manifest.platform === "darwin" && existingManaged && modeChanged
+        && (previousStatus?.registered === true || previousStatus?.active === true)) {
         await manager.stop(previousManifest);
         previousServiceStopped = true;
       }
@@ -274,12 +274,19 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
           if (manifestWriteAttempted || manifestChanged) await restoreManifestSnapshot(filesystem, manifest, existingManifest, true);
           if (await filesystem.read(manifest.path) !== existingManifest) throw new Error("previous service manifest could not be restored");
           if (!sameEnrollmentProfile(await store.load(), profileBefore)) throw new Error("previous Runner profile could not be restored");
-          await manager.install(previousManifest);
-          await manager.restart(previousManifest);
+          if (previousStatus?.active === true) {
+            await manager.install(previousManifest);
+            await manager.restart(previousManifest);
+          }
           const status = await manager.status?.(previousManifest);
-          const privilegeState = servicePrivilegeState(previousManifest, status?.identity, status?.active ?? false);
-          if (status === undefined || status.reliable === false || !status.installed || !status.active || (privilegeState !== "restricted" && privilegeState !== "privileged")) {
-            throw new Error("previous Runner service could not be verified after rollback");
+          if (status === undefined || status.reliable === false) throw new Error("previous Runner service state could not be verified after rollback");
+          if (previousStatus?.active === true) {
+            const privilegeState = servicePrivilegeState(previousManifest, status.identity, status.active);
+            if (!status.installed || !status.active || (privilegeState !== "restricted" && privilegeState !== "privileged")) {
+              throw new Error("previous Runner service could not be verified after rollback");
+            }
+          } else if (status.active || status.registered === true || !status.installed) {
+            throw new Error("previous Runner service could not be kept stopped after rollback");
           }
         } catch (cleanup) { throw incomplete(cleanup instanceof Error ? cleanup.message : "previous Runner service contract could not be restored"); }
         throw cause;
@@ -328,8 +335,8 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
       // Restore the native process as well as the bytes/profile.  Otherwise a
       // failed migration can leave an old process running with a new profile
       // contract (or a newly-created privileged process alive after its
-      // manifest was removed).  All cleanup is best-effort so the original
-      // failure remains the actionable error.
+      // manifest was removed). Preserve the original failure when reporting
+      // an incomplete restoration.
       if (provisioningAttempted && !profileUpdated && existingManaged) {
         // Same-mode reinstalls do not replace the profile JSON, but their ACL
         // or ownership changes can still be partial. Re-run the old-mode
@@ -372,6 +379,10 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
               // service stopped rather than risk a privileged process from
               // the failed attempt continuing under an unknown definition.
               await manager.stop(previousManifest).catch(() => undefined);
+            }
+            if (previousStatus?.active === true && previousStatus.registered === true && !previousStatus.installed && manager.disable !== undefined) {
+              try { await manager.disable(previousManifest); }
+              catch (cleanup) { throw incomplete(cleanup instanceof Error ? cleanup.message : "previous service enablement could not be restored"); }
             }
           }
         }

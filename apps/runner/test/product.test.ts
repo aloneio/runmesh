@@ -12,7 +12,7 @@ import { createServiceManager, createServiceProvisioner, hashContent, installSer
 
 vi.mock("node:fs/promises", async importOriginal => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...original, rename: vi.fn(original.rename) };
+  return { ...original, rename: vi.fn(original.rename), writeFile: vi.fn(original.writeFile) };
 });
 const originalFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 
@@ -301,6 +301,7 @@ describe("runner product profile and enrollment", () => {
   });
   it("rejects an oversized enrollment body before stalled cancellation finishes", async () => {
     const test = await fixture();
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release: async () => undefined });
     let finishCancellation!: () => void;
     let cancellationStarted!: () => void;
     const cancellation = new Promise<void>(resolve => { finishCancellation = resolve; });
@@ -324,11 +325,12 @@ describe("runner product profile and enrollment", () => {
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(response.body!.locked).toBe(false);
       await expect(test.store.load()).resolves.toBeUndefined();
-    } finally { finishCancellation(); await pending; await test.cleanup(); }
+    } finally { finishCancellation(); await pending; lease.mockRestore(); await test.cleanup(); }
   });
   it("times out a stalled enrollment request and discards a late response without saving its credential", async () => {
     const test = await fixture();
     vi.useFakeTimers();
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release: async () => undefined });
     const load = vi.spyOn(test.store, "load").mockResolvedValue(profile());
     const save = vi.spyOn(test.store, "save").mockResolvedValue(undefined);
     const remove = vi.spyOn(test.store, "remove").mockResolvedValue(undefined);
@@ -350,12 +352,13 @@ describe("runner product profile and enrollment", () => {
       expect(save).not.toHaveBeenCalled(); expect(cancel).toHaveBeenCalledTimes(1); expect(fetch).toHaveBeenCalledTimes(1);
       expect(errors.join("\n")).toContain("generate a new enrollment code"); expect(vi.getTimerCount()).toBe(0);
     } finally {
-      respond(late); await pending; load.mockRestore(); save.mockRestore(); remove.mockRestore(); vi.useRealTimers(); await test.cleanup();
+      respond(late); await pending; load.mockRestore(); save.mockRestore(); remove.mockRestore(); lease.mockRestore(); vi.useRealTimers(); await test.cleanup();
     }
   });
   it("bounds the full enrollment response by one deadline even when body cancellation stalls", async () => {
     const test = await fixture();
     vi.useFakeTimers();
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release: async () => undefined });
     const load = vi.spyOn(test.store, "load").mockResolvedValue(undefined), save = vi.spyOn(test.store, "save").mockResolvedValue(undefined);
     let stream!: ReadableStreamDefaultController<Uint8Array>, finishCancellation!: () => void, settled = false;
     const cancel = vi.fn(() => new Promise<void>(resolve => { finishCancellation = resolve; }));
@@ -371,12 +374,13 @@ describe("runner product profile and enrollment", () => {
       expect(save).not.toHaveBeenCalled(); expect(fetch).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
     } finally {
       if (cancel.mock.calls.length === 0) stream.close(); else finishCancellation();
-      await pending; load.mockRestore(); save.mockRestore(); vi.useRealTimers(); await test.cleanup();
+      await pending; load.mockRestore(); save.mockRestore(); lease.mockRestore(); vi.useRealTimers(); await test.cleanup();
     }
   });
   it("clears the network deadline before saving a successfully enrolled profile", async () => {
     const test = await fixture();
     vi.useFakeTimers();
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release: async () => undefined });
     const load = vi.spyOn(test.store, "load").mockResolvedValue(undefined);
     let finishSave!: () => void, settled = false;
     const save = vi.spyOn(test.store, "save").mockImplementation(() => new Promise<void>(resolve => { finishSave = resolve; }));
@@ -387,7 +391,7 @@ describe("runner product profile and enrollment", () => {
       await vi.advanceTimersByTimeAsync(0); expect(save).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(60_000); expect(settled).toBe(false);
       finishSave(); expect((await pending).profile.runner_id).toBe("runner-saved");
-    } finally { finishSave(); await pending; load.mockRestore(); save.mockRestore(); vi.useRealTimers(); await test.cleanup(); }
+    } finally { finishSave(); await pending; load.mockRestore(); save.mockRestore(); lease.mockRestore(); vi.useRealTimers(); await test.cleanup(); }
   });
   it("re-enrollment replaces connection credentials without adding a workspace", async () => {
     const test = await fixture();
@@ -398,6 +402,103 @@ describe("runner product profile and enrollment", () => {
       expect(result.profile).toMatchObject({ runner_id: "runner-replaced", token: "abcdef0123456789", workspaces: [] });
       await expect(test.store.load()).resolves.toMatchObject({ runner_id: "runner-replaced", workspaces: [] });
     } finally { await test.cleanup(); }
+  });
+  it("rejects another enrollment before redeeming while a success response is still in flight", async () => {
+    const test = await fixture();
+    await test.store.save(profile());
+    let release!: () => void, reached!: () => void;
+    const requested = new Promise<void>(resolve => { reached = resolve; });
+    const response = new Promise<void>(resolve => { release = resolve; });
+    const first = enrollRunner({ server: "https://example.test", code: "a".repeat(43), reEnroll: true, store: test.store,
+      fetch: async () => { reached(); await response; return Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "first-enrollment-token" }); },
+    });
+    try {
+      await requested;
+      const fetch = vi.fn(async () => Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "second-enrollment-token" }));
+      await expect(enrollRunner({ server: "https://example.test", code: "b".repeat(43), reEnroll: true,
+        store: new ProfileStore({ filePath: test.store.filePath }), fetch })).rejects.toThrow("already in progress");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { release(); await first; await test.cleanup(); }
+  });
+  it.each(["main", "enrollment"] as const)("cleans the actual pre-request profile after an uncertain %s enrollment", async entry => {
+    const test = await fixture();
+    await test.store.save(profile());
+    const load = test.store.load.bind(test.store), save = test.store.save.bind(test.store);
+    let requested = false, snapshots = 0;
+    const observed = vi.spyOn(test.store, "load").mockImplementation(async () => {
+      // A separate invocation can finish in a redundant snapshot window.
+      if (!requested && ++snapshots === 2) await save({ ...profile(), token: "intervening-enrollment-token" });
+      return load();
+    });
+    const execute = entry === "main" ? runCli : runEnrollCli;
+    try {
+      await expect(execute([...(entry === "main" ? ["enroll"] : []), "--server", "https://example.test", "--code", "a".repeat(43), "--re-enroll"], {
+        store: test.store, stdout: () => undefined, stderr: () => undefined,
+        fetch: async () => { requested = true; throw new TypeError("response lost after redemption"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(load()).resolves.toBeUndefined();
+    } finally { observed.mockRestore(); await test.cleanup(); }
+  });
+  it("removes this attempt's profile when save publishes it before final metadata validation fails", async () => {
+    const test = await fixture();
+    await test.store.save(profile());
+    const save = test.store.save.bind(test.store);
+    const failingSave = vi.spyOn(test.store, "save").mockImplementation(async value => { await save(value); throw new Error("final profile metadata check failed"); });
+    const errors: string[] = [];
+    try {
+      await expect(runEnrollCli(["--server", "https://example.test", "--code", "a".repeat(43), "--re-enroll"], {
+        store: test.store, stdout: () => undefined, stderr: value => errors.push(value),
+        fetch: async () => Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "published-enrollment-token" }),
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("the local profile was removed");
+    } finally { failingSave.mockRestore(); await test.cleanup(); }
+  });
+  it("keeps a replacement enrollment when the lease is lost during real profile write preparation", async () => {
+    const test = await fixture();
+    await test.store.save(profile());
+    let held = true, pauseNextWrite = true;
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({
+      assertHeld() { if (!held) throw new Error("enrollment lease stopped"); }, release: async () => undefined,
+    });
+    const replacement = { ...profile(), token: "replacement-owner-token" };
+    vi.mocked(writeFile).mockImplementation(async (path, data, options) => {
+      await originalFs.writeFile(path, data, options);
+      if (pauseNextWrite && String(path).includes(".profile-") && String(path).endsWith(".tmp")) {
+        pauseNextWrite = false; held = false;
+        await new ProfileStore({ filePath: test.store.filePath }).save(replacement);
+      }
+    });
+    try {
+      await expect(runEnrollCli(["--server", "https://example.test", "--code", "a".repeat(43), "--re-enroll"], {
+        store: test.store, stdout: () => undefined, stderr: () => undefined,
+        fetch: async () => Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "superseded-owner-token" }),
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toEqual(replacement);
+    } finally { vi.mocked(writeFile).mockImplementation(originalFs.writeFile); lease.mockRestore(); await test.cleanup(); }
+  });
+  it("reports a lease release failure without announcing enrollment success or cleaning another owner's profile", async () => {
+    const test = await fixture();
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release: async () => { throw new Error("lease release failed"); } });
+    const remove = vi.spyOn(test.store, "remove"), output = vi.fn();
+    try {
+      await expect(runEnrollCli(["--server", "https://example.test", "--code", "a".repeat(43)], {
+        store: test.store, stdout: output, stderr: () => undefined,
+        fetch: async () => Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "released-enrollment-token" }),
+      })).rejects.toThrow("lease release failed");
+      expect(output).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
+      await expect(test.store.load()).resolves.toMatchObject({ token: "released-enrollment-token" });
+    } finally { lease.mockRestore(); remove.mockRestore(); await test.cleanup(); }
+  });
+  it("retains the unknown enrollment outcome when releasing its lease also fails", async () => {
+    const test = await fixture();
+    const releaseError = new Error("lease release failed");
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release: async () => { throw releaseError; } });
+    try {
+      await expect(enrollRunner({ server: "https://example.test", code: "a".repeat(43), store: test.store,
+        fetch: async () => { throw new TypeError("response lost"); },
+      })).rejects.toMatchObject({ outcomeUnknown: true, cause: releaseError });
+    } finally { lease.mockRestore(); await test.cleanup(); }
   });
   it("runs the real enrollment CLI with an isolated profile without outputting the token", async () => {
     const test = await fixture();

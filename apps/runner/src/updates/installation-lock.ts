@@ -157,3 +157,12 @@ export async function acquireInstallationLock(mode: "system" | "user", installRo
   if (mode === "user") return directoryLease(join(installRoot, ".installation.lock"));
   return directoryLease("/var/run/runmesh-installer.lock");
 }
+
+/** Enrollment runs inside hosted installers, so it has a separate lock namespace. */
+export async function acquireEnrollmentLock(profilePath: string): Promise<InstallationLease | undefined> {
+  if (process.platform === "win32") {
+    const scope = createHash("sha256").update(resolve(profilePath).toLowerCase()).digest("hex");
+    return windowsLease(`Global\\RunmeshEnrollment-${scope}`);
+  }
+  return directoryLease(`${profilePath}.enrollment.lock`);
+}
