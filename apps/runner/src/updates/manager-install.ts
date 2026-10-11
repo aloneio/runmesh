@@ -381,7 +381,7 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
     manifest = { path: manifestPath, content: body === previous.body ? previousManifest : ownedManifest(body, platform, "maintenance", previous.newline).content };
   }
   const wasRegistered = platform === "win32" && previousManifest !== undefined ? await host.registered() : false;
-  let manifestWriteAttempted = false, nativeDefinitionAttempted = false;
+  let manifestWriteAttempted = false, nativeDefinitionAttempted = false, nativeRegistrationAttempted = false;
   const temporary = `${managerRoot}.staging.${randomUUID()}`;
   const temporaryManifest = `${manifestPath}.${randomUUID()}.tmp`;
   try {
@@ -469,12 +469,16 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
       await host.execute("systemctl", [...host.prefix, "is-active", "--quiet", LINUX_MANAGER]);
     } else if (platform === "darwin") {
       await host.execute("launchctl", ["enable", host.target]);
-      if (!await host.registered()) await host.execute("launchctl", ["bootstrap", host.domain, manifestPath]);
+      if (!await host.registered()) {
+        nativeRegistrationAttempted = true;
+        await host.execute("launchctl", ["bootstrap", host.domain, manifestPath]);
+      }
       await host.execute("launchctl", ["kickstart", host.target]);
     } else {
       const registered = await host.registered();
       if (manifestWriteAttempted || !registered) {
         nativeDefinitionAttempted = true;
+        nativeRegistrationAttempted = !registered;
         await host.execute("schtasks", ["/Create", "/TN", WINDOWS_MANAGER, "/XML", manifestPath, ...(registered ? ["/F"] : [])]);
       }
       await host.execute("schtasks", ["/Change", "/TN", WINDOWS_MANAGER, "/ENABLE"]);
@@ -494,11 +498,11 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
         }
       } catch { /* Preserve the independent package and the original failure. */ }
     }
-    // A retained package can acquire a new service during reinstall. Roll that
-    // service back too, while keeping the previously installed program intact.
+    // Retained files can acquire a new native registration during reinstall.
+    // Roll it back while keeping the previously installed program intact.
     let launchersRestored = true;
     if (rollbackLaunchers !== undefined) { try { await rollbackLaunchers(); } catch { launchersRestored = false; } }
-    if (created || (previousManifest === undefined && manifestWriteAttempted)) {
+    if (created || (previousManifest === undefined && manifestWriteAttempted) || nativeRegistrationAttempted) {
       let stopped = !serviceAttempted;
       if (serviceAttempted) { try { await host.stop(); stopped = true; } catch { /* retain executable while its process may still exist */ } }
       if (stopped && launchersRestored) {

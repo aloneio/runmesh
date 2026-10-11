@@ -37,7 +37,11 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     if (arg === "--code-stdin") { values.codeStdin = true; continue; }
     if (arg === "--shareable" && command === "doctor") { values.shareable = true; continue; }
     const key = arg === "--install-root" && command === "maintenance-agent" ? "installRoot" : arg === "--execution-mode" ? "executionMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
-    const value = rest[index + 1]; if (key === undefined || value === undefined || value.startsWith("--")) throw new Error(`unknown or incomplete option: ${arg}`);
+    const value = rest[index + 1];
+    // Issued base64url enrollment codes can start with two hyphens. Match their
+    // exact length so a following option still reports a missing code value.
+    const enrollmentValue = command === "enroll" && key === "code" && value !== undefined && /^[A-Za-z0-9_-]{43}$/.test(value);
+    if (key === undefined || value === undefined || (value.startsWith("--") && !enrollmentValue)) throw new Error(`unknown or incomplete option: ${arg}`);
     values[key] = value; index += 1;
   }
   return { command, json: values.json === true, values, passthrough };
