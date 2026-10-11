@@ -228,11 +228,12 @@ function workerEvent(line) {
 
 const launcherReasons = ["setup_failed", "test_failed", "unexpected_exit", "teardown_failed"];
 const launcherSignals = ["SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGBUS", "SIGILL", "SIGFPE", "SIGINT", "other"];
-const fixtureNames = ["queue", "busy"];
+const fixtureNames = ["queue", "busy", "job_sharing"];
 const fixturePhases = ["primary", "release", "cancel", "observe"];
 const fixtureFailureKinds = ["mcp_http_failure", "assertion_failed", "timeout", "other"];
-const progressFixtures = ["job_recording", "job_history"];
-const progressPhases = ["admin_login_page", "admin_login", "client_create", "runner_select", "recording_update", "history_settings", "history_restore", "shell", "job_logs", "job_metadata", "job_poll", "job_list", "job_list_live", "job_list_snapshot"];
+const progressFixtures = ["job_recording", "job_history", "job_sharing"];
+const progressPhases = ["admin_login_page", "admin_login", "client_create", "runner_select", "recording_update", "history_settings", "history_restore", "shell", "job_logs", "job_metadata", "job_poll", "job_list", "job_list_live", "job_list_snapshot",
+  "job_share_read", "job_input_denied", "job_cancel_denied", "job_owner_read", "job_input", "job_cancel"];
 const progressBoundaries = ["headers", "body", "validation", "request", "filesystem", "poll"];
 const exitCode = value => value === null || (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647);
 
@@ -292,11 +293,36 @@ export function mcpFixtureFailureDiagnostic(fixture, phase, error) {
     ...(kind === "mcp_http_failure" ? { http_status: Number(status), mcp_response: detail } : {}) });
 }
 
+/** Cleanup remains sequential and never retries. Its failure cannot replace a
+ * primary failure, including non-Error values thrown by the test or an assertion. */
+export async function runMcpFixtureWithCleanup(fixture, { primary, cancel, observe }, emit) {
+  const report = (phase, error) => {
+    try {
+      const diagnostic = mcpFixtureFailureDiagnostic(fixture, phase, error);
+      if (diagnostic !== undefined) emit(diagnostic);
+    } catch { /* Observability cannot replace either initiating failure. */ }
+  };
+  let primaryFailed = false;
+  try { return await primary(); }
+  catch (error) { primaryFailed = true; report("primary", error); throw error; }
+  finally {
+    let phase = "cancel";
+    try {
+      await cancel();
+      phase = "observe";
+      await observe();
+    } catch (error) {
+      report(phase, error);
+      if (!primaryFailed) throw error;
+    }
+  }
+}
+
 function eventBudget() {
   const counts = new Map();
   return event => {
     // Separate bounds preserve launcher and fixture evidence during log floods.
-    // Totals: 16 handler + 8 runtime + 8 proxy + 4 launcher + 2 primary + 16 cleanup + 2 progress + 9 admin = 65.
+    // Totals: 16 handler + 8 runtime + 8 proxy + 4 launcher + 3 primary + 24 cleanup + 3 progress + 9 admin = 75.
     const key = event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
       : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
     const limit = event.event === "admin_http" || event.event === "fixture_progress" ? 1 : event.event === "mcp_handler_error" ? 16 : event.event === "launcher_snapshot" ? 4

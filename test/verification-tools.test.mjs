@@ -13,7 +13,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence, testFailureEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence, runMcpFixtureWithCleanup } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
@@ -892,6 +892,76 @@ test("fixture diagnostics distinguish the primary error from cancellation and ob
     assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...events[1], ...patch })), []);
   assert.deepEqual(mcpWorkerFailureEvidence("private " + cancel), []);
   assert.deepEqual(mcpWorkerFailureEvidence(cancel.trimEnd() + "private\n"), []);
+});
+
+test("job-sharing cleanup preserves the original failure and reports the failed cleanup boundary without replay", async () => {
+  const primaryError = Object.assign(new Error("private-primary"), { name: "AssertionError" });
+  const cleanupError = await mcpHttpFailure(new Response("Error: Network connection lost.\n at private-cookie", {
+    status: 500, headers: { "content-type": "text/plain" },
+  }), "private-id", "job", { action: "get", job_id: "private-job" });
+  for (const failedCleanup of ["cancel", "observe"]) {
+    const calls = [], diagnostics = [];
+    await assert.rejects(runMcpFixtureWithCleanup("job_sharing", {
+      primary: async () => { calls.push("primary"); throw primaryError; },
+      cancel: async () => { calls.push("cancel"); if (failedCleanup === "cancel") throw cleanupError; },
+      observe: async () => { calls.push("observe"); throw cleanupError; },
+    }, line => diagnostics.push(line)), error => error === primaryError);
+    assert.deepEqual(calls, failedCleanup === "cancel" ? ["primary", "cancel"] : ["primary", "cancel", "observe"]);
+    const events = mcpWorkerFailureEvidence(diagnostics.join(""));
+    assert.deepEqual(events.map(({ phase, kind }) => ({ phase, kind })), [
+      { phase: "primary", kind: "assertion_failed" }, { phase: failedCleanup, kind: "mcp_http_failure" },
+    ]);
+    assert.equal(events[1].mcp_response.runtime_signature, "network_connection_lost");
+    assert.doesNotMatch(JSON.stringify(events), /private|Network connection lost/u);
+  }
+});
+
+test("job-sharing cleanup still fails a successful primary and diagnostic exceptions never replace errors", async () => {
+  for (const failedCleanup of ["cancel", "observe"]) {
+    const failure = new Error("private-cleanup"), calls = [];
+    await assert.rejects(runMcpFixtureWithCleanup("job_sharing", {
+      primary: async () => { calls.push("primary"); return "result"; },
+      cancel: async () => { calls.push("cancel"); if (failedCleanup === "cancel") throw failure; },
+      observe: async () => { calls.push("observe"); throw failure; },
+    }, () => { throw new Error("private-diagnostic"); }), error => error === failure);
+    assert.deepEqual(calls, failedCleanup === "cancel" ? ["primary", "cancel"] : ["primary", "cancel", "observe"]);
+  }
+  const calls = [];
+  assert.equal(await runMcpFixtureWithCleanup("job_sharing", {
+    primary: async () => { calls.push("primary"); return "result"; },
+    cancel: async () => { calls.push("cancel"); }, observe: async () => { calls.push("observe"); },
+  }, () => assert.fail("successful fixture must emit no failure")), "result");
+  assert.deepEqual(calls, ["primary", "cancel", "observe"]);
+});
+
+test("job-sharing cleanup preserves even undefined and primitive primary failures", async () => {
+  for (const original of [undefined, null, 0, "private-primary"]) {
+    let caught = false;
+    await runMcpFixtureWithCleanup("job_sharing", {
+      primary: async () => { throw original; }, cancel: async () => { throw new Error("private-cleanup"); },
+      observe: async () => assert.fail("cancel failure must not retry or advance cleanup"),
+    }, () => { throw new Error("private-diagnostic"); }).then(() => assert.fail("must reject"), error => { caught = true; assert.equal(error, original); });
+    assert.equal(caught, true);
+  }
+});
+
+test("job-sharing progress distinguishes shared owner and cleanup reads while retaining only bounded classifications", () => {
+  for (const phase of ["job_share_read", "job_owner_read", "job_poll", "job_input_denied", "job_cancel_denied", "job_input", "job_cancel"]) {
+    const event = { event: "fixture_progress", fixture: "job_sharing", phase, boundary: "request", elapsed_ms: 12 };
+    const marker = mcpFixtureProgressDiagnostic({ ...event, url: "private-client", job_id: "private-job", body: "private-body" });
+    assert.deepEqual(mcpWorkerFailureEvidence(marker), [event]);
+    assert.doesNotMatch(marker, /private|job_id|url/u);
+  }
+  const event = { event: "fixture_progress", fixture: "job_sharing", phase: "job_share_read", boundary: "request", elapsed_ms: 12 };
+  for (const patch of [{ phase: "private-phase" }, { fixture: "private-fixture" }, { boundary: "private-boundary" }, { elapsed_ms: 900001 }])
+    assert.equal(mcpFixtureProgressDiagnostic({ ...event, ...patch }), undefined);
+  const primary = mcpFixtureFailureDiagnostic("job_sharing", "primary", new Error("private"));
+  const cleanup = mcpFixtureFailureDiagnostic("job_sharing", "observe", new Error("private"));
+  const progress = mcpFixtureProgressDiagnostic(event);
+  const events = mcpWorkerFailureEvidence((primary + cleanup + progress).repeat(20));
+  assert.equal(events.filter(value => value.event === "fixture_progress").length, 1);
+  assert.equal(events.filter(value => value.phase === "primary").length, 1);
+  assert.equal(events.filter(value => value.phase === "observe").length, 8);
 });
 
 test("runtime floods preserve the first fixture primary and independent launcher evidence", () => {
