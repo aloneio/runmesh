@@ -146,7 +146,7 @@ ${entry === "fresh" ? section(generated, "  Invoke-LoggedStep 'Starting service'
     for (const [index, path] of [profile, manifest].entries()) assert.deepEqual(await readFile(path), retained[index]);
   } finally {
     assert.equal(dirname(temporary), await realpath(tmpdir()));
-    await rm(temporary, { recursive: true, force: true });
+    await rm(temporary, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   }
 });
 
@@ -305,7 +305,7 @@ rollback 37
     assert.deepEqual(calls.map(call => call.role), scenario.expected ? [scenario.expected] : []);
   } finally {
     assert.equal(dirname(temporary), await realpath(tmpdir()));
-    await rm(temporary, { recursive: true, force: true });
+    await rm(temporary, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   }
 });
 
