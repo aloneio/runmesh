@@ -18,7 +18,13 @@ describe("maintenance bootstrap", () => {
   it("isolates cleanup failure from new-install rollback and never purges legacy data during install rollback", () => {
     const shell = renderPosixInstaller("https://worker.example");
     const windows = renderPowerShellInstaller("https://worker.example");
-    expect(shell).toContain('if [ "$RUNMESH_ACTION" = uninstall ]; then cleanup;');
+    const rollback = shell.match(/rollback\(\)\s*\{([\s\S]*?)\non_exit\(\)/)?.[1] ?? "";
+    const uninstall = rollback.match(/if\s+\[\s+"\$RUNMESH_ACTION"\s+=\s+uninstall\s+\];\s*then([\s\S]*?)\bfi\b/)?.[1] ?? "";
+    expect(uninstall).toMatch(/RMI_UNINSTALL_FAILED[\s\S]*\bcleanup(?:\s*;|\s*\n)[\s\S]*\bexit\s+"\$rc"/);
+    expect(uninstall).not.toMatch(/RMI_INSTALL_FAILED|Enrollment/);
+    const uninstallEnd = rollback.indexOf(uninstall) + uninstall.length;
+    expect(uninstallEnd).toBeLessThan(rollback.indexOf("RMI_INSTALL_FAILED"));
+    expect(uninstallEnd).toBeLessThan(rollback.indexOf('if [ "$CURRENT_NEW_CREATED"'));
     expect(shell).not.toContain('uninstall --profile "$PROFILE" --purge');
     expect(windows).toContain("if (-not $Succeeded -and $MaintenanceAction -ne 'uninstall')");
     expect(windows).not.toContain("uninstall --profile $Profile --purge");
