@@ -15,7 +15,7 @@ import { profileManagementMode } from "./profile.js";
 import { ProfileStore } from "./profile.js";
 import { redactedProfile } from "./profile.js";
 import { renderService } from "./service.js";
-import { report } from "./cli/reporting.js";
+import { markCliErrorReported, report } from "./cli/reporting.js";
 import { requiredString } from "./cli/input.js";
 import { requireProfile } from "./cli/input.js";
 import { RUNNER_VERSION } from "./version.js";
@@ -122,7 +122,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     throw new Error(HELP);
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
-    error(detail); throw cause;
+    error(detail); throw markCliErrorReported(cause);
   }
 }
 

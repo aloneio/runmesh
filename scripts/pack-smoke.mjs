@@ -36,6 +36,10 @@ try {
   if (version.stdout.trim() !== manifest.version) throw new Error(`packaged CLI version mismatch: ${version.stdout.trim()}`);
   const help = await runBin(["--help"]);
   if (!help.stdout.includes("usage: runmesh-runner")) throw new Error("packaged CLI help is invalid");
+  const incompleteEnrollment = await runBin(["enroll"]).catch(error => error);
+  if (incompleteEnrollment.code !== 1 || incompleteEnrollment.stdout.trim() !== "" || incompleteEnrollment.stderr.trim() !== "--server is required") {
+    throw new Error("packaged enrollment must report its argument failure once and exit 1");
+  }
   const doctor = await runBin(["doctor", "--json"]).catch((error) => error);
   const parsed = JSON.parse(String(doctor.stdout ?? ""));
   if (!Array.isArray(parsed.checks)) throw new Error("packaged doctor did not produce JSON checks");

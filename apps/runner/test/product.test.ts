@@ -6,6 +6,7 @@ import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
 import { classifyConnectionFailure, RunnerConnection } from "../src/connection.js";
 import { enrollRunner } from "../src/enrollment.js";
+import { isCliErrorReported } from "../src/cli/reporting.js";
 import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
 import { createServiceManager, createServiceProvisioner, hashContent, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceLayout, serviceProfilePath, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
@@ -851,12 +852,14 @@ describe("runner product CLI and service safety", () => {
     try {
       await test.store.save(profile(join(test.root, "workspace")));
       const errors: string[] = [];
+      const failure = Object.freeze(new Error("local state initialization failed"));
       await expect(runCli(["start"], {
         store: test.store,
         stderr: (line) => errors.push(line),
-        startRunner: async () => { throw new Error("local state initialization failed"); },
-      })).rejects.toThrow("local state initialization failed");
+        startRunner: async () => { throw failure; },
+      })).rejects.toBe(failure);
       expect(errors).toEqual(["local state initialization failed"]);
+      expect(isCliErrorReported(failure)).toBe(true);
     } finally { await test.cleanup(); }
   });
   it("uses the CLI-selected profile store once when starting with an explicit profile path", async () => {

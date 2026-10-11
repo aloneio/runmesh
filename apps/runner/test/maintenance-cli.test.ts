@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { runMaintenanceCli } from "../src/maintenance-cli.js";
+import { isCliErrorReported } from "../src/cli/reporting.js";
 import { RUNNER_VERSION } from "../src/version.js";
 import type { CliDependencies, ServiceProfilePort } from "../src/cli/contracts.js";
 
@@ -33,4 +34,22 @@ it("rejects incomplete maintenance arguments before starting the host agent", as
   const startMaintenanceAgent = vi.fn(async () => undefined); const stderr = vi.fn();
   await expect(runMaintenanceCli(["maintenance-agent"], { startMaintenanceAgent, stderr })).rejects.toThrow("--profilePath is required");
   expect(startMaintenanceAgent).not.toHaveBeenCalled(); expect(stderr).toHaveBeenCalledWith("--profilePath is required");
+});
+
+it.each([Object.freeze(new Error("maintenance runtime failed")), "maintenance runtime failed"])("marks reported maintenance failures without suppressing runtime errors: %s", async failure => {
+  const stderr = vi.fn();
+  const cause = await runMaintenanceCli(["maintenance-agent", "--profile", "/home/fixture/profile.json", "--install-root", "/home/fixture/runmesh", "--user"], {
+    servicePlatform: "linux", stderr, startMaintenanceAgent: async () => { throw failure; },
+  }).catch(error => error);
+  expect(stderr).toHaveBeenCalledExactlyOnceWith("maintenance runtime failed");
+  expect(isCliErrorReported(cause)).toBe(true);
+  if (failure instanceof Error) expect(cause).toBe(failure);
+  else expect(cause).toMatchObject({ message: failure, cause: failure });
+});
+
+it("leaves failures unreported when the stderr handler fails", async () => {
+  const writeFailure = new Error("stderr unavailable");
+  const cause = await runMaintenanceCli(["maintenance-agent"], { stderr: () => { throw writeFailure; } }).catch(error => error);
+  expect(cause).toBe(writeFailure);
+  expect(isCliErrorReported(cause)).toBe(false);
 });
