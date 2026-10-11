@@ -45,9 +45,10 @@ function readEnrollmentStdin(): Promise<string> {
     // EOF path remains supported for hosted installers.
     const onData = (chunk: string | Buffer): void => {
       value += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      if (value.length > 512) { finish(new Error("--code-stdin input is too long")); return; }
       const lineEnd = value.search(/[\r\n]/u);
-      if (lineEnd >= 0) { value = value.slice(0, lineEnd); finish(); }
+      if (lineEnd >= 0) value = value.slice(0, lineEnd);
+      if (value.length > 512) { finish(new Error("--code-stdin input is too long")); return; }
+      if (lineEnd >= 0) finish();
     };
     const onError = (): void => finish(new Error("--code-stdin input could not be read"));
     const onEnd = (): void => finish();

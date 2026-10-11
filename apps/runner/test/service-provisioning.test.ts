@@ -13,14 +13,16 @@ import { resolveTrustedWindowsTool, trustedWindowsEnvironment, trustedWindowsRoo
 const WINDOWS_TASK_PROBE_TIMEOUT_MS = 30_000;
 const WINDOWS_TASK_PROBE_TEST_MARGIN_MS = 5_000;
 
-function runSyntheticTaskProbe(script: string, state: "stopped" | "absent" | "running" | "queued" | "denied" | "unknown") {
+function runSyntheticTaskProbe(script: string, state: "stopped" | "absent" | "running" | "queued" | "denied" | "unknown" | "starting" | "exited") {
   const task = state === "absent" ? "throw [System.IO.FileNotFoundException]::new()"
     : state === "denied" ? "throw [System.UnauthorizedAccessException]::new('synthetic access denied')"
-      : state === "unknown" ? "throw [System.InvalidOperationException]::new('synthetic unknown state')" : "$script:taskFixture";
+      : state === "unknown" ? "throw [System.InvalidOperationException]::new('synthetic unknown state')"
+        : state === "starting" ? "$script:taskReads++; if($script:taskReads -ge 3) { $script:taskFixture.State=4 }; $script:taskFixture"
+          : state === "exited" ? "$script:taskReads++; if($script:taskReads -ge 2) { $script:taskFixture.State=3 }; $script:taskFixture" : "$script:taskFixture";
   // Replace COM construction inside a fresh PowerShell process. Every object
   // below is synthetic; no host service or task is inspected.
-  const fixture = `$script:taskFixture = [pscustomobject]@{State=${state === "queued" ? 2 : state === "running" ? 4 : 3}; Definition=[pscustomobject]@{Principal=[pscustomobject]@{UserId='SYSTEM'}}};
-$script:taskFixture | Add-Member ScriptMethod GetInstances { [pscustomobject]@{Count=${state === "running" ? 1 : 0}} };
+  const fixture = `$script:taskReads=0; $script:taskFixture = [pscustomobject]@{State=${state === "queued" || state === "starting" ? 2 : state === "running" || state === "exited" ? 4 : 3}; Definition=[pscustomobject]@{Principal=[pscustomobject]@{UserId='SYSTEM'}}};
+$script:taskFixture | Add-Member ScriptMethod GetInstances { [pscustomobject]@{Count=[int]($this.State -eq 4)} };
 $script:folderFixture = [pscustomobject]@{};
 $script:folderFixture | Add-Member ScriptMethod GetTask { ${task} };
 $script:serviceFixture = [pscustomobject]@{};
@@ -186,6 +188,39 @@ describe("native service package ownership", () => {
     await manager.uninstall(manifest);
     expect(calls.filter(call => call.includes("/Delete"))).toHaveLength(initial === "stopped" ? 1 : 0);
   });
+
+  it.each(["install", "restart"] as const)("waits for Windows %s startup and rejects an unsuccessful observation", async action => {
+    const calls: string[][] = [];
+    let startRequested = false;
+    const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
+      execute: async (file, args) => {
+        calls.push([file, ...args]);
+        if (args[0] === "/Run") startRequested = true;
+        if (file === "powershell.exe") return startRequested ? { exitCode: 1, stderr: "Runner task did not become active" } : { exitCode: 0, stdout: "stopped" };
+        return { exitCode: 0 };
+      },
+    } });
+    await expect(manager[action](renderService({ platform: "win32", mode: "system" }))).rejects.toThrow("did not become active");
+    expect(calls.findIndex(call => call.includes("/Run"))).toBeLessThan(calls.findLastIndex(call => call[0] === "powershell.exe"));
+  });
+
+  it.skipIf(process.platform !== "win32").each(["starting", "running", "queued", "exited"] as const)("observes Windows startup against a synthetic %s task", async state => {
+    let script = "";
+    const manager = createServiceManager({ platform: "win32", mode: "system", executor: {
+      execute: async (file, args) => { if (file === "powershell.exe") script = args.at(-1)!; return { exitCode: 0 }; },
+    } });
+    await manager.install(renderService({ platform: "win32", mode: "system" }));
+    expect(script).not.toBe("");
+    const result = runSyntheticTaskProbe(script, state);
+    expectSyntheticProbeCompleted(result);
+    if (state === "starting" || state === "running") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("running");
+    } else {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Runner task did not become active");
+    }
+  }, WINDOWS_TASK_PROBE_TIMEOUT_MS + WINDOWS_TASK_PROBE_TEST_MARGIN_MS);
 
   it("fails Linux installation when the process exits just after systemd accepts startup", async () => {
     vi.useFakeTimers();
