@@ -6,7 +6,7 @@
 
 https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
 
-[下载 MP4](media/runmesh-promo.zh-CN.mp4?raw=1) · [视频介绍与字幕](media/README.zh-CN.md) · 中文旁白与字幕。
+[下载 MP4](media/runmesh-promo.zh-CN.mp4?raw=1) · [视频介绍与字幕](media/README.zh-CN.md) · [英文版](media/README.md) · 中文旁白与字幕。
 
 ## 开始使用
 

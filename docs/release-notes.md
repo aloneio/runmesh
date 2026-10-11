@@ -10,7 +10,7 @@ These changes are available in the current dev source. The published stable rele
 - **MCP connection checks and tool search.** Inspect a connection's status and declared capabilities, import supported remote entries from MCP Registry `server.json` files, and use `remote_search` to find published tools across enabled services. See [connecting an MCP](central-remote-mcp.md).
 - **Skill imports and version management.** Import a public GitHub folder at an exact commit, inspect file manifests, compare saved versions, retain important versions, restore an earlier version and preview storage cleanup. See [Skill installation and updates](central-skills.md).
 - **Control-panel improvements.** Updated navigation and Runner actions, clearer MCP and Skill status, and recovery guidance that stays visible after validation errors.
-- **Documentation and video.** Updated English and Chinese guides and added a [60-second Runmesh overview](media/README.md) with Chinese narration and captions.
+- **Documentation and video.** Updated English and Chinese guides and added a [60-second Runmesh overview](media/README.md) with narration and captions in both languages.
 
 ## 0.1.7 — published stable release
 

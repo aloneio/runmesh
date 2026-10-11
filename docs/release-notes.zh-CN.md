@@ -10,7 +10,7 @@
 - **MCP 连接检查与工具搜索。** 检查连接状态和声明的能力，从 MCP Registry 的 `server.json` 文件导入支持的远程条目，通过 `remote_search` 跨已启用服务查找已发布工具。详见[连接 MCP](central-remote-mcp.zh-CN.md)。
 - **Skill 导入与版本管理。** 从固定 commit 的公开 GitHub 目录导入，查看文件清单、比较历史版本、保留重要版本、恢复旧版并预览存储清理。详见 [Skill 安装与更新](central-skills.zh-CN.md)。
 - **控制端改进。** 更新导航与 Runner 操作，明确 MCP 和 Skill 状态，并在输入校验报错后保留恢复指引。
-- **文档与视频。** 同步中英文指南，加入带中文旁白与字幕的 [60 秒 Runmesh 介绍](media/README.zh-CN.md)。
+- **文档与视频。** 同步中英文指南，加入 [60 秒 Runmesh 介绍](media/README.zh-CN.md)，提供中英文旁白与字幕。
 
 ## 0.1.7 — 已发布正式版
 
