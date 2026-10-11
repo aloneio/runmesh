@@ -5,7 +5,7 @@ import { isEnrollmentOutcomeUnknown } from "../enrollment.js";
 import type { ParsedCommand } from "./contracts.js";
 import { parseProductArgs } from "./input.js";
 import { ProfileStore } from "../profile.js";
-import { report } from "./reporting.js";
+import { markCliErrorReported, report } from "./reporting.js";
 import { requiredString } from "./input.js";
 import type { RunnerProfile } from "../profile.js";
 import { storeFor } from "./input.js";
@@ -159,6 +159,6 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
     const detail = cause instanceof Error ? cause.message : String(cause);
     const outcomeUnknown = isEnrollmentOutcomeUnknown(cause);
     error(enrollmentFailureMessage(detail, enrolled, outcomeUnknown, profileCleanup));
-    throw cause;
+    throw markCliErrorReported(cause);
   }
 }
