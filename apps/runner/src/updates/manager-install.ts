@@ -494,11 +494,11 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
         }
       } catch { /* Preserve the independent package and the original failure. */ }
     }
-    // Only a new manager belongs to this attempt. Preserve an existing one and
-    // leave its independent package available for recovery after any failure.
+    // A retained package can acquire a new service during reinstall. Roll that
+    // service back too, while keeping the previously installed program intact.
     let launchersRestored = true;
     if (rollbackLaunchers !== undefined) { try { await rollbackLaunchers(); } catch { launchersRestored = false; } }
-    if (created) {
+    if (created || (previousManifest === undefined && manifestWriteAttempted)) {
       let stopped = !serviceAttempted;
       if (serviceAttempted) { try { await host.stop(); stopped = true; } catch { /* retain executable while its process may still exist */ } }
       if (stopped && launchersRestored) {
@@ -510,7 +510,7 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
           } else if (platform === "win32" && serviceAttempted && await host.registered()) {
             await host.execute("schtasks", ["/Delete", "/TN", WINDOWS_MANAGER, "/F"]);
           }
-          await filesystem.remove(managerRoot);
+          if (created) await filesystem.remove(managerRoot);
         } catch { /* Keep recovery files until registration cleanup succeeds. */ }
       }
     }

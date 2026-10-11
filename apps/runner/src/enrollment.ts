@@ -91,16 +91,23 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
     return result;
   } catch (error) {
     failed = true; failure = error;
-    if (options.onFailure !== undefined) await options.onFailure(error, attempt);
+    if (options.onFailure !== undefined) {
+      try { await options.onFailure(error, attempt); }
+      catch (cleanup) { addEnrollmentFailureCause(error, cleanup); }
+    }
     throw error;
   } finally {
     try { await lease.release(); }
     catch (error) {
       if (!failed) throw error;
-      try { if (failure instanceof Error && failure.cause === undefined) failure.cause = error; }
-      catch { /* Secondary diagnostics must preserve a frozen or readonly primary error. */ }
+      addEnrollmentFailureCause(failure, error);
     }
   }
+}
+
+function addEnrollmentFailureCause(error: unknown, cause: unknown): void {
+  try { if (error instanceof Error && error.cause === undefined) error.cause = cause; }
+  catch { /* Cleanup must preserve a frozen or readonly primary error. */ }
 }
 
 async function redeemEnrollment(options: EnrollmentOptions, store: ProfileStore, endpoint: string, existing: RunnerProfile | undefined,

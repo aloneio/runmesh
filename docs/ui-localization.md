@@ -14,6 +14,11 @@ sentences at intentional markup boundaries and keep user data separate from
 translation keys. Render the selected language on the server so the browser
 receives ready-to-display text.
 
+One-time enrollment result pages opt into in-place language switching. The
+server supplies both translations of authored labels; switching language keeps
+the current result and commands without navigating or repeating the request.
+Credentials, code blocks and form values remain unchanged.
+
 `ui-catalog.ts` has one immutable mapping. Duplicate keys and later overlays are
 rejected by the catalog regression test. Context-specific meanings use distinct
 source labels, such as workspace `Disabled` and cloud-history `Do not upload`.

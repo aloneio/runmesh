@@ -534,6 +534,41 @@ describe("runner product profile and enrollment", () => {
       })).rejects.toMatchObject({ outcomeUnknown: true, cause: releaseError });
     } finally { lease.mockRestore(); await test.cleanup(); }
   });
+  it("retains an unknown enrollment outcome when failure cleanup and lease release both fail", async () => {
+    const test = await fixture(), cleanupError = new Error("failure cleanup failed"), releaseError = new Error("lease release failed");
+    const release = vi.fn(async () => { throw releaseError; });
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release });
+    let primary: unknown;
+    const cleanup = vi.fn(async (error: unknown) => { primary = error; throw cleanupError; });
+    try {
+      const result = await enrollRunner({ server: "https://example.test", code: "a".repeat(43), store: test.store,
+        fetch: async () => { throw new TypeError("response lost"); }, onFailure: cleanup,
+      }).then(() => undefined, error => error);
+      expect(result).toBe(primary);
+      expect(result).toMatchObject({ outcomeUnknown: true, cause: cleanupError });
+      expect(cleanup).toHaveBeenCalledOnce(); expect(release).toHaveBeenCalledOnce();
+      await expect(test.store.load()).resolves.toBeUndefined();
+    } finally { lease.mockRestore(); await test.cleanup(); }
+  });
+  it.each([
+    ["frozen", () => Object.freeze(new EnrollmentOutcomeUnknownError("activation outcome is unknown"))],
+    ["readonly-cause", () => Object.defineProperty(new Error("activation failed"), "cause", { value: undefined })],
+    ["existing-cause", () => new Error("activation failed", { cause: new Error("original cause") })],
+    ["non-error", () => "activation failed"],
+  ] as const)("retains a %s activation failure when its cleanup callback fails", async (_kind, createFailure) => {
+    const test = await fixture(), failure = createFailure(), originalCause = failure instanceof Error ? failure.cause : undefined;
+    try {
+      await expect(enrollRunner({ server: "https://example.test", code: "a".repeat(43), store: test.store,
+        fetch: async () => Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "activation-enrollment-token" }),
+        afterEnroll: async () => { throw failure; },
+        onFailure: async () => { await test.store.remove(); throw new Error("failure cleanup failed"); },
+      })).rejects.toBe(failure);
+      if (failure instanceof Error) expect(failure.cause).toBe(originalCause);
+      await expect(test.store.load()).resolves.toBeUndefined();
+      const retryLease = await test.store.acquireEnrollmentLease();
+      expect(retryLease).toBeDefined(); await retryLease?.release();
+    } finally { await test.cleanup(); }
+  });
   it("runs the real enrollment CLI with an isolated profile without outputting the token", async () => {
     const test = await fixture();
     try {

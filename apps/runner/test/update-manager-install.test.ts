@@ -193,6 +193,32 @@ it.each(["unfinished", "invalid"] as const)("retains a new manager's %s update j
   expect(test.stats.has(test.paths.managerRoot)).toBe(false);
 });
 
+it.each(["linux", "darwin", "win32"] as const)("rolls back a failed %s manager reinstall while retaining its previously installed package", async platform => {
+  const test = fixture(platform);
+  await managerInstall(test.options);
+  await managerUninstall({ ...test.options, preservePackage: true });
+  let failStart = true;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    const result = await test.options.executor.execute(name, args);
+    if (failStart && ((name === "systemctl" && args.includes("is-active"))
+      || (name === "launchctl" && args[0] === "kickstart")
+      || (name === "schtasks" && args[0] === "/Run"))) return { exitCode: 1 };
+    return result;
+  } };
+  const options = { ...test.options, executor };
+  await expect(managerInstall(options)).rejects.toThrow("maintenance manager command failed");
+  expect(test.isActive()).toBe(false);
+  expect(test.files.has(test.paths.manifestPath)).toBe(false);
+  expect(test.files.get(test.paths.runtimePath)).toBe("runtime bytes");
+  expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  expect(test.copies).toHaveLength(2);
+  failStart = false;
+  await managerInstall(options);
+  expect(test.isActive()).toBe(true);
+  expect(test.copies).toHaveLength(2);
+  await managerUninstall(options);
+});
+
 it("retains the stable management package across ordinary uninstall and reinstall of an older Runner", async () => {
   const test = fixture("linux"); await managerInstall(test.options);
   await managerUninstall({ ...test.options, preservePackage: true });
