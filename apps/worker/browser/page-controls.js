@@ -80,6 +80,11 @@ function createPageControls({
         if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         var locale2 = link.getAttribute("data-lang-toggle") || "en";
         rememberLocale(locale2);
+        if (locale.applyLocaleInPlace(locale2)) {
+          event.preventDefault();
+          stabilizeTabPanels(document);
+          return;
+        }
         var url = new URL(location.href);
         url.searchParams.set("lang", locale2);
         event.preventDefault();
@@ -100,14 +105,22 @@ function createPageControls({
         var mark = function () {
           if (current !== generation) return;
           button.textContent = document.documentElement.lang === "zh-CN" ? "已复制" : "Copied";
+          button.setAttribute("data-locale-en", "Copied");
+          button.setAttribute("data-locale-zh-cn", "已复制");
           button.removeAttribute("title");
+          button.removeAttribute("data-locale-title-en");
+          button.removeAttribute("data-locale-title-zh-cn");
           button.classList.add("copied");
         };
         result.then(mark, function () {
           if (current !== generation) return;
           var isZh = document.documentElement.lang === "zh-CN";
           button.textContent = isZh ? "重试复制" : "Retry copy";
+          button.setAttribute("data-locale-en", "Retry copy");
+          button.setAttribute("data-locale-zh-cn", "重试复制");
           button.setAttribute("title", isZh ? "复制失败，请手动复制或重试" : "Copy failed. Copy manually or retry.");
+          button.setAttribute("data-locale-title-en", "Copy failed. Copy manually or retry.");
+          button.setAttribute("data-locale-title-zh-cn", "复制失败，请手动复制或重试");
           button.classList.remove("copied");
         });
       });

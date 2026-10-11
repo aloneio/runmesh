@@ -1012,7 +1012,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(html).not.toContain("curl -fsSL");
     expect(html).not.toContain("curl --fail --location");
     expect(html).not.toContain("Invoke-WebRequest");
-    const code = /<span class="form-stat-label">One-time enrollment code<\/span><code class="mono" data-no-i18n>([A-Za-z0-9_-]{43})<\/code>/.exec(html)?.[1];
+    const code = /<code\b[^>]*\bdata-no-i18n\b[^>]*\bdata-enrollment-code>([A-Za-z0-9_-]{43})<\/code>/.exec(html)?.[1];
     if (code === undefined) throw new Error("browser enrollment code absent");
     // The one-time code is rendered in its own protected value block and must
     // never be embedded in either platform's copied command.

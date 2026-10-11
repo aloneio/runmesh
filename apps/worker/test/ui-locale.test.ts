@@ -123,9 +123,27 @@ for(const executionMode of ["dedicated_user","privileged_host"] as const)for(con
    if(locale==="en")expect(text).not.toMatch(/[\u4e00-\u9fff]/u);
    else for(const phrase of ["Manual Runner enrollment","The installer verifies","Selected execution mode:","The default is dedicated_user","This code is valid until","You must keep","Run the command for the local OS"])expect(text).not.toContain(phrase);
    expect([...output.matchAll(/<pre\b[^>]*>[\s\S]*?<\/pre>/gu)].map(x=>x[0])).toEqual([...original.matchAll(/<pre\b[^>]*>[\s\S]*?<\/pre>/gu)].map(x=>x[0]));
+   expect(output).toContain('id="main-content" data-local-locale');
+   expect(output).toContain('data-locale-en="Enroll Runner"');
+   expect(output).toContain('data-locale-zh-cn="注册 Runner"');
+   const localText=[...output.matchAll(/\bdata-locale-[a-z-]+="([^"]*)"/gu)].map(x=>x[1]);
+   for(const value of ["synthetic-code-DO-NOT-USE","synthetic-csrf","runner-i18n"])expect(localText.some(text=>text!.includes(value))).toBe(false);
+   expect(output).toContain('<code class="mono" data-no-i18n data-enrollment-code>synthetic-code-DO-NOT-USE</code>');
+   expect(output).not.toMatch(/<title[^>]*><span/u);
   }
  });
 }
+
+it("local language metadata follows the same protected-value boundary as first-paint translation",async()=>{
+ const source='<html data-local-locale><head><title>Dashboard</title></head><body><main id="main-content" data-local-locale><p title="Display name">Display name</p><span data-no-i18n>Display name</span><input value="Display name" placeholder="Display name"><code>Display name</code><pre>Display name</pre><textarea>Display name</textarea></main></body></html>';
+ for(const locale of ["en","zh-CN"]){
+  const output=await localizeHtmlResponse(request(locale),new Response(source,{headers:{"content-type":"text/html"}})).text();
+  expect(output).toContain('data-locale-en="Display name" data-locale-zh-cn="显示名称"');
+  expect(output).toContain('data-locale-title-en="Display name"');
+  expect(output).toContain('data-locale-placeholder-zh-cn="显示名称"');
+  for(const protectedMarkup of ['<span data-no-i18n>Display name</span>','value="Display name"','<code>Display name</code>','<pre>Display name</pre>','<textarea>Display name</textarea>'])expect(output).toContain(protectedMarkup);
+ }
+});
 
 it("I18N03 regional query overrides cookie; malformed language ranges are ignored",()=>{
  expect(requestLocale(request("en-US",{cookie:"runmesh_lang=zh-CN"}))).toBe("en");

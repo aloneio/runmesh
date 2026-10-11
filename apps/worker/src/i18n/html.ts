@@ -12,19 +12,30 @@ function decodeText(value: string): string {
   });
 }
 
+function escapeText(value: string): string {
+  return value.replace(/[&<>"']/gu, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character]!);
+}
+
 /** Render one locale before first paint. Never translate code, logs, form
- * values or explicitly marked user labels; no browser-side retranslations. */
+ * values or explicitly marked user labels. One-time result pages may opt in
+ * to retaining the two authored translations for a local language switch. */
 export function localizeHtmlResponse(request: Request, response: Response): Response {
   if(!response.body || !response.headers.get("content-type")?.includes("text/html"))return response;
   const locale=requestLocale(request);
-  let excluded=0, textBuffer="", oversizedText=false;
+  let excluded=0, textBuffer="", oversizedText=false, localLocale=false, plainTextElement=false;
   const skipTags=new Set(["script","style","pre","code","textarea","svg"]);
   const voidTags=new Set(["area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"]);
   const rewriter=new HTMLRewriter().on("*",{
     element(element){
+      if(element.tagName === "html")localLocale=element.hasAttribute("data-local-locale");
+      if(element.tagName === "title" || element.tagName === "option"){plainTextElement=true;element.onEndTag(()=>{plainTextElement=false;});}
       const skip=skipTags.has(element.tagName)||element.hasAttribute("data-no-i18n")||element.getAttribute("translate")?.toLowerCase()==="no";
       if(skip && !voidTags.has(element.tagName)){excluded++;element.onEndTag(()=>{excluded--;});}
-      if(!excluded && !skip)for(const name of ["aria-label","alt","placeholder","title","data-password-show","data-password-hide","data-submit-pending"]){const old=element.getAttribute(name);if(old!==null){const next=localizeUiText(decodeText(old),locale);if(next!==old)element.setAttribute(name,next);}}
+      if(!excluded && !skip)for(const name of ["aria-label","alt","placeholder","title","data-password-show","data-password-hide","data-submit-pending"]){const old=element.getAttribute(name);if(old!==null){
+        const decoded=decodeText(old), translated=localizeUiText(decoded,"zh-CN"), next=locale === "en" ? decoded : translated;
+        if(localLocale && translated!==decoded){element.setAttribute(`data-locale-${name}-en`,decoded);element.setAttribute(`data-locale-${name}-zh-cn`,translated);}
+        if(next!==old)element.setAttribute(name,next);
+      }}
       if(element.tagName === "html")element.setAttribute("lang",locale);
     }
   }).on("title[data-i18n-title]", {
@@ -48,6 +59,11 @@ export function localizeHtmlResponse(request: Request, response: Response): Resp
       if(textBuffer.length > 65536){chunk.replace(textBuffer,{html:true});textBuffer="";oversizedText=!chunk.lastInTextNode;return;}
       if(!chunk.lastInTextNode){chunk.remove();return;}
       const raw=textBuffer, decoded=decodeText(raw), result=localizeUiText(decoded,locale);textBuffer="";
+      const translated=localLocale && !plainTextElement ? localizeUiText(decoded,"zh-CN") : decoded;
+      if(translated!==decoded){
+        chunk.replace(`<span data-locale-en="${escapeText(decoded)}" data-locale-zh-cn="${escapeText(translated)}">${escapeText(result)}</span>`,{html:true});
+        return;
+      }
       // HTMLRewriter text chunks retain entity escapes. Preserve unmodified
       // source text byte-for-byte; translations are escaped as fresh text.
       if(result===decoded)chunk.replace(raw,{html:true});else chunk.replace(result);

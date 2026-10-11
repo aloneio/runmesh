@@ -552,6 +552,44 @@ test("language controls delegate the full destination to the navigation owner", 
   assert.match(document.cookie, /^runmesh_lang=zh-CN;/u);
 });
 
+for (const path of ["/admin/runners?lang=en", "/admin/runners/fixture/enrollment", "/admin/runners/fixture/rotate"])
+test("one-time enrollment language switches retain the result and copy values at " + path, async () => {
+  const en = element(), zh = element(), label = element(), title = element(), button = element(), control = element();
+  en.setAttribute("data-lang-toggle", "en"); zh.setAttribute("data-lang-toggle", "zh-CN");
+  for (const [node, english, chinese] of [[label, "Enroll Runner", "注册 Runner"], [title, "Runner setup", "Runner 配置"]]) {
+    node.setAttribute("data-locale-en", english); node.setAttribute("data-locale-zh-cn", chinese); node.textContent = english;
+  }
+  control.setAttribute("aria-label", "Operating system");
+  control.setAttribute("data-locale-aria-label-en", "Operating system"); control.setAttribute("data-locale-aria-label-zh-cn", "操作系统");
+  const code = { textContent: "synthetic-installer-command --fixture-only" }, panel = { querySelector: () => code };
+  button.setAttribute("data-copy-source", "command"); button.closest = () => panel;
+  const copied = [], location = { href: "https://worker.test" + path };
+  let activeResult = true;
+  const document = { documentElement: { lang: "en" },
+    querySelector: selector => selector === "#main-content[data-local-locale]" && activeResult ? panel : null,
+    querySelectorAll: selector => selector === "[data-lang-toggle]" ? [en, zh]
+      : selector === "[data-locale-en]" ? [label, title, ...(button.hasAttribute("data-locale-en") ? [button] : [])]
+      : selector === "[data-locale-aria-label-en]" ? [control] : [] };
+  const destinations = [], controls = createPageControls({ document, window: {}, location,
+    navigator: { clipboard: { async writeText(value) { copied.push(value); } } },
+    locale: createLocale({ document }), navigate: url => destinations.push(url) });
+  const root = { querySelector: () => null, querySelectorAll: selector => selector === "[data-lang-toggle]" ? [en, zh] : selector === "[data-copy],[data-copy-source]" ? [button] : [] };
+  controls.bindPageControls(root);
+  for (const [link, locale, text, accessibleName] of [[zh, "zh-CN", "注册 Runner", "操作系统"], [en, "en", "Enroll Runner", "Operating system"], [zh, "zh-CN", "注册 Runner", "操作系统"]]) {
+    let prevented = false; link.dispatch("click", { button: 0, preventDefault() { prevented = true; } });
+    assert.equal(prevented, true); assert.equal(document.documentElement.lang, locale);
+    assert.equal(label.textContent, text); assert.equal(control.getAttribute("aria-label"), accessibleName);
+    assert.equal(location.href, "https://worker.test" + path); assert.deepEqual(destinations, []);
+    assert.equal(code.textContent, "synthetic-installer-command --fixture-only");
+    button.dispatch("click"); await new Promise(setImmediate);
+    assert.equal(button.textContent, locale === "en" ? "Copied" : "已复制");
+  }
+  assert.deepEqual(copied, Array(3).fill(code.textContent));
+  activeResult = false;
+  en.dispatch("click", { button: 0, preventDefault() {} });
+  assert.equal(destinations.length, 1, "Leaving the result restores normal server navigation");
+});
+
 for (const gesture of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }, { defaultPrevented: true }])
 test("language controls preserve native navigation for " + JSON.stringify(gesture), () => {
   const document = { documentElement: { lang: "en" }, cookie: "runmesh_lang=en" }, destinations = [];
