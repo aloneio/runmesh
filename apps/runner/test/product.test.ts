@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
 import { classifyConnectionFailure, RunnerConnection } from "../src/connection.js";
-import { enrollRunner } from "../src/enrollment.js";
+import { enrollRunner, EnrollmentOutcomeUnknownError } from "../src/enrollment.js";
 import { isCliErrorReported } from "../src/cli/reporting.js";
 import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
@@ -478,18 +478,51 @@ describe("runner product profile and enrollment", () => {
       await expect(test.store.load()).resolves.toEqual(replacement);
     } finally { vi.mocked(writeFile).mockImplementation(originalFs.writeFile); lease.mockRestore(); await test.cleanup(); }
   });
-  it("reports a lease release failure without announcing enrollment success or cleaning another owner's profile", async () => {
+  it("reports a lease release failure while preserving the completed enrollment", async () => {
     const test = await fixture();
     const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release: async () => { throw new Error("lease release failed"); } });
-    const remove = vi.spyOn(test.store, "remove"), output = vi.fn();
+    const remove = vi.spyOn(test.store, "remove"), output = vi.fn(), errors: string[] = [];
     try {
       await expect(runEnrollCli(["--server", "https://example.test", "--code", "a".repeat(43)], {
-        store: test.store, stdout: output, stderr: () => undefined,
+        store: test.store, stdout: output, stderr: line => errors.push(line),
         fetch: async () => Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "released-enrollment-token" }),
       })).rejects.toThrow("lease release failed");
       expect(output).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
       await expect(test.store.load()).resolves.toMatchObject({ token: "released-enrollment-token" });
+      expect(errors).toEqual(["lease release failed; enrollment completed and the local profile was retained; resolve the local error before continuing setup"]);
+      expect(errors.join("\n")).not.toContain("generate a new enrollment code");
     } finally { lease.mockRestore(); remove.mockRestore(); await test.cleanup(); }
+  });
+  it("retains a completed enrollment when success reporting fails", async () => {
+    const test = await fixture(), errors: string[] = [];
+    const remove = vi.spyOn(test.store, "remove");
+    try {
+      await expect(runEnrollCli(["--server", "https://example.test", "--code", "a".repeat(43)], {
+        store: test.store, stdout: () => { throw new Error("success output failed"); }, stderr: line => errors.push(line),
+        fetch: async () => Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "reported-enrollment-token" }),
+      })).rejects.toThrow("success output failed");
+      expect(remove).not.toHaveBeenCalled();
+      await expect(test.store.load()).resolves.toMatchObject({ token: "reported-enrollment-token" });
+      expect(errors).toEqual(["success output failed; enrollment completed and the local profile was retained; resolve the local error before continuing setup"]);
+      expect(errors.join("\n")).not.toContain("generate a new enrollment code");
+    } finally { remove.mockRestore(); await test.cleanup(); }
+  });
+  it.each([
+    ["frozen", () => Object.freeze(new Error("activation failed"))],
+    ["frozen unknown-outcome", () => Object.freeze(new EnrollmentOutcomeUnknownError("activation outcome is unknown"))],
+    ["readonly-cause", () => Object.defineProperty(new Error("activation failed"), "cause", { value: undefined })],
+    ["existing-cause", () => new Error("activation failed", { cause: new Error("original cause") })],
+  ] as const)("preserves a %s primary enrollment error when lease release also fails", async (_kind, createFailure) => {
+    const test = await fixture(), failure = createFailure(), originalCause = failure.cause;
+    const lease = vi.spyOn(test.store, "acquireEnrollmentLease").mockResolvedValue({ assertHeld() {}, release: async () => { throw new Error("lease release failed"); } });
+    try {
+      await expect(enrollRunner({ server: "https://example.test", code: "a".repeat(43), store: test.store,
+        fetch: async () => Response.json({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "activation-enrollment-token" }),
+        afterEnroll: async () => { throw failure; },
+      })).rejects.toBe(failure);
+      expect(failure.cause).toBe(originalCause);
+      if (failure instanceof EnrollmentOutcomeUnknownError) expect(failure.outcomeUnknown).toBe(true);
+    } finally { lease.mockRestore(); await test.cleanup(); }
   });
   it("retains the unknown enrollment outcome when releasing its lease also fails", async () => {
     const test = await fixture();
@@ -567,6 +600,7 @@ describe("runner product profile and enrollment", () => {
       await expect(test.store.load()).resolves.toBeUndefined();
       expect(errors.join("\n")).toContain("credentials were consumed");
       expect(errors.join("\n")).toContain("generate a new enrollment code");
+      expect(errors.join("\n")).not.toContain("enrollment completed");
     } finally { await test.cleanup(); }
   });
 
@@ -599,6 +633,7 @@ describe("runner product profile and enrollment", () => {
       await expect(test.store.load()).resolves.toBeUndefined();
       expect(errors.join("\n")).toContain("local profile was removed");
       expect(errors.join("\n")).toContain("generate a new enrollment code");
+      expect(errors.join("\n")).not.toContain("enrollment completed");
     } finally { await test.cleanup(); }
   });
 

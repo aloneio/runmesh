@@ -94,6 +94,8 @@ export interface ServiceCommandExecutor {
 export interface ServiceRuntimeStatus {
   readonly installed: boolean;
   readonly active: boolean;
+  /** Native enablement, independent of registration and activity; omitted when unknown. */
+  readonly enabled?: boolean;
   /**
    * Whether a native registration/unit exists, independent from its enabled
    * or active state. `undefined` means the adapter could not prove either
@@ -135,7 +137,8 @@ export interface ServiceManagerAdapter {
   readonly install: (manifest: ServiceManifest) => Promise<void>;
   readonly stop: (manifest: ServiceManifest) => Promise<void>;
   /**
-   * Disable a native registration without deleting its managed definition.
+   * Disable a native registration without stopping running instances or
+   * deleting its managed definition.
    * This is optional for injected/legacy adapters; rollback uses it when a
    * pre-existing unit was registered but deliberately disabled.
    */

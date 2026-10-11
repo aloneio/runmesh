@@ -137,11 +137,116 @@ it.each(["enabled", "disabled", "disable-failure"] as const)("restores an active
   } else expect(state.enabled).toBe(initial === "enabled");
   expect(state.active).toBe(true);
   expect(test.contents.get(test.manifest.path)).toBe(test.manifest.content);
-  expect(calls.some(args => args[0] === "stop" || args.includes("--now") && args[0] === "disable")).toBe(false);
+  expect(calls.some(args => args.includes("--now") && args[0] === "disable")).toBe(false);
   state.failDisable = false; state.failMaintenance = false;
   await install();
   expect(state).toMatchObject({ enabled: true, active: true });
   await uninstall(command("uninstall"), test.store, () => undefined, dependencies);
   expect(state).toMatchObject({ enabled: false, active: false });
   expect(test.contents.has(test.manifest.path)).toBe(false);
+});
+
+it.each(["profile", "manifest", "both", "stop"] as const)("keeps a failed migration retryable when restoring its %s contract fails", async failure => {
+  const test = fixture();
+  const before = await test.store.load();
+  let profile = before;
+  const originalFailure = new Error("fixture maintenance failure");
+  const state = { active: true, enabled: true, definition: test.manifest.content, fail: true, rollingBack: false };
+  const trace: string[] = [];
+  const store: ServiceProfilePort = { ...test.store, load: async () => profile, save: async value => {
+    trace.push(`save:${value.execution_mode}`);
+    if (state.fail && state.rollingBack && value.execution_mode === "dedicated_user" && (failure === "profile" || failure === "both")) throw new Error("fixture profile restore failure");
+    profile = value;
+  } };
+  const filesystem = { ...test.dependencies.serviceFilesystem!, write: async (path: string, value: string) => {
+    trace.push(`write:${value === test.manifest.content ? "previous" : "candidate"}`);
+    if (state.fail && state.rollingBack && value === test.manifest.content && (failure === "manifest" || failure === "both")) throw new Error("fixture manifest restore failure");
+    test.contents.set(path, value);
+  } };
+  const serviceManager = createServiceManager({ platform: "linux", mode: "system", filesystem, executor: { execute: async (file, args) => {
+    expect(file).toBe("systemctl");
+    const operation = args[0]; trace.push(`native:${operation}`);
+    if (operation === "daemon-reload") { state.definition = test.contents.get(test.manifest.path)!; return { exitCode: 0 }; }
+    if (operation === "is-enabled") return { exitCode: state.enabled ? 0 : 1, stdout: state.enabled ? "enabled\n" : "disabled\n" };
+    if (operation === "is-active") return { exitCode: state.active ? 0 : 3 };
+    if (operation === "show") return { exitCode: 0, stdout: state.definition.includes("User=runmesh") ? "runmesh\n" : "root\n" };
+    if (operation === "stop") {
+      if (state.fail && state.rollingBack && failure === "stop") return { exitCode: 1, stderr: "fixture stop failure" };
+      state.active = false; return { exitCode: 0 };
+    }
+    if (operation === "enable") { state.enabled = true; state.active = true; return { exitCode: 0 }; }
+    if (operation === "restart") { state.active = true; return { exitCode: 0 }; }
+    if (operation === "disable") { state.enabled = false; if (args.includes("--now")) state.active = false; return { exitCode: 0 }; }
+    throw new Error(`unexpected fixture command: ${args.join(" ")}`);
+  } } });
+  const dependencies = { ...test.dependencies, serviceFilesystem: filesystem, serviceManager,
+    serviceProvisioner: { platform: "linux" as const, provision: async (manifest: ReturnType<typeof renderService>) => {
+      trace.push(`provision:${manifest.executionMode}`);
+      return { identity: manifest.executionMode === "dedicated_user" ? "runmesh" : "root", profileSecured: true };
+    } }, maintenanceManager: { install: async () => {
+      if (state.fail) { state.rollingBack = true; trace.push("maintenance-failed"); throw originalFailure; }
+    }, uninstall: async () => undefined } };
+  const migrate = () => serviceCommand(command("migrate", { executionMode: "privileged_host", confirmPrivilegedHost: true }), store, () => undefined, dependencies);
+  const result = await migrate().then(() => undefined, error => error as Error);
+  expect(result?.message).toContain("fixture maintenance failure");
+  expect(result?.message).toContain("rollback incomplete");
+  expect(result?.cause).toBe(originalFailure);
+  const rollback = trace.slice(trace.indexOf("maintenance-failed") + 1);
+  expect(rollback).toContain("native:stop");
+  expect(rollback).not.toContain("native:enable");
+  expect(rollback).not.toContain("native:restart");
+  expect(test.contents.has(test.manifest.path)).toBe(true);
+  if (failure === "stop") {
+    expect(state.active).toBe(true);
+    expect(profile.execution_mode).toBe("privileged_host");
+    expect(test.contents.get(test.manifest.path)).not.toBe(test.manifest.content);
+    expect(rollback.some(call => call.startsWith("save:") || call.startsWith("write:") || call.startsWith("provision:"))).toBe(false);
+  } else expect(state.active).toBe(false);
+  state.fail = false;
+  await migrate();
+  expect(state.active).toBe(true);
+  expect(profile.execution_mode).toBe("privileged_host");
+  await uninstall(command("uninstall"), store, () => undefined, dependencies);
+  expect(state.active).toBe(false);
+  expect(test.contents.has(test.manifest.path)).toBe(false);
+});
+
+it.each([false, true])("restores a disabled Windows task after failed install while preserving active=%s", async active => {
+  const layout = serviceLayout({ platform: "win32", mode: "system" });
+  const profile: RunnerProfile = { version: 1, server_url: "wss://fixture.invalid/runner/connect", runner_id: "fixture-runner", token: "fixture-only-token", management_mode: "central", execution_mode: "dedicated_user", workspaces: [] };
+  const store: ServiceProfilePort = { filePath: serviceProfilePath(layout), load: async () => profile, save: async () => undefined, remove: async () => undefined, assertServiceOwnership: async () => undefined };
+  const manifest = renderService({ platform: "win32", mode: "system", profilePath: store.filePath });
+  const contents = new Map([[manifest.path, manifest.content]]);
+  const state = { registered: true, enabled: false, active, definition: manifest.content, failMaintenance: true };
+  const calls: string[] = [];
+  const filesystem = { read: async (path: string) => contents.get(path), write: async (path: string, content: string) => { contents.set(path, content); }, remove: async (path: string) => { contents.delete(path); } };
+  const serviceManager = createServiceManager({ platform: "win32", mode: "system", filesystem, executor: { execute: async (file, args) => {
+    if (file === "powershell.exe") {
+      if (args.at(-1)!.includes("Write-Output 'stopped'")) return { exitCode: state.active ? 1 : 0, stdout: state.registered ? "stopped" : "absent" };
+      return { exitCode: 0, stdout: JSON.stringify(state.registered ? { found: true, enabled: state.enabled, state: state.active ? 4 : state.enabled ? 3 : 1, identity: "NT AUTHORITY\\LOCAL SERVICE" } : { found: false, absent: true }) };
+    }
+    expect(file).toBe("schtasks"); calls.push(args.join(" "));
+    if (args[0] === "/Query") return { exitCode: state.registered ? 0 : 1, ...(state.registered ? {} : { stderr: "ERROR: The system cannot find the file specified." }) };
+    if (args[0] === "/Create") { state.definition = contents.get(manifest.path)!; state.registered = true; state.enabled = true; return { exitCode: 0 }; }
+    if (args[0] === "/Run") { state.active = true; return { exitCode: 0 }; }
+    if (args[0] === "/End") { state.active = false; return { exitCode: 0 }; }
+    if (args[0] === "/Delete") { state.registered = false; return { exitCode: 0 }; }
+    if (args[0] === "/Change" && args.includes("/DISABLE")) { state.enabled = false; return { exitCode: 0 }; }
+    throw new Error(`unexpected fixture command: ${args.join(" ")}`);
+  } } });
+  const dependencies = { servicePlatform: "win32" as const, isAdministrator: () => true, serviceManager, serviceFilesystem: filesystem,
+    serviceProvisioner: { platform: "win32" as const, provision: async () => ({ identity: "NT AUTHORITY\\LOCAL SERVICE", profileSecured: true }) },
+    maintenanceManager: { install: async () => { if (state.failMaintenance) throw new Error("fixture maintenance failure"); }, uninstall: async () => undefined } };
+  const install = () => serviceCommand(command("install", { executablePath: "C:\\fixture\\new\\runmesh.cmd" }), store, () => undefined, dependencies);
+  const result = await install().then(() => undefined, error => error as Error);
+  expect(result?.message).toBe("fixture maintenance failure");
+  expect(contents.get(manifest.path)).toBe(manifest.content);
+  expect(state).toMatchObject({ enabled: false, active, definition: manifest.content });
+  expect(calls.some(call => call.startsWith("/Change") && call.includes("/DISABLE"))).toBe(true);
+  state.failMaintenance = false;
+  await install();
+  expect(state).toMatchObject({ enabled: true, active: true });
+  await uninstall(command("uninstall"), store, () => undefined, dependencies);
+  expect(state).toMatchObject({ registered: false, active: false });
+  expect(contents.has(manifest.path)).toBe(false);
 });

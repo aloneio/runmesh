@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { renderService, serviceLayout, serviceProfilePath, type ServiceCommandExecutor } from "../src/service.js";
+import { createServiceManager, renderService, serviceLayout, serviceProfilePath, type ServiceCommandExecutor } from "../src/service.js";
 import { createNativeServiceMaintenance, hasStandardEffectiveMaintenanceLaunch, hasStandardMaintenanceLaunch, type NativeServiceMaintenanceOptions } from "../src/updates/native-service.js";
 
 const linuxArguments = ["/opt/runmesh/current/bin/runmesh", "start", "--profile", "/etc/runmesh/profile.json", "--state-dir", "/var/lib/runmesh"];
@@ -149,6 +149,56 @@ it("unloads a macOS KeepAlive job and proves its old PID exited before switching
   expect(calls.some(call => call.includes("kill"))).toBe(false);
   await port.stop(); // A rollback must wait for the candidate, not the original PID.
   expect(calls.filter(call => call[0] === "ps").at(-1)).toEqual(["ps", "-p", "456", "-o", "pid="]);
+});
+
+it.each([
+  { enabled: false, active: false, state: 1 },
+  { enabled: true, active: false, state: 3 },
+  { enabled: false, active: true, state: 4 },
+  { enabled: true, active: true, state: 4 },
+])("reports Windows task enablement independently from activity: $enabled / $active", async initial => {
+  let statusScript = "";
+  const manager = createServiceManager({ platform: "win32", mode: "system", executor: { execute: async (file, args) => {
+    if (file === "powershell.exe") {
+      statusScript = args.at(-1) ?? "";
+      return { exitCode: 0, stdout: JSON.stringify({ found: true, enabled: initial.enabled, state: initial.state, identity: "NT AUTHORITY\\LOCAL SERVICE" }) };
+    }
+    expect(file).toBe("schtasks");
+    expect(args).toEqual(["/Query", "/TN", "RunmeshRunner"]);
+    return { exitCode: 0 };
+  } } });
+  await expect(manager.status?.(renderService({ platform: "win32" }))).resolves.toMatchObject({
+    installed: true, registered: true, reliable: true, enabled: initial.enabled, active: initial.active,
+  });
+  expect(statusScript).toContain("enabled=[bool]$task.Enabled");
+});
+
+it.each([undefined, "false", 0])("leaves legacy Windows enablement unknown when the probe returns %s", async enabled => {
+  const manager = createServiceManager({ platform: "win32", executor: { execute: async file => file === "powershell.exe"
+    ? { exitCode: 0, stdout: JSON.stringify({ found: true, state: 4, enabled }) }
+    : { exitCode: 0 } } });
+  const status = await manager.status?.(renderService({ platform: "win32" }));
+  expect(status).toMatchObject({ installed: true, active: true, reliable: true });
+  expect(status).not.toHaveProperty("enabled");
+});
+
+it.each([false, true])("disables a Windows task without changing its running state: %s", async active => {
+  const state = { enabled: true, active };
+  const calls: string[][] = [];
+  const manager = createServiceManager({ platform: "win32", executor: { execute: async (file, args) => {
+    calls.push([file, ...args]);
+    if (file === "schtasks" && args[0] === "/Change" && args.includes("/DISABLE")) state.enabled = false;
+    else throw new Error(`unexpected native operation: ${file} ${args.join(" ")}`);
+    return { exitCode: 0 };
+  } } });
+  await manager.disable!(renderService({ platform: "win32" }));
+  expect(state).toEqual({ enabled: false, active });
+  expect(calls).toEqual([["schtasks", "/Change", "/TN", "RunmeshRunner", "/DISABLE"]]);
+});
+
+it("reports Windows disable failures so rollback cannot claim restored enablement", async () => {
+  const manager = createServiceManager({ platform: "win32", executor: { execute: async () => ({ exitCode: 1, stderr: "fixture disable failure" }) } });
+  await expect(manager.disable!(renderService({ platform: "win32" }))).rejects.toThrow("fixture disable failure");
 });
 
 it("disables a Windows task before stopping and restores an originally disabled task", async () => {

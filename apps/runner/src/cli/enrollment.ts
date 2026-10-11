@@ -114,6 +114,9 @@ export function sameEnrollmentProfile(left: RunnerProfile | undefined, right: Ru
 
 export function enrollmentFailureMessage(detail: string, credentialsConsumed: boolean, outcomeUnknown: boolean, profileCleanup?: EnrollmentProfileCleanup): string {
   if (!credentialsConsumed && !outcomeUnknown) return detail;
+  if (credentialsConsumed && !outcomeUnknown && profileCleanup === undefined) {
+    return `${detail}; enrollment completed and the local profile was retained; resolve the local error before continuing setup`;
+  }
   const cleanupMessages: Record<EnrollmentProfileCleanup, string> = {
     absent: "no local profile was found",
     removed: "the local profile was removed",

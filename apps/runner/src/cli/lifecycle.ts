@@ -291,9 +291,56 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
         } catch (cleanup) { throw incomplete(cleanup instanceof Error ? cleanup.message : "previous Runner service contract could not be restored"); }
         throw cause;
       }
-      // A failed lifecycle operation must not leave the profile claiming a
-      // mode that was never activated. Restore the prior managed manifest and
-      // profile on a best-effort basis, while preserving the original error.
+      if (existingManaged && existingManifest !== undefined && statusProbeReliable && previousStatus !== undefined && !previousNativeAbsent
+        && (profileUpdated || provisioningAttempted || manifestWriteAttempted || lifecycleAttempted)) {
+        try {
+          const currentManifest = await filesystem.read(manifest.path);
+          if (currentManifest !== manifest.content && currentManifest !== existingManifest) throw new Error("managed service manifest changed during rollback");
+          const currentProfile = await store.load();
+          const profileRestored = sameEnrollmentProfile(currentProfile, profileBefore);
+          if (!profileRestored && (!profileUpdated || !sameEnrollmentProfile(currentProfile, profileTarget))) throw new Error("Runner profile changed during rollback");
+          // Stop before restoring any part of the old contract. If this fails,
+          // retain the current profile and definition for a later stop retry.
+          await manager.stop(currentManifest === manifest.content ? manifest : previousManifest);
+          if (!profileRestored) await store.save(profileBefore);
+          if (profileUpdated || provisioningAttempted) {
+            const restored = await provisioner.provision(previousManifest, store.filePath);
+            if (manifest.mode === "system" && !restored.profileSecured) throw new Error(restored.detail ?? "previous Runner profile could not be secured");
+            if (manifest.mode === "system") await store.assertServiceOwnership(previousManifest.executionMode, previousManifest.serviceGroup);
+          }
+          if (manifestWriteAttempted || manifestChanged) await restoreManifestSnapshot(filesystem, manifest, existingManifest, true);
+          if (await filesystem.read(manifest.path) !== existingManifest) throw new Error("previous service manifest could not be restored");
+          if (!sameEnrollmentProfile(await store.load(), profileBefore)) throw new Error("previous Runner profile could not be restored");
+
+          const wasDisabled = previousStatus.enabled === false
+            || (manifest.platform === "linux" && previousStatus.registered === true && !previousStatus.installed);
+          // A disabled systemd registration already refers to the restored
+          // file. Reload it through disable(), without enable --now.
+          if (!(manifest.platform === "linux" && wasDisabled && !previousStatus.active)) {
+            await manager.install(previousManifest);
+            if (previousStatus.active) await manager.restart(previousManifest);
+            else await manager.stop(previousManifest);
+          }
+          if (wasDisabled) {
+            if (manager.disable === undefined) throw new Error("previous service enablement could not be restored");
+            await manager.disable(previousManifest);
+          }
+          const restoredStatus = await manager.status?.(previousManifest);
+          if (restoredStatus === undefined || restoredStatus.reliable === false
+            || restoredStatus.active !== previousStatus.active || restoredStatus.installed !== previousStatus.installed
+            || (previousStatus.enabled !== undefined && restoredStatus.enabled !== previousStatus.enabled)
+            || (manifest.platform !== "darwin" && previousStatus.registered === true && restoredStatus.registered === false)) {
+            throw new Error("previous Runner service state could not be verified after rollback");
+          }
+          if (previousStatus.active && (previousStatus.identity !== undefined || modeChanged || previousManifest.executionMode === "privileged_host")) {
+            const privilegeState = servicePrivilegeState(previousManifest, restoredStatus.identity, true);
+            if (privilegeState !== "restricted" && privilegeState !== "privileged") throw new Error("previous Runner service identity could not be verified after rollback");
+          }
+        } catch (cleanup) { throw incomplete(cleanup instanceof Error ? cleanup.message : "previous Runner service contract could not be restored"); }
+        throw cause;
+      }
+      // First installs and legacy adapters without a known native state
+      // restore their owned files without starting an unverified registration.
       // A no-manifest install has no native service identity whose profile
       // ACL can be restored by the provisioner.  Even when the requested
       // execution mode is unchanged (`profileUpdated === false`), the
@@ -332,60 +379,11 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
         if (existingManaged && ownsProfileSnapshot) await provisioner.provision(previousManifest, store.filePath).catch(() => undefined);
       }
       if (manifestWriteAttempted || manifestChanged) await restoreManifestSnapshot(filesystem, manifest, existingManaged ? existingManifest : undefined, existingManaged);
-      // Restore the native process as well as the bytes/profile.  Otherwise a
-      // failed migration can leave an old process running with a new profile
-      // contract (or a newly-created privileged process alive after its
-      // manifest was removed). Preserve the original failure when reporting
-      // an incomplete restoration.
       if (provisioningAttempted && !profileUpdated && existingManaged) {
         // Same-mode reinstalls do not replace the profile JSON, but their ACL
         // or ownership changes can still be partial. Re-run the old-mode
         // provisioner even when no profile migration was requested.
         await provisioner.provision(previousManifest, store.filePath).catch(() => undefined);
-      }
-      if (lifecycleAttempted && !previousNativeAbsent) {
-        if (existingManaged && existingManifest !== undefined) {
-          const hadNativeService = statusProbeReliable && previousStatus !== undefined
-            && (previousStatus.registered === true || previousStatus.installed === true || previousStatus.active === true);
-          const wasRegisteredButDisabled = statusProbeReliable && previousStatus !== undefined
-            && previousStatus.registered === true && previousStatus.installed !== true && previousStatus.active !== true;
-          if (wasRegisteredButDisabled) {
-            // Do not call manager.install() while restoring a disabled,
-            // masked, or linked native registration.  The production Linux
-            // adapter implements install as `enable --now`, which would
-            // silently turn the operator's disabled state into an enabled
-            // service during rollback (and a masked unit would fail with an
-            // unnecessary error).  The restored manifest is already on disk;
-            // stop is a harmless best-effort guard against an adapter that
-            // partially started the candidate before throwing.  A native
-            // disable hook then removes only an enablement introduced by this
-            // attempt while leaving masked/linked/static registrations alone.
-            // The next explicit install/start will reload the restored
-            // definition.
-            await manager.stop(previousManifest).catch(() => undefined);
-            if (manager.disable !== undefined) await manager.disable(previousManifest).catch(() => undefined);
-          } else if (statusProbeReliable && previousStatus !== undefined && !hadNativeService) {
-            // There was no service before this attempt; remove any newly
-            // created registration rather than starting the old definition.
-            await manager.uninstall(previousManifest).catch(() => undefined);
-          } else if (hadNativeService) {
-            // Re-load the restored bytes before changing lifecycle state. A
-            // restart alone can keep a cached/new unit or task definition.
-            await manager.install(previousManifest).catch(() => undefined);
-            if (previousStatus?.active === true) await manager.restart(previousManifest).catch(() => undefined);
-            else if (previousStatus?.installed === true) await manager.stop(previousManifest).catch(() => undefined);
-            else {
-              // The preflight probe was unavailable.  Leave the restored
-              // service stopped rather than risk a privileged process from
-              // the failed attempt continuing under an unknown definition.
-              await manager.stop(previousManifest).catch(() => undefined);
-            }
-            if (previousStatus?.active === true && previousStatus.registered === true && !previousStatus.installed && manager.disable !== undefined) {
-              try { await manager.disable(previousManifest); }
-              catch (cleanup) { throw incomplete(cleanup instanceof Error ? cleanup.message : "previous service enablement could not be restored"); }
-            }
-          }
-        }
       }
       throw cause;
     }
