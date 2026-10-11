@@ -76,7 +76,8 @@ export function normalizeJobRecord(value: unknown, expectedJobId?: string): JobR
   const cwd = item.cwd;
   if (typeof cwd !== "string" || cwd.length === 0 || cwd.length > 4_096 || cwd.includes("\0") || isAbsoluteJobPath(cwd) || cwd.split(/[\\/]+/u).includes("..")) return undefined;
   const command = item.command;
-  if (!Array.isArray(command) || command.length === 0 || command.length > 256 || command.some((part) => typeof part !== "string" || part.length > 8_192 || part.includes("\0"))) return undefined;
+  // String-form invocations retain the executable plus up to 256 arguments.
+  if (!Array.isArray(command) || command.length === 0 || command.length > 257 || command.some((part) => typeof part !== "string" || part.length > 8_192 || part.includes("\0"))) return undefined;
   if (typeof item.shell !== "boolean" || !isJobStatus(item.status)) return undefined;
   // These nullable fields predate the recovery metadata additions and may be
   // absent in a persisted record from an older Runner.  Treat omission as the
