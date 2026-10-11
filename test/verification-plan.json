@@ -110,6 +110,7 @@
         "apps/runner/test/product.test.ts",
         "apps/runner/test/profile-read-consistency.test.ts",
         "apps/runner/test/purge-native.test.ts",
+        "apps/runner/test/purge-record.test.ts",
         "apps/runner/test/purge.test.ts",
         "apps/runner/test/release-boundary-security.test.ts",
         "apps/runner/test/release-stager.test.ts",

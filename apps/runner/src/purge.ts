@@ -6,6 +6,7 @@ import { currentServicePlatform, hostServiceCommandExecutor, isManagedService, s
 import { stopWindowsTask, windowsTaskMissingCatch } from "./services/task-scheduler.js";
 import { launchdProcessExited, waitForLaunchdExit } from "./services/launchd.js";
 import { nativeProbeReliable } from "./services/probes.js";
+import { createDurableFile, syncDurableFile } from "./services/durable-file.js";
 
 /** Cleanup is restricted to these application-owned locations. */
 export function purgeLayout(platform: ServicePlatform, mode: ServiceMode, home = homedir()) {
@@ -37,6 +38,7 @@ export interface PurgeFilesystem {
   mounts(): Promise<string[]>;
   /** Exclusively create and durably publish a cleanup recovery record. */
   createFile?(path: string, content: string): Promise<void>;
+  syncFile?(path: string): Promise<void>;
   withDirectory?(path: string, expected: PurgeStat, action: (anchored: string) => Promise<void>): Promise<void>;
 }
 const missing = (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
@@ -58,13 +60,8 @@ export const hostPurgeFilesystem: PurgeFilesystem = {
   link: readlink,
   file: unlink,
   directory: rmdir,
-  createFile: async (path, content) => {
-    const handle = await open(path, "wx", 0o600);
-    try { await handle.writeFile(content); await handle.sync(); }
-    finally { await handle.close(); }
-    const parent = await open(dirname(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    try { await parent.sync(); } finally { await parent.close(); }
-  },
+  createFile: createDurableFile,
+  syncFile: syncDurableFile,
   text: async (path, limit) => {
     let handle;
     try {
@@ -314,6 +311,12 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
           paths.delete(stopRecord.path); stopRecord = undefined;
         }
         if (pid !== undefined && pid > 0 && stopRecord === undefined) await rememberStoppedProcess(pid);
+        if (stopRecord !== undefined) {
+          if (io.syncFile === undefined) throw new Error("Runner stop requires durable recovery-record synchronization");
+          await assertStopRecordUnchanged();
+          await io.syncFile(stopRecord.path);
+          await assertStopRecordUnchanged();
+        }
         // The same PID may still be registered if an earlier attempt stopped
         // after publishing the record but before bootout. Retrying is valid.
         await run("launchctl", ["bootout", launchdTarget]);

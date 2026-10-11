@@ -32,6 +32,7 @@ function memoryHost(withManifest = true, platform = currentServicePlatform()) {
       if (entries.has(path)) throw new Error("stop record already exists");
       file(path, content);
     },
+    syncFile: async () => undefined,
     link: async () => { throw new Error("unexpected link"); },
     file: async (path) => { entries.delete(path); },
     directory: async (path) => {
@@ -193,6 +194,26 @@ it.skipIf(process.platform === "win32")("checks the recorded macOS process even 
   exited = true;
   expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(true);
   expect(host.entries.has(stopRecord(host))).toBe(false);
+});
+
+it.skipIf(process.platform === "win32")("retries record synchronization before unloading the recorded macOS service", async () => {
+  const host = memoryHost(true, "darwin"), before = installationEntries(host);
+  const execute = host.executor.execute; let bootouts = 0, syncs = 0;
+  host.io.syncFile = async path => {
+    expect(path).toBe(stopRecord(host));
+    if (++syncs === 1) throw new Error("record synchronization failed");
+  };
+  host.executor.execute = async (program, args) => {
+    if (program === "launchctl" && args[0] === "print" && bootouts === 0) return { exitCode: 0, stdout: host.layout.installRoot + "\nstate = running\npid = 4321\n" };
+    if (program === "launchctl" && args[0] === "bootout") bootouts++;
+    if (program === "ps") return { exitCode: 1 };
+    return execute(program, args);
+  };
+  const first = await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor });
+  expect(first.purged).toBe(false); expect(bootouts).toBe(0);
+  expect(installationEntries(host)).toEqual(before);
+  expect((await purgeInstallation({ platform: "darwin", filesystem: host.io, executor: host.executor })).purged).toBe(true);
+  expect(syncs).toBe(2); expect(bootouts).toBe(1);
 });
 
 function uninstallHost(host: ReturnType<typeof memoryHost>, maintenanceManager: MaintenanceManagerInstaller) {

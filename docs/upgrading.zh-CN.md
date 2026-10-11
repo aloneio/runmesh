@@ -127,6 +127,8 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 
 在同一 root／管理员会话执行[共用首次启用命令](upgrading.md#enable-the-manager-after-the-package-switch)。命令使用原 canonical profile 和读出的执行模式；原模式为 `privileged_host` 时，显式带上 `--confirm-privileged-host`。这是现有全主机服务执行 `install` 仍要求的确认，不能省略。命令不传 `--executable-path`，保留已有受管服务的程序路径、参数和账号，只允许安装逻辑更新已知生成字段。
 
+Windows 首次启用由新目录中的私有 Node 直接执行已验签的 `maintenance.cjs`。安装会改写 `.cmd` 启动器，直接入口可避免正在运行的批处理在返回时续读改写后的内容。
+
 脚本检查安装报告中的 `remote_version_management: available` 和原执行模式，并确认系统管理器服务正在运行，然后再次运行 `doctor`。原服务或 profile 显示身份／模式不一致时先处理该问题；不要借首次启用来切换权限模式。若返回 `manual` / `custom_service_layout`，检查实际服务定义及覆盖配置，不要删除自定义参数来强行启用。
 
 独立管理器会从已验签包复制到安装根目录的 `manager`。控制台还需从“等待主机管理器领取”推进到目标版本完成，并保留原 Runner 身份和工作区策略；本地服务启动成功不等于远程请求已经领取。
@@ -136,6 +138,10 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 如果管理器已经启动，手工恢复前先通过系统服务管理器停止它，保留其程序包与 journal。未完成的版本操作必须先完成恢复，不可删除 journal 或安装锁再切换 `current`。重新启动管理器前也要核对控制台的目标，避免再次自动切换。
 
 确认没有维护操作运行后，按同一平台步骤暂停 Runner。重新读取并记录 `current` 的实际物理路径，核对程序包身份，确认它是受管 `versions` 目录的直属子目录。管理器即使安装同版本，也可能已经切换到另一个目录，不能假定当前目标仍为 `NEW` / `$New`。POSIX 将实际路径记为 `ROLLBACK_FROM`，让 `current.next` 指向原 `OLD`，用原 Node 命令替换 `current`，传入 `ROLLBACK_FROM` 作为预期当前目标。Windows 在任务停止后，把实际的 `current` junction 改名为尚未使用的恢复名称，再把 `$Previous` 改回 `current`；重命名前再次确认绝对路径都在 `$Root` 内。使用保留的服务定义启动，恢复任务原启用状态。
+
+首次升级前的旧目录仍包含旧启动器。已经安装独立管理器时，手工恢复该目录会让 `install`、`uninstall` 等命令重新进入不认识管理器的旧 CLI。刷新启动器前，服务管理操作使用保留的独立入口：POSIX 为 `/opt/runmesh/manager/runtime/node /opt/runmesh/manager/runmesh.cjs`；Windows 用 `C:\Program Files\Runmesh\manager\runtime\node.exe` 执行 `C:\Program Files\Runmesh\manager\runmesh.cjs`。Windows 卸载使用保留的 `C:\Program Files\Runmesh\manager\uninstall.ps1` 或托管维护命令，通过临时运行时完成清理。
+
+核对待处理版本请求、允许两项服务启动后，在同一管理员会话执行[恢复独立维护入口的共用命令](upgrading.md#recover-the-previous-package)。命令显式使用管理器自己的 Node 和维护包，以原 profile、执行模式及必要的 `--confirm-privileged-host` 执行 `install`，复用已有管理器并刷新当前旧包的两个启动器，再确认 Runner 仍为记录的旧版本并运行 `doctor`。管理器需要继续停止时，暂缓这次 `install`，服务操作继续使用上述绝对入口。刷新成功后可继续使用普通启动器；从未安装过管理器的恢复沿用旧包原入口。
 
 保留配置、状态和经过验证的安装包，直到恢复后的服务通过检查。验收完成后，清理本次升级创建的暂存目录和 npm 配置文件，按备份策略保留上一版本。
 
