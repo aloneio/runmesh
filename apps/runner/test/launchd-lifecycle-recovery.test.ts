@@ -129,14 +129,18 @@ function firstInstallFixture() {
   const before: RunnerProfile = { version: 1, server_url: "wss://fixture.example/runner/connect", runner_id: "fixture-runner",
     token: "fixture-token", management_mode: "central", execution_mode: "dedicated_user", workspaces: [] };
   let profile = before;
+  const provisionedModes: string[] = [];
   const store = { filePath: serviceProfilePath(serviceLayout({ platform: "darwin", mode: "system" })), load: async () => profile,
     save: async (value: RunnerProfile) => { profile = value; }, remove: async () => undefined, assertServiceOwnership: async () => undefined };
   const dependencies = { servicePlatform: "darwin" as const, serviceManager: test.manager(), serviceFilesystem: test.filesystem,
-    serviceProvisioner: { platform: "darwin" as const, provision: async () => ({ identity: "root", profileSecured: true }) }, isAdministrator: () => true };
+    serviceProvisioner: { platform: "darwin" as const, provision: async (candidate: ReturnType<typeof renderService>) => {
+      provisionedModes.push(candidate.executionMode);
+      return { identity: "root", profileSecured: true };
+    } }, isAdministrator: () => true };
   const install = () => serviceCommand({ command: "install", json: true, values: { executionMode: "privileged_host", confirmPrivilegedHost: true }, passthrough: [] }, store, () => undefined, dependencies);
   const remove = () => uninstall({ command: "uninstall", json: true, values: {}, passthrough: [] }, store, () => undefined,
     { ...dependencies, serviceManager: test.manager() });
-  return { ...test, store, dependencies, before, profile: () => profile, install, remove };
+  return { ...test, store, dependencies, before, provisionedModes, profile: () => profile, install, remove };
 }
 
 it.each(["bootout", "process-probe"] as const)("keeps a first macOS install retryable when rollback fails at %s", async failure => {
@@ -184,4 +188,56 @@ it("retains a failed first user install when an injected adapter cannot prove pr
   expect(test.files.get(manifest.path)).toBe(manifest.content);
   expect(test.profile()).toEqual(test.before);
   expect(calls).toEqual([]);
+});
+
+function stoppedManagedFixture() {
+  const test = firstInstallFixture();
+  const previous = renderService({ platform: "darwin", mode: "system", profilePath: test.store.filePath, executionMode: "dedicated_user" });
+  test.files.set(previous.path, previous.content);
+  return { ...test, previous };
+}
+
+it.each(["bootout", "process-probe"] as const)("preserves a newly active mode when a stopped managed macOS install cannot roll back at %s", async failure => {
+  const test = stoppedManagedFixture();
+  if (failure === "bootout") test.state.bootoutFailures = 2;
+  const result = await test.install().then(() => undefined, error => error as Error);
+  expect(test.files.get(test.manifest.path)).toBe(test.manifest.content);
+  expect(test.profile()).toEqual({ ...test.before, execution_mode: "privileged_host" });
+  expect(test.provisionedModes).toEqual(["privileged_host"]);
+  expect(result?.message).toContain("fixture enable failure");
+  expect(result?.message).toContain("rollback incomplete");
+  expect(result?.cause).toBeInstanceOf(Error);
+  expect(JSON.parse(test.files.get(test.recordPath)!)).toMatchObject({ pid: 4321 });
+  test.state.bootoutFailures = 0;
+  test.state.process = "gone";
+  await test.remove();
+  expect(test.files.has(test.manifest.path)).toBe(false);
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.state.loaded).toBe(false);
+});
+
+it("restores a previously unloaded macOS manifest and profile without starting the old service", async () => {
+  const test = stoppedManagedFixture();
+  test.state.process = "gone";
+  await expect(test.install()).rejects.toThrow("fixture enable failure");
+  expect(test.profile()).toEqual(test.before);
+  expect(test.provisionedModes).toEqual(["privileged_host", "dedicated_user"]);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.files.has(test.recordPath)).toBe(false);
+  expect(test.state.loaded).toBe(false);
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+  expect(test.calls.filter(call => call[1] === "bootout")).toHaveLength(1);
+});
+
+it("does not start a previously unloaded macOS service while rolling back a failed bootstrap", async () => {
+  const test = stoppedManagedFixture();
+  test.state.bootstrapFailures = 1;
+  test.state.enableFailures = 0;
+  test.state.process = "gone";
+  await expect(test.install()).rejects.toThrow("Service already loaded");
+  expect(test.profile()).toEqual(test.before);
+  expect(test.files.get(test.manifest.path)).toBe(test.previous.content);
+  expect(test.state.loaded).toBe(false);
+  expect(test.calls.filter(call => call[1] === "bootstrap")).toHaveLength(1);
+  expect(test.calls.some(call => call[1] === "bootout")).toBe(false);
 });

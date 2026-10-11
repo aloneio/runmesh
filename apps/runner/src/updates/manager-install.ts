@@ -332,6 +332,22 @@ async function installManagementLaunchers(host: ReturnType<typeof managerHost>, 
   }
 }
 
+async function removeManagerDefinition(host: ReturnType<typeof managerHost>, expected: string): Promise<void> {
+  if (await host.filesystem.read(host.manifestPath) !== expected) throw new Error("maintenance service changed during removal");
+  if (host.platform === "win32" && await host.registered()) await host.execute("schtasks", ["/Delete", "/TN", WINDOWS_MANAGER, "/F"]);
+  if (await host.filesystem.read(host.manifestPath) !== expected) throw new Error("maintenance service changed during removal");
+  await host.filesystem.remove(host.manifestPath);
+  if (host.platform === "linux") {
+    try { await host.execute("systemctl", [...host.prefix, "daemon-reload"]); }
+    catch (cause) {
+      // Keep ownership proof when systemd may still cache the removed unit.
+      try { if (await host.filesystem.stat(host.manifestPath) === undefined) await host.filesystem.write(host.manifestPath, expected); }
+      catch { /* Preserve the reload failure and independent package. */ }
+      throw cause;
+    }
+  }
+}
+
 /** Initial installation copies once. Runner package changes never overwrite a live manager. */
 export async function managerInstall(options: MaintenanceManagerOptions): Promise<MaintenanceManagerInstallResult> {
   const host = managerHost(options);
@@ -475,9 +491,16 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
       let stopped = !serviceAttempted;
       if (serviceAttempted) { try { await host.stop(); stopped = true; } catch { /* retain executable while its process may still exist */ } }
       if (stopped && launchersRestored) {
-        if (platform === "win32" && serviceAttempted) await host.execute("schtasks", ["/Delete", "/TN", WINDOWS_MANAGER, "/F"]).catch(() => undefined);
-        if (previousManifest === undefined && await filesystem.read(manifestPath) === manifest.content) await filesystem.remove(manifestPath).catch(() => undefined);
-        await filesystem.remove(managerRoot).catch(() => undefined);
+        try {
+          await assertFinishedManagerJournal(host);
+          if (previousManifest === undefined) {
+            if (await filesystem.read(manifestPath) !== undefined) await removeManagerDefinition(host, manifest.content);
+            else if (serviceAttempted && await host.registered()) throw new Error("maintenance manager registration remains without its definition");
+          } else if (platform === "win32" && serviceAttempted && await host.registered()) {
+            await host.execute("schtasks", ["/Delete", "/TN", WINDOWS_MANAGER, "/F"]);
+          }
+          await filesystem.remove(managerRoot);
+        } catch { /* Keep recovery files until registration cleanup succeeds. */ }
       }
     }
     throw cause;
@@ -526,20 +549,7 @@ export async function managerUninstall(options: MaintenanceManagerOptions): Prom
   // crash or interrupted switch must keep its independent runtime and journal
   // available for recovery; uninstall/purge may not destroy that evidence.
   await assertFinishedManagerJournal(host);
-  if (host.platform === "win32" && await host.registered()) await host.execute("schtasks", ["/Delete", "/TN", WINDOWS_MANAGER, "/F"]);
-  if (await host.filesystem.read(host.manifestPath) !== existing) throw new Error("maintenance service changed during removal");
-  await host.filesystem.remove(host.manifestPath);
-  if (host.platform === "linux") {
-    try { await host.execute("systemctl", [...host.prefix, "daemon-reload"]); }
-    catch (cause) {
-      // An unsuccessful reload may leave a cached registration. Keep our
-      // ownership proof available for a normal retry without replacing a
-      // manifest that another operation has since created.
-      try { if (await host.filesystem.stat(host.manifestPath) === undefined) await host.filesystem.write(host.manifestPath, existing); }
-      catch { /* Retain the original reload failure if restoration also fails. */ }
-      throw cause;
-    }
-  }
+  await removeManagerDefinition(host, existing);
   if (!options.preservePackage) await host.filesystem.remove(host.managerRoot);
 }
 

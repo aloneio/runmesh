@@ -122,6 +122,77 @@ it("rolls back a failed new manager installation while retaining all Runner stat
   expect(test.files.get(test.paths.path.join(test.paths.layout.installRoot, "versions", "0.1.7", "bin", "runmesh"))).toBe("original launcher");
 });
 
+it("can retry a new Linux manager installation after startup rollback removes its cached registration", async () => {
+  const test = fixture("linux");
+  let failStart = true;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    if (name === "systemctl" && args.includes("is-active") && failStart) { failStart = false; return { exitCode: 1 }; }
+    return test.options.executor.execute(name, args);
+  } };
+  const options = { ...test.options, executor };
+  await expect(managerInstall(options)).rejects.toThrow("maintenance manager command failed");
+  expect(test.stats.has(test.paths.managerRoot)).toBe(false);
+  expect(test.files.has(test.paths.manifestPath)).toBe(false);
+  await managerInstall(options);
+  expect(test.isActive()).toBe(true);
+  await managerUninstall(options);
+});
+
+it.each(["linux-reload", "linux-manifest", "windows-delete"] as const)("retains a new manager for retry when rollback fails at %s", async failure => {
+  const test = fixture(failure === "windows-delete" ? "win32" : "linux");
+  let failStart = true, failCleanup = true, reloads = 0;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    if (name === "systemctl" && args.includes("daemon-reload") && ++reloads > 1 && failure === "linux-reload" && failCleanup) return { exitCode: 1 };
+    if (name === "schtasks" && args[0] === "/Delete" && failCleanup) return { exitCode: 1 };
+    const result = await test.options.executor.execute(name, args);
+    if (failStart && ((name === "systemctl" && args.includes("is-active")) || (name === "schtasks" && args[0] === "/Run"))) {
+      failStart = false; return { exitCode: 1 };
+    }
+    return result;
+  } };
+  const filesystem = { ...test.options.filesystem, remove: async (path: string) => {
+    if (failure === "linux-manifest" && failCleanup && path === test.paths.manifestPath) throw new Error("fixture manifest removal failure");
+    await test.options.filesystem.remove(path);
+  } };
+  const options = { ...test.options, executor, filesystem };
+  await expect(managerInstall(options)).rejects.toThrow("maintenance manager command failed");
+  expect(test.files.has(test.paths.manifestPath)).toBe(true);
+  expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  expect(test.files.get(test.paths.runtimePath)).toBe("runtime bytes");
+  expect(test.files.get(test.options.profilePath)).toBe("existing credential profile");
+  expect(test.isActive()).toBe(false);
+  failCleanup = false;
+  await managerUninstall(options);
+  expect(test.stats.has(test.paths.managerRoot)).toBe(false);
+  expect(test.files.has(test.paths.manifestPath)).toBe(false);
+  await managerInstall(options);
+  expect(test.isActive()).toBe(true);
+});
+
+it.each(["unfinished", "invalid"] as const)("retains a new manager's %s update journal after startup failure", async state => {
+  const test = fixture("linux");
+  const directory = test.paths.path.join(test.paths.managerRoot, "state");
+  const journal = test.paths.path.join(directory, "active-operation.json");
+  const content = state === "unfinished" ? JSON.stringify({ phase: "checking" }) : "interrupted journal";
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    if (name === "systemctl" && args.includes("is-active")) {
+      await test.options.filesystem.mkdir(directory, 0o700);
+      await test.options.filesystem.write(journal, content);
+      return { exitCode: 1 };
+    }
+    return test.options.executor.execute(name, args);
+  } };
+  await expect(managerInstall({ ...test.options, executor })).rejects.toThrow("maintenance manager command failed");
+  expect(test.isActive()).toBe(false);
+  expect(test.files.get(journal)).toBe(content);
+  expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");
+  expect(test.files.has(test.paths.manifestPath)).toBe(true);
+  await expect(managerUninstall(test.options)).rejects.toThrow(state === "unfinished" ? "maintenance is unfinished" : "journal is invalid");
+  test.files.set(journal, JSON.stringify({ phase: "rolled_back" }));
+  await managerUninstall(test.options);
+  expect(test.stats.has(test.paths.managerRoot)).toBe(false);
+});
+
 it("retains the stable management package across ordinary uninstall and reinstall of an older Runner", async () => {
   const test = fixture("linux"); await managerInstall(test.options);
   await managerUninstall({ ...test.options, preservePackage: true });

@@ -73,7 +73,14 @@ export class UpdateCoordinator {
       if (this.matches(journal, observed) && observed.operation?.state === journal.phase) {
         await this.options.journal.complete(journal); return;
       }
-      if (journal.phase === "succeeded" && this.matches(journal, observed) && observed.operation !== null && !isTerminalRunnerUpdate(observed.operation.state)) {
+      if ((journal.phase === "succeeded" || journal.phase === "rolled_back") && this.matches(journal, observed) && observed.operation !== null && !isTerminalRunnerUpdate(observed.operation.state)) {
+        if (journal.phase === "rolled_back") {
+          // The restored Runner can also exit before its receipt commits.
+          // Revalidate and recover next poll, bounding repeated receipt loss
+          // to one native recovery per coordinator run.
+          await this.write(journal, "checking", journal.error_code ?? "activation_failed");
+          throw error;
+        }
         // The candidate can exit between its health observation and commit.
         // A fresh nonterminal server record proves that the cloud fence is
         // still held; only then may a rejected success safely roll back.

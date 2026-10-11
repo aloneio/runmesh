@@ -103,6 +103,12 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
       try { previousStatus = await manager.status(previousManifest); } catch { statusProbeFailed = true; previousStatus = undefined; }
     }
     const statusProbeReliable = previousStatus !== undefined && previousStatus.reliable !== false;
+    // On macOS `installed` describes the managed plist, not a loaded native
+    // service. Prefer explicit registration state when deciding whether a
+    // failed attempt created a service that must be stopped before rollback.
+    // Legacy adapters without `registered` retain their installed fallback.
+    const previousNativeAbsent = statusProbeReliable && previousStatus !== undefined && previousStatus.active !== true
+      && (previousStatus.registered === false || (previousStatus.registered === undefined && !previousStatus.installed));
     // Compare the requested contract with the mode represented by the
     // existing managed manifest as well as the profile. This catches stale
     // legacy/mismatched states where the JSON omits (or disagrees with) the
@@ -227,12 +233,13 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
       });
       return;
     } catch (cause) {
-      if (!existingManaged && lifecycleAttempted) {
-        // A first install can start its process before a later native step
-        // fails. Preserve its profile, ownership and managed definition until
-        // stopping that process succeeds, so a later uninstall can retry.
+      if (lifecycleAttempted && (!existingManaged || previousNativeAbsent)) {
+        // Installing a previously absent native service can start its process
+        // before a later step fails, even when an old managed plist exists.
+        // Preserve the candidate profile, ownership and managed definition
+        // until stopping succeeds, so a later uninstall can retry.
         const incomplete = (detail: string) => new Error(`${cause instanceof Error ? cause.message : String(cause)}; rollback incomplete: ${detail}; service manifest and profile retained`, { cause });
-        if (!statusProbeReliable || previousStatus === undefined || previousStatus.registered === true || previousStatus.installed || previousStatus.active) {
+        if (!previousNativeAbsent) {
           // Legacy injected user adapters can omit status. An unknown prior
           // registration must never become authority to stop another service.
           throw incomplete("the prior native service state could not be confirmed");
@@ -292,7 +299,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
         // provisioner even when no profile migration was requested.
         await provisioner.provision(previousManifest, store.filePath).catch(() => undefined);
       }
-      if (lifecycleAttempted) {
+      if (lifecycleAttempted && !previousNativeAbsent) {
         if (existingManaged && existingManifest !== undefined) {
           const hadNativeService = statusProbeReliable && previousStatus !== undefined
             && (previousStatus.registered === true || previousStatus.installed === true || previousStatus.active === true);

@@ -438,6 +438,60 @@ describe("independent update coordinator", () => {
     expect(test.events).toContain("restore"); expect(test.operation().state).toBe("rolled_back");
   });
 
+  it("retries an old Runner that exits before its rollback receipt commits while preserving the original error", async () => {
+    const test = fixture(); test.setJournal({ ...recovering(), error_code: "service_stop_failed" });
+    const report = test.options.cloud.report; let loseRollbackSession = true;
+    const coordinator = new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, report: async (owner, state, details) => {
+      if (state === "rolled_back") {
+        if (loseRollbackSession) { loseRollbackSession = false; test.setNewSession(false); }
+        if (!(await test.options.cloud.poll()).observed_new_session) throw new MaintenanceHttpError(409);
+      }
+      return report(owner, state, details);
+    } } });
+    await expect(coordinator.runOnce()).rejects.toThrow("maintenance_http_409");
+    expect(test.active()).toMatchObject({ phase: "checking", error_code: "service_stop_failed" });
+    expect(test.events.filter(event => event === "start")).toHaveLength(1);
+    await coordinator.runOnce();
+    expect(test.active()).toBeUndefined();
+    expect(test.operation()).toMatchObject({ state: "rolled_back", error_code: "service_stop_failed" });
+    for (const event of ["stop", "restore", "start"]) expect(test.events.filter(value => value === event)).toHaveLength(2);
+  });
+
+  it("bounds each recovery attempt when every rollback receipt loses its Runner session", async () => {
+    const test = fixture(); test.setJournal(recovering()); let receipts = 0;
+    const coordinator = new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, report: async (owner, state, details) => {
+      if (state === "rolled_back") { receipts++; test.setNewSession(false); throw new MaintenanceHttpError(409); }
+      return test.options.cloud.report(owner, state, details);
+    } } });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await expect(coordinator.runOnce()).rejects.toThrow("maintenance_http_409");
+      expect(test.active()).toMatchObject({ phase: "checking", error_code: "activation_failed" });
+      expect(receipts).toBe(attempt);
+      for (const event of ["stop", "restore", "start"]) expect(test.events.filter(value => value === event)).toHaveLength(attempt);
+    }
+  });
+
+  it.each(["same_terminal", "other_terminal", "operation", "lifecycle", "manager", "removed"] as const)("does not retry a rollback receipt after its authenticated fence changes: %s", async replacement => {
+    const test = fixture(); const saved: UpdateJournal = { ...recovering(), phase: "rolled_back", error_code: "service_stop_failed" };
+    test.setJournal(saved);
+    const replacedOperation = replacement === "removed" ? null : {
+      ...saved.operation,
+      ...(replacement === "same_terminal" ? { state: "rolled_back" as const, error_code: "service_stop_failed" as const }
+        : replacement === "other_terminal" ? { state: "succeeded" as const }
+          : replacement === "operation" ? { operation_id: "upgrade_2" }
+            : replacement === "lifecycle" ? { lifecycle_id: "lifecycle_2" } : { manager_id: "manager_2" }),
+    };
+    const coordinator = new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud,
+      report: async () => { throw new MaintenanceHttpError(409); },
+      poll: async () => ({ ...await test.options.cloud.poll(), operation: replacedOperation }),
+    } });
+    const retired = ["same_terminal", "operation", "lifecycle"].includes(replacement);
+    if (retired) await coordinator.runOnce();
+    else await expect(coordinator.runOnce()).rejects.toThrow("maintenance_http_409");
+    expect(test.active()).toEqual(retired ? undefined : saved);
+    expect(test.events).toEqual(retired ? ["complete"] : []);
+  });
+
   it("retires a terminal journal superseded after a lost receipt without changing the new operation", async () => {
     const test = fixture(); const saved = { ...recovering(), phase: "succeeded" as const }; test.setJournal(saved);
     test.setOperation({ ...operation(), operation_id: "upgrade_2" });
