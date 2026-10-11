@@ -227,6 +227,19 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
       });
       return;
     } catch (cause) {
+      if (!existingManaged && lifecycleAttempted) {
+        // A first install can start its process before a later native step
+        // fails. Preserve its profile, ownership and managed definition until
+        // stopping that process succeeds, so a later uninstall can retry.
+        const incomplete = (detail: string) => new Error(`${cause instanceof Error ? cause.message : String(cause)}; rollback incomplete: ${detail}; service manifest and profile retained`, { cause });
+        if (!statusProbeReliable || previousStatus === undefined || previousStatus.registered === true || previousStatus.installed || previousStatus.active) {
+          // Legacy injected user adapters can omit status. An unknown prior
+          // registration must never become authority to stop another service.
+          throw incomplete("the prior native service state could not be confirmed");
+        }
+        try { await manager.uninstall(manifest); }
+        catch (cleanup) { throw incomplete(cleanup instanceof Error ? cleanup.message : "service stop could not be confirmed"); }
+      }
       // A failed lifecycle operation must not leave the profile claiming a
       // mode that was never activated. Restore the prior managed manifest and
       // profile on a best-effort basis, while preserving the original error.
@@ -317,13 +330,6 @@ export async function serviceCommand(parsed: ParsedCommand, store: ServiceProfil
               await manager.stop(previousManifest).catch(() => undefined);
             }
           }
-        } else if (statusProbeReliable && previousStatus !== undefined
-          && previousStatus.registered !== true && !previousStatus.installed && !previousStatus.active) {
-          // The preflight explicitly proved that no native service existed;
-          // only in that case is it safe to remove a registration created by
-          // this failed attempt.  Unknown status is intentionally left alone
-          // so a custom/native service cannot be deleted as collateral.
-          await manager.uninstall(manifest).catch(() => undefined);
         }
       }
       throw cause;

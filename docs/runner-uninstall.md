@@ -55,6 +55,8 @@ If cleanup reports a symlinked parent directory, a same-named service from anoth
 
 A failed step returns a nonzero status and lists remaining items. Inspect that list; the maintenance CLI is retained where possible for diagnosis. Retry with the same verified maintenance release after correcting the cause.
 
+If a new installation fails after attempting to start its service, rollback first stops and unregisters that service. When this cannot be completed, the installer retains the profile, selected package and remaining service recovery state. Read the original installation error, resolve the service-stop failure, then retry uninstall using the hosted maintenance command. Obtain a new enrollment code when installing again if the earlier code was consumed.
+
 ## Confirm removal
 
 Check the exit status, any remaining-item report and the host service manager. Confirm the expected local directories have been removed.

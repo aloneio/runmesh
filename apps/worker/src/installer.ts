@@ -285,10 +285,24 @@ CURRENT_NEW_CREATED=0
 STAGE_CREATED=0
 PROFILE_CREATED=0
 ENROLLMENT_ATTEMPTED=0
+SERVICE_ATTEMPTED=0
 # A failed enrollment does not prove ownership of a profile another operation
 # may have created. Only successful enrollment authorizes profile rollback.
 cleanup_tty() { if [ "$TTY_ECHO_DISABLED" -eq 1 ]; then stty echo < /dev/tty 2>/dev/null || true; TTY_ECHO_DISABLED=0; fi; }
 cleanup() { cleanup_tty; rm -rf "$TMP"; release_install_lock; }
+rollback_service() {
+  if [ "$CURRENT_CREATED" -ne 1 ] || [ ! -L "$INSTALL_ROOT/current" ] || [ "$(readlink "$INSTALL_ROOT/current")" != "$FINAL" ]; then return 1; fi
+  if [ -e "$INSTALL_ROOT/manager" ] || [ -L "$INSTALL_ROOT/manager" ]; then
+    service_runtime="$INSTALL_ROOT/manager/runtime/node"
+    service_entry="$INSTALL_ROOT/manager/runmesh.cjs"
+  else
+    service_runtime="$INSTALL_ROOT/current/runtime/node"
+    service_entry="$INSTALL_ROOT/current/lib/node_modules/@aloneio/runmesh-runner/dist/maintenance.cjs"
+    if [ ! -f "$service_entry" ]; then service_entry="$INSTALL_ROOT/current/lib/node_modules/@aloneio/runmesh-runner/dist/runmesh.cjs"; fi
+  fi
+  if [ ! -x "$service_runtime" ] || [ ! -f "$service_entry" ]; then return 1; fi
+  "$service_runtime" "$service_entry" uninstall --profile "$PROFILE" --json
+}
 rollback() {
   rc="$1"
   if [ "$RUNMESH_ACTION" = uninstall ]; then
@@ -302,10 +316,19 @@ rollback() {
     printf '%s\n' '  Enrollment was attempted and the code may have been consumed. Check credentials before retrying; do not repeatedly redeem the same code.' >&2
   fi
   cleanup_tty
-  if [ "$CURRENT_NEW_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
-  if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/runmesh" uninstall --profile "$PROFILE" --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
-  if [ "$PROFILE_CREATED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
-  if [ "$FINAL_CREATED" -eq 1 ]; then rm -rf "$FINAL"; fi
+  can_remove_created=1
+  if [ "$SERVICE_ATTEMPTED" -eq 1 ]; then
+    can_remove_created=0
+    if rollback_service >/dev/null 2>&1; then can_remove_created=1; fi
+  fi
+  if [ "$can_remove_created" -eq 1 ]; then
+    if [ "$CURRENT_NEW_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
+    if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then rm -f "$INSTALL_ROOT/current"; fi
+    if [ "$PROFILE_CREATED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
+    if [ "$FINAL_CREATED" -eq 1 ]; then rm -rf "$FINAL"; fi
+  else
+    printf '%s\n' '  Service shutdown was not confirmed. Installation files were retained for recovery.' >&2
+  fi
   if [ "$STAGE_CREATED" -eq 1 ]; then rm -rf "$STAGE"; fi
   rm -rf "$TMP"
   release_install_lock
@@ -470,6 +493,7 @@ CURRENT_CREATED=1
 INSTALL_PHASE=service_install
 step 'Starting service'
 SERVICE_LOG="$TMP/service-install.log"
+SERVICE_ATTEMPTED=1
 if "$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" __EXECUTION_MODE_FLAGS__ --executable-path "$INSTALL_ROOT/current/bin/runmesh" >"$SERVICE_LOG" 2>&1; then :; else rc=$?; report_failure 'Starting service' "$SERVICE_LOG" "$rc"; exit "$rc"; fi
 ok "Runmesh Runner $VERSION is ready."
 printf '%s\n' '  Service started automatically.' >&2
@@ -608,8 +632,7 @@ function Invoke-LoggedStep([string]$Message, [string]$LogPath, [scriptblock]$Act
   }
   Write-Ok $Message
 }
-function Invoke-InstalledServiceInstall([string]$RunnerPath) {
-  # Installation replaces the .cmd launchers; keep this invocation outside them.
+function Get-InstalledServiceEntry {
   $ManagerRoot = Join-Path $InstallRoot 'manager'
   if (Test-Path -LiteralPath $ManagerRoot) {
     $ServiceRuntime = Join-Path $ManagerRoot 'runtime\node.exe'
@@ -622,7 +645,12 @@ function Invoke-InstalledServiceInstall([string]$RunnerPath) {
   foreach ($ServiceFile in @($ServiceRuntime, $ServiceEntry)) {
     if (-not (Test-Path -LiteralPath $ServiceFile -PathType Leaf)) { throw 'Installed service maintenance entry is incomplete.' }
   }
-  & $ServiceRuntime $ServiceEntry install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $RunnerPath
+  return @{ Runtime = $ServiceRuntime; Entry = $ServiceEntry }
+}
+function Invoke-InstalledServiceInstall([string]$RunnerPath) {
+  # Installation replaces the .cmd launchers; keep service calls outside them.
+  $Service = Get-InstalledServiceEntry
+  & $Service.Runtime $Service.Entry install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $RunnerPath
 }
 function Refresh-Existing {
   if (-not (Test-Path -LiteralPath $CurrentRoot)) { return $false }
@@ -898,12 +926,22 @@ __VERIFIER__
   if ($null -ne $HttpClient) { $HttpClient.Dispose() }
   if ($null -ne $HttpHandler) { $HttpHandler.Dispose() }
   if (-not $Succeeded -and $MaintenanceAction -ne 'uninstall') {
-    if ($ServiceAttempted -and $null -ne $CurrentRunner -and (Test-Path -LiteralPath $CurrentRunner)) { try { & $CurrentRunner uninstall --profile $Profile --json *> $null } catch {} }
-    if ($ProfileCreated -and (Test-Path -LiteralPath $Profile)) { try { Remove-Item -LiteralPath $Profile -Force } catch {} }
-    if ($CurrentNewCreated -and (Test-Path -LiteralPath $CurrentNew)) { try { [IO.Directory]::Delete($CurrentNew) } catch {} }
-    if ($CurrentCreated -and (Test-Path -LiteralPath $CurrentRoot)) { try { [IO.Directory]::Delete($CurrentRoot) } catch {} }
+    $CanRemoveCreated = -not $ServiceAttempted
+    if ($ServiceAttempted) {
+      $OriginalExitCode = $LASTEXITCODE
+      try {
+        $Service = Get-InstalledServiceEntry
+        & $Service.Runtime $Service.Entry uninstall --profile $Profile --json *> $null
+        $CanRemoveCreated = $LASTEXITCODE -eq 0
+      } catch {} finally { $global:LASTEXITCODE = $OriginalExitCode }
+    }
+    if ($CanRemoveCreated) {
+      if ($ProfileCreated -and (Test-Path -LiteralPath $Profile)) { try { Remove-Item -LiteralPath $Profile -Force } catch {} }
+      if ($CurrentNewCreated -and (Test-Path -LiteralPath $CurrentNew)) { try { [IO.Directory]::Delete($CurrentNew) } catch {} }
+      if ($CurrentCreated -and (Test-Path -LiteralPath $CurrentRoot)) { try { [IO.Directory]::Delete($CurrentRoot) } catch {} }
+      if ($VersionCreated -and (Test-Path -LiteralPath $VersionRoot)) { try { Remove-Item -LiteralPath $VersionRoot -Recurse -Force } catch {} }
+    } else { Write-Host '  Service shutdown was not confirmed. Installation files were retained for recovery.' }
     if ($StageCreated -and (Test-Path -LiteralPath $Stage)) { try { Remove-Item -LiteralPath $Stage -Recurse -Force } catch {} }
-    if ($VersionCreated -and (Test-Path -LiteralPath $VersionRoot)) { try { Remove-Item -LiteralPath $VersionRoot -Recurse -Force } catch {} }
   }
   if (Test-Path -LiteralPath $TempRoot) { try { Remove-Item -LiteralPath $TempRoot -Recurse -Force } catch {} }
 }
