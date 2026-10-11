@@ -386,7 +386,7 @@ export async function checkAdminLayout(executable) {
     }
     if (documents.has(url.pathname)) {
       res.setHeader('content-type', 'text/html');
-      res.end(documents.get(url.pathname).replace('<html lang="en">', '<html lang="' + locale + '">')); return;
+      res.end(documents.get(url.pathname).replace(/(<html\b[^>]*\blang=")en(")/u, (_match, before, after) => before + locale + after)); return;
     }
     res.setHeader('content-type', 'application/json');
     if (url.pathname === '/admin/central/profiles') res.end(JSON.stringify({ state: 'listed', profiles: [profile], next_after: null }));
