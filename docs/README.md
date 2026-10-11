@@ -4,9 +4,9 @@
 
 Choose a guide for the task you want to complete. Start with the user guide to connect an MCP client, or the administrator guide to set up an instance.
 
-https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
+https://github.com/user-attachments/assets/49488721-4a41-40af-a0a6-5482f71b937c
 
-[Download MP4](media/runmesh-promo.zh-CN.mp4?raw=1) · [Overview and subtitles](media/README.md) — Chinese narration and captions.
+[Download MP4](media/runmesh-promo.en.mp4?raw=1) · [Overview and subtitles](media/README.md) · [中文版](media/README.zh-CN.md) — English narration and captions.
 
 ## Use Runmesh
 

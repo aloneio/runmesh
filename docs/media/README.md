@@ -4,11 +4,11 @@
 
 Your machines, your tools, one entry point. This video introduces how Runmesh connects AI clients to your computers and shares MCP tools and Skills across those clients.
 
-https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
+https://github.com/user-attachments/assets/49488721-4a41-40af-a0a6-5482f71b937c
 
-[Download MP4](runmesh-promo.zh-CN.mp4?raw=1) · [Download Chinese subtitles](runmesh-promo.zh-CN.srt) · [Cover image](runmesh-promo-cover.png)
+[Download MP4](runmesh-promo.en.mp4?raw=1) · [Download English subtitles](runmesh-promo.en.srt) · [Cover image](runmesh-promo-cover.en.png) · [中文版](README.zh-CN.md)
 
-60 seconds · 1920 × 1080 · 30 fps · Chinese narration and captions.
+60 seconds · 1920 × 1080 · 30 fps · English narration and captions.
 
 ## Video overview
 

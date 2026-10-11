@@ -6,7 +6,7 @@
 
 https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
 
-[下载 MP4](runmesh-promo.zh-CN.mp4?raw=1) · [下载中文字幕](runmesh-promo.zh-CN.srt) · [封面图片](runmesh-promo-cover.png)
+[下载 MP4](runmesh-promo.zh-CN.mp4?raw=1) · [下载中文字幕](runmesh-promo.zh-CN.srt) · [封面图片](runmesh-promo-cover.png) · [英文版](README.md)
 
 60 秒 · 1920 × 1080 · 30 fps · 中文旁白与字幕。
 

@@ -20,9 +20,9 @@
 
 One entry point for Linux, macOS and Windows. Reach machines behind NAT and keep your MCP connections and Skills available when you switch AI clients.
 
-https://github.com/user-attachments/assets/53ac03e9-612e-40f2-b5e7-a331fe02ba72
+https://github.com/user-attachments/assets/49488721-4a41-40af-a0a6-5482f71b937c
 
-[Download MP4](docs/media/runmesh-promo.zh-CN.mp4?raw=1) · [Video overview and subtitles](docs/media/README.md) — Chinese narration and captions, 60 seconds.
+[Download MP4](docs/media/runmesh-promo.en.mp4?raw=1) · [Video overview and subtitles](docs/media/README.md) · [中文版](docs/media/README.zh-CN.md) — English narration and captions, 60 seconds.
 
 ## What Runmesh does
 

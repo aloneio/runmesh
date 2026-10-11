@@ -1,0 +1,55 @@
+1
+00:00:00,350 --> 00:00:02,925
+Runmesh. Put your machines to work with AI.
+
+2
+00:00:06,200 --> 00:00:09,488
+Linux, macOS, Windows. One entry point.
+
+3
+00:00:11,200 --> 00:00:13,075
+Each client uses its own credentials.
+
+4
+00:00:14,000 --> 00:00:15,462
+Keep machine keys off your client.
+
+5
+00:00:18,600 --> 00:00:20,275
+Reach your machines behind NAT.
+
+6
+00:00:22,400 --> 00:00:23,937
+Runner connects out to Runmesh.
+
+7
+00:00:26,700 --> 00:00:27,812
+No public IP needed.
+
+8
+00:00:31,350 --> 00:00:34,038
+Keep your MCP tools and Skills in Runmesh.
+
+9
+00:00:35,700 --> 00:00:36,500
+Switch clients.
+
+10
+00:00:38,000 --> 00:00:40,075
+Keep your tools and project instructions.
+
+11
+00:00:44,200 --> 00:00:47,538
+Find docs. Read project guidance. Run tests.
+
+12
+00:00:48,400 --> 00:00:52,175
+Tools, instructions, and machines. One complete task.
+
+13
+00:00:53,450 --> 00:00:53,950
+Runmesh.
+
+14
+00:00:54,600 --> 00:00:57,438
+Your machines. Your tools. One entry point.
