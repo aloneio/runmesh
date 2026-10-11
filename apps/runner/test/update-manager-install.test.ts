@@ -38,6 +38,8 @@ function fixture(platform: ServicePlatform) {
     read: async path => files.get(path), stat: async path => stats.get(path), realpath: async path => path === current ? version : path,
     mkdir: async path => { if (stats.has(path)) throw new Error("exists"); directory(path); },
     write: async (path, value) => { if (stats.has(path)) throw new Error("exists"); file(path, value); },
+    createFile: async (path, value) => { if (stats.has(path)) throw new Error("exists"); file(path, value); },
+    syncFile: async path => { if (!stats.get(path)?.file) throw new Error("missing record"); },
     copy: async (source, destination) => { copies.push([source, destination]); file(destination, files.get(source)!); },
     rename: async (source, destination) => {
       for (const path of [...stats.keys()]) if (path === source || path.startsWith(source + paths.path.sep)) {
@@ -129,6 +131,192 @@ it("retains the stable management package across ordinary uninstall and reinstal
   await managerUninstall({ ...test.options, preservePackage: true });
   await managerUninstall(test.options);
   expect(test.stats.has(test.paths.managerRoot)).toBe(false);
+});
+
+it("checks a stopped macOS manager process again before an uninstall retry can proceed", async () => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const record = `${test.paths.manifestPath}.purge-stop.json`;
+  let probeFails = true, probes = 0;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    if (name === "ps") { probes++; if (probeFails) return { exitCode: 1, stderr: "process query unavailable" }; }
+    return test.options.executor.execute(name, args);
+  } };
+  const options = { ...test.options, executor, preservePackage: true };
+  await expect(managerUninstall(options)).rejects.toThrow(/process/u);
+  expect(JSON.parse(test.files.get(record)!)).toEqual({ schema_version: 1, target: "system/io.alone.runmesh.manager", mode: "system", pid: 12 });
+  await expect(managerUninstall(options)).rejects.toThrow(/process/u);
+  expect(probes).toBe(2); expect(test.files.has(test.paths.manifestPath)).toBe(true);
+  probeFails = false;
+  await managerUninstall(options);
+  expect(probes).toBe(3); expect(test.files.has(record)).toBe(false);
+  expect(test.files.has(test.paths.manifestPath)).toBe(false); expect(test.files.has(test.paths.bundlePath)).toBe(true);
+});
+
+it("retains macOS stop recovery after the manager manifest and package disappear", async () => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const record = `${test.paths.manifestPath}.purge-stop.json`;
+  let probeFails = true;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => name === "ps" && probeFails
+    ? { exitCode: 1, stderr: "process query unavailable" } : test.options.executor.execute(name, args) };
+  const options = { ...test.options, executor, preservePackage: true };
+  await expect(managerUninstall(options)).rejects.toThrow(/process/u);
+  await test.options.filesystem.remove(test.paths.manifestPath);
+  await test.options.filesystem.remove(test.paths.managerRoot);
+  await expect(managerUninstall(options)).rejects.toThrow(/process/u);
+  expect(test.files.has(record)).toBe(true);
+  probeFails = false;
+  await managerUninstall(options);
+  expect(test.files.has(record)).toBe(false);
+});
+
+it("finishes a failed macOS install's stop recovery before starting the manager again", async () => {
+  const test = fixture("darwin"), record = `${test.paths.manifestPath}.purge-stop.json`;
+  let failStart = true, failProbe = true;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    if (name === "launchctl" && args[0] === "kickstart" && failStart) return { exitCode: 1 };
+    if (name === "ps" && failProbe) return { exitCode: 1, stderr: "process query unavailable" };
+    return test.options.executor.execute(name, args);
+  } };
+  await expect(managerInstall({ ...test.options, executor })).rejects.toThrow("command failed");
+  expect(test.files.has(record)).toBe(true); expect(test.files.has(test.paths.bundlePath)).toBe(true);
+  failStart = false; test.calls.length = 0;
+  await expect(managerInstall({ ...test.options, executor })).rejects.toThrow(/process/u);
+  expect(test.calls.some(call => call.includes("bootstrap") || call.includes("kickstart"))).toBe(false);
+  failProbe = false;
+  await managerInstall({ ...test.options, executor });
+  expect(test.files.has(record)).toBe(false); expect(test.isActive()).toBe(true);
+});
+
+it("requires durable macOS stop-record synchronization again on retry", async () => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const record = `${test.paths.manifestPath}.purge-stop.json`;
+  let failedSync = true, syncs = 0;
+  const filesystem: MaintenanceManagerFilesystem = { ...test.options.filesystem, syncFile: async path => {
+    syncs++; if (failedSync) throw new Error("record sync failed"); await test.options.filesystem.syncFile!(path);
+  } };
+  test.calls.length = 0;
+  await expect(managerUninstall({ ...test.options, filesystem })).rejects.toThrow("record sync failed");
+  expect(test.files.has(record)).toBe(true); expect(test.isActive()).toBe(true);
+  expect(test.calls.some(call => call.includes("disable") || call.includes("bootout"))).toBe(false);
+  failedSync = false;
+  await managerUninstall({ ...test.options, filesystem });
+  expect(syncs).toBeGreaterThanOrEqual(2); expect(test.files.has(record)).toBe(false);
+});
+
+it("retains a macOS stop record when record removal fails and clears it on retry", async () => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const record = `${test.paths.manifestPath}.purge-stop.json`;
+  let failRemoval = true;
+  const filesystem: MaintenanceManagerFilesystem = { ...test.options.filesystem, remove: async path => {
+    if (path === record && failRemoval) throw new Error("record removal failed"); await test.options.filesystem.remove(path);
+  } };
+  await expect(managerUninstall({ ...test.options, filesystem })).rejects.toThrow("record removal failed");
+  expect(test.files.has(record)).toBe(true); expect(test.files.has(test.paths.manifestPath)).toBe(true);
+  failRemoval = false;
+  await managerUninstall({ ...test.options, filesystem });
+  expect(test.files.has(record)).toBe(false); expect(test.files.has(test.paths.managerRoot)).toBe(false);
+});
+
+it.each(["0", "9007199254740992", ""])("refuses a running macOS manager with an invalid PID %s", async pid => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const before = new Map(test.files), calls: string[][] = [];
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    calls.push([name, ...args]);
+    if (name === "launchctl" && args[0] === "print") return { exitCode: 0, stdout: `state = running\n${pid === "" ? "" : `pid = ${pid}\n`}` };
+    return test.options.executor.execute(name, args);
+  } };
+  await expect(managerUninstall({ ...test.options, executor })).rejects.toThrow("process identity");
+  expect(test.files).toEqual(before);
+  expect(calls.some(call => call.includes("disable") || call.includes("bootout"))).toBe(false);
+});
+
+it("restores the owned Linux manifest after a reload failure so uninstall can be retried", async () => {
+  const test = fixture("linux"); await managerInstall(test.options);
+  const manifest = test.files.get(test.paths.manifestPath)!;
+  let failReload = true;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    if (name === "systemctl" && args.includes("daemon-reload") && failReload) { failReload = false; return { exitCode: 1 }; }
+    return test.options.executor.execute(name, args);
+  } };
+  const options = { ...test.options, executor, preservePackage: true };
+  await expect(managerUninstall(options)).rejects.toThrow("command failed");
+  expect(test.files.get(test.paths.manifestPath)).toBe(manifest);
+  await managerUninstall(options);
+  expect(test.files.has(test.paths.manifestPath)).toBe(false); expect(test.files.has(test.paths.bundlePath)).toBe(true);
+});
+
+it("does not overwrite a new Linux manifest while recovering a failed reload", async () => {
+  const test = fixture("linux"); await managerInstall(test.options);
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => {
+    if (name === "systemctl" && args.includes("daemon-reload")) {
+      await test.options.filesystem.write(test.paths.manifestPath, "operator replacement"); return { exitCode: 1 };
+    }
+    return test.options.executor.execute(name, args);
+  } };
+  await expect(managerUninstall({ ...test.options, executor })).rejects.toThrow("command failed");
+  expect(test.files.get(test.paths.manifestPath)).toBe("operator replacement");
+});
+
+it("does not stop a new macOS manager PID until the recorded old process has exited", async () => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const record = `${test.paths.manifestPath}.purge-stop.json`;
+  const text = JSON.stringify({ schema_version: 1, target: "system/io.alone.runmesh.manager", mode: "system", pid: 11 });
+  await test.options.filesystem.write(record, text);
+  let oldAlive = true;
+  const executor: ServiceCommandExecutor = { execute: async (name, args) => name === "ps" && args[1] === "11"
+    ? oldAlive ? { exitCode: 0, stdout: "11\n" } : { exitCode: 1 } : test.options.executor.execute(name, args) };
+  test.calls.length = 0;
+  await expect(managerUninstall({ ...test.options, executor })).rejects.toThrow("previous maintenance manager process is still active");
+  expect(test.files.get(record)).toBe(text); expect(test.isActive()).toBe(true);
+  expect(test.calls.some(call => call.includes("disable") || call.includes("bootout"))).toBe(false);
+  oldAlive = false;
+  await managerUninstall({ ...test.options, executor });
+  expect(test.files.has(record)).toBe(false); expect(test.isActive()).toBe(false);
+});
+
+it("does not use a macOS stop record to take over an unknown native registration", async () => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const record = `${test.paths.manifestPath}.purge-stop.json`;
+  const text = JSON.stringify({ schema_version: 1, target: "system/io.alone.runmesh.manager", mode: "system", pid: 12 });
+  await test.options.filesystem.write(record, text);
+  await test.options.filesystem.remove(test.paths.manifestPath);
+  await test.options.filesystem.remove(test.paths.managerRoot);
+  test.calls.length = 0;
+  await expect(managerUninstall(test.options)).rejects.toThrow("unverified native service");
+  expect(test.files.get(record)).toBe(text); expect(test.isActive()).toBe(true);
+  expect(test.calls.some(call => call.includes("disable") || call.includes("bootout"))).toBe(false);
+});
+
+it.each(["manifest", "metadata"])("checks macOS manager %s identity before recovering a previous stop during install", async changed => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const record = `${test.paths.manifestPath}.purge-stop.json`;
+  await test.options.filesystem.write(record, JSON.stringify({ schema_version: 1, target: "system/io.alone.runmesh.manager", mode: "system", pid: 12 }));
+  if (changed === "manifest") {
+    const body = parseOwnedManifest(test.files.get(test.paths.manifestPath)!, "maintenance")!.body.replace("maintenance-agent", "another-command");
+    test.files.set(test.paths.manifestPath, ownedManifest(body, "darwin", "maintenance").content);
+  } else test.files.set(test.paths.path.join(test.paths.managerRoot, "installation.json"), "another installation");
+  const before = new Map(test.files); test.calls.length = 0;
+  await expect(managerInstall(test.options)).rejects.toThrow(/definition differs|different installation/u);
+  expect(test.files).toEqual(before); expect(test.isActive()).toBe(true);
+  expect(test.calls.some(call => call.includes("disable") || call.includes("bootout"))).toBe(false);
+});
+
+it.each(["createFile", "syncFile"] as const)("does not stop a macOS manager without the %s durability port", async port => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const filesystem = { ...test.options.filesystem }; delete filesystem[port];
+  const before = new Map(test.files); test.calls.length = 0;
+  await expect(managerUninstall({ ...test.options, filesystem })).rejects.toThrow("durable recovery-record support");
+  expect(test.files).toEqual(before); expect(test.isActive()).toBe(true);
+  expect(test.calls.some(call => call.includes("disable") || call.includes("bootout"))).toBe(false);
+});
+
+it("rejects a malformed macOS manager stop record before changing native state", async () => {
+  const test = fixture("darwin"); await managerInstall(test.options);
+  const record = `${test.paths.manifestPath}.purge-stop.json`;
+  await test.options.filesystem.write(record, JSON.stringify({ schema_version: 1, target: "system/io.alone.runmesh.manager", mode: "system", pid: 0 }));
+  const before = new Map(test.files); test.calls.length = 0;
+  await expect(managerUninstall(test.options)).rejects.toThrow("stop recovery record is invalid");
+  expect(test.files).toEqual(before); expect(test.isActive()).toBe(true); expect(test.calls).toEqual([]);
 });
 
 it.each(["linux", "darwin", "win32"] as const)("refuses to overlook an orphaned %s manager registration when its files are gone", async platform => {
@@ -311,7 +499,7 @@ it.each(["linux", "darwin", "win32"] as const)("retains %s recovery files when a
     const content = JSON.stringify({ phase: [phase] });
     test.files.set(journal, content);
     await expect(managerUninstall({ ...test.options, filesystem })).rejects.toThrow("maintenance is unfinished");
-    expect(removals).toEqual([]);
+    expect(removals).toEqual(platform === "darwin" ? [`${test.paths.manifestPath}.purge-stop.json`] : []);
     expect(test.files.get(journal)).toBe(content);
     expect(test.files.get(test.paths.manifestPath)).toBe(manifest);
     expect(test.files.get(test.paths.bundlePath)).toBe("independent maintenance bytes");

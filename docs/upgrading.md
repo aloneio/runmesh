@@ -307,14 +307,14 @@ esac
 "$ROOT/current/bin/runmesh" doctor --profile "$PROFILE" --json
 ```
 
-On Windows, in the same elevated PowerShell session:
+On Windows, in the same elevated PowerShell session, call the verified maintenance artifact with the staged private Node directly. Setup replaces the `.cmd` launchers, so this entry avoids continuing through a batch file changed by the installation:
 
 ```powershell
 if (-not $EnableManager) { throw 'Manager setup was not selected during staging.' }
 if ([IO.Path]::GetFullPath([string](Get-Item -LiteralPath $Current -Force).Target) -ine $New) { throw 'Current installation changed.' }
 $InstallArguments = @('install', '--profile', $RunnerProfile, '--execution-mode', $OriginalMode, '--json')
 if ($OriginalMode -eq 'privileged_host') { $InstallArguments += '--confirm-privileged-host' }
-$ManagerResult = & (Join-Path $Current 'runmesh.cmd') @InstallArguments
+$ManagerResult = & (Join-Path $New 'runtime\node.exe') (Join-Path $New 'node_modules\@aloneio\runmesh-runner\dist\maintenance.cjs') @InstallArguments
 if ($LASTEXITCODE -ne 0) { throw 'Review manager installation output before retrying.' }
 $ManagerReport = ($ManagerResult -join "`n") | ConvertFrom-Json
 if ($ManagerReport.remote_version_management -ne 'available' -or $ManagerReport.execution_mode -ne $OriginalMode) { throw 'The manager or execution mode did not pass verification.' }
@@ -330,6 +330,45 @@ The manager is copied from the verified package into the separate `manager` dire
 If a manager was started, stop it through the native service manager before a manual rollback and retain its package and journal. An unfinished version operation must be recovered before changing `current`; do not delete its journal or installation lock. Reconcile the panel's requested version before starting the manager again.
 
 Once no maintenance operation is active, pause the Runner using the same platform steps. Read and record the actual physical target of `current` again, verify its package identity and confirm it is a direct child of the managed `versions` directory. A manager operation can change this path even when it installs the same version, so do not assume it still equals `NEW` / `$New`. On POSIX, record that path as `ROLLBACK_FROM`, create `current.next` pointing to the recorded `OLD` directory, and rename it over `current` with the same Node command, passing `ROLLBACK_FROM` as the expected current target. On Windows, while the task is disabled and stopped, rename the actual `current` junction to an unused recovery name, then rename the saved `$Previous` junction back to `current`. Check all resolved paths are still within `$Root` before renaming. Start through the preserved service definition and restore the task's previous enabled state.
+
+If the independent manager was installed, restoring the original old directory also restores its old launchers. Those launchers can send `install` or `uninstall` to the old Runner CLI, which predates the manager. Until its launchers are refreshed, use the retained manager's own runtime and entry point for service commands: `/opt/runmesh/manager/runtime/node /opt/runmesh/manager/runmesh.cjs` on POSIX, or `C:\Program Files\Runmesh\manager\runtime\node.exe` with `C:\Program Files\Runmesh\manager\runmesh.cjs` on Windows. For Windows removal, use the retained `C:\Program Files\Runmesh\manager\uninstall.ps1` helper or the hosted maintenance command; its temporary runtime permits complete cleanup.
+
+After reconciling pending version requests, and when both services may start, refresh the restored launchers with the retained manager. Run the applicable block in the same administrator session, using the saved original profile, execution mode and old version. This reuses the independent manager and keeps the selected Runner package at the restored version. If the manager must remain stopped, keep using its absolute maintenance entry and postpone this `install` step.
+
+On Linux/macOS:
+
+```sh
+test -f "$ROOT/manager/runtime/node" && test ! -L "$ROOT/manager/runtime/node"
+test -f "$ROOT/manager/runmesh.cjs" && test ! -L "$ROOT/manager/runmesh.cjs"
+set -- install --profile "$PROFILE" --execution-mode "$ORIGINAL_MODE" --json
+if [ "$ORIGINAL_MODE" = privileged_host ]; then set -- "$@" --confirm-privileged-host; fi
+"$ROOT/manager/runtime/node" "$ROOT/manager/runmesh.cjs" "$@" > "$NPM_CONFIG_DIR/manager-recovery.json"
+"$ROOT/manager/runtime/node" -e 'const r=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));if(r.remote_version_management!=="available"||r.execution_mode!==process.argv[2])throw Error("Inspect manager recovery result")' "$NPM_CONFIG_DIR/manager-recovery.json" "$ORIGINAL_MODE"
+test "$("$ROOT/current/bin/runmesh" --version)" = "$OLD_VERSION"
+"$ROOT/current/bin/runmesh" doctor --profile "$PROFILE" --json
+```
+
+On Windows:
+
+```powershell
+$ManagerRuntime = Join-Path $Root 'manager\runtime\node.exe'
+$ManagerEntry = Join-Path $Root 'manager\runmesh.cjs'
+foreach ($Path in @($ManagerRuntime, $ManagerEntry)) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'Inspect the retained manager before restoring service commands.' }
+}
+$RecoveryArguments = @('install', '--profile', $RunnerProfile, '--execution-mode', $OriginalMode, '--json')
+if ($OriginalMode -eq 'privileged_host') { $RecoveryArguments += '--confirm-privileged-host' }
+$RecoveryResult = & $ManagerRuntime $ManagerEntry @RecoveryArguments
+if ($LASTEXITCODE -ne 0) { throw 'Review manager recovery output before retrying.' }
+$RecoveryReport = ($RecoveryResult -join "`n") | ConvertFrom-Json
+if ($RecoveryReport.remote_version_management -ne 'available' -or $RecoveryReport.execution_mode -ne $OriginalMode) { throw 'The retained manager or execution mode did not pass verification.' }
+$RestoredVersion = & (Join-Path $Current 'runmesh.cmd') --version
+if ($LASTEXITCODE -ne 0 -or ([string]$RestoredVersion).Trim() -ne $OldVersion) { throw 'Inspect the restored Runner version.' }
+& (Join-Path $Current 'runmesh.cmd') doctor --profile $RunnerProfile --json
+if ($LASTEXITCODE -ne 0) { throw 'Review the restored Runner health.' }
+```
+
+After this succeeds, the usual launchers again dispatch service commands to the independent manager. A recovery that never installed a manager can keep using the restored package's original launchers.
 
 Keep the profile, state and verified packages until the restored service passes its checks. Once acceptance is complete, remove the maintenance staging/config files created for this upgrade and retain the previous package according to your backup policy.
 

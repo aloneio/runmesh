@@ -14,6 +14,8 @@ import { renderManagedLauncher, renderWindowsMaintenanceUninstall } from "./laun
 import type { MaintenanceLayout } from "./native-service.js";
 import { trustedWindowsEnvironment, trustedWindowsRoot } from "../windows-tools.js";
 import { isTerminalLocalUpdatePhase } from "./contracts.js";
+import { launchdProcessExited, waitForLaunchdExit } from "../services/launchd.js";
+import { createDurableFile, syncDurableFile } from "../services/durable-file.js";
 
 export interface MaintenanceManagerFileStat {
   readonly file: boolean;
@@ -35,6 +37,8 @@ export interface MaintenanceManagerFilesystem {
   remove(path: string): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
   symlink(source: string, destination: string): Promise<void>;
+  createFile?(path: string, content: string): Promise<void>;
+  syncFile?(path: string): Promise<void>;
 }
 
 export interface MaintenanceManagerOptions {
@@ -75,6 +79,8 @@ const hostFilesystem: MaintenanceManagerFilesystem = {
   remove: path => rm(path, { recursive: true, force: true }),
   chmod,
   symlink: (source, destination) => symlink(source, destination),
+  createFile: createDurableFile,
+  syncFile: syncDurableFile,
 };
 
 const LINUX_MANAGER = "runmesh-manager.service";
@@ -197,33 +203,83 @@ function managerHost(options: MaintenanceManagerOptions) {
     if (result.stdout?.trim() !== "present" && result.stdout?.trim() !== "absent") throw new Error("maintenance manager registration is unknown");
     return result.stdout.trim() === "present";
   };
-  const stop = async () => {
-    if (!await registered()) return;
+  const stopRecordPath = `${layout.manifestPath}.purge-stop.json`;
+  type StopRecord = { readonly text: string; readonly pid: number };
+  const readStopRecord = async (): Promise<StopRecord | undefined> => {
+    if (layout.platform !== "darwin" || await filesystem.stat(stopRecordPath) === undefined) return undefined;
+    await trustedTreePath(stopRecordPath, "file", layout.path.dirname(layout.manifestPath));
+    const text = await filesystem.read(stopRecordPath);
+    let value: unknown;
+    try { value = text === undefined || text.length > 4096 ? undefined : JSON.parse(text); } catch { value = undefined; }
+    if (typeof value !== "object" || value === null || Array.isArray(value)
+      || !("schema_version" in value) || value.schema_version !== 1
+      || !("target" in value) || value.target !== target
+      || !("mode" in value) || value.mode !== layout.mode
+      || !("pid" in value) || !Number.isSafeInteger(value.pid) || Number(value.pid) <= 0
+      || Object.keys(value).some(key => !["schema_version", "target", "mode", "pid"].includes(key))) {
+      throw new Error("maintenance manager stop recovery record is invalid; retain it for inspection");
+    }
+    return { text: text!, pid: Number(value.pid) };
+  };
+  const checkStopRecord = async (expected: StopRecord) => {
+    if ((await readStopRecord())?.text !== expected.text) throw new Error("maintenance manager stop recovery record changed");
+  };
+  const removeStopRecord = async (record: StopRecord) => {
+    await checkStopRecord(record);
+    await filesystem.remove(stopRecordPath);
+  };
+  const stop = async (ownedManifest = true) => {
+    let record = await readStopRecord();
+    if (!await registered()) {
+      if (record !== undefined) {
+        await waitForLaunchdExit(executor, target, record.pid);
+        await removeStopRecord(record);
+      }
+      return;
+    }
+    if (!ownedManifest) {
+      // A retained PID can be observed without taking ownership of a native
+      // registration whose manifest has disappeared.
+      if (record !== undefined && await launchdProcessExited(executor, record.pid)) await removeStopRecord(record);
+      throw new Error("maintenance manager manifest is missing; refusing to manage an unverified native service");
+    }
     if (layout.platform === "linux") {
       await execute("systemctl", [...prefix, "disable", "--now", LINUX_MANAGER]);
       const stopped = await execute("systemctl", [...prefix, "show", LINUX_MANAGER, "--property=ActiveState,MainPID"]);
       if (!/^ActiveState=(inactive|failed)\r?$/mu.test(stopped.stdout ?? "") || !/^MainPID=0\r?$/mu.test(stopped.stdout ?? "")) throw new Error("maintenance manager did not stop");
     } else if (layout.platform === "darwin") {
       const live = await execute("launchctl", ["print", target]);
-      const pid = /\bpid\s*=\s*(\d+)/u.exec(live.stdout ?? "")?.[1];
-      if (/\bstate\s*=\s*running\b/u.test(live.stdout ?? "") && pid === undefined) throw new Error("maintenance manager process identity is unavailable");
+      const rawPid = /^\s*pid\s*=\s*(\d+)\s*$/mu.exec(live.stdout ?? "")?.[1];
+      const pid = rawPid === undefined ? undefined : Number(rawPid);
+      if ((pid !== undefined && (!Number.isSafeInteger(pid) || pid <= 0))
+        || (/\bstate\s*=\s*running\b/u.test(live.stdout ?? "") && pid === undefined)) throw new Error("maintenance manager process identity is unavailable");
+      if (record !== undefined && record.pid !== pid) {
+        if (!await launchdProcessExited(executor, record.pid)) throw new Error("previous maintenance manager process is still active");
+        await removeStopRecord(record); record = undefined;
+      }
+      if (pid !== undefined && record === undefined) {
+        if (filesystem.createFile === undefined || filesystem.syncFile === undefined) throw new Error("maintenance manager stop requires durable recovery-record support");
+        const text = JSON.stringify({ schema_version: 1, target, mode: layout.mode, pid }) + "\n";
+        await filesystem.createFile(stopRecordPath, text);
+        record = await readStopRecord();
+        if (record?.text !== text) throw new Error("maintenance manager stop recovery record was not persisted");
+      }
+      if (record !== undefined) {
+        if (filesystem.syncFile === undefined) throw new Error("maintenance manager stop requires durable recovery-record support");
+        await checkStopRecord(record);
+        await filesystem.syncFile(stopRecordPath);
+        await checkStopRecord(record);
+      }
       await execute("launchctl", ["disable", target]);
       await execute("launchctl", ["bootout", target]);
-      if (await registered()) throw new Error("maintenance manager did not unload");
-      if (pid !== undefined && Number(pid) > 0) {
-        const deadline = Date.now() + 5_000;
-        while (true) {
-          const processState = await executor.execute("ps", ["-p", pid, "-o", "pid="]);
-          if (processState.exitCode === 1 && !(processState.stdout ?? "").trim() && !(processState.stderr ?? "").trim()) break;
-          if (processState.exitCode !== 0 || Date.now() >= deadline) throw new Error("maintenance manager process has not exited");
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-      }
+      await waitForLaunchdExit(executor, target, pid);
+      if (record !== undefined) await removeStopRecord(record);
     } else {
       await ps("$ErrorActionPreference='Stop'; $s=New-Object -ComObject Schedule.Service; $s.Connect(); $t=$s.GetFolder('\\').GetTask('RunmeshManager'); $t.Enabled=$false; $t.Stop(0); $deadline=[DateTime]::UtcNow.AddSeconds(5); do { $t=$s.GetFolder('\\').GetTask('RunmeshManager'); if(($t.GetInstances(0)).Count -eq 0 -and ([int]$t.State -eq 1 -or [int]$t.State -eq 3)) { exit 0 }; if([DateTime]::UtcNow -ge $deadline) { throw 'Maintenance manager is still running' }; [Threading.Thread]::Sleep(100) } while($true)");
     }
   };
-  return { ...layout, filesystem, executor, prefix, domain, target, execute, ps, trusted, trustedTreePath, registered, stop };
+  const recoverStop = async (ownedManifest: boolean) => { if (await readStopRecord() !== undefined) await stop(ownedManifest); };
+  return { ...layout, filesystem, executor, prefix, domain, target, execute, ps, trusted, trustedTreePath, registered, stop, recoverStop };
 }
 
 async function installManagementLaunchers(host: ReturnType<typeof managerHost>, onRollback: (rollback: () => Promise<void>) => void): Promise<void> {
@@ -318,7 +374,11 @@ export async function managerInstall(options: MaintenanceManagerOptions): Promis
       await host.trustedTreePath(bundlePath, "file", layout.installRoot);
       await host.trustedTreePath(metadataPath, "file", layout.installRoot);
       if (await filesystem.read(metadataPath) !== metadata) throw new Error("maintenance manager belongs to a different installation");
-    } else {
+    }
+    // Establish the exact service/package identity before finishing a prior
+    // stop. Recovery must not stop a manager belonging to another profile.
+    await host.recoverStop(previousManifest !== undefined);
+    if (existingRoot === undefined) {
       const current = path.join(layout.installRoot, "current");
       if ((await filesystem.stat(current))?.symlink !== true) throw new Error("maintenance manager requires the managed current link");
       const version = await filesystem.realpath(current);
@@ -443,6 +503,7 @@ export async function managerUninstall(options: MaintenanceManagerOptions): Prom
   const host = managerHost(options);
   const existing = await host.filesystem.read(host.manifestPath);
   if (existing === undefined) {
+    await host.recoverStop(false);
     // Native registration can outlive both the manifest and its package after
     // interrupted/manual cleanup. Missing files are not evidence of absence;
     // refuse an unknown registration without stopping or deleting it.
@@ -459,7 +520,7 @@ export async function managerUninstall(options: MaintenanceManagerOptions): Prom
   }
   if (!managedManager(existing)) throw new Error("refusing to remove an unmanaged maintenance service");
   await host.trustedTreePath(host.manifestPath, "file", host.path.dirname(host.manifestPath));
-  await host.trustedTreePath(host.managerRoot, "directory", host.layout.installRoot);
+  if (await host.filesystem.stat(host.managerRoot) !== undefined) await host.trustedTreePath(host.managerRoot, "directory", host.layout.installRoot);
   await host.stop();
   // Native stop releases the manager's installer lease before this read. A
   // crash or interrupted switch must keep its independent runtime and journal
@@ -468,7 +529,17 @@ export async function managerUninstall(options: MaintenanceManagerOptions): Prom
   if (host.platform === "win32" && await host.registered()) await host.execute("schtasks", ["/Delete", "/TN", WINDOWS_MANAGER, "/F"]);
   if (await host.filesystem.read(host.manifestPath) !== existing) throw new Error("maintenance service changed during removal");
   await host.filesystem.remove(host.manifestPath);
-  if (host.platform === "linux") await host.execute("systemctl", [...host.prefix, "daemon-reload"]);
+  if (host.platform === "linux") {
+    try { await host.execute("systemctl", [...host.prefix, "daemon-reload"]); }
+    catch (cause) {
+      // An unsuccessful reload may leave a cached registration. Keep our
+      // ownership proof available for a normal retry without replacing a
+      // manifest that another operation has since created.
+      try { if (await host.filesystem.stat(host.manifestPath) === undefined) await host.filesystem.write(host.manifestPath, existing); }
+      catch { /* Retain the original reload failure if restoration also fails. */ }
+      throw cause;
+    }
+  }
   if (!options.preservePackage) await host.filesystem.remove(host.managerRoot);
 }
 
