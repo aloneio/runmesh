@@ -1,4 +1,5 @@
 import { createLaunchdManager } from "./launchd.js";
+import { readOnlyLaunchdStopRecoveryFilesystem } from "./launchd-stop.js";
 import { createSystemdManager } from "./systemd.js";
 import { createTaskSchedulerManager } from "./task-scheduler.js";
 import { currentServicePlatform } from "./values.js";
@@ -22,7 +23,12 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
     if (result.exitCode !== 0) throw new Error(`service command failed: ${[file, ...args].join(" ")}${result.stderr === undefined || result.stderr.length === 0 ? "" : ` (${result.stderr.trim().slice(0, 512)})`}`);
   };
   if (platform === "linux") return createSystemdManager(mode, executor, execute);
-  if (platform === "darwin") return createLaunchdManager(mode, executor, execute, options.filesystem ?? hostServiceManifestFilesystem);
+  if (platform === "darwin") return createLaunchdManager(mode, executor, execute, options.filesystem ?? hostServiceManifestFilesystem, {
+    ...(options.stopRecoveryFilesystem !== undefined ? { stopRecoveryFilesystem: options.stopRecoveryFilesystem }
+      : options.filesystem !== undefined ? { stopRecoveryFilesystem: readOnlyLaunchdStopRecoveryFilesystem(options.filesystem.read) } : {}),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.delay === undefined ? {} : { delay: options.delay }),
+  });
   return createTaskSchedulerManager(mode, executor, execute);
 }
 

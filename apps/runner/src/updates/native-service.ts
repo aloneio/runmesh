@@ -5,6 +5,7 @@ import { stopWindowsTask, windowsTaskMissingCatch } from "../services/task-sched
 import { LINUX_SERVICE_NAME, MACOS_LABEL } from "../services/values.js";
 import { posix, win32 } from "node:path";
 import type { NativeServiceMaintenancePort, NativeServiceSnapshot } from "../services/contracts.js";
+import { createLaunchdStopRecovery, readOnlyLaunchdStopRecoveryFilesystem, type LaunchdStopRecoveryFilesystem } from "../services/launchd-stop.js";
 
 export interface NativeServiceMaintenanceOptions {
   readonly platform?: ServicePlatform;
@@ -14,6 +15,7 @@ export interface NativeServiceMaintenanceOptions {
   readonly home?: string;
   readonly executor?: ServiceCommandExecutor;
   readonly filesystem?: Pick<ServiceManifestFilesystem, "read">;
+  readonly stopRecoveryFilesystem?: LaunchdStopRecoveryFilesystem;
   readonly uid?: number;
   readonly now?: () => number;
   readonly delay?: (ms: number) => Promise<void>;
@@ -201,6 +203,10 @@ export function createNativeServiceMaintenance(options: NativeServiceMaintenance
   if (platform === "darwin" && mode === "user" && uid === undefined) throw new Error("user maintenance requires the owning session UID");
   const domain = mode === "system" ? "system" : `gui/${uid}`;
   const target = `${domain}/${MACOS_LABEL}`;
+  const recoveryFilesystem = options.stopRecoveryFilesystem ?? (options.filesystem === undefined ? undefined : readOnlyLaunchdStopRecoveryFilesystem(path => filesystem.read(path)));
+  const macStop = createLaunchdStopRecovery({ executor, target, mode, manifestPath: layout.manifestPath,
+    ...(recoveryFilesystem === undefined ? {} : { filesystem: recoveryFilesystem }),
+    ...(options.now === undefined ? {} : { now: options.now }), ...(options.delay === undefined ? {} : { delay: options.delay }) });
   const now = options.now ?? Date.now;
   const delay = options.delay ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const execute = async (file: string, args: readonly string[]) => {
@@ -268,6 +274,7 @@ export function createNativeServiceMaintenance(options: NativeServiceMaintenance
     snapshot,
     stop: async () => {
       await owned();
+      if (platform === "darwin") { await macStop.stop({ disable: true }); return; }
       // Rollback can stop a newly started candidate. Observe its current PID,
       // never reuse the pre-upgrade process identity retained in the journal.
       const previous = await snapshot();
@@ -275,17 +282,6 @@ export function createNativeServiceMaintenance(options: NativeServiceMaintenance
         if (previous.enabled) await execute("systemctl", [...prefix, ...(previous.enablement === "enabled-runtime" ? ["--runtime"] : []), "disable", LINUX_SERVICE_NAME]);
         await execute("systemctl", [...prefix, "stop", LINUX_SERVICE_NAME]);
         await waitStopped(async () => { const state = await linuxState(); return (state.active === "inactive" || state.active === "failed") && state.pid === 0; });
-      } else if (platform === "darwin") {
-        await execute("launchctl", ["disable", target]);
-        if ((await macLoaded()).exitCode === 0) await execute("launchctl", ["bootout", target]);
-        await waitStopped(async () => {
-          if ((await macLoaded()).exitCode === 0) return false;
-          if (previous.pid === undefined || previous.pid === 0) return true;
-          const processState = await executor.execute("ps", ["-p", String(previous.pid), "-o", "pid="]);
-          if (processState.exitCode === 1 && !(processState.stdout ?? "").trim() && !(processState.stderr ?? "").trim()) return true;
-          if (processState.exitCode !== 0) throw new Error("Runner process exit could not be confirmed");
-          return false;
-        });
       } else {
         await powershell(windowsTask + "$t.Enabled=$false;");
         await stopWindowsTask(executor);
@@ -297,6 +293,7 @@ export function createNativeServiceMaintenance(options: NativeServiceMaintenance
       await owned();
       if (platform === "linux") await execute("systemctl", [...prefix, "start", LINUX_SERVICE_NAME]);
       else if (platform === "darwin") {
+        await macStop.recover();
         await execute("launchctl", ["enable", target]);
         if ((await macLoaded()).exitCode === 0) await execute("launchctl", ["kickstart", "-k", target]);
         else await execute("launchctl", ["bootstrap", domain, layout.manifestPath]);

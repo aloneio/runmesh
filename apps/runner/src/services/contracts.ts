@@ -1,5 +1,3 @@
-
-
 export type ServicePlatform = "linux" | "darwin" | "win32";
 
 export type ServiceMode = "user" | "system";
@@ -80,6 +78,13 @@ export interface ServiceManifestFilesystem {
   readonly remove: (path: string) => Promise<void>;
 }
 
+export interface LaunchdStopRecoveryFilesystem {
+  read(path: string): Promise<string | undefined>;
+  create(path: string, text: string): Promise<void>;
+  sync(path: string): Promise<void>;
+  remove(path: string): Promise<void>;
+}
+
 export interface ServiceCommandResult { readonly exitCode: number; readonly stdout?: string; readonly stderr?: string; }
 
 export interface ServiceCommandExecutor {
@@ -146,6 +151,10 @@ export interface ServiceManagerOptions {
   readonly mode?: ServiceMode;
   readonly executor?: ServiceCommandExecutor;
   readonly filesystem?: Pick<ServiceManifestFilesystem, "read">;
+  /** Durable macOS stop records; injected manifest I/O never falls back to host writes. */
+  readonly stopRecoveryFilesystem?: LaunchdStopRecoveryFilesystem;
+  readonly now?: () => number;
+  readonly delay?: (ms: number) => Promise<void>;
 }
 
 export interface ServiceProvisionerOptions {

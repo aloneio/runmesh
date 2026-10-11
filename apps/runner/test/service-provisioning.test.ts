@@ -84,7 +84,7 @@ describe("native service package ownership", () => {
   it("preserves a macOS registration when its native state probe is denied", async () => {
     const manifest = renderService({ platform: "darwin", mode: "system" });
     const calls: string[][] = [];
-    const manager = createServiceManager({ platform: "darwin", mode: "system", filesystem: { read: async () => manifest.content },
+    const manager = createServiceManager({ platform: "darwin", mode: "system", filesystem: { read: async path => path === manifest.path ? manifest.content : undefined },
       executor: { execute: async (file, args) => { calls.push([file, ...args]); return { exitCode: 1, stderr: "Operation not permitted" }; } } });
     await expect(manager.stop(manifest)).rejects.toThrow("state could not be verified");
     await expect(manager.restart(manifest)).rejects.toThrow("state could not be verified");
@@ -94,9 +94,9 @@ describe("native service package ownership", () => {
 
   it.each([undefined, "<plist>foreign</plist>"])("keeps an unloaded macOS service stopped when its managed manifest is absent or changed", async content => {
     const calls: string[][] = [];
-    const manager = createServiceManager({ platform: "darwin", mode: "system", filesystem: { read: async () => content },
-      executor: { execute: async (file, args) => { calls.push([file, ...args]); return { exitCode: 113, stderr: "Could not find service" }; } } });
     const manifest = renderService({ platform: "darwin", mode: "system" });
+    const manager = createServiceManager({ platform: "darwin", mode: "system", filesystem: { read: async path => path === manifest.path ? content : undefined },
+      executor: { execute: async (file, args) => { calls.push([file, ...args]); return { exitCode: 113, stderr: "Could not find service" }; } } });
     await expect(manager.status?.(manifest)).resolves.toMatchObject({ installed: false, registered: false, active: false });
     await expect(manager.restart(manifest)).rejects.toThrow("manifest is missing");
     expect(calls.every(call => call[1] === "print")).toBe(true);
