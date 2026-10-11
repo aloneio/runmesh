@@ -44,10 +44,12 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
   const store = new ProfileStore({ filePath: options.profilePath, platform: layout.platform, enforceServiceOwnership: layout.mode === "system" });
   const initial = await store.loadMaintenanceIdentity();
   if (initial === undefined) throw new UpdateFailure("invalid_installation");
-  let requestCredential: string | undefined;
+  let requestCredential: string | undefined, identityChanged = false;
   const profile = async (): Promise<RunnerMaintenanceIdentity> => {
     const current = await store.loadMaintenanceIdentity();
-    if (current === undefined || current.runner_id !== initial.runner_id || current.server_url !== initial.server_url) throw new UpdateFailure("invalid_installation");
+    if (current === undefined) throw new UpdateFailure("invalid_installation");
+    identityChanged = current.runner_id !== initial.runner_id || current.server_url !== initial.server_url;
+    if (identityChanged) throw new UpdateFailure("invalid_installation");
     requestCredential = createHash("sha256").update(current.token).digest("hex");
     return current;
   };
@@ -97,6 +99,13 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
         failures = 0;
       } catch (error) {
         if (signal.aborted) break;
+        if (identityChanged) {
+          // Exit for native restart only after proving no old transaction
+          // remains. A new process must not adopt another identity's journal.
+          let journalAbsent = false;
+          try { journalAbsent = await journal.load() === undefined; } catch { /* Keep the old identity until recovery state can be inspected. */ }
+          if (journalAbsent) throw new UpdateFailure("invalid_installation");
+        }
         const code = error instanceof UpdateFailure ? error.code : error instanceof MaintenanceHttpError ? error.message : "maintenance_unavailable";
         if (code !== lastError) (options.onError ?? (value => process.stderr.write(`Runner maintenance: ${value}\n`)))(code);
         lastError = code;
