@@ -49,12 +49,13 @@ async function atomicJson(directory: string, name: string, value: unknown): Prom
 function parseJournal(value: unknown): UpdateJournalRecord {
   if (!object(value) || value.schema_version !== 1 || typeof value.manager_id !== "string" || !UPDATE_IDENTIFIER.test(value.manager_id)) throw new UpdateFailure("local_state_invalid");
   if (value.recovery_identity !== undefined && (typeof value.recovery_identity !== "string" || !/^[a-f0-9]{64}$/u.test(value.recovery_identity))) throw new UpdateFailure("local_state_invalid");
+  if (value.authority_identity !== undefined && (typeof value.authority_identity !== "string" || !/^[a-f0-9]{64}$/u.test(value.authority_identity))) throw new UpdateFailure("local_state_invalid");
   const operation = RunnerUpdateOperationSchema.safeParse(value.operation);
   if (!operation.success) throw new UpdateFailure("local_state_invalid");
   if (value.phase === "preparing") {
     if (operation.data.manager_id !== null && operation.data.manager_id !== value.manager_id
       || !["queued", "verifying"].includes(operation.data.state)
-      || Object.keys(value).some(key => !["schema_version", "operation", "manager_id", "recovery_identity", "phase"].includes(key))) throw new UpdateFailure("local_state_invalid");
+      || Object.keys(value).some(key => !["schema_version", "operation", "manager_id", "recovery_identity", "authority_identity", "phase"].includes(key))) throw new UpdateFailure("local_state_invalid");
     return value as unknown as UpdatePreparation;
   }
   if (operation.data.manager_id !== value.manager_id) throw new UpdateFailure("local_state_invalid");

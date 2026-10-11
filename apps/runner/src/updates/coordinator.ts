@@ -22,6 +22,25 @@ export class UpdateCoordinator {
   private matches(journal: UpdateJournalRecord, observation: CloudUpdateObservation): boolean {
     return observation.operation?.operation_id === journal.operation.operation_id && observation.operation.lifecycle_id === journal.operation.lifecycle_id && observation.operation.manager_id === journal.manager_id;
   }
+  private async bindAuthority(journal: UpdateJournalRecord): Promise<UpdateJournalRecord> {
+    const authority = await this.options.authorityIdentity();
+    if (journal.authority_identity !== undefined) {
+      if (journal.authority_identity !== authority) throw new UpdateFailure("invalid_installation");
+      return journal;
+    }
+    // Legacy records bind credentials, not the server/Runner authority.
+    // Rotation needs the original operation to be confirmed before migration.
+    if (journal.recovery_identity !== await this.options.recoveryIdentity()) {
+      const observed = await this.options.cloud.poll();
+      const unclaimed = journal.phase === "preparing" && observed.operation?.operation_id === journal.operation.operation_id
+        && observed.operation.lifecycle_id === journal.operation.lifecycle_id && observed.operation.manager_id === null && observed.operation.state === "queued";
+      if (!this.matches(journal, observed) && !unclaimed) throw new UpdateFailure("invalid_installation");
+    }
+    if (await this.options.authorityIdentity() !== authority) throw new UpdateFailure("invalid_installation");
+    const bound = { ...journal, authority_identity: authority };
+    this.guard(); await this.options.journal.save(bound);
+    return bound;
+  }
   private async write(journal: UpdateJournal, phase: LocalUpdatePhase, errorCode?: UpdateErrorCode): Promise<UpdateJournal> {
     this.guard();
     const next: UpdateJournal = { ...journal, phase, ...(errorCode === undefined ? {} : { error_code: errorCode }) };
@@ -210,9 +229,10 @@ export class UpdateCoordinator {
 
   public async runOnce(): Promise<void> {
     this.guard();
-    const saved = await this.options.journal.load();
+    let saved = await this.options.journal.load();
     if (saved !== undefined) {
       if (saved.manager_id !== this.options.managerId) throw new UpdateFailure("local_state_invalid");
+      saved = await this.bindAuthority(saved);
       if (saved.phase === "preparing") { await this.finishPreparation(saved); return; }
       if (isTerminalLocalUpdatePhase(saved.phase)) { await this.finish(saved); return; }
       if (saved.phase === "recovery_required") {
@@ -236,7 +256,8 @@ export class UpdateCoordinator {
     if (!["queued", "verifying"].includes(offeredOperation.state)) throw new UpdateFailure("local_state_invalid");
     const owner = { operation_id: offeredOperation.operation_id, lifecycle_id: offeredOperation.lifecycle_id, manager_id: this.options.managerId };
     const recoveryIdentity = await this.options.recoveryIdentity();
-    const preparation: UpdatePreparation = { schema_version: 1, operation: offeredOperation, manager_id: this.options.managerId, recovery_identity: recoveryIdentity, phase: "preparing" };
+    const authorityIdentity = await this.options.authorityIdentity();
+    const preparation: UpdatePreparation = { schema_version: 1, operation: offeredOperation, manager_id: this.options.managerId, recovery_identity: recoveryIdentity, authority_identity: authorityIdentity, phase: "preparing" };
     // Failure to persist here must not claim a cloud fence with no recovery record.
     this.guard(); await this.options.journal.save(preparation); this.guard();
     const claimed = await this.options.cloud.claim(owner);
@@ -249,7 +270,7 @@ export class UpdateCoordinator {
       if (operation.original_version !== previous.version) throw new UpdateFailure("invalid_installation");
       const service = await this.options.service.snapshot();
       if (!service.registered) throw new UpdateFailure("invalid_installation");
-      journal = { schema_version: 1, operation, manager_id: this.options.managerId, recovery_identity: recoveryIdentity, previous, service, phase: "claimed" };
+      journal = { schema_version: 1, operation, manager_id: this.options.managerId, recovery_identity: recoveryIdentity, authority_identity: authorityIdentity, previous, service, phase: "claimed" };
     } catch {
       await this.finishPreparation(preparation);
       throw new UpdateFailure("invalid_installation");

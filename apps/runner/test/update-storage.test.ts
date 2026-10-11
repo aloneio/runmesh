@@ -7,7 +7,7 @@ import { inspectLocalJobs } from "../src/updates/job-drain.js";
 import { ManagedInstallationPointer } from "../src/updates/installation.js";
 import { FileUpdateJournal, loadManagerId, readManagerJson } from "../src/updates/journal.js";
 import { readMetadataJson } from "../src/updates/metadata-file.js";
-import type { UpdateJournal, UpdatePreparation } from "../src/updates/contracts.js";
+import type { UpdateJournal, UpdateJournalRecord, UpdatePreparation } from "../src/updates/contracts.js";
 import { isJobStatus } from "../src/jobs/records.js";
 import { MAINTENANCE_JOB_STATES } from "../src/maintenance-contract.js";
 import { atomicJson } from "../src/jobs/storage.js";
@@ -141,6 +141,21 @@ function checkingJournal(managerId: string): UpdateJournal {
 }
 
 describe("managed version pointer and durable journal", () => {
+  it.each(["preparing", "checking"] as const)("round-trips the authority of a %s journal and rejects a malformed binding", async phase => {
+    const directory = await temporary(), journal = new FileUpdateJournal(directory), existing = checkingJournal("manager_1");
+    const saved: UpdateJournalRecord = phase === "preparing"
+      ? { schema_version: 1, phase, manager_id: "manager_1", operation: { ...existing.operation, state: "verifying" }, authority_identity: "a".repeat(64) }
+      : { ...existing, authority_identity: "a".repeat(64) };
+    await journal.save(saved); expect(await new FileUpdateJournal(directory).load()).toEqual(saved);
+    for (const authority of [null, 1, [], "", "a".repeat(63), "G".repeat(64)]) {
+      await expect(journal.save({ ...saved, authority_identity: authority } as UpdateJournalRecord)).rejects.toThrow("local_state_invalid");
+      expect(await journal.load()).toEqual(saved);
+    }
+    const path = join(directory, "active-operation.json"), content = JSON.stringify({ ...saved, authority_identity: [] });
+    await writeFile(path, content, { mode: 0o600 });
+    await expect(journal.load()).rejects.toThrow("local_state_invalid"); expect(await readFile(path, "utf8")).toBe(content);
+  });
+
   it("preserves a colliding temporary journal when exclusive creation never acquired ownership", async () => {
     const directory = await temporary(), journal = new FileUpdateJournal(directory), saved = checkingJournal("manager_1");
     await journal.save(saved);

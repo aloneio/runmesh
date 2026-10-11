@@ -10,7 +10,7 @@ function fixture() {
   let version = "0.1.7"; let connectedVersion: string | null = "0.1.7"; let newSession = false; let cloudDrained = true; let cloudUncertain = false;
   const observe = (): CloudUpdateObservation => ({ operation: cloudOperation, cloud_drained: cloudDrained, cloud_uncertain: cloudUncertain, observed_version: connectedVersion, observed_new_session: newSession });
   const options: UpdateCoordinatorOptions = {
-    managerId: "manager_1", recoveryIdentity: async () => "e".repeat(64), now: () => now, sleep: async ms => { now += ms; }, drainTimeoutMs: 4_000, activationTimeoutMs: 4_000,
+    managerId: "manager_1", authorityIdentity: async () => "a".repeat(64), recoveryIdentity: async () => "e".repeat(64), now: () => now, sleep: async ms => { now += ms; }, drainTimeoutMs: 4_000, activationTimeoutMs: 4_000,
     cloud: {
       poll: async () => observe(),
       claim: async owner => { events.push("claim"); cloudOperation = { ...cloudOperation, manager_id: owner.manager_id, state: "verifying" }; return observe(); },
@@ -37,10 +37,75 @@ function fixture() {
   };
 }
 function recovering(): UpdateJournal {
-  return { schema_version: 1, operation: { ...operation(), manager_id: "manager_1", state: "installing" }, manager_id: "manager_1", recovery_identity: "e".repeat(64), previous: { version: "0.1.7", directory: "/managed/versions/old" }, next: { version: "0.1.6", directory: "/managed/versions/new" }, phase: "switching", service: { schema_version: 1, platform: "win32", mode: "system", registered: true, active: true, enabled: true, enablement: "enabled" } };
+  return { schema_version: 1, operation: { ...operation(), manager_id: "manager_1", state: "installing" }, manager_id: "manager_1", authority_identity: "a".repeat(64), recovery_identity: "e".repeat(64), previous: { version: "0.1.7", directory: "/managed/versions/old" }, next: { version: "0.1.6", directory: "/managed/versions/new" }, phase: "switching", service: { schema_version: 1, platform: "win32", mode: "system", registered: true, active: true, enabled: true, enablement: "enabled" } };
 }
 
 describe("independent update coordinator", () => {
+  const retainedJournal = (phase: "preparing" | UpdateJournal["phase"]): UpdateJournalRecord => phase === "preparing"
+    ? { schema_version: 1, operation: operation(), manager_id: "manager_1", authority_identity: "a".repeat(64), recovery_identity: "e".repeat(64), phase }
+    : { ...recovering(), phase };
+
+  it.each(["preparing", "succeeded", "rolled_back", "failed", "claimed", "switching", "recovery_required"] as const)("retains a %s journal after restart under another authority before contacting its cloud", async phase => {
+    const test = fixture(), saved = retainedJournal(phase); test.setJournal(saved);
+    const poll = vi.fn(test.options.cloud.poll), report = vi.fn(test.options.cloud.report);
+    await expect(new UpdateCoordinator({ ...test.options, authorityIdentity: async () => "b".repeat(64), recoveryIdentity: async () => "f".repeat(64),
+      cloud: { ...test.options.cloud, poll, report } }).runOnce()).rejects.toThrow("invalid_installation");
+    expect(test.active()).toEqual(saved); expect(test.events).toEqual([]);
+    expect(poll).not.toHaveBeenCalled(); expect(report).not.toHaveBeenCalled();
+  });
+
+  it.each(["preparing", "succeeded", "rolled_back", "failed"] as const)("allows a %s receipt after same-authority token rotation", async phase => {
+    const test = fixture(); test.setJournal(retainedJournal(phase));
+    await new UpdateCoordinator({ ...test.options, recoveryIdentity: async () => "f".repeat(64) }).runOnce();
+    expect(test.active()).toBeUndefined(); expect(test.events).toContain("complete");
+    expect(test.events).not.toContain("stop");
+  });
+
+  it.each(["preparing", "succeeded"] as const)("retains a legacy %s journal when changed credentials cannot confirm its operation", async phase => {
+    for (const replacement of ["absent", "operation", "lifecycle", "manager"] as const) {
+      const test = fixture(), saved = retainedJournal(phase); delete (saved as { authority_identity?: string }).authority_identity; test.setJournal(saved);
+      const observed = await test.options.cloud.poll();
+      const cloud = { ...test.options.cloud, poll: async () => ({ ...observed, operation: replacement === "absent" ? null : {
+        ...saved.operation, ...(replacement === "operation" ? { operation_id: "other-operation" } : replacement === "lifecycle" ? { lifecycle_id: "other-lifecycle" } : { manager_id: "other-manager" }),
+      } }) };
+      await expect(new UpdateCoordinator({ ...test.options, recoveryIdentity: async () => "f".repeat(64), cloud }).runOnce()).rejects.toThrow("invalid_installation");
+      expect(test.active()).toEqual(saved); expect(test.events).toEqual([]);
+    }
+  });
+
+  it.each(["preparing", "succeeded"] as const)("binds a legacy %s journal after token rotation when the cloud confirms its operation", async phase => {
+    const test = fixture(), saved = retainedJournal(phase); delete (saved as { authority_identity?: string }).authority_identity; test.setJournal(saved);
+    const writes: UpdateJournalRecord[] = [];
+    await new UpdateCoordinator({ ...test.options, recoveryIdentity: async () => "f".repeat(64), journal: { ...test.options.journal, save: async value => {
+      writes.push(value); await test.options.journal.save(value);
+    } } }).runOnce();
+    expect(writes[0]).toMatchObject({ phase, authority_identity: "a".repeat(64) });
+    expect(test.active()).toBeUndefined(); expect(test.events).not.toContain("stop");
+  });
+
+  it("persists an authority for the preparation and claimed record before cloud ownership advances", async () => {
+    const test = fixture(); const snapshots: UpdateJournalRecord[] = [];
+    await new UpdateCoordinator({ ...test.options, journal: { ...test.options.journal, save: async value => {
+      snapshots.push(value); await test.options.journal.save(value);
+    } } }).runOnce();
+    expect(snapshots[0]).toMatchObject({ phase: "preparing", authority_identity: "a".repeat(64) });
+    expect(snapshots[1]).toMatchObject({ phase: "claimed", authority_identity: "a".repeat(64) });
+  });
+
+  it.each(["preparing", "succeeded"] as const)("retires a legacy %s journal after operation replacement with unchanged credentials", async phase => {
+    const test = fixture(), saved = retainedJournal(phase); delete (saved as { authority_identity?: string }).authority_identity; test.setJournal(saved);
+    test.setOperation({ ...operation(), operation_id: "replacement" });
+    await new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, report: async () => { throw new MaintenanceHttpError(409); } } }).runOnce();
+    expect(test.active()).toBeUndefined(); expect(test.operation().operation_id).toBe("replacement");
+    expect(test.events).toEqual([`local:${phase}`, "complete"]);
+  });
+
+  it("retains the legacy record when its authority binding cannot be persisted", async () => {
+    const test = fixture(), saved = retainedJournal("succeeded"); delete (saved as { authority_identity?: string }).authority_identity; test.setJournal(saved);
+    await expect(new UpdateCoordinator({ ...test.options, journal: { ...test.options.journal, save: async () => { throw new Error("journal unavailable"); } } }).runOnce()).rejects.toThrow("journal unavailable");
+    expect(test.active()).toEqual(saved); expect(test.events).toEqual([]);
+  });
+
   it.each([401, 403])("retains the activation journal and reports rejected HTTP %s credentials without another cloud request", async status => {
     const test = fixture(); let rejected = 0;
     const cloud = { ...test.options.cloud, poll: async () => {
@@ -268,7 +333,7 @@ describe("independent update coordinator", () => {
   });
 
   it.each(["removed", "operation", "lifecycle"])("retires an unstarted preparation after authenticated %s replacement without a cloud mutation", async replacement => {
-    const test = fixture(); test.setJournal({ schema_version: 1, manager_id: "manager_1", phase: "preparing", operation: operation() });
+    const test = fixture(); test.setJournal(retainedJournal("preparing"));
     await new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, poll: async () => ({
       ...await test.options.cloud.poll(), operation: replacement === "removed" ? null : { ...test.operation(),
         ...(replacement === "operation" ? { operation_id: "new-operation" } : { lifecycle_id: "new-lifecycle" }) },
@@ -277,7 +342,7 @@ describe("independent update coordinator", () => {
   });
 
   it("retains preparation when an operation replacement races its failure receipt", async () => {
-    const test = fixture(); test.setJournal({ schema_version: 1, manager_id: "manager_1", phase: "preparing", operation: operation() });
+    const test = fixture(); test.setJournal(retainedJournal("preparing"));
     test.setOperation({ ...operation(), manager_id: "manager_1", state: "verifying" });
     const options = { ...test.options, cloud: { ...test.options.cloud, report: async () => {
       test.setOperation({ ...operation(), operation_id: "new-operation" }); throw new MaintenanceHttpError(409);
@@ -370,8 +435,10 @@ describe("independent update coordinator", () => {
     expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("restore");
   });
 
-  it("restores the original installation through a temporary outage with unchanged durable credentials", async () => {
-    const test = fixture(); test.setJournal(recovering()); let polls = 0;
+  it.each(["bound", "legacy"])("restores the original installation through a temporary outage with unchanged durable credentials and a %s journal", async format => {
+    const test = fixture(), saved = recovering(); let polls = 0;
+    if (format === "legacy") delete (saved as { authority_identity?: string }).authority_identity;
+    test.setJournal(saved);
     await new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, poll: async () => {
       if (++polls === 1) throw new TypeError("network unavailable");
       return test.options.cloud.poll();

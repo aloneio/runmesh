@@ -11,6 +11,7 @@ vi.mock("../src/profile.js", () => ({ ProfileStore: class { async loadMaintenanc
 vi.mock("../src/updates/journal.js", () => ({ assertManagerDirectory: async (_path: string, create = false) => { if (create && testState.failStateDirectory) throw new Error("manager state directory fixture"); }, FileUpdateJournal: class {
   async load() { testState.journalReads++; if (testState.failJournalReadAt && testState.journalReads >= testState.failJournalReadAt) throw new Error("journal read fixture"); return testState.journal; }
   async complete() { testState.journalCompletes++; testState.journal = undefined; }
+  async save(journal: UpdateJournalRecord) { testState.journal = journal; }
 }, loadManagerId: async () => "manager" }));
 vi.mock("../src/updates/manager-install.js", () => ({ maintenanceManagerLayout: () => ({ platform: process.platform, mode: "user", managerRoot: "/manager", runtimePath: process.execPath, bundlePath: process.argv[1], layout: { installRoot: "/install", stateRoot: "/state" } }) }));
 vi.mock("../src/updates/installation-lock.js", () => ({ acquireInstallationLock: async () => ({ assertHeld() {}, async release() { testState.leaseReleases++; } }) }));
@@ -44,6 +45,40 @@ describe("maintenance request scheduling", () => {
     const completed = running.then(() => { settled = true; }, cause => { settled = true; failure = cause; });
     return { errors, tokens, calls: () => calls, settled: () => settled, failure: () => failure, async stop(expectedFailure = false) { controller.abort(); await completed; if (!expectedFailure && failure !== undefined) throw failure; } };
   }
+
+  it.each(["runner", "server"] as const)("preserves old journals across an actual coordinator restart with a changed %s", async changed => {
+    const { UpdateCoordinator } = await vi.importActual<typeof import("../src/updates/coordinator.js")>("../src/updates/coordinator.js");
+    for (const phase of ["preparing", "succeeded"] as const) {
+      testState.profile = identity; testState.journal = pending(phase);
+      testState.runCoordinator = async options => {
+        testState.journal = { ...pending(phase), authority_identity: await options.authorityIdentity(), recovery_identity: await options.recoveryIdentity() };
+      };
+      const old = start(() => Response.json(idle));
+      await vi.advanceTimersByTimeAsync(0); await old.stop();
+      const saved = structuredClone(testState.journal);
+      testState.profile = { ...identity, ...(changed === "runner" ? { runner_id: "replacement" } : { server_url: "wss://replacement.example.test/runner/connect" }) };
+      testState.runCoordinator = async options => new UpdateCoordinator(options).runOnce();
+      const restarted = start(() => Response.json(idle));
+      try {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(restarted.calls()).toBe(0); expect(restarted.errors).toEqual(["invalid_installation"]);
+        expect(testState.journal).toEqual(saved); expect(testState.journalCompletes).toBe(0);
+      } finally { await restarted.stop(); }
+    }
+  });
+
+  it("keeps the authority stable while refreshing the credential fingerprint on token rotation", async () => {
+    testState.journal = pending("preparing");
+    const identities: { authority: string; credential: string }[] = [];
+    testState.runCoordinator = async options => { identities.push({ authority: await options.authorityIdentity(), credential: await options.recoveryIdentity() }); };
+    const agent = start(() => Response.json(idle));
+    try {
+      await vi.advanceTimersByTimeAsync(0); testState.profile = { ...identity, token: "rotated-token" };
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(identities).toHaveLength(2); expect(identities[1]!.authority).toBe(identities[0]!.authority);
+      expect(identities[1]!.credential).not.toBe(identities[0]!.credential); expect(agent.errors).toEqual([]);
+    } finally { await agent.stop(); }
+  });
 
   it.each(["runner", "server"])("exits for a native restart after an idle %s identity change", async changed => {
     const signals = ["SIGINT", "SIGTERM"] as const, before = signals.map(signal => process.listeners(signal));

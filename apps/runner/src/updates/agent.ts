@@ -82,6 +82,10 @@ export async function runMaintenanceAgent(options: MaintenanceAgentOptions): Pro
             const managerId = await loadManagerId(directory);
             const held = lease;
             const coordinator = new UpdateCoordinator({ managerId, cloud, journal,
+              authorityIdentity: async () => {
+                const current = await profile();
+                return createHash("sha256").update(JSON.stringify([resolve(layout.layout.installRoot), current.runner_id, current.server_url])).digest("hex");
+              },
               recoveryIdentity: async () => {
                 const current = await profile();
                 return createHash("sha256").update(JSON.stringify([resolve(layout.layout.installRoot), current.runner_id, current.server_url, current.token])).digest("hex");

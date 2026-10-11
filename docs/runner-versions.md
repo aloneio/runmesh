@@ -18,6 +18,8 @@ Runmesh verifies the published package, pauses new requests to that Runner, and 
 
 If the new version fails to start or reconnect, the version manager attempts to restore the previous package. The panel reports the result. An interrupted change resumes recovery from a local journal when the manager starts again. If the panel reports `rollback_failed` or `local_state_invalid`, inspect the host's service and retained update state before requesting another change. A failed rollback keeps the maintenance hold in place while recovery is incomplete.
 
+Complete an unfinished version change using its original Runner registration and control-plane address. If re-enrollment or a server change interrupts recovery, retain the local journal and restore the original profile before retrying.
+
 Allow running tasks to finish before switching. Each wait for local work has a 15-minute limit; if the panel reports `busy_local_jobs`, resolve the task in the task list or on the computer, then submit the version change again. A sleeping or disconnected computer picks up the request when its version manager can reach the control plane. The manager normally checks for requests every 30–60 seconds while idle.
 
 ## Enable remote version management on an existing computer
