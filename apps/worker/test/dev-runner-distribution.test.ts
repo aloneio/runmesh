@@ -639,7 +639,7 @@ describe("explicit development release runtime", () => {
       finish(new Response(status === 204 ? null : new ReadableStream({ cancel }), { status }));
       await vi.advanceTimersByTimeAsync(0);
       expect(outcomes).toEqual(["development release registry cache write timed out"]);
-      expect(cancel).toHaveBeenCalledTimes(status === 204 ? 0 : 1);
+      expect(cancel).not.toHaveBeenCalled();
       expect(registryFetch).toHaveBeenCalledOnce();
       expect(vi.getTimerCount()).toBe(0);
     } finally { finish(new Response(null, { status: 204 })); await operation; }
@@ -665,7 +665,7 @@ describe("explicit development release runtime", () => {
     await pending;
     expect(bounded).toBe(true);
     expect(registryFetch.mock.calls[0]?.[0].signal.aborted).toBe(true);
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledTimes(phase === "read body" ? 1 : 0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -694,7 +694,7 @@ describe("explicit development release runtime", () => {
     expect(abortedAtDeadline).toBe(true);
     expect(timersAtDeadline).toBe(0);
     if (phase === "body") expect(cancelledAtDeadline).toBe(1);
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledTimes(phase === "body" ? 1 : 0);
     expect(registryFetch).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
@@ -926,7 +926,7 @@ describe("explicit development release runtime", () => {
     await vi.advanceTimersByTimeAsync(19_000); expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1_100); expect(await pending).toMatchObject({ distributable: false });
     if (phase === "headers") { finishRead(response); await vi.advanceTimersByTimeAsync(0); }
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledTimes(phase === "body" ? 1 : 0);
     expect(dependencies.runtime.cached).toBeUndefined();
     expect(cache.put).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);

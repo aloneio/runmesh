@@ -32,7 +32,7 @@ See [release status](release-readiness.md) for current installation options and 
 
 ### MCP connections and reliability
 
-- Temporary control-plane interruptions preserve the existing OAuth connection. Authorization opens when the account needs to sign in again.
+- During a temporary control-plane outage, the existing OAuth connection is preserved. Authorization opens when the account needs to sign in again.
 - Runner connections release unused responses during disconnects and temporary control-plane failures.
 
 ### Security
@@ -87,7 +87,7 @@ Published on **September 20, 2026** as an [immutable stable release](https://git
 
 - **More reliable task control.** Cancellation keeps uncertain live processes under supervision until their state is resolved. Concurrent recovery respects the recorded cancellation delivery. Input errors include guidance for checking the original process before sending more input.
 - **Clearer recovery on Linux.** After a Runner restart, unfinished Jobs whose processes have exited resolve to interrupted, or cancelled when recorded cancellation delivery supports that outcome.
-- **Clearer MCP calls and recovery.** Action-specific tool definitions, workspace-bound Job queries and structured errors help you follow the original operation after an outage. Query the online Runner with the original Job and workspace IDs when cloud history is unavailable.
+- **Clearer MCP calls and recovery.** Action-specific tool definitions, workspace-bound Job queries and structured errors help you follow the original operation after an outage. Query the online Runner with the original Job and workspace IDs while cloud history is pending.
 - **More control over saved context and paged reads.** Inspect Context storage usage and prune selected old revisions. Optional snapshot reads keep file pages tied to captured content, while append reads follow one Job-log generation. Runner diagnostics help you check support before using these features.
 - **Fewer idle history uploads.** Compatible Worker/Runner pairs upload recorded Job metadata when it changes, then stop the history timer after acknowledgement. Ordinary log reads stay on demand. Heartbeats, authorization and maintenance continue to use account resources.
 - **Stronger local and distribution boundaries.** Additional checks reject unsafe special-file replacements in metadata and release inputs. Release health checks reject oversized or stalled responses before completing preflight. Published packages keep their original identity; the stable tag publisher now explicitly verifies the project tagger identity.

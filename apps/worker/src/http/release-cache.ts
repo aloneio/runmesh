@@ -18,18 +18,22 @@ function record(value: unknown): value is Record<string, unknown> {
 async function persistReleaseCache(env: WorkerEnv, value: Record<string, unknown>): Promise<void> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let completed = false;
+  let completed = false, abandoned = false;
   const write = async (): Promise<void> => {
     const response = await registryRequest(env, VERIFIED_DEV_RELEASE_PATH, "POST", JSON.stringify(value), controller.signal);
+    // A Registry transport may ignore abort and resolve after the write
+    // deadline. The late response belongs to the retired operation; leave its
+    // body untouched so it cannot resume work across request lifetimes.
+    if (abandoned) return;
     void response.body?.cancel().catch(() => undefined);
     if (controller.signal.aborted || response.status !== 204) throw new Error("development release registry cache write failed");
     completed = true;
   };
   try {
     await Promise.race([write(), new Promise<never>((_, reject) => {
-      timer = setTimeout(() => { controller.abort(); reject(new Error("development release registry cache write timed out")); }, REGISTRY_CACHE_TIMEOUT_MS);
+      timer = setTimeout(() => { abandoned = true; controller.abort(); reject(new Error("development release registry cache write timed out")); }, REGISTRY_CACHE_TIMEOUT_MS);
     })]);
-  } finally { if (timer !== undefined) clearTimeout(timer); if (!completed) controller.abort(); }
+  } finally { if (timer !== undefined) clearTimeout(timer); if (!completed) { abandoned = true; controller.abort(); } }
 }
 
 /** HTTP composition adapter for the globally persisted descriptor that has
