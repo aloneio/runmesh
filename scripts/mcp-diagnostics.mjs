@@ -273,6 +273,54 @@ const fixturePhases = ["primary", "release", "cancel", "observe"];
 const fixtureFailureKinds = ["mcp_http_failure", "assertion_failed", "timeout", "other"];
 const directFailureKinds = ["mcp_http_failure", "assertion_failed", "timeout", ...errorKinds];
 const directErrorNames = new Map([["TypeError", "type_error"], ["RangeError", "range_error"], ["SyntaxError", "syntax_error"], ["AbortError", "abort_error"], ["Error", "error"]]);
+const causeCodes = ["UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_ABORTED",
+  "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE"];
+const causeNames = ["SocketError", "ConnectTimeoutError", "HeadersTimeoutError", "BodyTimeoutError", "RequestAbortedError", "AbortError", "TypeError", "Error", "AggregateError"];
+const loadFailureFields = ["concurrency", "operation", "request_index", "boundary", "signal_aborted", "test_signal_aborted", "elapsed_ms"];
+const socketByteLimit = 2_147_483_647;
+const diagnosticInteger = (value, maximum, minimum = 0) => Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+const diagnosticNullableInteger = (value, maximum, minimum = 0) => value === null || diagnosticInteger(value, maximum, minimum);
+const diagnosticNullableBoolean = value => value === null || typeof value === "boolean";
+
+function safeLoadFailureContext(value) {
+  if (!record(value) || ![1, 4, 8, 16].includes(value.concurrency)
+    || !["read", "workspace_list", "job_get", "job_logs"].includes(value.operation)
+    || !diagnosticInteger(value.request_index, 127) || !["headers", "body", "validation"].includes(value.boundary)
+    || typeof value.signal_aborted !== "boolean" || typeof value.test_signal_aborted !== "boolean"
+    || !diagnosticInteger(value.elapsed_ms, 900000)) return undefined;
+  return { concurrency: value.concurrency, operation: value.operation, request_index: value.request_index, boundary: value.boundary,
+    signal_aborted: value.signal_aborted, test_signal_aborted: value.test_signal_aborted, elapsed_ms: value.elapsed_ms };
+}
+
+function safeFailureNetwork(value) {
+  if (!record(value) || !diagnosticInteger(value.request_sequence, 8192, 1)
+    || !diagnosticNullableInteger(value.socket_sequence, 2048, 1) || !diagnosticNullableInteger(value.socket_request_count, 8192, 1)
+    || !diagnosticNullableBoolean(value.reused) || !diagnosticNullableInteger(value.idle_ms, 900000)
+    || !diagnosticInteger(value.request_elapsed_ms, 900000) || typeof value.headers_received !== "boolean"
+    || !diagnosticNullableBoolean(value.socket_destroyed)
+    || ![value.socket_bytes_read, value.socket_bytes_written, value.socket_bytes_read_delta, value.socket_bytes_written_delta]
+      .every(item => diagnosticNullableInteger(item, socketByteLimit))) return undefined;
+  return { request_sequence: value.request_sequence, socket_sequence: value.socket_sequence, socket_request_count: value.socket_request_count,
+    reused: value.reused, idle_ms: value.idle_ms, request_elapsed_ms: value.request_elapsed_ms, headers_received: value.headers_received,
+    socket_destroyed: value.socket_destroyed, socket_bytes_read: value.socket_bytes_read, socket_bytes_written: value.socket_bytes_written,
+    socket_bytes_read_delta: value.socket_bytes_read_delta, socket_bytes_written_delta: value.socket_bytes_written_delta };
+}
+
+function failureCause(error) {
+  const cause = error?.cause;
+  if (cause === undefined) return {};
+  const result = { cause_code: cause?.code === undefined ? "absent" : causeCodes.includes(cause.code) ? cause.code : "other",
+    cause_name: cause?.name === undefined ? "absent" : causeNames.includes(cause.name) ? cause.name : "other" };
+  if (record(cause?.socket)) {
+    // These are cumulative socket counters, not bytes for the failed request.
+    result.socket = {};
+    for (const [input, output, maximum] of [["bytesRead", "bytes_read", socketByteLimit], ["bytesWritten", "bytes_written", socketByteLimit], ["timeout", "timeout_ms", 900000]]) {
+      const value = cause.socket[input];
+      if (Number.isSafeInteger(value) && value >= 0) result.socket[output] = Math.min(maximum, value);
+    }
+  }
+  return result;
+}
 const progressFixtures = ["job_recording", "job_history", "job_sharing"];
 const progressPhases = ["admin_login_page", "admin_login", "client_create", "runner_select", "recording_update", "history_settings", "history_restore", "shell", "job_logs", "job_metadata", "job_poll", "job_list", "job_list_live", "job_list_snapshot",
   "job_share_read", "job_input_denied", "job_cancel_denied", "job_owner_read", "job_input", "job_cancel"];
@@ -294,6 +342,27 @@ function safeWorkerEvent(value) {
       const detail = mcpToolResultFailureDiagnostic(TOOL_RESULT_MARKER + JSON.stringify(value.mcp_tool_result));
       if (detail === undefined) return undefined;
       event.mcp_tool_result = detail;
+    }
+    if (value.cause_code !== undefined || value.cause_name !== undefined || value.socket !== undefined) {
+      if (![...causeCodes, "absent", "other"].includes(value.cause_code) || ![...causeNames, "absent", "other"].includes(value.cause_name)) return undefined;
+      event.cause_code = value.cause_code; event.cause_name = value.cause_name;
+      if (value.socket !== undefined) {
+        if (!record(value.socket)) return undefined;
+        event.socket = {};
+        for (const [field, maximum] of [["bytes_read", socketByteLimit], ["bytes_written", socketByteLimit], ["timeout_ms", 900000]]) {
+          if (value.socket[field] === undefined) continue;
+          if (!diagnosticInteger(value.socket[field], maximum)) return undefined;
+          event.socket[field] = value.socket[field];
+        }
+      }
+    }
+    if (loadFailureFields.some(field => value[field] !== undefined)) {
+      const context = safeLoadFailureContext(value);
+      if (context !== undefined) Object.assign(event, context);
+    }
+    if (value.network !== undefined) {
+      const network = safeFailureNetwork(value.network);
+      if (network !== undefined) event.network = network;
     }
     return event;
   }
@@ -377,7 +446,7 @@ export function mcpLoadProgressDiagnostic(value) {
 }
 
 /** Call only after a request or assertion throws; expected tool errors are data. */
-export function mcpFailureDiagnostic(event, error) {
+export function mcpFailureDiagnostic(event, error, context) {
   const text = typeof error?.message === "string" ? error.message.slice(0, 16384) : "";
   const status = /^(?:Error: )?RUNMESH_E2E_MCP_HTTP_STATUS=([1-5]\d{2})\r?$/mu.exec(text)?.[1];
   const response = mcpHttpDiagnostic(text), toolResult = mcpToolResultFailureDiagnostic(text);
@@ -385,15 +454,17 @@ export function mcpFailureDiagnostic(event, error) {
     : error?.code === "ERR_ASSERTION" || error?.name === "AssertionError" ? "assertion_failed"
       : error?.name === "TimeoutError" || error?.code === "ETIMEDOUT" || /^(?:Test|Hook) timed out in \d+ms\b|^timed out after \d+ms\b/u.test(text) ? "timeout"
         : directErrorNames.get(error?.name) ?? "other";
-  return eventMarker({ event, kind,
+  const load = safeLoadFailureContext(context), network = safeFailureNetwork(context?.network);
+  return eventMarker({ event, kind, ...failureCause(error), ...load,
+    ...(network === undefined ? {} : { network }),
     ...(kind === "mcp_http_failure" ? { http_status: Number(status), mcp_response: response } : {}),
     ...(toolResult === undefined ? {} : { mcp_tool_result: toolResult }) });
 }
 
 /** Flush before cleanup or reporter shutdown; diagnostics never own the error. */
-export function emitMcpFailureDiagnostic(event, error, emit = value => writeSync(2, value)) {
+export function emitMcpFailureDiagnostic(event, error, emit = value => writeSync(2, value), context) {
   try {
-    const diagnostic = mcpFailureDiagnostic(event, error);
+    const diagnostic = mcpFailureDiagnostic(event, error, context);
     if (diagnostic !== undefined) emit(diagnostic);
   } catch { /* Preserve the initiating error even when stderr is already closed. */ }
 }
@@ -445,6 +516,7 @@ function eventBudget() {
     const key = timingKey ?? (event.event === "runtime_lifecycle" && runtimeReloadMessages.has(event.reason) ? "runtime_reload"
       : event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
       : event.event === "load_progress" ? `load:${event.concurrency}`
+      : event.event === "test_failure" && event.concurrency !== undefined ? `test_failure:${event.concurrency}`
       : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event);
     // Preserve the first sixteen reload transitions in arrival order, with a
     // separate allowance so reload chatter cannot displace crash evidence.
@@ -482,7 +554,10 @@ export function mcpWorkerFailureEvidence(stderr) {
   // Match execFile's capture bound so a later assertion cannot evict an earlier
   // fixed event. Each category retains its own bounded, reconstructed records.
   const text = clean(stderr.slice(0, 8 * 1024 * 1024));
-  for (const match of text.matchAll(/^RUNMESH_E2E_MCP_WORKER_EVENT=(\{[^\r\n]{1,768}\})\r?$/gmu)) {
+  // A first load failure can combine cause, socket and request observations
+  // with the existing HTTP or tool-result details (up to 1256 JSON bytes).
+  // The larger fixed envelope still passes through strict field projection.
+  for (const match of text.matchAll(/^RUNMESH_E2E_MCP_WORKER_EVENT=(\{[^\r\n]{1,2048}\})\r?$/gmu)) {
     try {
       const event = safeWorkerEvent(JSON.parse(match[1]));
       if (event !== undefined && admit(event)) events.push(event);
