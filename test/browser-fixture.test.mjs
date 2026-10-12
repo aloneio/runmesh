@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { finished } from "node:stream/promises";
 import { EventEmitter, once } from "node:events";
 import { WebSocketServer } from "ws";
 import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../scripts/browser-worker-fixture.mjs";
@@ -607,6 +608,161 @@ test("Shared Worker launch owns an IPC-discovered port and shuts down its proces
   assert.ok(child.exitCode !== null || child.signalCode !== null);
   await assert.rejects(fetch(origin + "/health", { signal: AbortSignal.timeout(1_000) }));
 });
+
+async function nativeLauncherFixture(t, mode = "success") {
+  const temporaryRoot = await realpath(tmpdir());
+  const directory = await realpath(await mkdtemp(join(temporaryRoot, "native-worker-fixture-test-")));
+  let child, output = "";
+  t.after(async () => {
+    await stopFixtureProcess(child);
+    assert.equal(dirname(directory), temporaryRoot);
+    assert.ok(basename(directory).startsWith("native-worker-fixture-test-") && directory !== temporaryRoot);
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+  const moduleDirectory = join(directory, "node_modules/wrangler");
+  await mkdir(moduleDirectory, { recursive: true });
+  await writeFile(join(moduleDirectory, "package.json"), JSON.stringify({ name: "wrangler", type: "module", exports: "./index.mjs" }));
+  await writeFile(join(moduleDirectory, "index.mjs"), `
+    import { EventEmitter } from 'node:events';
+    import { spawn } from 'node:child_process';
+    import { createServer } from 'node:http';
+    import { writeFile } from 'node:fs/promises';
+    const mode = process.env.NATIVE_FIXTURE_MODE;
+    export function unstable_convertConfigBindingsToStartWorkerBindings({ vars }) {
+      return Object.fromEntries(Object.entries(vars).map(([name, value]) => [name, { type: 'plain_text', value }]));
+    }
+    export class unstable_DevEnv extends EventEmitter {
+      runtimes = []; servers = []; posts = 0; readyResolved = false;
+      async startWorker(options) {
+        if (mode === 'start_failure') throw new Error('PRIVATE_START_ERROR');
+        const listen = async kind => {
+          const server = createServer((request, response) => {
+            if (request.method === 'POST') { this.posts++; response.statusCode = 500; }
+            response.end(JSON.stringify({ kind, posts: this.posts, readyResolved: this.readyResolved }));
+            if (request.url === '/reload') queueMicrotask(() => this.emit('reloadComplete', this.reload));
+          });
+          this.servers.push(server);
+          await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+          return new URL('http://127.0.0.1:' + server.address().port);
+        };
+        const proxy = await listen('proxy'), native = await listen('native');
+        const ready = new Promise((resolve, reject) => setTimeout(() => {
+          this.readyResolved = true;
+          mode === 'ready_failure' ? reject(new Error('PRIVATE_READY_ERROR')) : resolve(native);
+        }, 60));
+        this.runtimes = [{ mf: { ready } }, { mf: undefined }];
+        if (mode === 'multiple_runtimes') this.runtimes.push({ mf: { ready } });
+        const announced = mode === 'address_mismatch' ? proxy : native;
+        this.reload = { proxyData: { userWorkerUrl: {
+          protocol: announced.protocol, hostname: mode === 'remote_address' ? 'example.com' : announced.hostname, port: announced.port,
+        }, headers: { 'MF-Proxy-Shared-Secret': 'PRIVATE_PROXY_SECRET' } } };
+        let descendant;
+        if (mode === 'teardown_hang' || mode === 'teardown_reject') {
+          const child = spawn(process.execPath, ['-e', "const s=require('node:http').createServer((q,r)=>r.end('descendant'));s.listen(0,'127.0.0.1',()=>process.send(s.address().port))"],
+            { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
+          descendant = 'http://127.0.0.1:' + await new Promise(resolve => child.once('message', resolve));
+        }
+        await writeFile('native-contract.json', JSON.stringify({
+          config: options.config, dev: options.dev, args: process.argv.slice(2),
+          environment: process.env.FIXTURE_ROLE, secretMatches: options.bindings.FIXTURE_SECRET.value === process.env.FIXTURE_SECRET,
+          configurationRemoved: process.env.RUNMESH_WORKER_FIXTURE_CONFIGURATION === undefined,
+          proxy: proxy.origin, native: native.origin, descendant,
+        }));
+        if (mode === 'build_failure') this.emit('buildFailed', new Error('PRIVATE_BUILD_ERROR'));
+        else this.emit('reloadComplete', this.reload);
+        return { url: Promise.resolve(proxy) };
+      }
+      async teardown() {
+        if (mode === 'teardown_hang') await new Promise(() => {});
+        if (mode === 'teardown_reject') throw new Error('PRIVATE_TEARDOWN_ERROR');
+        await Promise.all(this.servers.map(server => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); }));
+        await writeFile('native-closed.json', JSON.stringify({ posts: this.posts }));
+      }
+    }
+  `);
+  child = spawnWorkerFixture({ cwd: directory, persistTo: directory, transport: "native",
+    vars: { FIXTURE_ROLE: "native-contract", FIXTURE_SECRET: "PRIVATE_BINDING_VALUE" }, env: { ...process.env, NATIVE_FIXTURE_MODE: mode } });
+  const messages = [];
+  child.on("message", value => messages.push(value));
+  child.stdout.on("data", chunk => { output += chunk.toString(); });
+  child.stderr.on("data", chunk => { output += chunk.toString(); });
+  return { child, directory, messages, output: () => output,
+    async outputClosed() {
+      // Node 22 may omit ChildProcess.close after an explicit IPC disconnect.
+      // Own the two output streams directly, under a referenced drain deadline.
+      const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(), 1_000);
+      try {
+        await Promise.all([child.stdout, child.stderr].map(stream => finished(stream,
+          { readable: true, writable: false, cleanup: true, signal: controller.signal })));
+      } finally { clearTimeout(deadline); }
+    },
+    contract: async () => JSON.parse(await readFile(join(directory, "native-contract.json"), "utf8")),
+    closed: async () => JSON.parse(await readFile(join(directory, "native-closed.json"), "utf8")),
+  };
+}
+
+test("Native Worker launch publishes the runtime entry socket and preserves its config and single HTTP dispatch", { timeout: 12_000 }, async t => {
+  const fixture = await nativeLauncherFixture(t);
+  const origin = await waitForWorker(fixture.child, 8_000), contract = await fixture.contract();
+  assert.equal(origin, contract.native); assert.notEqual(origin, contract.proxy);
+  assert.equal(contract.config, join(fixture.directory, "apps/worker/wrangler.jsonc"));
+  assert.deepEqual(contract.dev, { remote: false, server: { hostname: "127.0.0.1", port: 0, secure: false },
+    inspector: false, watch: false, liveReload: false, persist: fixture.directory, logLevel: "warn", inferOriginFromRoutes: false });
+  assert.equal(contract.environment, "native-contract"); assert.equal(contract.secretMatches, true);
+  assert.equal(contract.configurationRemoved, true); assert.deepEqual(contract.args, []);
+  const response = await fetch(origin + "/single-post", { method: "POST" });
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { kind: "native", posts: 1, readyResolved: true });
+  fixture.child.disconnect();
+  await waitForFixtureExit(fixture.child, 3_000);
+  await fixture.outputClosed();
+  assert.equal(fixture.child.exitCode, 0); assert.deepEqual(await fixture.closed(), { posts: 1 });
+  assert.equal(fixture.messages.filter(message => message?.event === "DEV_SERVER_READY").length, 1);
+  assert.doesNotMatch(fixture.output(), /PRIVATE_/u);
+  await assert.rejects(fetch(origin + "/health", { signal: AbortSignal.timeout(1_000) }));
+  await assert.rejects(fetch(contract.proxy + "/health", { signal: AbortSignal.timeout(1_000) }));
+});
+
+for (const mode of ["start_failure", "build_failure", "ready_failure", "address_mismatch", "remote_address", "multiple_runtimes"])
+  test(`Native Worker launch closes after ${mode} without announcing a usable fixture`, { timeout: 12_000 }, async t => {
+    const fixture = await nativeLauncherFixture(t, mode);
+    await assert.rejects(waitForWorker(fixture.child, 8_000), /Worker exited before readiness/u);
+    await fixture.outputClosed();
+    assert.equal(fixture.child.exitCode, 1);
+    assert.equal(fixture.messages.filter(message => message?.event === "DEV_SERVER_READY").length, 0);
+    assert.deepEqual(await fixture.closed(), { posts: 0 });
+    assert.doesNotMatch(fixture.output(), /PRIVATE_/u);
+    assert.match(fixture.output(), /Native Worker fixture launch failed/u);
+  });
+
+test("Native Worker launch closes an unexpected reload instead of changing the tested endpoint", { timeout: 12_000 }, async t => {
+  const fixture = await nativeLauncherFixture(t);
+  const origin = await waitForWorker(fixture.child, 8_000);
+  const response = await fetch(origin + "/reload"); await response.arrayBuffer();
+  await waitForFixtureExit(fixture.child, 3_000);
+  await fixture.outputClosed();
+  assert.equal(fixture.child.exitCode, 1);
+  assert.deepEqual(await fixture.closed(), { posts: 0 });
+  assert.equal(fixture.messages.filter(message => message?.event === "DEV_SERVER_READY").length, 1);
+  assert.doesNotMatch(fixture.output(), /PRIVATE_/u);
+});
+
+for (const mode of ["teardown_hang", "teardown_reject"])
+  test(`Native Worker launch terminates its own descendant tree after ${mode}`, { timeout: 16_000 }, async t => {
+    const fixture = await nativeLauncherFixture(t, mode);
+    const origin = await waitForWorker(fixture.child, 8_000), contract = await fixture.contract();
+    assert.equal(await (await fetch(contract.descendant)).text(), "descendant");
+    fixture.child.disconnect();
+    await waitForFixtureExit(fixture.child, 8_000);
+    await fixture.outputClosed();
+    assert.ok(fixture.child.exitCode !== 0 || fixture.child.signalCode !== null);
+    assert.match(fixture.output(), /Native Worker fixture launch failed phase=teardown/u);
+    assert.doesNotMatch(fixture.output(), /PRIVATE_/u);
+    for (const address of [origin, contract.proxy, contract.descendant]) {
+      await assert.rejects(fetch(address, { signal: AbortSignal.timeout(1_000) }));
+    }
+  });
 
 test("Fixture exit wait clears successful and already-exited child deadlines and listeners", async () => {
   const fixtureUrl = new URL("../scripts/worker-fixture.mjs", import.meta.url).href;
