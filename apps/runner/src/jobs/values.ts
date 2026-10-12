@@ -22,6 +22,15 @@ export function parseInvocation(params: Record<string, unknown>, workspace: Work
   return { file: [params.command, ...args].join(" "), args: [], command: [params.command, ...args], shell: true };
 }
 
+/** Pure launch validation, shared with capability recovery before any probe. */
+export function parseStartValues(params: Record<string, unknown>, workspace: WorkspaceConfig) {
+  const invocation = parseInvocation(params, workspace);
+  const createdByClientId = safeOptionalIdentifier(params.created_by_client_id);
+  if (params.record_history !== undefined && typeof params.record_history !== "boolean") throw new RpcRuntimeError("invalid_params", "record_history must be a boolean");
+  const requestId = safeOptionalRequestId(params.request_id);
+  return { invocation, createdByClientId, requestId };
+}
+
 export function paramsObject(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object"); return value as Record<string, unknown>; }
 
 export function stringArray(value: unknown, label: string): string[] { if (!Array.isArray(value) || value.length > 256 || value.some((item) => typeof item !== "string" || item.includes("\0") || item.length > 8_192)) throw new RpcRuntimeError("invalid_params", `${label} must be string array`); return value as string[]; }

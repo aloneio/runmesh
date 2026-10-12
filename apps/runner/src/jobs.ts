@@ -15,7 +15,7 @@ import type { PathPolicy } from "./path-policy.js";
 import type { JobRecord, RecoveryLiveness, JobEvent } from "./jobs/records.js";
 export type { JobRecord, RecoveryLiveness, LocalJobStatus, JobEvent } from "./jobs/records.js";
 import { isActive, occupiesProcessSlot, sameJobProcessIdentity, safeJobId, normalizeJobRecord, isJobStatus, nextJobUpdate } from "./jobs/records.js";
-import { parseInvocation, paramsObject, bounded, positiveInteger, relativeWorkspacePath, safeOptionalIdentifier, safeOptionalRequestId, launchRequestFingerprint, isErrno } from "./jobs/values.js";
+import { parseStartValues, paramsObject, bounded, positiveInteger, relativeWorkspacePath, launchRequestFingerprint, isErrno } from "./jobs/values.js";
 import { terminalRecoveredJob } from "./jobs/recovery.js";
 import { nativeJobFiles } from "./jobs/storage.js";
 import { nativeJobProcesses, type ProcessTerminator } from "./jobs/process.js";
@@ -351,10 +351,7 @@ export class JobManager {
     const workspace = this.policy.getWorkspace(params.workspace_id);
     const cwd = await this.policy.resolve(workspace.workspaceId, params.cwd ?? ".", "cwd");
     this.policy.assertGeneration(generation);
-    const invocation = parseInvocation(params, workspace);
-    const createdByClientId = safeOptionalIdentifier(params.created_by_client_id);
-    if (params.record_history !== undefined && typeof params.record_history !== "boolean") throw new RpcRuntimeError("invalid_params", "record_history must be a boolean");
-    const requestId = safeOptionalRequestId(params.request_id);
+    const { invocation, createdByClientId, requestId } = parseStartValues(params, workspace);
     const requestFingerprint = requestId === null ? null : launchRequestFingerprint(workspace.workspaceId, relativeWorkspacePath(workspace, cwd.path), invocation, createdByClientId);
     if (reservedJob === undefined && requestId !== null) {
       const existing = [...this.jobs.values()].find((job) => job.workspace_id === workspace.workspaceId && job.created_by_client_id === createdByClientId && job.request_id === requestId);

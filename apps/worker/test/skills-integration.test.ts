@@ -12,11 +12,90 @@ import { CentralSchema } from "../src/platform/capabilities/schema.js";
 import { makeSkillBundle } from "../src/domain/skills/bundle.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
 import { SKILL_LIMITS } from "../src/contracts/skills.js";
+import * as skillReaderModule from "../src/application/skills/reader.js";
 
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName('registry'));
 const sharedTools = ['remote_call', 'remote_profiles', 'remote_search', 'remote_tools', 'skill_list', 'skill_read'];
 const nativeTools = ['context', 'edit', 'inspect', 'job', 'read', 'runner_current', 'runner_list', 'runner_select', 'shell', 'workspace_list'];
 const toolNames = (tools: { name: string }[]) => tools.map(tool => tool.name).sort();
+
+/** Failure-only observations preserve the real calls and their original budgets. */
+function skillLoadDiagnostics() {
+  type Trace = { scope: 'reader' | 'owner'; operation: 'read' | 'list'; stage: string; started: number; elapsed_ms?: number;
+    outcome?: string; error?: string; identity_checks?: number; identity_state?: string; signal_aborted?: boolean;
+    storage_calls?: number; bundle_found?: boolean; digest_calls?: number; digest_matches?: boolean; binding_matches?: boolean };
+  const traces: Trace[] = [];
+  const state = (value: unknown): string => typeof value === 'string' && ['read', 'listed', 'allowed', 'denied', 'unavailable', 'malformed', 'missing', 'invalid', 'capacity'].includes(value) ? value : 'other';
+  const errorCode = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : '';
+    if (message.includes('Cannot perform I/O on behalf of a different request')) return 'io_context';
+    if (message.includes('SQLITE_LOCKED')) return 'sqlite_locked';
+    if (message.includes('invalidating this Durable Object')) return 'do_invalidated';
+    if (['skill_record_invalid', 'skill_schema_unsupported', 'capabilities_schema_unsupported'].includes(message)) return message;
+    return error instanceof Error && ['AbortError', 'TimeoutError', 'TypeError', 'SyntaxError'].includes(error.name) ? error.name : 'other';
+  };
+  const begin = (scope: Trace['scope'], operation: Trace['operation']): Trace => {
+    const trace: Trace = { scope, operation, stage: 'entered', started: performance.now() };
+    traces.push(trace); if (traces.length > 32) traces.shift(); return trace;
+  };
+  const create = skillReaderModule.createSkillReader;
+  const readerSpy = vi.spyOn(skillReaderModule, 'createSkillReader').mockImplementation(ports => {
+    let trace: Trace, expectedDigest: string | undefined;
+    const reader = create({ ...ports,
+      repository: new Proxy(ports.repository, { get(target, key) {
+        const method = Reflect.get(target, key, target);
+        if (typeof method !== 'function' || !['head', 'heads', 'approved', 'summary', 'bundle'].includes(String(key))) return method;
+        return (...args: unknown[]) => {
+          trace.stage = 'storage_' + String(key); trace.storage_calls = (trace.storage_calls ?? 0) + 1;
+          try {
+            const result = Reflect.apply(method, target, args);
+            if (key === 'bundle') { trace.bundle_found = result !== undefined; expectedDigest = result?.digest; }
+            return result;
+          } catch (error) { trace.error = errorCode(error); throw error; }
+        };
+      } }),
+      identity: async (principal, signal) => {
+        trace.stage = 'identity'; trace.identity_checks = (trace.identity_checks ?? 0) + 1;
+        try { const result = await ports.identity(principal, signal); trace.identity_state = state(result.state); return result; }
+        catch (error) { trace.error = errorCode(error); throw error; }
+        finally { trace.signal_aborted = signal.aborted; }
+      },
+      digest: async value => {
+        trace.stage = 'digest'; trace.digest_calls = (trace.digest_calls ?? 0) + 1;
+        try { const digest = await ports.digest(value); trace.digest_matches = digest === expectedDigest; return digest; }
+        catch (error) { trace.error = errorCode(error); throw error; }
+      },
+    });
+    const observe = async <T extends { state: string }>(operation: Trace['operation'], action: () => Promise<T>): Promise<T> => {
+      trace = begin('reader', operation);
+      try { const result = await action(); trace.outcome = state(result.state); return result; }
+      finally { trace.elapsed_ms = Math.round(performance.now() - trace.started); }
+    };
+    return { list: (...args) => observe('list', () => reader.list(...args)), read: (...args) => observe('read', () => reader.read(...args)) };
+  });
+  let reported = false;
+  return {
+    restore: () => readerSpy.mockRestore(),
+    async owner<T extends { state: string }>(operation: Trace['operation'], action: () => Promise<T>, input?: unknown): Promise<T> {
+      const trace = begin('owner', operation);
+      try {
+        const result = await action(); trace.outcome = state(result.state);
+        if (result.state === 'read') {
+          const content = result as T & { skill_id?: unknown; digest?: unknown; path?: unknown }, query = input as { skill_id?: unknown; digest?: unknown; path?: unknown };
+          trace.binding_matches = content.skill_id === query?.skill_id && content.digest === query?.digest && content.path === query?.path;
+        }
+        return result;
+      } catch (error) { trace.error = errorCode(error); throw error; }
+      finally { trace.elapsed_ms = Math.round(performance.now() - trace.started); }
+    },
+    report(reason: 'public_tool_error' | 'public_rpc_error' | 'assertion_failed' | 'test_failed') {
+      if (reported) return; reported = true;
+      console.info('skills-load-failure', JSON.stringify({ reason, provider_budget_ms: SKILL_LIMITS.operation_ms + 1000,
+        traces: traces.map(({ started, ...trace }) => ({ ...trace, elapsed_ms: trace.elapsed_ms ?? Math.round(performance.now() - started), settled: trace.elapsed_ms !== undefined })) }));
+    },
+  };
+}
+
 async function fixture(nativeScopes: ["coding:read"] | [] = []) {
   const session = randomBase64Url(), csrf = randomBase64Url(), hash = await sha256Hex(session), csrfHash = await sha256Hex(csrf);
   const verifier = await passwordVerifier('central-skills-test-password');
@@ -48,8 +127,19 @@ async function fixture(nativeScopes: ["coding:read"] | [] = []) {
   };
   return { config, headers, clients, admin, rpc, invoke, hash, port, stub };
 }
-it('normal concurrent Skill MCP reads preserve complete pages and immutable content', async () => {
+it('normal concurrent Skill MCP reads preserve complete pages and immutable content', async ({ onTestFinished, onTestFailed }) => {
+  const diagnostic = skillLoadDiagnostics();
+  onTestFinished(diagnostic.restore); onTestFailed(() => diagnostic.report('test_failed'));
   const f = await fixture(), count = SKILL_LIMITS.page + 2, text = 'Reference content.\n'.repeat(256);
+  const originalRead = f.port.readSkill, originalList = f.port.listSkills;
+  const readSpy = vi.spyOn(f.port, 'readSkill').mockImplementation((principal, query) => diagnostic.owner('read', () => originalRead(principal, query), query));
+  const listSpy = vi.spyOn(f.port, 'listSkills').mockImplementation((principal, query) => diagnostic.owner('list', () => originalList(principal, query)));
+  onTestFinished(() => { readSpy.mockRestore(); listSpy.mockRestore(); });
+  const checkReply = (reply: { error?: unknown; result?: { isError?: boolean } }) => {
+    if (reply.error !== undefined) diagnostic.report('public_rpc_error');
+    else if (reply.result?.isError === true) diagnostic.report('public_tool_error');
+    expect(reply.error).toBeUndefined(); expect(reply.result?.isError).not.toBe(true);
+  };
   const values = await Promise.all(Array.from({ length: count }, (_, index) => {
     const id = 'load-skill-' + String(index).padStart(3, '0');
     return makeSkillBundle({ skill_id: id, source: 'Local load fixture', license: 'MIT', files: [
@@ -72,8 +162,7 @@ it('normal concurrent Skill MCP reads preserve complete pages and immutable cont
   const warmup = await f.rpc(f.clients[0]!.secret, 'tools/call', { name: 'skill_read', arguments: {
     skill_id: selected.skill_id, digest: selected.digest, path: 'references/content.md',
   } });
-  expect(warmup.result?.isError, JSON.stringify(warmup)).not.toBe(true);
-  expect(warmup.error, JSON.stringify(warmup)).toBeUndefined();
+  checkReply(warmup);
   const measurements: Array<{ concurrency: number; requests: number; failures: number; p50_ms: number; p95_ms: number }> = [];
   for (const concurrency of [1, 4, 8, 16]) {
     const durations: number[] = [], failures: string[] = [];
@@ -87,7 +176,7 @@ it('normal concurrent Skill MCP reads preserve complete pages and immutable cont
           if (index % 4 < 2) {
             const second = index % 4 === 1;
             const reply = await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: second ? { after } : {} });
-            expect(reply.error, JSON.stringify(reply)).toBeUndefined(); expect(reply.result.isError, JSON.stringify(reply)).not.toBe(true);
+            checkReply(reply);
             const page = JSON.parse(reply.result.content[0].text);
             expect(page.state).toBe('listed');
             expect(page.skills.map((skill: { skill_id: string }) => skill.skill_id)).toEqual(second ? lastIds : firstIds);
@@ -96,15 +185,15 @@ it('normal concurrent Skill MCP reads preserve complete pages and immutable cont
             const reply = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: {
               skill_id: selected.skill_id, digest: selected.digest, path: 'references/content.md',
             } });
-            expect(reply.error, JSON.stringify(reply)).toBeUndefined(); expect(reply.result.isError, JSON.stringify(reply)).not.toBe(true);
+            checkReply(reply);
             expect(JSON.parse(reply.result.content[0].text)).toMatchObject({ state: 'read', digest: selected.digest, text });
           } else {
             const reply = await f.rpc(client.secret, 'resources/read', {
               uri: 'runmesh-skill://bundle/' + selected.skill_id + '/' + selected.digest + '/references/content.md',
             });
-            expect(reply.error, JSON.stringify(reply)).toBeUndefined(); expect(reply.result.contents[0].text).toBe(text);
+            checkReply(reply); expect(reply.result.contents[0].text).toBe(text);
           }
-        } catch (error) { failures.push(error instanceof Error ? error.message : String(error)); }
+        } catch { diagnostic.report('assertion_failed'); failures.push('request_' + index + '_failed'); }
         finally { durations.push(performance.now() - start); }
       }
     }));

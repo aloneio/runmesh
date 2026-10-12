@@ -341,6 +341,27 @@ test("browser diagnostic classes distinguish navigation, startup, operation and 
   assert.equal(browserErrorDiagnostic({ code: -32000, message: "Execution context was destroyed." }).kind, "navigation_context_lost");
 });
 
+test("test failure classification ignores timeout wrapper frames and preserves source coordinates", () => {
+  const stack = "\n    at C:/private/test timeout/test/e2e/mcp-runner.e2e.test.ts:551:129"
+    + "\n    at runWithTimeout (file:///C:/private/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)";
+  for (const [message, kind] of [
+    ["TypeError: Cannot destructure property 'onTestFailed' of 'undefined' as it is undefined.", "type_error"],
+    ["TypeError [ERR_INVALID_ARG_TYPE]: private-value", "type_error"],
+    ["AssertionError: private-value", "assertion_failed"],
+    ["Error: private-value", "unclassified"],
+    ["Error: Test timed out in 60000ms", "test_timeout"],
+    ["Error: Hook timed out in 30000ms", "hook_timeout"],
+    ["Error: Operation timed out", "timeout"],
+  ]) {
+    const safe = testFailureEvidence({ testResults: [{ name: "C:/private/test/e2e/mcp-runner.e2e.test.ts", status: "failed", assertionResults: [
+      { status: "failed", failureMessages: [message + stack] },
+    ] }] });
+    assert.deepEqual(safe.failures, [{ file_index: 1, file: "test/e2e/mcp-runner.e2e.test.ts", scope: "test", test_index: 1, kind,
+      location: { file: "test/e2e/mcp-runner.e2e.test.ts", line: 551, column: 129 } }]);
+    assert.doesNotMatch(JSON.stringify(safe), /private|runWithTimeout|Cannot destructure/u);
+  }
+});
+
 test("colored browser failure stacks retain safe assertion locations", () => {
   const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [
     "\u001b[31mAssertionError\u001b[39m: private-cookie\n    at check (\u001b[36m/private/build/scripts/ui-browser-check.mjs\u001b[39m:\u001b[33m63:17\u001b[39m)",
@@ -502,6 +523,16 @@ test("MCP tool-result diagnostics normalize unknown, missing and malformed resul
   const malformed = mcpToolResultDiagnostic("inspect_search_initial", { isError: false, structuredContent: { error: "private-error" } });
   assert.deepEqual(mcpToolResultFailureDiagnostic(malformed), { phase: "inspect_search_initial", result: "success", error_code: "other",
     failure_class: "other", operation_state: "other", next_action: "other" });
+});
+
+test("mixed MCP load diagnostics preserve the reviewed phase without exposing tool content", () => {
+  const marker = mcpToolResultDiagnostic("mixed_load", { isError: true,
+    structuredContent: { error: { code: "timeout", message: "private-message" } },
+    content: [{ type: "text", text: "private-content" }] });
+  const detail = { phase: "mixed_load", result: "error", error_code: "timeout", failure_class: "absent", operation_state: "absent", next_action: "absent" };
+  assert.deepEqual(mcpToolResultFailureDiagnostic(marker), detail);
+  assert.deepEqual(browserErrorDiagnostic(new Error("AssertionError: " + marker)), { kind: "assertion_failed", mcp_tool_result: detail });
+  assert.doesNotMatch(marker, /private/u);
 });
 
 test("Job log failure assertions preserve the original tool classification in browser evidence", () => {
