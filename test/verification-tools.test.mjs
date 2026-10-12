@@ -629,6 +629,24 @@ test("mixed MCP load diagnostics preserve the reviewed phase without exposing to
   assert.doesNotMatch(marker, /private/u);
 });
 
+test("Runner disconnect assertions retain safe tool classification in transport evidence", () => {
+  for (const code of ["runner_offline", "registry_unavailable"]) {
+    const result = { isError: true, structuredContent: { error: { code, failure_class: "availability", operation_state: "not_started", next_action: "wait_and_retry",
+      message: "private-message", recovery_hint: "private-hint", details: { runner_id: "private-runner", path: "private-path" } } } };
+    Object.defineProperty(result, "content", { get() { assert.fail("Free-form tool content must not be inspected"); } });
+    const marker = mcpToolResultDiagnostic("runner_disconnect", result);
+    const detail = { phase: "runner_disconnect", result: "error", error_code: code,
+      failure_class: "availability", operation_state: "not_started", next_action: "wait_and_retry" };
+    assert.deepEqual(mcpToolResultFailureDiagnostic(marker), detail);
+    const summary = testFailureEvidence({ testResults: [{ name: "/private/test/e2e/mcp-runner.e2e.test.ts", status: "failed", assertionResults: [{
+      status: "failed", failureMessages: ["AssertionError: " + marker + ": expected private-actual to match private-expected"],
+    }] }] });
+    assert.deepEqual(summary.failures, [{ file_index: 1, file: "test/e2e/mcp-runner.e2e.test.ts", scope: "test", test_index: 1,
+      kind: "assertion_failed", mcp_tool_result: detail }]);
+    assert.doesNotMatch(marker + JSON.stringify(summary), /private/u);
+  }
+});
+
 test("Job log failure assertions preserve the original tool classification in browser evidence", () => {
   for (const phase of ["job_logs_initial", "job_logs_continuation", "job_logs_stderr"]) {
     for (const code of ["job_history_unavailable", "log_unavailable", "log_changed", "timeout", "runner_offline"]) {
