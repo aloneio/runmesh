@@ -3,7 +3,7 @@
 检查日期：2026-10-12（Asia/Shanghai）
 
 检查基线：`dev`，`115ba45`
-阶段：候选 `0274535` 的 PR CI 全部成功，push Windows 网络门禁及汇总失败，原始发布门禁保持阻塞。实验 B `8f61ffe` 的本地固定对照两轮各 41/41、0 跳过，支持进入工具链升级候选完整验证；本机补充检查通过。正式版保持 0.1.7，0.1.8 保持 candidate，完整候选与发布验收按后续精确提交记录。
+阶段：工具链候选 `bc31153` 的 push、PR CI 全部成功；随后仅调整四份文档的 `6a849a2`，PR CI 全部成功，push Windows 断线恢复断言及汇总失败。四档混合负载均完成。开发预发布 `v0.1.8-dev.63` 已发布并独立验证，正式版保持 0.1.7；0.1.8 的正式发布与生产激活保持待验收状态。
 
 ## 范围与方法
 
@@ -660,3 +660,54 @@ B 本机静态及三环境构建门禁共 17 项通过，覆盖工具链、全�
 干净提交 `8f61ffec2ab6ed0a4cf242574e462bfcb9a7a3f2` 的本机 Windows 实际安装包 E2E 为 41/41 通过、0 跳过。`installed_transport` 门禁耗时 235,691 ms，安装包证据内部 elapsed 为 230,676 ms。包大小为 1,206,785 字节，SHA256 为 `d3e4b189f58d5de200acae76f0e54531122af3c481f7c4b37dfc864d0320042a`；与升级前 Runner 包一致，签名与发布状态均为 false。原始记录保留于该 worktree 的 `.audit/runtime-validation/installed-transport.log`、`installed-transport-gate.json` 和 `package-e2e.json`，与源码对照结果分别计数。
 
 随后在 Windows 调用浏览器门禁时，`scripts/run-browser-e2e.mjs:26` 的 Linux 平台要求在 configuration 阶段中止执行，门禁报告 failed、耗时 1,183 ms，浏览器 reporter 未生成。该次准备错误保留在 `.audit/runtime-validation/browser.log`、`browser.json`、`browser-tests.json`，不计为浏览器功能覆盖。新候选按项目规定在 Linux CI 执行浏览器及 guided product 检查；全部托管门禁另按其精确提交验收。
+
+## 工具链候选的托管复验与发布状态
+
+### `bc31153` 的完整 CI
+
+提交 `bc3115372b1e2a3643dd7ed851ad0a7356e807b4`、树 `4320feb2257a41284233b8bfc5c053d05c796bc5` 的 [push CI 38242619138](https://github.com/aloneio/runmesh/actions/runs/38242619138) 与 [PR CI 38242628296](https://github.com/aloneio/runmesh/actions/runs/38242628296) 各 8/8 jobs 成功，均为 attempt 1。PR 实际检出合成提交 `42be44215760611f9f0ac2fbceedab92122e83e2`，源码树与候选一致。
+
+两路 Linux verify 各 26 个门禁通过；Linux 源码、Linux 安装包与 Windows 源码六次 transport 各 41/41、0 跳过。两路浏览器各 5/5，并完成 guided product 检查；Windows Runner 各 1,494 通过、142 平台跳过。Linux/macOS native 和 Node 22.23.2/24.21.0 LTS jobs 分别通过。开发节奏检查为 `due=false`，未产生该候选的开发发布。
+
+完整归档为 `.audit/bc31153-ci/safe-summary.json`，SHA256 `36cbe15115ce1e2595ee810cb46e158f8838dc10f4ccb1eea423ec860ed77f26`。该结果属于本提交，不能替代后续提交的完整验证。
+
+### `6a849a2` 的混合结果
+
+提交 `6a849a2e58c29217ae604c82ef06b174efbd7909`、树 `4d2d8a1334d2ecf38142dced46cd0f648be3ede2` 仅进一步修订四份双语文档：使用公开功能名称、目录预算与恢复链接以及部署检查步骤。相对 `bc31153`，应用代码、依赖、测试、请求次数、超时及并发预算均相同。
+
+| 独立运行 | 原始终态与覆盖 |
+| --- | --- |
+| [push CI 38244104298](https://github.com/aloneio/runmesh/actions/runs/38244104298) | Windows transport 的 test index 38 断言失败，verify-all 随之失败，其余 6 jobs 成功。Windows Runner 单元测试通过。 |
+| [PR CI 38244110481](https://github.com/aloneio/runmesh/actions/runs/38244110481) | 全部 8 jobs 成功；实际合成提交 `70b156f595688c2906bedea5dda3a4e4a7ee3b58`，树与候选一致。 |
+| [source policy 38244110451](https://github.com/aloneio/runmesh/actions/runs/38244110451) | cancelled，尚未分配 runner，steps 为空；时序与同 PR 并发替代一致，API 未给出取消操作者。 |
+| [source policy 38244112436](https://github.com/aloneio/runmesh/actions/runs/38244112436) | 后续 PR 描述编辑触发，成功；取消记录单独保留。 |
+| [开发预发布 38244105039](https://github.com/aloneio/runmesh/actions/runs/38244105039) | attempt 1，12 jobs 全部成功；按节奏实际发布 `v0.1.8-dev.63`。 |
+
+push Windows 的 transport 门禁耗时 129,897 ms，工件报告 1 项失败、0 跳过。失败位置为 `test/e2e/mcp-runner.e2e.test.ts:1138`：停止真实 Runner 并等待既有 200 ms 后，单次读取应得到 `runner_offline`。其并发 1/4/8/16 的混合负载均通过，各完成 128 请求，共 512；四档 mixed 阶段分别为 20,373 / 10,773 / 9,334 / 6,257 ms。
+
+该失败日志与工件的 214 条安全事件逐项一致，未截断；包括一条 `mcp_active_runner`、`deadline`、HTTP 200、`phase=fetch` 事件，192 条负载指标、16 条负载计时、两条观察器记录、两条 spawn 与一条 launcher 快照。未记录 native exit、restart 或代理连接丢失。工件没有保存失败断言收到的实际值，也没有把这条控制面事件关联到某个测试请求，因此不能确定该断言实际收到 `registry_unavailable`。
+
+静态复核确认：`boundedJsonReceipt` 会在 fetch 返回后、读取正文前检查总期限；超过 5 秒时，`registryCall` 返回 `registry_unavailable`、`not_started`。只有取得有效选择收据后，`resolveActiveRunner` 才能报告 `runner_offline`。该区分符合现有语义。Runner 断开通过独立的 WebSocket/Registry 通知链传播，200 ms 延时本身不证明远端完成；现有证据也没有证明该传播链失败。复核未找出可归因于本次失败的确定性应用修复点。
+
+失败后补充了 test 38 的安全诊断：在原断言消息中加入固定 `runner_disconnect` 阶段及白名单错误字段；原 200 ms 等待、单次请求、`runner_offline` 期望与所有预算保持原值。投影回归验证实际错误码能进入失败工件，正文、消息、路径及任意 details 留在私有范围。该改动修复证据缺口，不构成网络问题已解决的结论。
+
+| 固定证据 | SHA256 |
+| --- | --- |
+| `.audit/6a849a2-ci/safe-summary.json` | `815693cdf13d18ff555ada083cf8d2d61763d16dc755daf60530971790c2db87` |
+| `.audit/6a849a2-ci/push-windows-failure-summary.json` | `f1c745559b48f630095655528e7f15e12c1265fb3d82879c187a6460b05a5db9` |
+| `.audit/6a849a2-ci/dev-prerelease-summary.json` | `9814b7d2c595a49395223a66ea4d78e167db997c1a16c9c6fd48f6b121b52bf2` |
+| `.audit/6a849a2-ci/disconnect-static-review.zh-CN.md` | `811499a83846d6d2f70d62a0220bae6e0d81ec4fc4cb9dcdb7f295e3e07a6130` |
+
+### 断线诊断补丁的单次本机验证
+
+在运行前冻结一次完整源码 transport 计划，保留 41 项测试、四档并发共 512 个计划请求、既有 30 秒普通用例/60 秒负载/300 秒 wrapper 预算。计划 SHA256 为 `2f64d5d7a6a5aa0755e675272261e676e81289566be89fb9b46cf90967634825`。执行来源为 `6a849a2` 加诊断与报告修改的 dirty 工作树，七个相关文件的前后哈希一致；它不是原 clean CI 的补跑或替代结果。
+
+本机 Windows、Node 22.23.2/npm 10.9.3 的单次结果为 41/41、0 跳过，门禁 124,844 ms；test 38 通过，耗时 634.503 ms。四档各完成 128 个请求，共 512。归档保存 214 条事件，其中 native index 1 在 observer elapsed 104,916 ms 以 code 1 退出，并出现一次 `crash_restarting`；没有后续 spawn 记录。观察器与测试收尾缺少公共时间锚点，暂不将该事件解释为收尾或指定为应用故障。
+
+完整摘要 `.audit/runner-disconnect-source-once/summary.json` 的 SHA256 为 `ad752f06f4d80a219a7860458fb6ff937d1571aaddd17eff6297e776bbc7e77f`，包含冻结计划、源码文件摘要、原始日志/私有 reporter/门禁文件的哈希、41 项用例时间及完整安全事件。该计划只执行一次，没有追加本机轮次；结果说明诊断补丁下这次功能验证通过，原托管失败及根因未确定的结论保持不变。
+
+### 发布判定
+
+[开发预发布 v0.1.8-dev.63](https://github.com/aloneio/runmesh/releases/tag/v0.1.8-dev.63) 为公开、immutable 的 prerelease；独立读取 annotated tag 确认绑定 `6a849a2` 与对应源码树，并验证九个公开资产的摘要、manifest Ed25519 签名及 SHA256SUMS。开发预发布的通过结果与独立 push CI 的失败分别保留。
+
+0.1.8 正式签名发布和生产激活尚未执行。当前候选的完整验证仍有阻塞，因此没有提升受保护 main、改写发行状态或套用待发布文档。后续需要先取得失败请求的完整安全分类并完成有依据的修复，再按项目流程验证精确候选、双端 main、正式资产和线上激活。所有历史失败继续保留；用户 docs 维持当前使用说明，调查事实集中存放于 reports。

@@ -1135,7 +1135,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // Close handling is asynchronous across the runner socket and DO.
     await delay(200);
     const offline = await mcpTool("read", { workspace_id: "workspace-1", path: "note.txt", limit: 1 });
-    expect(offline).toMatchObject({ isError: true, structuredContent: { error: { code: "runner_offline" } } });
+    expect(offline, mcpToolResultDiagnostic("runner_disconnect", offline)).toMatchObject({ isError: true, structuredContent: { error: { code: "runner_offline" } } });
   });
 
   async function createBrowserRunnerEnrollment(): Promise<string> {

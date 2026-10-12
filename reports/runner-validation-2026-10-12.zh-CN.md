@@ -228,6 +228,24 @@ B 的六文件工具验证为 417 通过、14 条件跳过、0 失败；本机�
 
 这些结果支持 B 进入升级候选完整验证，原 `0274535` CI 失败继续保留。Windows 浏览器入口尝试在 Linux 平台配置要求处停止，未生成浏览器 reporter；该准备错误与后续 Linux CI 浏览器验收分别记录，详见项目检查书。新候选托管 CI 与正式发布使用各自后续证据；本次未签名、未发布，正式版仍为 0.1.7。
 
+## 工具链候选的托管验证
+
+`bc3115372b1e2a3643dd7ed851ad0a7356e807b4`（树 `4320feb2257a41284233b8bfc5c053d05c796bc5`）的 [push CI](https://github.com/aloneio/runmesh/actions/runs/38242619138) 与 [PR CI](https://github.com/aloneio/runmesh/actions/runs/38242628296) 均为 attempt 1，各 8/8 jobs 成功。两路 Windows Runner 各 1,494 通过、142 平台跳过；Windows 源码、Linux 源码与 Linux 安装包六次 transport 各 41/41、0 跳过。归档 `.audit/bc31153-ci/safe-summary.json` 的 SHA256 为 `36cbe15115ce1e2595ee810cb46e158f8838dc10f4ccb1eea423ec860ed77f26`。
+
+随后 `6a849a2e58c29217ae604c82ef06b174efbd7909`（树 `4d2d8a1334d2ecf38142dced46cd0f648be3ede2`）仅修改四份双语文档。其 [PR CI](https://github.com/aloneio/runmesh/actions/runs/38244110481) 全部 8 jobs 成功；[push CI](https://github.com/aloneio/runmesh/actions/runs/38244104298) 的 Windows transport test 38 失败，verify-all 随之失败，其余 6 jobs 成功。Windows Runner 单元步骤通过，失败发生于随后真实 Runner 断开后的 `runner_offline` 断言。
+
+该次 Windows transport 门禁耗时 129,897 ms，失败工件报告 1 项失败、0 跳过。并发 1/4/8/16 的混合负载均通过，各完成 128 请求，共 512；四档耗时分别为 20,373 / 10,773 / 9,334 / 6,257 ms。214 条安全事件完整保留，包含一次 `mcp_active_runner/deadline/status200/phasefetch`，未记录 native exit、restart 或代理连接丢失。工件缺少断言实际值及请求关联，不能把这条控制面观察认定为该断言的返回码或根因。
+
+停止本地进程与 Registry 完成断开状态写回是不同完成点，固定 200 ms 只提供等待时间。静态复核未找到与当前失败建立因果联系的确定性应用修复。后续诊断补充固定 `runner_disconnect` 阶段和白名单错误字段，保持原等待、单次请求、严格离线断言以及各项预算；定向投影回归 8/8、0 跳过，证据 `.audit/runner-disconnect-diagnostic/verification.json` 的 SHA256 为 `9fb7eb8c26f4d4313cca68d6b0b06db927f6941a9030d28a636a5d0220f9c67b`。该记录属于 dirty 诊断补丁，不是原 `6a849a2` 干净 CI 的结果，也不表示原故障已解决。
+
+完整 CI 归档 `.audit/6a849a2-ci/safe-summary.json` 的 SHA256 为 `815693cdf13d18ff555ada083cf8d2d61763d16dc755daf60530971790c2db87`；独立 Windows 失败归档 SHA256 为 `f1c745559b48f630095655528e7f15e12c1265fb3d82879c187a6460b05a5db9`。完整来源、静态语义和关联边界见[项目检查书](project-audit-2026-10-12.zh-CN.md)末节。
+
+开发工作流 [38244105039](https://github.com/aloneio/runmesh/actions/runs/38244105039) 的 12 jobs 独立成功，并发布 [v0.1.8-dev.63](https://github.com/aloneio/runmesh/releases/tag/v0.1.8-dev.63)。annotated tag、九个资产摘要、manifest 签名及 SHA256SUMS 已独立验证；这是开发预发布，不能代替上述 push 失败或正式发布门禁。0.1.8 正式发布、main 提升及生产激活保持待验收，正式版仍为 0.1.7。
+
+诊断补丁另外按预先冻结计划执行一次本机完整源码 transport：Windows、Node 22.23.2/npm 10.9.3，41/41、0 跳过，512 个混合请求完成，门禁耗时 124,844 ms。test 38 通过，634.503 ms。来源为 `6a849a2` 加诊断与报告修改的 dirty 工作树；相关文件前后哈希一致。完整摘要 `.audit/runner-disconnect-source-once/summary.json` 的 SHA256 为 `ad752f06f4d80a219a7860458fb6ff937d1571aaddd17eff6297e776bbc7e77f`。
+
+该次日志的 214 条事件包含 native index 1 在 observer elapsed 104,916 ms 以 code 1 退出及一次 `crash_restarting`，未记录后续 spawn。现有时间锚点不足以确认其与收尾的关系；完整测试通过与生命周期观察分别保留。本机计划执行一次后结束，未追加轮次，也不据此认定托管失败消失。
+
 ## 证据边界
 
 本轮负载使用隔离临时目录、真实 Node/Git 子进程与文件系统 API，不连接生产服务，也不操作系统级 Runner 注册。驱动器使用显式的本机 Git 路径作为测试注入。升级协调器、服务回滚和跨平台服务适配器由项目完整测试及 CI 矩阵覆盖；原生 Linux/macOS 服务行为需由对应平台执行证据确认。Worker→Runner 网络链路和浏览器验证另行记录。
