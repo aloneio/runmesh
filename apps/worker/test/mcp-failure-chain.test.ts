@@ -3,20 +3,23 @@ import { failureMetadata, isKnownRpcFailureCode, RPC_FAILURE_CODES, PROTOCOL_CUR
 import { callRunner, registryCall, registryPostCall } from "../src/mcp/transport.js";
 import { getActiveRunnerSelection, resolveActiveRunner, selectActiveRunner } from "../src/mcp/selection.js";
 import { jobTool } from "../src/mcp/handlers/jobs.js";
-import { checkPermission, checkAnyReadPermission, policyReadiness } from "../src/mcp/authorization.js";
+import { checkPermission, checkAnyReadPermission, policyReadiness, workspacePreflight } from "../src/mcp/authorization.js";
+import { activeRunnerTool } from "../src/mcp/dispatch.js";
 import { failure, failureWithDetails, runnerFailure, hintFor } from "../src/mcp/results/envelope.js";
 import type { McpRequestEnv, ActiveSelection } from "../src/mcp/contracts.js";
 
 const checksum = "a".repeat(64);
+const readiness = { ok: true, policy_status: "applied", desired_revision: 1, applied_revision: 1, runner_reported_policy_revision: 1,
+  desired_checksum: checksum, active_checksum: checksum, runner_reported_policy_checksum: checksum, connection_epoch: 1, credential_version: 1, lifecycle_id: checksum, session_id: "session-test" };
 const selection: ActiveSelection = { runnerId: "runner-test", context: { runner_id: "runner-test", state: "online", available: true, updated_at_ms: 1, automatic_selection: false } };
 function fixture(reply: () => Response = () => Response.json({ type: "rpc.response", result: {} })) {
   const dispatch = vi.fn(async () => reply());
   const registry = vi.fn(async (request: Request) => {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url), path = url.pathname;
     if (path.endsWith("/active-runner")) return Response.json({ active_runner_id: "runner-test", active_runner_updated_at_ms: 1, runner: selection.context });
-    if (path.includes("/effective-permissions/")) return Response.json({ permissions: { read: true, edit: true, shell: true, job_control: true } });
-    if (path.endsWith("/policy-readiness")) return Response.json({ ok: true, policy_status: "applied", desired_revision: 1, applied_revision: 1, runner_reported_policy_revision: 1,
-      desired_checksum: checksum, active_checksum: checksum, runner_reported_policy_checksum: checksum, connection_epoch: 1, credential_version: 1, lifecycle_id: checksum, session_id: "session-test" });
+    if (path.includes("/effective-permissions/")) return Response.json({ permissions: { read: true, edit: true, shell: true, job_control: true },
+      ...(url.searchParams.has("policy_readiness_for") ? { policy_readiness: readiness } : {}) });
+    if (path.endsWith("/policy-readiness")) return Response.json(readiness);
     if (path.includes("/jobs/")) return new Response(null, { status: 404 });
     if (path.endsWith("/authorize-rpc")) return Response.json({ ok: true });
     if (path.endsWith("/mcp-calls")) return Response.json({ audit_status: "recorded" });
@@ -28,6 +31,57 @@ function fixture(reply: () => Response = () => Response.json({ type: "rpc.respon
   return { env, dispatch, registry };
 }
 const invoke = (env: McpRequestEnv) => callRunner(env, "runner-test", "fs.read", { workspace_id: "work", path: "file.txt" }, 1, checksum);
+
+describe("request-local workspace preflight", () => {
+  it.each(["read", "get", "logs"] as const)("uses one permission/policy round trip for %s while retaining final authority and audit", async action => {
+    const f = fixture(() => Response.json({ type: "rpc.response", result: action === "get"
+      ? { job_id: "job-original", workspace_id: "work", status: "running" }
+      : { job_id: "job-original", workspace_id: "work", path: "file.txt", data: "x", encoding: "utf-8", offset: 0, next_cursor: null, truncated: false, size: 1 } }));
+    const original = f.registry.getMockImplementation()!;
+    f.registry.mockImplementation(async request => new URL(request.url).pathname.includes("/jobs/")
+      ? Response.json({ job_id: "job-original", workspace_id: "work", status: "running" }) : original(request));
+    const result = action === "read"
+      ? await activeRunnerTool(f.env, "client-test", "fs.read", { workspace_id: "work", path: "file.txt" }, "read", "read")
+      : await jobTool(f.env, "client-test", { action, job_id: "job-original" }, ["coding:read"]);
+    expect(result).not.toHaveProperty("isError", true);
+    expect(f.dispatch).toHaveBeenCalledOnce();
+    const paths = f.registry.mock.calls.map(([request]) => new URL(request.url).pathname);
+    expect(paths).toEqual(["/auth/clients/client-test/active-runner",
+      ...(action === "read" ? [] : ["/runners/runner-test/jobs/job-original"]),
+      "/auth/clients/client-test/effective-permissions/runner-test", "/auth/mcp/authorize-rpc",
+      ...(action === "read" ? ["/runners/runner-test/mcp-calls"] : [])]);
+    const preflight = f.registry.mock.calls.find(([request]) => new URL(request.url).pathname.includes("/effective-permissions/"))![0];
+    expect(new URL(preflight.url).searchParams.get("policy_readiness_for")).toBe("read");
+  });
+
+  it.each(["read", "edit", "shell", "job_control"] as const)("keeps denied %s ahead of a missing readiness receipt", async required => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json({ permissions: { read: false, edit: false, shell: false, job_control: false } }));
+    expect(await workspacePreflight(f.env, "client-test", "runner-test", "work", required)).toMatchObject({ ok: false, error: { error: {
+      code: required === "edit" ? "readonly_workspace" : "permission_denied", operation_state: "not_started" } } });
+    expect(f.registry).toHaveBeenCalledOnce();
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([null, {}, { permissions: { read: "true" }, policy_readiness: readiness },
+    { permissions: { read: true } }, { permissions: { read: true }, policy_readiness: [] }])("rejects malformed preflight %j without fallback reads", async value => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json(value));
+    expect(await workspacePreflight(f.env, "client-test", "runner-test", "work", "read")).toMatchObject({ ok: false, error: { error: {
+      code: "authorization_response_invalid", operation_state: "not_started" } } });
+    expect(f.registry).toHaveBeenCalledOnce();
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([404, 503])("retains the preflight HTTP %i outcome", async status => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => new Response(null, { status }));
+    expect(await workspacePreflight(f.env, "client-test", "runner-test", "work", "read")).toMatchObject({ ok: false, error: { error: {
+      code: status === 404 ? "permission_denied" : "registry_unavailable", operation_state: "not_started" } } });
+    expect(f.registry).toHaveBeenCalledOnce();
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+});
 
 describe("fixed MCP Registry failure diagnostics", () => {
   it.each([
@@ -264,8 +318,10 @@ describe("agent-visible recovery receipts", () => {
     const read = f.registry.getMockImplementation()!;
     f.registry.mockImplementation(async request => {
       const response = await read(request);
-      if (!new URL(request.url).pathname.endsWith("/policy-readiness")) return response;
-      return Response.json({ ...await response.json() as Record<string, unknown>, policy_status });
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/policy-readiness")) return Response.json({ ...await response.json() as Record<string, unknown>, policy_status });
+      if (url.searchParams.has("policy_readiness_for")) return Response.json({ ...await response.json() as Record<string, unknown>, policy_readiness: { ...readiness, policy_status } });
+      return response;
     });
     expect(await policyReadiness(f.env, "runner-test")).toMatchObject({ ok: false, error: { error: { code: "policy_pending" } } });
     expect(await jobTool(f.env, "client-test", { action: "get", job_id: "job-original", workspace_id: "work" }, ["coding:read"])).toMatchObject({ isError: true, structuredContent: { error: { code: "policy_pending" } } });

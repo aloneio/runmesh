@@ -261,3 +261,49 @@ PR 未生成最终 reporter，因此没有最终测试计数或 test 38 实际�
 ## 证据边界
 
 本轮负载使用隔离临时目录、真实 Node/Git 子进程与文件系统 API，不连接生产服务，也不操作系统级 Runner 注册。驱动器使用显式的本机 Git 路径作为测试注入。升级协调器、服务回滚和跨平台服务适配器由项目完整测试及 CI 矩阵覆盖；原生 Linux/macOS 服务行为需由对应平台执行证据确认。Worker→Runner 网络链路和浏览器验证另行记录。
+
+## 后续生命周期修复与定向验证
+
+本节记录 2026-10-12T13:24Z 的后续修复，基线为 `aebf4e2d020cb2c110df0437cd9b9ede81425f31`，验证来源包含本轮未提交修改。前文各次通过、失败及发布状态保留其原始时间与提交归属。
+
+实际 Vitest 4.1.11、Node 22.23.2 探针已复现：测试信号取消后，原始函数开始清理，finished/failed 回调及下一测试先行运行，恢复请求随后被已取消的信号拒绝，最后原始函数才结束。原始观察 `.audit/http-lifecycle-repair/before-events.json` 的 HTTP 请求仅为 `/held`。修复追踪完整测试函数，由 `afterEach` 在既有 30 秒 hook 预算内取消并等待业务函数结束；queue、busy、job sharing、history 恢复显式使用清理作用域。清理或 hook 超时时隔离共享夹具，后续业务函数停止进入；原始超时错误继续保留。
+
+实际 Vitest 回归确认顺序为 `signal-abort → cleanup-start → body-settled → finished-hook → failed-hook → next-body`，HTTP 请求为 `/held`、`/restore`，取消后的业务续体未发出请求。另一个 hook 超时夹具确认下一业务函数未开始、恢复关闭后被拒绝，原始测试超时与 hook 超时均保留，且无未处理拒绝。Node 22.23.2 定向 17/17 通过、0 跳过、0 取消，20,340.6564 ms；内部成功及预期失败夹具不另外累加。日志 `.audit/http-lifecycle-repair/targeted-final.log` 的 SHA256 为 `14caa610a0c9766e5611872e16c0ffd3a7491773b487bfba2f0b0999b64e6e83`，完整收据 `.audit/http-lifecycle-repair/verification.json` 的 SHA256 为 `1cca0784c87d884761c8512d9eb7e10f50ce4ce952a30cb6150e79a2f5a3355b`。
+
+正常在线 read、job/get、job/logs 的权限与策略 readiness 改为一次同步 Registry 预检，各减少一次 Registry 往返。权限拒绝保持优先，离线 Job 快照保留原权限路径；派发前 Registry 与 RunnerDO 最终授权、nonce、审计与连接身份校验保留。合并预检返回后撤销权限、撤销/轮换客户端凭证及收缩 scope 的回归确认零 RPC 派发。相关 Worker 七文件共 386/386、domain route 65/65、Worker TypeScript 构建通过，均使用 Node 22.23.2。
+
+首错保全仅增加在 `mcpMessage` catch 与 mixed-load `onFirstFailure` 两处明确失败边界：同步写入固定错误类别及白名单 HTTP/RPC、工具结果字段，保持原异常；预期工具错误不自动成为失败事件。缺 reporter 的真实子进程超时归档及投影回归在 Node 22.23.2 下 3/3 通过；早期默认 Node 24.19.0 的三项尝试单列，不混为固定运行时证据。
+
+上述修复分别针对已复现的生命周期缺陷、重复 Registry 往返和首错分类丢失。运行时静态核查与既有归档尚未建立最初 60 秒超时、代理连接丢失的单一原因。原 41 项源码测试、四档各 128 请求共 512 个计划混合请求、30/60/300 秒既有预算、断言及重试规则保持原值。
+
+本轮完整 Worker、资源隔离对照和源码 E2E 的实际结果见下一节。详细修复范围和证据边界见[项目检查书](project-audit-2026-10-12.zh-CN.md)本轮后续修复章节。
+
+## 本轮完整复验结果与继续调查
+
+本节于 2026-10-12T13:51Z 在冻结验证结束后补录。默认完整 Worker 使用 Node 22.23.2、Vitest 4.1.11 和原三运行时配置，自然结束：115 文件中 114 通过、1 失败；2,504 测试中 2,503 通过、1 失败；Vitest 603.32 秒、命令 612,624 ms，退出码 1，未手动终止。唯一失败是 `mcp-client-lifecycle.test.ts:205` 的本地化撤销/删除管理页检查，`computer access=true`，10,123 ms，实际 HTTP 503、期望 200。具体页面/语言组合和依赖分类在原日志中缺失。
+
+随后冻结的计划 SHA256 为 `33a8992dd2d44815a6e747c536b87be6ae5c5297a99b6c6d93b979fda8960132`，记录 `aebf4e2` dirty 来源及 20 个执行前后相同的文件指纹。全部 115 文件的独立 `worker_serial` 对照使用 `--maxWorkers=1 --no-file-parallelism`，保留 30 秒测试/hook 预算，在 600,792 ms 触及 600 秒进程期限。其终态为 timeout，退出码 1，最终 reporter 缺失，完整测试计数保持未知。对照改变文件并行方式，明确不等同于原配置或托管 CI；默认 2,503/1 结果继续独立保留。
+
+单次源码 E2E 外层耗时 66,944 ms、退出码 1，内部 transport 为 65,595 ms、`failed`；原 300 秒 wrapper 未到期。私有 reporter 记录 41 项中 3 通过、0 测试断言失败、38 跳过，失败发生在主组 beforeAll。Worker 健康检查和管理端准备已通过，实际失败点为 `mcp-runner.e2e.test.ts:230` 的 Enrollment CLI 退出等待，原期限 15,000 ms。`:1518` 是通用 `waitForExit` 定时失败位置，`worker-fixture.mjs:98` 是包装层非零退出观察，均不应解释为 Worker readiness 失败。安全摘要按文件记录 1 个 suite 级失败；原 reporter 的 `numFailedTestSuites=2` 保留独立口径。
+
+实际通过的是三个 SQLite session 用例：索引 39 的乱序 sync 与旧 session 隔离（397.960 ms），索引 40 的带状态码关闭握手（130.488 ms），索引 41 的不带状态码关闭握手（185.364 ms）。主组 38 项跳过，四档混合请求未执行，512 仅为计划量。归档保留两条 observer、两条 native spawn 与一条 `setup_failed` launcher 快照；新增首错事件只覆盖 `mcpMessage` 和 mixed-load，本次 beforeAll 失败尚未进入这些边界。
+
+`worker_serial-summary.json` SHA256 为 `ab9688ea3acfa985e21dc5aa60566dda435f2aca8a86786b8bc02d5ed28f71ab`，`source_transport-summary.json` SHA256 为 `8a68c135057945831287d130a2f86d33a49e8399fde7a6bfec21116357ba8785`，均位于 `.audit/transport-repair-20261012`。默认 Worker 日志、私有 reporter 与门禁摘要继续保留，完整证据表见[项目检查书](project-audit-2026-10-12.zh-CN.md)。
+
+调查继续定位默认 Worker 503、单运行时超时及 Enrollment CLI 准备失败。后续确定性修复和定向验证另按源码状态追加。
+
+## 入口与夹具修复后的完整源码验证
+
+2026-10-12T14:12Z 补录的新修复继续基于 `aebf4e2d020cb2c110df0437cd9b9ede81425f31` 的 dirty 工作树。Runner 可执行入口按 help/version/enroll 分流，注册使用原注册实现，其他命令继续调用原 `runCli`；Node 门槛、公共导出、stdin 与错误输出语义保持。真实子进程中的七项新回归确认精确输出、退出码和模块加载边界，包含于 Runner product 的 134 通过、4 项既有平台跳过之中。
+
+`waitForFixtureExit` 修复成功后遗留期限定时器及超时后缺少进程树回收的等待缺陷；正常退出、已退出、spawn error 均清理监听器和期限，超时保留原失败并等待有界终止。Enrollment 句柄由 suite 持有，`allSettled` 收尾尝试停止全部三个受控进程并保留失败。四项退出/后代回收回归全部通过，4,383.6273 ms，原注册 15 秒期限保持。隔离注册对照旧/新入口首个 HTTP 为 3,716/3,428 ms、退出为 3,854/3,552 ms，两次均成功；单次样本不构成显著性能提升或历史超时归因。
+
+实际 Vitest 探针改为在 `beforeEach` 准备打开的正文，通过明确屏障汇合清理，人工 100 ms 测试超时与目标 50 ms hook 超时保持。精化后的 17/17 通过，0 跳过，12,666.8725 ms；恢复先于失败回调及后续业务，超时隔离路径拒绝下一业务函数，均无未处理拒绝。打包 smoke、自包含 Runner 0.1.8、根类型检查及文档/格式/架构检查通过；验证清单仍为 261 文件、9 组，七个 lane 收集通过。
+
+新冻结计划 `.audit/transport-followup-20261012/plan.json` 的 SHA256 为 `be0b9284403577b15bcc24c78833f56a7e180cf2c8c3bb01da7b236302b8dddf`，保存 23 个文件指纹并在唯一执行前后校验。来源基线树为 `d15f5a8b99dc8704ec2bd11b9d6716a0956aed16`，状态明确为 dirty。Windows x64、Node 22.23.2 的完整 source gate 于 14:10:08.792Z 开始，外层 111,448 ms、内部门禁 110,768 ms，退出码 0；41/41 通过，0 失败/跳过/TODO。
+
+并发 1/4/8/16 分别完成 128/128 请求，elapsed 为 9,336/7,377/6,766/7,226 ms；每档四种操作各完成 32/32、0 失败，合计 512/512。原 30 秒普通测试、60 秒负载、300 秒 wrapper、断连后 200 ms 及单次请求断言均保持。212 条安全事件包含 2 observer、2 native spawn、16 timing、192 metric，本次未记录 native exit/restart、代理连接丢失或首错事件。
+
+本次摘要 `.audit/transport-followup-20261012/source_transport-summary.json` 的 SHA256 为 `193e45816ef2d4dec688a601031506579ccbbbb9dbf1c7f81c340574890a799d`，原日志为 `842b8eeaafd21567cb408e26f497116eb4d5b4e419e96610986ca02422733888`。精化探针日志 SHA256 为 `f7321d681b7088986ac7295feaca72e3e376074dfa8f404bd57efe8628bb8021`，退出回收收据为 `c0a59ac89a41f2a462920099faf907e05c94a6f481ce64bea38bbc06a1819e5e`。更多源码身份、计数及证据表见[项目检查书](project-audit-2026-10-12.zh-CN.md)本轮追加章节。
+
+本轮已证明并修复测试隔离与清理缺陷，本机完整链路通过。原默认 Worker 503、单运行时超时、Enrollment 准备失败及历史托管 Windows 首次负载超时分别保留，尚不以本机结果宣称其共享单一根因。后续新干净候选由两平台完整 CI 验收，正式发布与生产激活使用后续独立证据；报告文字在冻结验证结束后更新。

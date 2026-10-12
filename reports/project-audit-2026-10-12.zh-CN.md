@@ -755,3 +755,128 @@ PR Windows 的门禁记录为 301,377 ms：原有 300,000 ms wrapper 到期后�
 2026-10-12T12:21:32Z 对生产环境的只读核验确认：`/health` 的 `ok=true`，部署为 `main`、`a18f3c015740458cfc90ce9b6c1626580937e6b9`、干净来源且 provider 身份匹配；测试模式关闭。`/runner/releases/stable` 的 current/latest 均为 0.1.7、`distributable=true`。原始观察 `.audit/production-status-20261012.json` 的 SHA256 为 `6fbabf8b848d109f2eb093a75328fdb2a99502746ca03cf519a8f6a554bc10a9`。
 
 两端受保护 main 保持原提交，GitHub dev 为 `a455499`，GitLab dev 保持 `0274535`。PR 118 与 MR 59 保持未合并状态。0.1.8 正式资产、发行状态更新及生产激活没有执行；四份发布后用户文档草稿保留为未应用状态。本节是测试结束后的工程记录，所列 CI 源码身份固定为 `a455499`，不把后续报告编辑冒充已执行的代码验证。
+
+## 后续修复记录：测试生命周期与同步预检
+
+本节记录 2026-10-12T13:24Z 时的后续工作，来源为 `aebf4e2d020cb2c110df0437cd9b9ede81425f31` 加本轮修复的 dirty 工作树。前文各轮终态继续归属于其原始提交和执行时间；本节的定向结果不覆盖历史失败，也不替代新候选的完整验证。
+
+### 已复现的测试清理乱序与修复
+
+使用实际 Vitest 4.1.11、Node 22.23.2 的隔离探针，旧实现记录了 `signal_abort → body_cleanup_begin → onTestFinished → onTestFailed → scope_end → next_test_begin → restore_rejected → raw_body_settled`。测试超时后，失败回调与下一测试已开始，原始测试函数的清理仍未结束；恢复请求沿用已取消的业务请求信号而被拒绝。观察文件 `.audit/http-lifecycle-repair/before-events.json` 只记录到 `/held`，没有恢复请求。这是已复现的测试生命周期缺陷，尚未建立它与最初单并发 60 秒超时之间的因果联系。
+
+修复由 `trackTestBodies` 追踪 Vitest 超时包装之下的完整测试函数，`afterEach` 在既有 30 秒 hook 预算内取消业务请求并等待函数结束。queue、busy、job sharing 和 history 模式恢复使用显式清理作用域，恢复完成后原业务续体仍保持取消状态。若内部清理或 Vitest hook 先触及期限，共享夹具进入隔离状态，后续测试函数不会继续使用未清理的夹具。实际 Vitest 回归确认恢复先于 finished/failed 回调及下一测试，且 hook 超时路径保留原始测试超时并阻止下一业务函数执行；两条路径均无未处理拒绝。
+
+### 减少正常请求的重复 Registry 往返
+
+`workspacePreflight` 将当前 workspace 权限与策略就绪信息合并到一次已签名的 `effective-permissions` GET 中。Registry 路由在同一同步执行段先读取权限，许可成立后再读取 readiness；拒绝权限仍优先返回，缺失或异常收据保持失败结果，不新增缓存或降级读取。在线 read、job/get、job/logs 的对应路径各减少一次 Registry 往返；workspace 列表和离线 Job 快照保留原有读取与权限语义。
+
+独立代码复核确认，合并预检后的 `authorize-rpc`、RunnerDO 最终 `mcp-authorization`、连接身份校验、nonce 与审计链均保留。回归在合并收据返回后撤销 workspace 权限、撤销或轮换客户端凭证、收缩 scope，均确认没有 RPC 派发。该优化减少了确定存在的重复请求，不能单独证明历史网络首错已解决。
+
+### 首个失败的分类保全
+
+补充 `request_failure` 与 `test_failure` 白名单事件：仅在 `mcpMessage` 已抛错的 catch 和 mixed-load 的 `onFirstFailure` 回调同步写入 stderr，原异常继续原样抛出。事件只保存固定错误类别、经过现有解析器重新投影的 HTTP/RPC 与工具结果分类；预期返回的 `isError` 不自动视作测试失败。每类独立保留首条，不依赖最终 JSON reporter。定向回归实际终止超时子进程，确认 `report_available=false` 时仍有安全分类，且没有虚构测试计数或输出原始正文、路径与错误消息。
+
+本轮保持 41 项源码 E2E、并发 1/4/8/16 各 128 个计划请求、原 30 秒普通测试/60 秒负载/300 秒 wrapper 预算、断言与重试规则。首错事件的新增范围限于上述两个失败边界；没有扩展为全测试关联追踪。
+
+### 定向验证与结论边界
+
+| 独立验证 | Node 22.23.2 结果 |
+| --- | --- |
+| Worker 七个相关测试文件 | 386/386 通过，分两组 256 与 130；覆盖权限链、预检错误、MCP 输入与 Job 集成。 |
+| Registry route domain | 65/65 通过。 |
+| HTTP 生命周期与实际 Vitest 集成 | 17/17 通过，0 跳过、0 取消，20,340.6564 ms。内部 8 用例成功夹具与 2 用例预期失败隔离夹具不重复累加。 |
+| 首错投影与缺 reporter 的超时归档 | 3/3 通过。此前默认 Node 24.19.0 的早期三项尝试也通过，单独保留运行时归属。 |
+| Worker TypeScript 构建检查 | `tsc -b apps/worker` 通过。 |
+
+生命周期定向日志为 `.audit/http-lifecycle-repair/targeted-final.log`，SHA256 `14caa610a0c9766e5611872e16c0ffd3a7491773b487bfba2f0b0999b64e6e83`；完整收据 `.audit/http-lifecycle-repair/verification.json` 的 SHA256 为 `1cca0784c87d884761c8512d9eb7e10f50ce4ce952a30cb6150e79a2f5a3355b`，保存基线、运行时、源码摘要及前后事件。各集合单独计数，完整套件随后仍可能覆盖同一用例。
+
+运行时静态审查确认，ProxyWorker 的固定 POST connection-lost 日志来自本地代理向 UserWorker 的 fetch 失败；测试端正常 MCP 正文完整消费，非 200 响应的诊断读取有界并取消 reader。最新失败归档没有 native exit/restart 事件，既有本机退出记录又缺少与 teardown 的公共时间锚点。当前证据未建立 Node 连接池、workerd 退出或代理队列中的单一根因，未据猜测调整连接池、重放请求或放宽预算。
+
+本轮完整 Worker、资源隔离对照和源码 E2E 的实际结果见下一节；本节定向结果继续按原集合计数。
+
+## 本轮完整复验记录（2026-10-12T13:51Z）
+
+### 默认完整 Worker 的实际失败
+
+按原命令 `npm run test --workspace=@aloneio/runmesh-worker` 执行的默认三运行时完整套件自然结束：Node 22.23.2、Vitest 4.1.11，115 个文件中 114 通过、1 失败，2,504 项测试中 2,503 通过、1 失败。Vitest 耗时 603.32 秒，命令总耗时 612,624 ms，退出码 1；未手动终止，没有 termination 记录。
+
+唯一失败位于 `apps/worker/test/mcp-client-lifecycle.test.ts:205`，检查列表页和详情页的本地化撤销/删除操作，参数 `computer access=true`。该用例耗时 10,123 ms，管理页实际 HTTP 503、期望 200。原日志没有保存本次失败的具体页面/语言组合或 503 依赖分类，当前不将其归因为同步预检、主机资源或某一运行时。定向 386/386 Worker 结果与本次完整套件分别保留。
+
+### 单次资源隔离对照
+
+默认失败后，冻结计划 `.audit/transport-repair-20261012/plan.json`，SHA256 `33a8992dd2d44815a6e747c536b87be6ae5c5297a99b6c6d93b979fda8960132`。计划记录 `aebf4e2` dirty 来源、20 个文件摘要，并对两个后续 lane 的执行前后校验相同指纹；每个 lane 仅一次，原始结果独立保存。
+
+`worker_serial` 覆盖原 115 个 Worker 文件，使用 `--maxWorkers=1 --no-file-parallelism`，保留 30 秒测试/hook 预算，进程期限为 600 秒。该对照于 2026-10-12T13:34:04.371Z 开始，600,792 ms 后触及进程期限，退出码 1、`termination_reason=timeout`。最终 reporter 未生成，`report_available=false`，不补写最终通过/失败/跳过计数。改变文件并行方式的本机对照明确 `ci_equivalent=false`，其超时与默认配置的 2,503/1 结果分别记录，不据此确定资源因素是根因。
+
+### 单次源码 E2E 的准备阶段失败
+
+`source_transport` 于 2026-10-12T13:45:28.522Z 开始，外层归档总耗时 66,944 ms、退出码 1；内部 transport 门禁耗时 65,595 ms、状态 `failed`，没有触及原 300 秒期限。私有 reporter 可用，41 项中 3 通过、0 测试断言失败、38 跳过。主测试组发生 suite 级准备失败；安全摘要记录 1 个失败文件，原 reporter 的 `numFailedTestSuites=2` 保留其自身统计口径，不能与失败测试数混用。
+
+主夹具已经通过 Worker 健康准备及管理端建号/Enrollment code 创建。在 `test/e2e/mcp-runner.e2e.test.ts:230` 等待 Enrollment CLI 退出时，原 `waitForExit(enrollmentCli, 15_000, ...)` 到期。安全投影中的 `:1518` 是该通用等待函数的定时失败分支；`scripts/worker-fixture.mjs:98` 是包装层接收测试子进程非零退出的位置。本次应归为 Enrollment CLI 准备阶段退出等待失败，不写作 Worker 健康检查失败或混合请求首错。
+
+独立 SQLite session 测试组实际完成的三个用例如下，索引与时间来自私有 reporter：
+
+| 测试索引 | 已通过的行为 | 耗时 ms |
+| --- | --- | --- |
+| 39 | 乱序 sync 保持连接，并隔离同凭证替换后的旧 session | 397.960 |
+| 40 | Runner 发起带状态码的正常关闭握手 | 130.488 |
+| 41 | Runner 发起不带状态码的正常关闭握手 | 185.364 |
+
+原主测试组的 38 项因准备失败跳过，四档混合负载均未进入执行，512 仍为计划请求数。安全事件有两条 observer installed、两条 native spawn（elapsed 15,468/21,371 ms）和一条 `setup_failed` launcher 快照；快照中 launcher 退出码/信号为 null，teardown 尚未开始。日志、summary 与复制的 transport 工件按安全字段核对，事件来自 `safe_wrapper_failure_summary`，不把事件缺席解释为组件健康证明。
+
+| 本轮证据 | SHA256 |
+| --- | --- |
+| `.audit/transport-repair-20261012/worker-full.log` | `ccf5a4f1f33b554036815f86ef11b569ed91bafc5e6f401cd6a09e91daa29c6f` |
+| `.audit/transport-repair-20261012/worker-full-execution.json` | `8da538d0932adda15fdee729797a76323240deea06d26dd1ee44fcea0b3926f5` |
+| `.audit/transport-repair-20261012/worker_serial-summary.json` | `ab9688ea3acfa985e21dc5aa60566dda435f2aca8a86786b8bc02d5ed28f71ab` |
+| `.audit/transport-repair-20261012/source_transport-summary.json` | `8a68c135057945831287d130a2f86d33a49e8399fde7a6bfec21116357ba8785` |
+| `.audit/transport-repair-20261012/transport-tests.json` | `40a44eefea428a4df214ae8927ffb6a8699d6d6d601736fee959b3f79e57e47c` |
+
+本次记录在两个冻结 lane 均结束后追加，报告编辑不冒充其执行时的原文件摘要。默认 Worker 503、单运行时超时和 Enrollment CLI 准备失败的调查继续进行；后续确定性修复及验证按新的源码状态另行记录。
+
+## 入口与夹具修复后的单次完整验证（2026-10-12T14:12Z）
+
+### 两项新增修复及探针精化
+
+Enrollment CLI 的可执行入口原先静态加载完整 `cli` 模块，使注册命令在发出首个 HTTP 请求前也初始化 supervisor、connection、runtime、jobs 和 update agent 等依赖。入口现先检查 Node 版本，再按命令加载：help/version 直接输出既有文本，enroll 只加载原注册实现，其余命令继续委派原 `runCli`。公共导出、stdin 读取、错误去重及退出码语义保持原值。七项新回归在真实 Node 子进程中执行入口并观察模块加载，覆盖长短 help、version、两种注册错误、普通命令委派和不受支持的 Node 版本；独立复核同时检查了 CJS 打包结果。
+
+原 Enrollment 退出等待使用 `Promise.race`，成功后仍留下期限定时器，超时路径也没有自行回收子进程树。新增 `waitForFixtureExit` 在正常退出、已退出和 spawn error 路径清理监听器与期限；超时先保留原始失败，再执行既有有界进程树终止，诊断函数或清理失败也不会把超时改成成功。Enrollment 句柄改由 suite 持有，收尾通过 `allSettled` 尝试停止 Enrollment、Runner 和 Worker，保留全部停止失败。原 15,000 ms 注册等待保持不变。
+
+实际 Vitest 生命周期探针进一步消除调度偶然性：`beforeEach` 先取得已打开的 `/held` 正文，再开始原 100 ms 人工超时；清理通过由 `afterEach` 释放的明确屏障汇合，替代固定 sleep。隔离探针的 50 ms 期限只作用于目标 `afterEach`，其余准备及收尾 hook 使用 5 秒预算。该调整只作用于探针，产品 E2E 的 30/60/300 秒预算保持原值。精化后的 17 项全部通过，实际顺序仍为清理结束先于 finished/failed 回调及下一业务函数，隔离路径仍阻止后续业务进入，两条路径均无未处理拒绝。
+
+一次隔离注册对照中，旧入口首个 HTTP 为 3,716 ms、退出为 3,854 ms；新入口分别为 3,428/3,552 ms。两次均在原 15 秒内成功、各发出一次请求、保存 profile，输出未含凭证。单次样本用于确认行为与记录启动阶段，不据此宣称显著性能提升或重现此前注册超时。
+
+| 验证集合 | Node 22.23.2 结果 |
+| --- | --- |
+| 精化后的 HTTP 生命周期与实际 Vitest 探针 | 17/17 通过，0 跳过，12,666.8725 ms。 |
+| 受控 fixture 退出与后代进程回收 | 4/4 通过，0 跳过，4,383.6273 ms。 |
+| Runner product | 134 通过、4 项既有平台跳过；其中包含上述新增 7 项入口回归，不另行累加。 |
+| 安装包 smoke | 自包含 Runner 0.1.8 打包通过。 |
+| 根项目类型与验证清单 | typecheck 通过；验证清单仍为 261 文件、9 组，七个 lane 收集通过。 |
+| 文档、格式与架构检查 | 通过。 |
+
+### 新冻结计划与完整源码压力结果
+
+新计划 `.audit/transport-followup-20261012/plan.json` 于 2026-10-12T14:10:07.079Z 冻结，SHA256 为 `be0b9284403577b15bcc24c78833f56a7e180cf2c8c3bb01da7b236302b8dddf`。来源是 `aebf4e2d020cb2c110df0437cd9b9ede81425f31`、树 `d15f5a8b99dc8704ec2bd11b9d6716a0956aed16` 加本轮 dirty 修改，记录 23 个文件摘要；执行前后校验通过。每个 lane 仅一次，保留原测试清单、并发、请求量、断言和期限。
+
+Windows x64、Node 22.23.2 的 `source_transport` 于 14:10:08.792Z 开始，外层耗时 111,448 ms、退出码 0；内部 transport 门禁耗时 110,768 ms。41/41 测试通过，0 失败、0 跳过、0 TODO。每档 read、workspace_list、job_get、job_logs 各完成 32/32 请求、0 失败；四档合计完成 512/512 请求。
+
+| 并发 | 实际完成请求 | 混合负载 elapsed ms |
+| --- | --- | --- |
+| 1 | 128/128 | 9,336 |
+| 4 | 128/128 | 7,377 |
+| 8 | 128/128 | 6,766 |
+| 16 | 128/128 | 7,226 |
+
+日志保存 212 条安全事件：2 条 observer、2 条 native spawn、16 条 operation timing 和 192 条 metric；本次未记录 native exit/restart、代理连接丢失或首错事件。这些是本次执行的观察范围，不外推为所有运行环境的健康证明。
+
+| 新增证据 | SHA256 |
+| --- | --- |
+| `.audit/http-lifecycle-repair/probe-determinism-targeted.log` | `f7321d681b7088986ac7295feaca72e3e376074dfa8f404bd57efe8628bb8021` |
+| `.audit/http-lifecycle-repair/enrollment-fixture-verification.json` | `c0a59ac89a41f2a462920099faf907e05c94a6f481ce64bea38bbc06a1819e5e` |
+| `.audit/transport-repair-20261012/runner-product.log` | `032e7d4ef156239912d8e517d599f33ea7b13b4b881243824b6a7cfa3184f7a8` |
+| `.audit/transport-repair-20261012/pack-followup.log` | `25ac358a0dc10a86e98506f94a17b627a27fb70a759caef97d98f22a860a504a` |
+| `.audit/transport-followup-20261012/source_transport-summary.json` | `193e45816ef2d4dec688a601031506579ccbbbb9dbf1c7f81c340574890a799d` |
+| `.audit/transport-followup-20261012/source_transport.log` | `842b8eeaafd21567cb408e26f497116eb4d5b4e419e96610986ca02422733888` |
+
+本轮建立并修复了可验证的测试隔离、恢复顺序和进程等待清理缺陷，去除了注册入口的无关依赖初始化与在线预检的重复往返。此前默认 Worker 503、单运行时超时、注册准备失败和 `a455499` 托管 Windows 首次负载超时各自保留原始证据；本次本机通过不将这些不同现象合并为一个已证明的根因。后续以新干净候选的两平台完整托管 CI 验收，正式版本签名、受保护 main 提升和生产激活按对应门禁另行记录。当前追加的是完整测试结束后的报告文字，其新文件摘要不回写到原冻结计划。

@@ -58,11 +58,26 @@ it.each(["revoke", "rotate"])("AUTH-04 %s after initial URL auth blocks late dis
 });
 it("AUTH-05 override revoked after preflight cannot dispatch", async () => {
   const f = await fixture(); let triggered = false;
-  f.hook(async (path) => { if (!path.endsWith("/policy-readiness") || triggered) return; triggered = true;
+  f.hook(async (path) => { if (!path.includes("/effective-permissions/") || triggered) return; triggered = true;
     await runInDurableObject(f.stub, (instance) => { instance.setClientRunnerOverride("c", "r", { read: false, edit: false, shell: false, job_control: false }, Date.now()); });
   });
   const result = await f.call("read", { workspace_id: "w", path: "x.txt" });
   expect(triggered).toBe(true); expect(f.forwarded()).toBe(0); expect(result.body.result.isError).toBe(true);
+});
+
+it.each(["revoke", "rotate"])("AUTH-05 principal %s after combined preflight still blocks dispatch", async action => {
+  const f = await fixture(); let triggered = false;
+  f.hook(async path => {
+    if (!path.includes("/effective-permissions/") || triggered) return;
+    triggered = true;
+    await runInDurableObject(f.stub, instance => {
+      if (action === "revoke") instance.revokeMcpClient("c", Date.now());
+      else instance.rotateMcpClient("c", "b".repeat(64), "next", Date.now());
+    });
+  });
+  const result = await f.call("read", { workspace_id: "w", path: "x.txt" });
+  expect(triggered).toBe(true); expect(f.forwarded()).toBe(0);
+  expect(result.body.result).toMatchObject({ isError: true, structuredContent: { error: { code: "permission_denied", operation_state: "not_started" } } });
 });
 
 it("AUTH-06 allowed calls succeed while independent tool scopes remain enforced", async () => {
@@ -75,7 +90,7 @@ it("AUTH-06 allowed calls succeed while independent tool scopes remain enforced"
 });
 it("AUTH-07 scope removed during readiness cannot inherit the exec ceiling", async () => {
   const f = await fixture(); let changed = false;
-  f.hook(async (path) => { if (!path.endsWith("/policy-readiness") || changed) return; changed = true;
+  f.hook(async (path) => { if (!path.includes("/effective-permissions/") || changed) return; changed = true;
     await runInDurableObject(f.stub, (instance) => { instance.updateMcpClientScopes("c", ["coding:read", "coding:exec"], Date.now()); });
   });
   expect((await f.call("edit", { workspace_id: "w", patch: "*** Begin Patch\n*** Add File: x\n+x\n*** End Patch" })).body.result.isError).toBe(true);

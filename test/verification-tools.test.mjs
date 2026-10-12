@@ -14,7 +14,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence, testFailureEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence, runMcpFixtureWithCleanup } from "../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, emitMcpFailureDiagnostic, jobCompletionDiagnostic, mcpFailureDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence, runMcpFixtureWithCleanup } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 import { mcpServerTiming, mcpLoadTimingDiagnostic, mcpWorkerSnapshotDiagnostic } from "../scripts/mcp-diagnostics.mjs";
@@ -195,8 +195,17 @@ async function transportFixture(t) {
   await writeFile(join(directory, "node_modules/vitest/vitest.mjs"), `
     import { writeFileSync } from 'node:fs';
     import { spawn } from 'node:child_process';
-    import { mcpToolResultDiagnostic } from '../../scripts/mcp-diagnostics.mjs';
+    import { emitMcpFailureDiagnostic, mcpHttpFailure, mcpToolResultDiagnostic } from '../../scripts/mcp-diagnostics.mjs';
     const mode = process.env.TRANSPORT_FIXTURE_MODE;
+    if (mode === 'first_failure_hang') {
+      const response = new Response(JSON.stringify({ jsonrpc: '2.0', id: 'private-id', error: { code: -32603, message: 'private-body' } }),
+        { status: 502, headers: { 'content-type': 'application/json', 'private-header': 'private-value' } });
+      emitMcpFailureDiagnostic('request_failure', await mcpHttpFailure(response, 'private-id', 'read', { path: 'private-path' }));
+      const marker = mcpToolResultDiagnostic('mixed_load', { isError: true, structuredContent: { error: { code: 'timeout',
+        failure_class: 'availability', operation_state: 'not_started', next_action: 'wait_and_retry', message: 'private-result' } } });
+      emitMcpFailureDiagnostic('test_failure', Object.assign(new Error('private-assertion' + marker), { name: 'AssertionError' }));
+      await new Promise(resolve => setTimeout(resolve, 30000));
+    }
     if (mode === 'hang') { await new Promise(resolve => setTimeout(resolve, 30000)); }
     if (mode === 'inherited_pipe') {
       const descendant = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
@@ -281,6 +290,22 @@ test("transport process timeout writes durable failed observations before return
   assert.equal(result.error, undefined); assert.equal(result.status, 1);
   assert.equal((await f.report("transport")).state, "timed_out");
   assert.equal((await f.report()).state, "failed");
+});
+
+test("transport timeout retains first request and assertion classifications without a reporter", async t => {
+  const f = await transportFixture(t), result = f.invoke("first_failure_hang", { RUNMESH_E2E_TIMEOUT_MS: "1000" });
+  assert.equal(result.error, undefined); assert.equal(result.status, 1);
+  assert.equal((await f.report("transport")).state, "timed_out");
+  const report = await f.report();
+  assert.equal(report.report_available, false);
+  assert.equal(report.failed_tests, undefined);
+  assert.deepEqual(report.worker_events, [
+    { event: "request_failure", kind: "mcp_http_failure", http_status: 502,
+      mcp_response: { content_type: "json", phase: "read_initial", body_kind: "json_rpc_error", rpc_code: -32603, rpc_id: "matches" } },
+    { event: "test_failure", kind: "assertion_failed", mcp_tool_result: { phase: "mixed_load", result: "error", error_code: "timeout",
+      failure_class: "availability", operation_state: "not_started", next_action: "wait_and_retry" } },
+  ]);
+  assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(report), /private/);
 });
 
 test("Worker fixture discovers its owned port over IPC after a released candidate is occupied", async t => {
@@ -581,6 +606,45 @@ test("Job list progress evidence distinguishes live requests from snapshots", ()
     assert.deepEqual(mcpWorkerFailureEvidence(line), [expected]);
     assert.doesNotMatch(line, /private|https?:/u);
   }
+});
+
+test("MCP direct failure diagnostics classify only fixed errors and preserve initiating error identity", () => {
+  for (const [name, kind] of [["AssertionError", "assertion_failed"], ["TimeoutError", "timeout"], ["AbortError", "abort_error"],
+    ["TypeError", "type_error"], ["SyntaxError", "syntax_error"], ["RangeError", "range_error"], ["Error", "error"], ["private-name", "other"]]) {
+    const original = Object.assign(new Error("private-error at https://private-url"), { name, cause: { message: "private-cause" } });
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("request_failure", original)), [{ event: "request_failure", kind }]);
+    assert.throws(() => {
+      try { throw original; }
+      catch (error) { emitMcpFailureDiagnostic("request_failure", error, () => { throw new Error("closed stderr"); }); throw error; }
+    }, error => error === original);
+  }
+  assert.equal(mcpFailureDiagnostic("private-event", new Error("private")), undefined);
+  assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("test_failure", "private-thrown-value")), [{ event: "test_failure", kind: "other" }]);
+});
+
+test("MCP direct failure evidence reprojects HTTP and tool fields and preserves independent first events", async () => {
+  const http = await mcpHttpFailure(new Response("private-body", { status: 503, headers: { "content-type": "text/plain" } }), "private-id", "read", {});
+  const tool = { phase: "mixed_load", result: "error", error_code: "timeout", failure_class: "availability",
+    operation_state: "not_started", next_action: "wait_and_retry" };
+  const assertion = Object.assign(new Error("private-message" + mcpToolResultDiagnostic("mixed_load", { isError: true,
+    structuredContent: { error: { code: "timeout", failure_class: "availability", operation_state: "not_started", next_action: "wait_and_retry", message: "private" } } })), { name: "AssertionError" });
+  const first = mcpFailureDiagnostic("request_failure", http) + mcpFailureDiagnostic("test_failure", assertion);
+  const later = mcpFailureDiagnostic("request_failure", new TypeError("private")) + mcpFailureDiagnostic("test_failure", new Error("private"));
+  assert.deepEqual(mcpWorkerFailureEvidence(first + later.repeat(30)), [
+    { event: "request_failure", kind: "mcp_http_failure", http_status: 503,
+      mcp_response: { content_type: "text", phase: "read_initial", body_kind: "non_json", rpc_code: "absent", rpc_id: "absent" } },
+    { event: "test_failure", kind: "assertion_failed", mcp_tool_result: tool },
+  ]);
+  const encoded = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  assert.deepEqual(mcpWorkerFailureEvidence(encoded({ event: "test_failure", kind: "assertion_failed", mcp_tool_result: { ...tool, message: "private" }, message: "private" })),
+    [{ event: "test_failure", kind: "assertion_failed", mcp_tool_result: tool }]);
+  for (const value of [
+    { event: "request_failure", kind: "private" },
+    { event: "request_failure", kind: "mcp_http_failure", http_status: 503, mcp_response: { content_type: "private" } },
+    { event: "request_failure", kind: "type_error", http_status: 503 },
+    { event: "test_failure", kind: "assertion_failed", mcp_tool_result: { ...tool, error_code: "private" } },
+  ]) assert.deepEqual(mcpWorkerFailureEvidence(encoded(value)), []);
+  assert.doesNotMatch(first + later, /private/);
 });
 
 test("MCP tool-result diagnostics carry known classifications without inspecting free-form tool content", () => {

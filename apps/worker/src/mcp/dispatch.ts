@@ -2,7 +2,7 @@ import { verifyRunnerToolResult } from "./validated-result.js";
 import { asToolResult } from "./results/envelope.js";
 import { callRunner } from "./transport.js";
 import { checkAnyReadPermission } from "./authorization.js";
-import { checkPermission } from "./authorization.js";
+import { workspacePreflight } from "./authorization.js";
 import type { McpRequestEnv } from "./contracts.js";
 import type { PermissionBit } from "./contracts.js";
 import { policyReadiness } from "./authorization.js";
@@ -17,13 +17,13 @@ import { withAuditReceipt } from "./audit.js";
 export async function activeRunnerTool(env: McpRequestEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
-  const permission = requiredPermission === undefined
-    ? undefined
-    : params.workspace_id === undefined
-      ? await checkAnyReadPermission(env, clientId, selected.value.runnerId)
-      : await checkPermission(env, clientId, selected.value.runnerId, params.workspace_id, requiredPermission);
-  if (permission !== undefined) return asToolResult(permission);
-  const readiness = await policyReadiness(env, selected.value.runnerId);
+  if (requiredPermission !== undefined && params.workspace_id === undefined) {
+    const permission = await checkAnyReadPermission(env, clientId, selected.value.runnerId);
+    if (permission !== undefined) return asToolResult(permission);
+  }
+  const readiness = requiredPermission !== undefined && params.workspace_id !== undefined
+    ? await workspacePreflight(env, clientId, selected.value.runnerId, params.workspace_id, requiredPermission)
+    : await policyReadiness(env, selected.value.runnerId);
   if (!readiness.ok) return asToolResult(readiness.error);
   const startedAtMs = Date.now();
   const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);

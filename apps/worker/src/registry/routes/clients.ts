@@ -1,6 +1,6 @@
 import type { RegistryRoute } from "./request.js";
 import type { ClientIdentity } from "../../contracts/identity.js";
-import type { McpClientActiveRunner, McpRunnerSelectionResult } from "../../contracts/runner-selection.js";
+import type { McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness } from "../../contracts/runner-selection.js";
 import { isSafeIdentifier } from "../../security.js";
 import type { CodingScope, McpClientRecord, VerifiedMcpClient, PermissionSet } from "../records.js";
 import { parseMcpIdentity, parseNativeMcpClient } from "../route-inputs.js";
@@ -23,6 +23,7 @@ export interface ClientsRoutePorts {
   deleteClientRunnerOverride(clientId: string, runnerId: string): boolean;
   setClientRunnerOverride(clientId: string, runnerId: string, permissions: PermissionSet, nowMs: number): boolean;
   effectivePermissions(clientId: string, runnerId: string, workspaceId: string): PermissionSet | undefined;
+  getPolicyReadiness(runnerId: string): PolicyReadiness;
   getMcpClientActiveRunner(clientId: string): McpClientActiveRunner | undefined;
   resetMcpClientRunner(clientId: string, nowMs: number): McpClientActiveRunner | undefined;
   revalidateMcpClient(clientId: unknown, secretVersion: unknown, includeJobRecording?: boolean): VerifiedMcpClient | undefined;
@@ -84,7 +85,13 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-permissions" && targetRunnerId !== undefined) {
       const workspaceId = url.searchParams.get("workspace_id");
       const permissions = workspaceId === null ? undefined : ports.effectivePermissions(clientId, targetRunnerId, workspaceId);
-      return permissions === undefined ? new Response("not found", { status: 404 }) : Response.json({ permissions });
+      if (permissions === undefined) return new Response("not found", { status: 404 });
+      const required = url.searchParams.get("policy_readiness_for");
+      // Capture permission and policy in this admitted event turn. A denied
+      // permission retains precedence and never needs a readiness lookup.
+      const readiness = (required === "read" || required === "edit" || required === "shell" || required === "job_control") && permissions[required]
+        ? ports.getPolicyReadiness(targetRunnerId) : undefined;
+      return Response.json({ permissions, ...(readiness === undefined ? {} : { policy_readiness: readiness }) });
     }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "active-runner") {
       const selection = ports.getMcpClientActiveRunner(clientId);

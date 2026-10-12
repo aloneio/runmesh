@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { safeMcpTimingEvent, mcpTimingEventBudgetKey } from "./mcp-timing-diagnostics.mjs";
 export { mcpServerTiming, mcpLoadTimingDiagnostic, mcpWorkerSnapshotDiagnostic } from "./mcp-timing-diagnostics.mjs";
 
@@ -261,6 +262,8 @@ const launcherSignals = ["SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGBUS", "
 const fixtureNames = ["queue", "busy", "job_sharing"];
 const fixturePhases = ["primary", "release", "cancel", "observe"];
 const fixtureFailureKinds = ["mcp_http_failure", "assertion_failed", "timeout", "other"];
+const directFailureKinds = ["mcp_http_failure", "assertion_failed", "timeout", ...errorKinds];
+const directErrorNames = new Map([["TypeError", "type_error"], ["RangeError", "range_error"], ["SyntaxError", "syntax_error"], ["AbortError", "abort_error"], ["Error", "error"]]);
 const progressFixtures = ["job_recording", "job_history", "job_sharing"];
 const progressPhases = ["admin_login_page", "admin_login", "client_create", "runner_select", "recording_update", "history_settings", "history_restore", "shell", "job_logs", "job_metadata", "job_poll", "job_list", "job_list_live", "job_list_snapshot",
   "job_share_read", "job_input_denied", "job_cancel_denied", "job_owner_read", "job_input", "job_cancel"];
@@ -271,6 +274,20 @@ function safeWorkerEvent(value) {
   if (!record(value)) return undefined;
   const timingEvent = safeMcpTimingEvent(value);
   if (timingEvent !== undefined) return timingEvent;
+  if (["request_failure", "test_failure"].includes(value.event) && directFailureKinds.includes(value.kind)) {
+    const event = { event: value.event, kind: value.kind };
+    if (value.kind === "mcp_http_failure") {
+      const detail = mcpHttpDiagnostic(HTTP_MARKER + JSON.stringify(value.mcp_response));
+      if (detail === undefined || !Number.isInteger(value.http_status) || value.http_status < 100 || value.http_status > 599) return undefined;
+      event.http_status = value.http_status; event.mcp_response = detail;
+    } else if (value.http_status !== undefined || value.mcp_response !== undefined) return undefined;
+    if (value.mcp_tool_result !== undefined) {
+      const detail = mcpToolResultFailureDiagnostic(TOOL_RESULT_MARKER + JSON.stringify(value.mcp_tool_result));
+      if (detail === undefined) return undefined;
+      event.mcp_tool_result = detail;
+    }
+    return event;
+  }
   if (value.event === "runtime_observer" && ["installed", "worker_thread", "runtime_override", "resolution_failed"].includes(value.coverage))
     return { event: "runtime_observer", coverage: value.coverage };
   if (value.event === "runtime_process" && ["spawn", "exit"].includes(value.phase)
@@ -350,6 +367,28 @@ export function mcpLoadProgressDiagnostic(value) {
   return eventMarker({ ...value, event: "load_progress" });
 }
 
+/** Call only after a request or assertion throws; expected tool errors are data. */
+export function mcpFailureDiagnostic(event, error) {
+  const text = typeof error?.message === "string" ? error.message.slice(0, 16384) : "";
+  const status = /^(?:Error: )?RUNMESH_E2E_MCP_HTTP_STATUS=([1-5]\d{2})\r?$/mu.exec(text)?.[1];
+  const response = mcpHttpDiagnostic(text), toolResult = mcpToolResultFailureDiagnostic(text);
+  const kind = status !== undefined && response !== undefined ? "mcp_http_failure"
+    : error?.code === "ERR_ASSERTION" || error?.name === "AssertionError" ? "assertion_failed"
+      : error?.name === "TimeoutError" || error?.code === "ETIMEDOUT" || /^(?:Test|Hook) timed out in \d+ms\b|^timed out after \d+ms\b/u.test(text) ? "timeout"
+        : directErrorNames.get(error?.name) ?? "other";
+  return eventMarker({ event, kind,
+    ...(kind === "mcp_http_failure" ? { http_status: Number(status), mcp_response: response } : {}),
+    ...(toolResult === undefined ? {} : { mcp_tool_result: toolResult }) });
+}
+
+/** Flush before cleanup or reporter shutdown; diagnostics never own the error. */
+export function emitMcpFailureDiagnostic(event, error, emit = value => writeSync(2, value)) {
+  try {
+    const diagnostic = mcpFailureDiagnostic(event, error);
+    if (diagnostic !== undefined) emit(diagnostic);
+  } catch { /* Preserve the initiating error even when stderr is already closed. */ }
+}
+
 /** Keep the primary failure and each cleanup phase distinct without error text. */
 export function mcpFixtureFailureDiagnostic(fixture, phase, error) {
   const text = typeof error?.message === "string" ? error.message.slice(0, 16384) : "";
@@ -397,7 +436,7 @@ function eventBudget() {
     const key = timingKey ?? (event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
       : event.event === "load_progress" ? `load:${event.concurrency}`
       : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event);
-    const limit = timingKey !== undefined ? 1 : event.event === "runtime_process" ? 64 : event.event === "runtime_observer" ? 8
+    const limit = timingKey !== undefined || event.event === "request_failure" || event.event === "test_failure" ? 1 : event.event === "runtime_process" ? 64 : event.event === "runtime_observer" ? 8
       : event.event === "admin_http" || event.event === "fixture_progress" || event.event === "load_progress" ? 1
       : event.event === "mcp_handler_error" || event.event === "control_plane_failure" ? 16 : event.event === "launcher_snapshot" ? 4
       : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;
