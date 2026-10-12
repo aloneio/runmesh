@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCloudMaintenance, maintenanceEndpoint } from "../src/updates/cloud.js";
 import { MaintenanceHttpError } from "../src/updates/contracts.js";
 import type { RunnerProfile } from "../src/profile.js";
@@ -59,6 +59,22 @@ describe("maintenance HTTPS and CLI", () => {
     await expect(large.poll()).rejects.toThrow("invalid maintenance response");
     const malformed = createCloudMaintenance({ profile: async () => profile, fetch: (async () => Response.json({ ...idle, operation: { target_version: "latest" } })) as typeof fetch });
     await expect(malformed.poll()).rejects.toThrow();
+  });
+  it("ignores a late maintenance response after its caller has stopped", async () => {
+    const owner = new AbortController(), reason = new Error("maintenance stopped");
+    let respond!: (response: Response) => void;
+    const fetch = (async (_url: string | URL | Request) => new Promise<Response>(resolve => { respond = resolve; })) as typeof globalThis.fetch;
+    const cloud = createCloudMaintenance({ profile: async () => profile, fetch, signal: owner.signal });
+    const pending = cloud.poll();
+    await vi.waitFor(() => expect(respond).toBeTypeOf("function"));
+    owner.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    const response = Response.json(idle);
+    const cancel = vi.spyOn(response.body!, "cancel");
+    respond(response);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(cancel).not.toHaveBeenCalled();
+    expect(response.body?.locked).toBe(false);
   });
   it("wires only the internal maintenance command to its injectable service entry point", async () => {
     const received: unknown[] = [];
