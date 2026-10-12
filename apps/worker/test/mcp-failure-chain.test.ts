@@ -29,6 +29,81 @@ function fixture(reply: () => Response = () => Response.json({ type: "rpc.respon
 }
 const invoke = (env: McpRequestEnv) => callRunner(env, "runner-test", "fs.read", { workspace_id: "work", path: "file.txt" }, 1, checksum);
 
+describe("fixed MCP Registry failure diagnostics", () => {
+  it.each([
+    ["/auth/clients/private-client/active-runner", "mcp_active_runner"],
+    ["/auth/clients/private-client/effective-permissions/private-runner?workspace_id=private-workspace", "mcp_permissions"],
+    ["/auth/clients/private-client/effective-workspaces/private-runner", "mcp_workspaces"],
+    ["/runners/private-runner/policy-readiness", "mcp_policy_readiness"],
+    ["/runners/private-runner/jobs/private-job?include=private-query", "mcp_job_snapshot"],
+    ["/private-other?private-query=private-value", "mcp_registry_read"],
+  ])("classifies a failed read at %s without retaining route data", async (path, stage) => {
+    const f = fixture(), warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = new Error("Network connection lost."); error.stack = "private-stack";
+    f.registry.mockRejectedValueOnce(error);
+    try {
+      expect(await registryCall(f.env, path)).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
+      expect(f.registry).toHaveBeenCalledOnce(); expect(f.dispatch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=" + stage + " outcome=exception kind=error reason=network_connection_lost status=none");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
+    } finally { warn.mockRestore(); }
+  });
+
+  it.each(["read", "post"] as const)("retains the existing %s failed-status semantics", async kind => {
+    const f = fixture(), warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    f.registry.mockImplementation(async () => new Response("private-status-body", { status: 503 }));
+    try {
+      const result = kind === "read" ? await registryCall(f.env, "/private-read") : await registryPostCall(f.env, "/private-post", {});
+      expect(result).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: kind === "read" ? "not_started" : "unknown" } });
+      expect(f.registry).toHaveBeenCalledOnce(); expect(f.dispatch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_registry_" + kind + " outcome=unexpected_status kind=other reason=unknown status=503");
+    } finally { warn.mockRestore(); }
+  });
+
+  it.each([200, 403, 409])("records malformed authorization at HTTP %s without dispatching", async status => {
+    const f = fixture(), warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    f.registry.mockImplementation(async () => Response.json({ ok: status === 200 ? "private-value" : true }, { status }));
+    try {
+      expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
+      expect(f.registry).toHaveBeenCalledOnce(); expect(f.dispatch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_rpc_authorization outcome=invalid_receipt kind=other reason=unknown status=" + status);
+    } finally { warn.mockRestore(); }
+  });
+
+  it("leaves normal missing records, explicit denials, and completed receipts quiet", async () => {
+    const f = fixture(), warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      f.registry.mockImplementation(async () => new Response("private-missing", { status: 404 }));
+      expect(await registryCall(f.env, "/private-read")).toMatchObject({ ok: false, error: { code: "not_found", operation_state: "not_started" } });
+      expect(await registryPostCall(f.env, "/private-post", {})).toMatchObject({ ok: false, error: { code: "not_found", operation_state: "unknown" } });
+      for (const status of [200, 403, 409]) {
+        f.registry.mockImplementation(async () => Response.json({ ok: false, code: "permission_denied" }, { status }));
+        expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "permission_denied", operation_state: "not_started" } });
+      }
+      for (const audit_status of ["disabled", "degraded"]) {
+        f.registry.mockImplementation(async () => Response.json({ audit_status }, { status: 202 }));
+        expect(await registryPostCall(f.env, "/private-audit", {}, "audit")).toEqual({ ok: true, value: { audit_status } });
+      }
+      f.registry.mockImplementation(async () => Response.json({ ok: true }));
+      expect(await registryCall(f.env, "/private-read")).toEqual({ ok: true, value: { ok: true } });
+      expect(await registryPostCall(f.env, "/private-post", {})).toEqual({ ok: true, value: { ok: true } });
+      expect(f.registry).toHaveBeenCalledTimes(9); expect(f.dispatch).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
+  });
+
+  it.each(["read", "post"] as const)("preserves the original %s signing exception before dispatch", async kind => {
+    const f = fixture(), warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = new Error("private-signing-error"), sign = vi.spyOn(crypto.subtle, "sign").mockRejectedValueOnce(error);
+    try {
+      const result = kind === "read" ? registryCall(f.env, "/private-read") : registryPostCall(f.env, "/private-post", {});
+      await expect(result).rejects.toBe(error);
+      expect(f.registry).not.toHaveBeenCalled(); expect(f.dispatch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_registry_" + kind + " outcome=exception kind=error reason=unknown status=none");
+    } finally { sign.mockRestore(); warn.mockRestore(); }
+  });
+});
+
 describe("stable failures across Runner, bridge and MCP", () => {
   it.each(RPC_FAILURE_CODES)("classifies and forwards %s without another allow-list", async code => {
     const expected = failureMetadata(code);

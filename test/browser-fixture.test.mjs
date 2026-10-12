@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../scripts/browser-worker-fixture.mjs";
 import { runFixtureCommand, spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../scripts/worker-fixture.mjs";
-import { createTestHttpScope } from "../scripts/test-http-scope.mjs";
+import { createTestHttpScope, runBoundedConcurrentLoad } from "../scripts/test-http-scope.mjs";
 import * as browserDiagnostics from "../scripts/browser-evidence.mjs";
 import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
@@ -120,6 +120,75 @@ test("Test HTTP scope aborting one parallel test leaves the other request alive"
   secondResponse.end("second-completed");
   assert.equal(await second, "second-completed");
   assert.deepEqual([...http.requests].sort(), ["/first", "/second"]);
+});
+
+test("Bounded concurrent load joins cancelled response bodies and retains the first failure", { timeout: 8_000 }, async t => {
+  const scope = createTestHttpScope(), testLifetime = new AbortController(), bodiesReading = Promise.withResolvers();
+  const failure = new Error("original-load-failure"), indices = [], signals = [];
+  let pendingBodies = 0, cancelledBodies = 0, snapshot;
+  const http = await localHttpFixture(t, (request, response) => {
+    if (request.url === "/after-load") { response.end("scope-still-live"); return; }
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.write("partial-response");
+  });
+  await scope.run(testLifetime.signal, async () => {
+    await assert.rejects(runBoundedConcurrentLoad({ count: 128, concurrency: 4,
+      onFirstFailure: error => {
+        snapshot = { error, pendingBodies, started: indices.length };
+        throw new Error("diagnostic-observer-failure");
+      },
+      run: async (index, signal) => {
+        indices.push(index); signals.push(signal);
+        if (index === 0) { await bodiesReading.promise; throw failure; }
+        const response = await scope.fetch(http.origin + `/held-${index}`, { signal });
+        assert.equal(response.status, 200);
+        const body = response.text();
+        if (++pendingBodies === 3) bodiesReading.resolve();
+        try { await body; assert.fail("the held body must settle by cancellation"); }
+        catch (error) { assert.equal(error.name, "AbortError"); cancelledBodies++; throw error; }
+        finally { pendingBodies--; }
+      },
+    }), error => error === failure);
+    assert.deepEqual(indices, [0, 1, 2, 3]);
+    assert.deepEqual(snapshot, { error: failure, pendingBodies: 3, started: 4 });
+    assert.equal(pendingBodies, 0); assert.equal(cancelledBodies, 3);
+    assert.ok(signals.every(signal => signal.aborted));
+    assert.equal(testLifetime.signal.aborted, false);
+    assert.equal(await (await scope.fetch(http.origin + "/after-load")).text(), "scope-still-live");
+  });
+  assert.deepEqual([...http.requests].sort(), ["/after-load", "/held-1", "/held-2", "/held-3"]);
+});
+
+for (const concurrency of [1, 4, 8, 16]) test(`Bounded concurrent load checks all 128 requests at concurrency ${concurrency}`, { timeout: 8_000 }, async t => {
+  const scope = createTestHttpScope(), indices = [], checked = [], kinds = [0, 0, 0, 0];
+  let active = 0, peak = 0, failures = 0;
+  const http = await localHttpFixture(t, (request, response) => response.end(request.url.slice(1)));
+  await scope.run(new AbortController().signal, () => runBoundedConcurrentLoad({ count: 128, concurrency,
+    onFirstFailure: () => { failures++; },
+    run: async (index, signal) => {
+      indices.push(index); active++; peak = Math.max(peak, active);
+      try {
+        const response = await scope.fetch(http.origin + `/${index}`, { signal });
+        assert.equal(await response.text(), String(index));
+        checked.push(index); kinds[index % kinds.length]++;
+      } finally { active--; }
+    },
+  }));
+  const expected = Array.from({ length: 128 }, (_, index) => index);
+  assert.deepEqual(indices, expected); assert.deepEqual(checked.sort((left, right) => left - right), expected);
+  assert.deepEqual(kinds, [32, 32, 32, 32]); assert.equal(http.requests.length, 128);
+  assert.equal(peak, concurrency); assert.equal(active, 0); assert.equal(failures, 0);
+});
+
+test("Bounded concurrent load preserves primitive failures when an async observer rejects", async () => {
+  for (const failure of [undefined, null, 0, "original-failure"]) {
+    let started = 0;
+    await runBoundedConcurrentLoad({ count: 128, concurrency: 4,
+      run: () => { started++; throw failure; },
+      onFirstFailure: async () => { throw new Error("diagnostic-observer-failure"); },
+    }).then(() => assert.fail("load must retain its failure"), error => assert.equal(error, failure));
+    assert.equal(started, 1);
+  }
 });
 
 function authenticationResponses() {

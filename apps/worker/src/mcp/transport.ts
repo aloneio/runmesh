@@ -1,4 +1,4 @@
-import { boundedJsonReceipt, boundedJsonResponse } from "../bounded-json.js";
+import { boundedJsonReceipt, type BoundedJsonFailure } from "../bounded-json.js";
 import { MAX_FRAME_BYTES } from "@aloneio/runmesh-protocol";
 import { boundPageResponseProblem } from "./byte-pages.js";
 import { encodeWireFrame } from "@aloneio/runmesh-protocol";
@@ -18,9 +18,32 @@ import { RpcRequestSchema } from "@aloneio/runmesh-protocol";
 import { safeJobLogResult } from "./results/jobs.js";
 import { safeReadResult } from "./results/files.js";
 import type { ToolCall } from "./contracts.js";
+import { reportControlPlaneFailure, type ControlPlaneFailureStage } from "../platform/control-plane-diagnostics.js";
 
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
   return isKnownRpcFailureCode(value) ? value : fallback;
+}
+
+/** Classify a route without retaining its identifiers, query, or full path. */
+function registryDiagnosticStage(path: string, method: "GET" | "POST"): ControlPlaneFailureStage {
+  if (method === "POST") return path === "/auth/mcp/authorize-rpc" ? "mcp_rpc_authorization" : "mcp_registry_post";
+  const segments = path.split("?", 1)[0]!.split("/");
+  if (segments[1] === "auth" && segments[2] === "clients") {
+    if (segments.length === 5 && segments[4] === "active-runner") return "mcp_active_runner";
+    if (segments.length === 6 && segments[4] === "effective-permissions") return "mcp_permissions";
+    if (segments.length === 6 && segments[4] === "effective-workspaces") return "mcp_workspaces";
+  }
+  if (segments[1] === "runners") {
+    if (segments.length === 4 && segments[3] === "policy-readiness") return "mcp_policy_readiness";
+    if (segments.length === 5 && segments[3] === "jobs") return "mcp_job_snapshot";
+  }
+  return "mcp_registry_read";
+}
+
+function reportRegistryFailure(stage: ControlPlaneFailureStage, failure: BoundedJsonFailure): void {
+  // A missing record retains its normal not_found result, not an outage event.
+  if (failure.outcome === "unexpected_status" && failure.status === 404) return;
+  reportControlPlaneFailure(stage, failure.outcome, failure.error, failure.status);
 }
 
 export async function callRunner(env: McpRequestEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string, workspaceBoundJob = false): Promise<ToolCall> {
@@ -40,7 +63,10 @@ export async function callRunner(env: McpRequestEnv, runnerId: string, method: s
     policy_revision: policyRevision, policy_checksum: policyChecksum,
   });
   if (!authorization.ok) return { ok: false, error: { ...authorization.error, ...failureMetadata(authorization.error.code, "not_started") } };
-  if (!isRecord(authorization.value) || typeof authorization.value.ok !== "boolean") return fail("registry_unavailable", "Authorization service returned an invalid response.", "Retry later; nothing was sent to the Runner.", "not_started");
+  if (!isRecord(authorization.value) || typeof authorization.value.ok !== "boolean") {
+    reportControlPlaneFailure("mcp_rpc_authorization", "invalid_receipt", undefined, 200);
+    return fail("registry_unavailable", "Authorization service returned an invalid response.", "Retry later; nothing was sent to the Runner.", "not_started");
+  }
   if (authorization.value.ok !== true) {
     if (authorization.value.code === "runner_upgrade_required") return fail("runner_upgrade_required", "History-independent Job operations require Runner 0.1.1 or newer.", "Install a verified supported Runner before disabling cloud Job history.");
     return fail("permission_denied", "The current client, workspace or policy no longer authorizes this operation.", "Refresh the current permissions and policy before retrying.");
@@ -84,12 +110,16 @@ export function registryJobsPath(runnerId: string, filters: Record<string, unkno
 
 export async function registryCall(env: McpRequestEnv, path: string): Promise<ToolCall> {
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.", "not_started");
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
+  const stage = registryDiagnosticStage(path, "GET");
+  let headers: HeadersInit;
+  try { headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, ""); }
+  catch (error) { reportControlPlaneFailure(stage, "exception", error); throw error; }
   try {
-    const response = await boundedJsonResponse(signal => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers, signal })), 5000, MAX_FRAME_BYTES);
+    const response = await boundedJsonReceipt(signal => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers, signal })), [200], 5000, MAX_FRAME_BYTES, undefined, failure => reportRegistryFailure(stage, failure));
     if (response?.status === 200) return { ok: true, value: response.value };
     return fail(response?.status === 404 ? "not_found" : "registry_unavailable", response?.status === 404 ? "The requested registry record was not found." : "The registry is unavailable.", response?.status === 404 ? "Use runner_list to discover valid identifiers." : "Retry shortly; the runner may still be available for live tools.", "not_started");
-  } catch {
+  } catch (error) {
+    reportControlPlaneFailure(stage, "exception", error);
     return fail("registry_unavailable", "The registry is unavailable.", "Retry shortly; the runner may still be available for live tools.", "not_started");
   }
 }
@@ -97,9 +127,12 @@ export async function registryCall(env: McpRequestEnv, path: string): Promise<To
 export async function registryPostCall(env: McpRequestEnv, path: string, input: Record<string, unknown>, receiptKind: "completed" | "audit" = "completed"): Promise<ToolCall> {
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
   const body = JSON.stringify(input);
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body);
+  const stage = registryDiagnosticStage(path, "POST");
+  let headers: HeadersInit;
+  try { headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body); }
+  catch (error) { reportControlPlaneFailure(stage, "exception", error); throw error; }
   try {
-    const response = await boundedJsonReceipt(signal => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal })), receiptKind === "audit" ? [200, 403, 409, 202] : [200, 403, 409]);
+    const response = await boundedJsonReceipt(signal => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal })), receiptKind === "audit" ? [200, 403, 409, 202] : [200, 403, 409], 5000, 16384, undefined, failure => reportRegistryFailure(stage, failure));
     // Authority and selection require completed JSON receipts at 200. Only
     // the audit caller opts into the documented disabled/degraded 202 receipt;
     // neither that receipt nor a conflict/denial can become an execution grant.
@@ -109,9 +142,10 @@ export async function registryPostCall(env: McpRequestEnv, path: string, input: 
       if (response.status === 200 || (isRecord(value) && (deferredAudit
         ? value.audit_status === "disabled" || value.audit_status === "degraded"
         : value.ok === false && typeof value.code === "string"))) return { ok: true, value };
+      reportControlPlaneFailure(stage, "invalid_receipt", undefined, response.status);
     }
     return fail(response?.status === 404 ? "not_found" : "registry_unavailable", "The Registry did not return a completed or explicit denial receipt.", "Inspect the current state before retrying a mutation.", "unknown");
-  } catch { return fail("registry_unavailable", "The Registry reply was not received.", "Inspect the current state before retrying a mutation.", "unknown"); }
+  } catch (error) { reportControlPlaneFailure(stage, "exception", error); return fail("registry_unavailable", "The Registry reply was not received.", "Inspect the current state before retrying a mutation.", "unknown"); }
 }
 
 async function json(response: Response): Promise<unknown> {
