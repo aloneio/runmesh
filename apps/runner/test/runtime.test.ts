@@ -181,9 +181,9 @@ describe("shell discovery recovery", () => {
     buildInvocation: command => ({ file: "/bin/bash", args: ["-lc", command] }) };
   const request = { workspace_id: "workspace-1", command: "fixture-command", shell: true };
   const pendingProbe = () => {
-    let finish!: (value: ShellRuntime | undefined) => void;
-    const promise = new Promise<ShellRuntime | undefined>(resolve => { finish = resolve; });
-    return { promise, finish };
+    let resolveDiscovery!: (value: ShellRuntime | undefined) => void;
+    const promise = new Promise<ShellRuntime | undefined>(resolve => { resolveDiscovery = resolve; });
+    return { promise, resolveDiscovery };
   };
   async function recoveryFixture() {
     const test = await fixture();
@@ -194,8 +194,11 @@ describe("shell discovery recovery", () => {
     vi.spyOn(runtime.policy, "resolve").mockResolvedValue({ workspace, path: workspace.rootPath });
     vi.spyOn(runtime.policy, "snapshot").mockResolvedValue({ canonicalPath: workspace.rootPath, device: 1, inode: 1, type: "directory", size: 0, modifiedAtMs: 0 });
     const start = vi.spyOn(runtime.jobs, "start").mockResolvedValue(jobRecord());
+    const get = vi.spyOn(runtime.jobs, "get");
+    const logs = vi.spyOn(runtime.jobs, "logs");
+    const listJobs = () => runtime.jobs.list();
     vi.useFakeTimers();
-    return { runtime, workspace, start, cleanup: async () => { vi.useRealTimers(); vi.restoreAllMocks(); await test.cleanup(); } };
+    return { runtime, workspace, start, get, logs, listJobs, cleanup: async () => { vi.useRealTimers(); vi.restoreAllMocks(); await test.cleanup(); } };
   }
 
   it("expires the initial negative result and shares one recovery probe across concurrent commands", async () => {
@@ -211,7 +214,7 @@ describe("shell discovery recovery", () => {
       const calls = Array.from({ length: 16 }, (_, index) => test.runtime.dispatch("exec.start", { ...request, command: "fixture-" + index }));
       await vi.advanceTimersByTimeAsync(0);
       expect(discover).toHaveBeenCalledTimes(2); expect(test.start).not.toHaveBeenCalled();
-      probe.finish(shell);
+      probe.resolveDiscovery(shell);
       await Promise.all(calls);
       expect(test.start).toHaveBeenCalledTimes(16);
       expect(test.start.mock.calls.map(([value]) => (value as { shell_runtime: { args: string[] } }).shell_runtime.args[1]))
@@ -220,7 +223,7 @@ describe("shell discovery recovery", () => {
       expect(discover).toHaveBeenCalledTimes(2); expect(test.start).toHaveBeenCalledTimes(17);
       expect(test.runtime.getShellRuntime()).toBe(shell);
       expect(vi.getTimerCount()).toBe(0);
-    } finally { probe.finish(undefined); await test.cleanup(); }
+    } finally { probe.resolveDiscovery(undefined); await test.cleanup(); }
   });
 
   it("starts a new cooldown after an unsuccessful shared probe", async () => {
@@ -230,11 +233,11 @@ describe("shell discovery recovery", () => {
       await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
       const calls = Array.from({ length: 16 }, () => test.runtime.dispatch("exec.start", request).catch(rpcError));
       await vi.advanceTimersByTimeAsync(0);
-      probe.finish(undefined);
+      probe.resolveDiscovery(undefined);
       for (const result of await Promise.all(calls)) expect(result).toMatchObject({ code: "shell_unavailable", operation_state: "not_started" });
       await expect(test.runtime.dispatch("exec.start", request)).rejects.toMatchObject({ code: "shell_unavailable" });
       expect(discover).toHaveBeenCalledTimes(2); expect(test.start).not.toHaveBeenCalled();
-    } finally { probe.finish(undefined); await test.cleanup(); }
+    } finally { probe.resolveDiscovery(undefined); await test.cleanup(); }
   });
 
   it("checks shell permission before probing and leaves direct executable requests independent", async () => {
@@ -258,12 +261,12 @@ describe("shell discovery recovery", () => {
       const call = test.runtime.dispatch("exec.start", request).catch(rpcError);
       await vi.advanceTimersByTimeAsync(0);
       test.runtime.applyPolicy([{ ...test.workspace, shell: false }]);
-      probe.finish(shell);
+      probe.resolveDiscovery(shell);
       expect(await call).toMatchObject({ code: "stale_policy" });
       expect(test.start).not.toHaveBeenCalled();
       await expect(test.runtime.dispatch("exec.start", request)).rejects.toMatchObject({ code: "permission_denied" });
       expect(test.start).not.toHaveBeenCalled();
-    } finally { probe.finish(undefined); await test.cleanup(); }
+    } finally { probe.resolveDiscovery(undefined); await test.cleanup(); }
   });
 
   it.each([["exec.start", LOCAL_RUNNER_OPERATION_TIMEOUT_MS], ["exec.run", 100]] as const)("never admits a timed-out %s request after a late probe succeeds", async (method, budget) => {
@@ -275,33 +278,33 @@ describe("shell discovery recovery", () => {
       await vi.advanceTimersByTimeAsync(budget);
       expect(await call).toMatchObject({ code: "shell_unavailable", operation_state: "not_started" });
       expect(test.start).not.toHaveBeenCalled();
-      probe.finish(shell); await vi.advanceTimersByTimeAsync(0);
+      probe.resolveDiscovery(shell); await vi.advanceTimersByTimeAsync(0);
       expect(test.runtime.getShellRuntime()).toBe(shell); expect(test.start).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
       await test.runtime.dispatch("exec.start", { ...request, command: "new-request" });
       expect(test.start).toHaveBeenCalledTimes(1);
       expect(test.start).toHaveBeenLastCalledWith(expect.objectContaining({ command: "new-request" }));
       expect(discover).toHaveBeenCalledTimes(2);
-    } finally { probe.finish(undefined); await test.cleanup(); }
+    } finally { probe.resolveDiscovery(undefined); await test.cleanup(); }
   });
 
   it("includes successful discovery in the run observation budget", async () => {
     const test = await recoveryFixture(), probe = pendingProbe();
     vi.spyOn(environment, "discoverShellRuntime").mockResolvedValueOnce(undefined).mockReturnValue(probe.promise);
-    vi.spyOn(test.runtime.jobs, "get").mockReturnValue(jobRecord());
+    test.get.mockReturnValue(jobRecord());
     try {
       await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
       let settled = false;
       const begin = performance.now();
       const call = test.runtime.dispatch("exec.run", { ...request, wait_ms: 100 }).then(value => { settled = true; return value; });
-      await vi.advanceTimersByTimeAsync(60); probe.finish(shell); await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60); probe.resolveDiscovery(shell); await vi.advanceTimersByTimeAsync(0);
       expect(test.start).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(39); expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(settled).toBe(true); expect(performance.now() - begin).toBe(100);
       expect(await call).toMatchObject({ completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS });
       expect(test.start).toHaveBeenCalledTimes(1);
-    } finally { probe.finish(undefined); await test.cleanup(); }
+    } finally { probe.resolveDiscovery(undefined); await test.cleanup(); }
   });
 
   it("reports an already completed run after admission consumes its observation budget", async () => {
@@ -309,8 +312,8 @@ describe("shell discovery recovery", () => {
     vi.spyOn(environment, "discoverShellRuntime").mockResolvedValue(shell);
     const completed = jobRecord({ status: "succeeded", exit_code: 0, completed_at_ms: 100 });
     test.start.mockImplementation(async () => { await vi.advanceTimersByTimeAsync(100); return completed; });
-    vi.spyOn(test.runtime.jobs, "get").mockReturnValue(completed);
-    vi.spyOn(test.runtime.jobs, "logs").mockResolvedValue({ data: "complete" });
+    test.get.mockReturnValue(completed);
+    test.logs.mockResolvedValue({ data: "complete" });
     try {
       await test.runtime.initialize();
       const begin = performance.now();
@@ -334,7 +337,7 @@ describe("shell discovery recovery", () => {
       await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
       await expect(test.runtime.dispatch("exec.start", { ...request, ...invalid })).rejects.toMatchObject({ code });
       expect(discover).toHaveBeenCalledTimes(1); expect(test.start).not.toHaveBeenCalled();
-      expect(test.runtime.jobs.list()).toEqual([]);
+      expect(test.listJobs()).toEqual([]);
     } finally { await test.cleanup(); }
   });
 
