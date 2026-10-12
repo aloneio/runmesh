@@ -233,14 +233,13 @@ function workerEvent(line) {
     status: control[5] === "none" ? null : Number(control[5]), ...(control[6] === undefined ? {} : { phase: control[6] }) });
   // Runtime failures can bypass the MCP handler entirely. Match complete fixed
   // messages, including the pinned Wrangler error prefix, never arbitrary logs.
-  const runtime = text.replace(/^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] |X \[ERROR\] )/u, "").replace(/^Error: /u, "");
+  const runtime = text.replace(/^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] |X \[ERROR\] |\[wrangler:(?:warn|error)\] )/u, "").replace(/^Error: /u, "");
   for (const [signature, message] of runtimeSignatures) {
     if (runtime === message) return { event: "runtime_log", signature };
   }
   // Pinned Miniflare can restart workerd while the Wrangler launcher stays
   // alive. Preserve only its complete fixed lifecycle messages, not causes.
-  const lifecycle = runtime.replace(/^\[wrangler:(?:warn|error)\] /u, "")
-    .replace(/^(?:Error|MiniflareCoreError \[ERR_RUNTIME_FAILURE\]): /u, "");
+  const lifecycle = runtime.replace(/^(?:Error|MiniflareCoreError \[ERR_RUNTIME_FAILURE\]): /u, "");
   const crash = /^The Workers runtime crashed unexpectedly and is being restarted \(crash #([1-9]\d{0,3})\)\. Any additional runtime output above may indicate the cause\.$/u.exec(lifecycle);
   if (crash) return { event: "runtime_lifecycle", reason: "crash_restarting", crash_count: Number(crash[1]) };
   for (const [reason, message] of runtimeLifecycleMessages) {

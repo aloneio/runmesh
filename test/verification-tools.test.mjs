@@ -947,6 +947,45 @@ test("fixed runtime messages survive fragmented Worker logs without copying text
   assert.doesNotMatch(emitted.join(""), /private|Network connection|ReadableStream/u);
 });
 
+test("fixed runtime signatures accept canonical and pinned Wrangler prefixes after fragmented ANSI logs", () => {
+  const cases = [
+    ["network_connection_lost", "Network connection lost."],
+    ["cross_request_io", "Cannot perform I/O on behalf of a different request."],
+    ["cross_request_promise", "A promise was resolved or rejected from a different request context than the one it was created in."],
+    ["hung_request", "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response."],
+    ["locked_reader", "This ReadableStream is locked to a reader."],
+  ];
+  for (const [signature, message] of cases) {
+    for (const prefix of ["", "Error: ", "[wrangler:error] ", "[wrangler:error] Error: ", "[wrangler:warn] ", "[wrangler:warn] Error: ",
+      "X [ERROR] Error: ", "\u001b[31m[wrangler:error]\u001b[0m Error: ", "\u001b[33m[wrangler:warn]\u001b[0m "]) {
+      const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+      const line = prefix + message + "\r\n  at private-stack\n";
+      for (let offset = 0; offset < line.length; offset += 7) forward(line.slice(offset, offset + 7));
+      assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), [{ event: "runtime_log", signature }]);
+      assert.doesNotMatch(emitted.join(""), /private|wrangler|ERROR|Error:|Network connection|ReadableStream/u);
+    }
+  }
+});
+
+test("Wrangler runtime signatures reject private boundaries and preserve the shared event budget", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  const message = "Network connection lost.";
+  for (const prefix of ["[wrangler:error] ", "[wrangler:warn] "]) {
+    for (const line of ["private-token " + prefix + message, prefix + "private-token " + message, prefix + message + " private-token",
+      prefix + "Error: " + message + " private-token", prefix + "TypeError: " + message, prefix + "Error: private-token"])
+      forward(line + "\n");
+  }
+  for (const prefix of ["[wrangler:err] ", "[wrangler:log] ", "[private:error] ", "[wrangler:error] [wrangler:warn] ",
+    "private X [ERROR] ", "X [PRIVATE] ", "X [WARNING] "])
+    forward(prefix + message + "\n");
+  assert.deepEqual(emitted, []);
+  for (let index = 0; index < 24; index++) forward(["", "[wrangler:error] Error: ", "[wrangler:warn] "][index % 3] + message + "\n");
+  assert.equal(emitted.length, 8);
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("").repeat(3)),
+    Array.from({ length: 8 }, () => ({ event: "runtime_log", signature: "network_connection_lost" })));
+  assert.doesNotMatch(emitted.join(""), /private|wrangler|Network connection/u);
+});
+
 test("fixed runtime lifecycle messages survive fragmentation without exposing native errors or causes", () => {
   const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
   forward("\u001b[33m[wrangler:warn]\u001b[0m The Workers runtime crashed unexpectedly and is being rest");

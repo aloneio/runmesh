@@ -20,7 +20,7 @@ MCP 返回受限的 `git_unavailable` 恢复提示。具体安装路径可通过
 | --- | --- | --- |
 | `401` 或 `403` | `4001`，`runner credentials rejected` | 检查 Runner 凭据；当前连接循环停止，服务管理器之后仍可能重启进程 |
 | `409` | `4000`，`stale runner session` | 使用现有凭据重新连接并完成握手 |
-| 可用性失败，包括 `429` 和 `5xx` | `1013`，`control plane temporarily unavailable` | 检查控制面，并等待服务不可用时较慢的退避重连 |
+| 可用性失败，包括 `429` 和 `5xx` | `1013`，`control plane temporarily unavailable` | 检查控制面健康与限流状态，等待 Runner 按较慢的退避节奏自动重连 |
 
 这些分类适用于连接建立、心跳、同步、Job 事件、策略确认和回复前的会话检查。旧会话的待处理回复会被拒绝。welcome 前消息和协议不匹配有各自的传输错误，应与凭据拒绝分别排查。
 

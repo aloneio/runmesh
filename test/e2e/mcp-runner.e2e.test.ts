@@ -48,7 +48,9 @@ async function loadWorkerSnapshot(concurrency: number): Promise<void> {
   const controller = new AbortController();
   let deadline: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<Snapshot>(resolve => {
-    deadline = setTimeout(() => { controller.abort(); resolve({ outcome: "timeout" }); }, 1_000);
+    // Post-failure observation has its own deadline; it never extends the
+    // mixed-load test deadline or changes the original failure outcome.
+    deadline = setTimeout(() => { controller.abort(); resolve({ outcome: "timeout" }); }, 5_000);
   });
   const readSnapshot = async (): Promise<Snapshot> => {
     // The failed test's HTTP scope is already cancelled; this one bounded

@@ -37,7 +37,7 @@ export async function reauthorizePrincipal(
   const expired = (): boolean => controller.signal.aborted || performance.now() >= deadline;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let reported = false, responseStatus: number | undefined;
+  let completed = false, reported = false, responseStatus: number | undefined;
   let phase: ControlPlaneFailurePhase = "fetch";
   const report = (outcome: ControlPlaneFailureOutcome, error?: unknown): void => {
     if (reported) return;
@@ -75,12 +75,18 @@ export async function reauthorizePrincipal(
         if (expired()) { report("deadline"); return { state: "unavailable" }; }
         const projected = projectReauthorization(value, expected);
         if (projected.state === "malformed") report("invalid_receipt");
+        else completed = true;
         return projected;
       }
       catch (error) { report("invalid_json", error); return { state: "malformed" }; }
     } catch (error) { report("exception", error); return { state: "unavailable" }; }
     finally {
-      if (reader !== undefined) { void reader.cancel().catch(() => undefined); try { reader.releaseLock(); } catch { /* a pending read settles after cancellation */ } }
+      if (reader !== undefined) {
+        // EOF plus a valid receipt completes the transport, including an
+        // authoritative denial. Cancellation is reserved for failed observations.
+        if (!completed) void reader.cancel().catch(() => undefined);
+        try { reader.releaseLock(); } catch { /* a pending read settles after cancellation */ }
+      }
     }
   };
   try {
@@ -90,5 +96,5 @@ export async function reauthorizePrincipal(
         timer = setTimeout(() => { report("deadline"); controller.abort(); void reader?.cancel().catch(() => undefined); resolve({ state: "unavailable" }); }, timeoutMs);
       }),
     ]);
-  } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
+  } finally { if (timer !== undefined) clearTimeout(timer); if (!completed) controller.abort(); }
 }
