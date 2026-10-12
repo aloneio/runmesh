@@ -85,7 +85,7 @@ it("AR02 timeout also bounds a stalled response body and cancels it", async () =
   expect(result).toEqual({ state: "unavailable" }); expect(cancelled).toBe(true);
 });
 
-it("AR02 cancels a late response after its fetch deadline has settled", async () => {
+it("AR02 fences a late response after its fetch deadline has settled", async () => {
   vi.useFakeTimers();
   let signal: AbortSignal | undefined, deliver!: (response: Response) => void;
   const pending = new Promise<Response>(resolve => { deliver = resolve; });
@@ -98,8 +98,8 @@ it("AR02 cancels a late response after its fetch deadline has settled", async ()
     await vi.advanceTimersByTimeAsync(5001);
     expect(await result).toEqual({ state: "unavailable" }); expect(signal?.aborted).toBe(true);
     deliver(response); await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
-    expect(cancelled).toHaveBeenCalledOnce(); expect(response.body!.locked).toBe(false);
+    expect(fetch).toHaveBeenCalledOnce(); expect(cancel).not.toHaveBeenCalled();
+    expect(cancelled).not.toHaveBeenCalled(); expect(response.body!.locked).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   } finally { deliver(response); await result; vi.useRealTimers(); }
 });

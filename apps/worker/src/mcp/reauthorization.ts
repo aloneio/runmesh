@@ -39,6 +39,8 @@ export async function reauthorizePrincipal(
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let completed = false, reported = false, responseStatus: number | undefined;
   let phase: ControlPlaneFailurePhase = "fetch";
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+  let abandoned = false;
   const report = (outcome: ControlPlaneFailureOutcome, error?: unknown): void => {
     if (reported) return;
     reported = true;
@@ -48,7 +50,10 @@ export async function reauthorizePrincipal(
     try {
       const response = await fetchDecision(controller.signal);
       responseStatus = response.status;
-      if (expired()) { report("deadline"); void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
+      // A transport may ignore AbortSignal and resolve after this observation
+      // has timed out. The late response is orphaned; do not inspect or cancel
+      // its body after the request lifecycle has ended.
+      if (abandoned || expired()) { abandoned = true; report("deadline"); return { state: "unavailable" }; }
       if ([401, 403, 404].includes(response.status)) { void response.body?.cancel().catch(() => undefined); return { state: "denied" }; }
       if (response.status !== 200) { report("unexpected_status"); void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
       if (response.body === null) { report("empty_body"); return { state: "malformed" }; }
@@ -58,7 +63,12 @@ export async function reauthorizePrincipal(
       for (let reads = 0; ; reads++) {
         if (expired()) { report("deadline"); return { state: "unavailable" }; }
         if (reads >= 256) { report("fragment_limit"); return { state: "malformed" }; }
-        const item = await reader.read();
+        const active = reader;
+        const read = active.read();
+        pendingRead = read;
+        let item: ReadableStreamReadResult<Uint8Array>;
+        try { item = await read; }
+        finally { if (pendingRead === read) pendingRead = undefined; }
         // Promise continuations can run before the timer callback. Recheck
         // elapsed time after every read, including the final done receipt.
         if (expired()) { report("deadline"); return { state: "unavailable" }; }
@@ -81,11 +91,15 @@ export async function reauthorizePrincipal(
       catch (error) { report("invalid_json", error); return { state: "malformed" }; }
     } catch (error) { report("exception", error); return { state: "unavailable" }; }
     finally {
-      if (reader !== undefined) {
+      const active = reader;
+      if (active !== undefined) {
         // EOF plus a valid receipt completes the transport, including an
         // authoritative denial. Cancellation is reserved for failed observations.
-        if (!completed) void reader.cancel().catch(() => undefined);
-        try { reader.releaseLock(); } catch { /* a pending read settles after cancellation */ }
+        if (!completed) void active.cancel().catch(() => undefined);
+        const read = pendingRead;
+        if (read !== undefined) void read.then(() => { try { active.releaseLock(); } catch { /* pending read settled */ } }, () => { try { active.releaseLock(); } catch { /* pending read settled */ } });
+        else { try { active.releaseLock(); } catch { /* a pending read settles after cancellation */ } }
+        reader = undefined;
       }
     }
   };
@@ -93,8 +107,12 @@ export async function reauthorizePrincipal(
     return await Promise.race([
       observe(),
       new Promise<ReauthorizationDecision>(resolve => {
-        timer = setTimeout(() => { report("deadline"); controller.abort(); void reader?.cancel().catch(() => undefined); resolve({ state: "unavailable" }); }, timeoutMs);
+        timer = setTimeout(() => { abandoned = true; report("deadline"); controller.abort(); void reader?.cancel().catch(() => undefined); resolve({ state: "unavailable" }); }, timeoutMs);
       }),
     ]);
-  } finally { if (timer !== undefined) clearTimeout(timer); if (!completed) controller.abort(); }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    abandoned = true;
+    if (!completed) controller.abort();
+  }
 }
