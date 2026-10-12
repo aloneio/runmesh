@@ -16,6 +16,10 @@
 
 During an upgrade, keep your existing Cloudflare resources, deployment secrets and Runner profiles. These preserve account connections, enrolled machines and workspace settings.
 
+## Next update: 0.1.9
+
+Version 0.1.9 is undergoing release validation. Its version manager checks a new runtime in its final version directory before switching the active installation. Existing managers receive this update through the separate `manager-refresh` procedure. See the [release notes](release-notes.md) for details.
+
 ## Check your installed version
 
 The control plane exposes its running version at `/health`. Its `/runner/releases/stable` endpoint lists the stable Runner package selected for that instance. Follow [build provenance](build-provenance.md) to check the deployed source, and the [upgrade guide](upgrading.md) to confirm the Runner service version.

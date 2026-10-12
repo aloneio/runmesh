@@ -16,6 +16,10 @@
 
 升级时保留现有 Cloudflare 资源、部署密钥和 Runner 配置，以继续使用已有账号连接、已注册机器和工作区设置。
 
+## 下一版本：0.1.9
+
+0.1.9 正在进行发布验证。新版管理器在最终版本目录校验新运行时后再切换当前安装，已有管理器通过独立的 `manager-refresh` 流程获取此次改进。具体变化见[版本说明](release-notes.zh-CN.md)。
+
 ## 查看已安装的版本
 
 控制端的 `/health` 返回运行中的版本，`/runner/releases/stable` 列出当前实例选用的正式 Runner 包。按[构建来源](build-provenance.zh-CN.md)核对部署源码，并按[升级指南](upgrading.zh-CN.md)确认 Runner 服务版本。

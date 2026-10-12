@@ -2,7 +2,7 @@
 
 [简体中文](dev-runner-prereleases.zh-CN.md) · [Upgrade guide](upgrading.md)
 
-Use a development Runner on a separate test host to try upcoming changes. Open the development Worker's administrator page and check the exact version offered before installing. Development downloads use the verified prerelease channel; the current production version is listed in [release status](release-readiness.md).
+Use a development Runner on a separate test host to try upcoming changes. Open the development Worker's administrator page and check the exact version offered before installing. Development downloads use the verified prerelease channel; published stable packages are listed in [release status](release-readiness.md). Check your instance's `/health` for its running Worker version and `/runner/releases/stable` for its selected stable Runner package.
 
 Copy the install command from the development panel to enroll with that development Worker. Commands from the production panel use its stable release and production address. Keep the two installations in their intended environments.
 

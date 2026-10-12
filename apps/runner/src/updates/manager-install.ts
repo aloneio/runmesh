@@ -131,7 +131,8 @@ function managedManager(content: string): boolean {
   return parseOwnedManifest(content, "maintenance") !== undefined;
 }
 
-function managerHost(options: MaintenanceManagerOptions) {
+/** Shared ownership and native-stop boundary for explicit manager maintenance. */
+export function managerHost(options: MaintenanceManagerOptions) {
   const layout = maintenanceManagerLayout(options);
   const filesystem = options.filesystem ?? hostFilesystem;
   const executor = options.executor ?? hostServiceCommandExecutor;

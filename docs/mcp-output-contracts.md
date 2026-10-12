@@ -10,7 +10,7 @@ Action-specific required evidence must be present. Wrong types, undeclared field
 
 ## Read process exit codes
 
-With a compatible 0.1.8-series Worker and Runner, `shell`, detailed `job` results and Context evidence preserve the host's complete exit code, including Windows values such as `3010` and `3221225477`. Interpret the code using the executed program's documentation and keep it with the Job's status and logs. Use a workspace-bound `job` query when you need the complete process result after a lifecycle notification.
+With compatible Worker and Runner versions of 0.1.8 or later, `shell`, detailed `job` results and Context evidence preserve the host's complete exit code, including Windows values such as `3010` and `3221225477`. Interpret the code using the executed program's documentation and keep it with the Job's status and logs. Use a workspace-bound `job` query when you need the complete process result after a lifecycle notification.
 
 ## Recover from an invalid result
 

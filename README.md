@@ -87,7 +87,7 @@ Effective permission is the intersection of the client, Runner, and workspace po
 
 See [release status](docs/release-readiness.md) for the current stable release and installation availability, and [release notes](docs/release-notes.md) for changes and upgrade guidance. Development uses a separate verified prerelease channel.
 
-An upgrade has three steps: deploy the Worker, install the target Runner package, and refresh the MCP client's tool catalog. Verify a representative task afterward using the [upgrade guide](docs/upgrading.md).
+To upgrade, deploy the Worker, apply any independent version-manager update required by the release notes, then install the target Runner package and refresh the MCP client's tool catalog. Follow the [upgrade guide](docs/upgrading.md) and verify a representative task afterward.
 
 A new deployment provisions its own resources. For an existing v2 installation, preserve the Worker, live namespaces, D1 binding, secrets and enrolled Runners. Before rollout, check account quotas, service startup and shutdown, edge-log redaction, and the MCP clients you plan to use.
 
