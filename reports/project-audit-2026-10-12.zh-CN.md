@@ -2,8 +2,11 @@
 
 检查日期：2026-10-12 至 2026-10-13（Asia/Shanghai）
 
-检查基线：`dev`，`115ba45`
-阶段：12 项检查发现及后续回执、夹具生命周期问题已完成对应修正，用户文档已整理。候选 `a259abd` 的原生 HTTP 入口在本机源码与安装包单次验证中各通过 41/41 项测试和 512/512 次压力请求，但随后 push、PR 两次 Windows CI 均出现传输失败，各记录 2 项失败。现有证据定位到客户端响应头接收与控制面 200 正文读取截止，底层原因仍需连接证据确认。现已补齐被动诊断，并完成两个本机完整链路的复验，接续新候选的托管 Windows 验证。完整失败与验证证据见末节。0.1.8 尚未正式发布或激活，最近一次线上健康检查通过，稳定分发保持 0.1.7。
+初始检查基线：`dev`，`115ba45`。
+正式发布源码：`e4656476f2b7ad8f1f873c1362ef0262404c0a45`，tree `3db3b8127fbf0a3ba910e3891662309efe4e3b39`。
+阶段：[0.1.8 已公开发布](https://github.com/aloneio/runmesh/releases/tag/v0.1.8)。12 项检查发现及后续回执、夹具生命周期问题已完成对应修正，用户文档已整理；发布提交的 push、PR、main 与 release 工作流均完成首轮验收。九项公开资产独立校验通过，清单签名通过验证，公开安装包在本机 Windows 单次完整验证中通过 41/41 项测试和 512/512 次压力请求。正式版本激活、部署与生产健康检查待后续独立验收。
+
+本检查书按提交和执行阶段保留历史判断。`a259abd` 的 push、PR 两次 Windows CI 各 2 项失败及其原始证据完整保留，底层根因仍未归属；后续被动诊断和成功执行分别记录。最新发布证据、公开包验收及归属边界见末节，早期候选的发布阻塞结论描述当时状态。
 
 ## 范围与方法
 
@@ -1213,3 +1216,102 @@ PR119 的独立 `main-source-policy` run `38279812282` attempt1 成功，job `11
 | summary SHA256 | `5ae3442c33468df8b59a6933135efd0c00aa8dbb95aa1490016b7931cd8c3ff4` | `82c3a1fff68b3193f2eb8e01ea1e1e96500ee361704bc5641a3931a428f4e376` |
 
 每个并发档位的四种操作均完成 32/32 次，失败数为 0。两条路径分别保留 6、5 个归档文件，其大小、摘要、日志负载行与 211 条安全事件已独立复核；事件仅涵盖已记录的运行时观察、进程启动与负载指标，没有保留失败或 reload 事件，不据此声称所有生命周期均已观察。安装包报告记录本地测试 tarball 为 1,217,455 bytes，SHA256 `7040077f3e3bbb55978a3efc7c979e40e3dce4d403bf687c464e88d1092e025b`，`signed=false`、`published=false`。这些本机结果验证诊断补充后的功能覆盖；托管 Windows 的底层故障仍按新提交的独立 CI 证据定位。
+
+## `e465647` 首轮验收与 0.1.8 正式发布
+
+记录日期：2026-10-13（Asia/Shanghai）。以下结果均来自已经完成的执行及其独立归档核验。发布源码为 `e4656476f2b7ad8f1f873c1362ef0262404c0a45`，直接父提交为 `a259abddfb8a5d6e0dc293c60040f2e0edb5882d`，源码树为 `3db3b8127fbf0a3ba910e3891662309efe4e3b39`。各次执行沿用既定入口、并发档位、请求数量与预算，按独立事件分别记录。
+
+### 候选、受保护 main 与发布工作流
+
+| 阶段 | GitHub run / attempt | 实际执行提交 | 作业 / 关卡结果 |
+| --- | --- | --- | --- |
+| push / dev | [38286664298](https://github.com/aloneio/runmesh/actions/runs/38286664298) / 1 | `e4656476f2b7ad8f1f873c1362ef0262404c0a45` | 8/8 作业成功，28/28 关卡通过 |
+| PR119 / dev → main | [38286668446](https://github.com/aloneio/runmesh/actions/runs/38286668446) / 1 | `6583828918114a36f41ddc04dae7896439f0d121` | 8/8 作业成功，28/28 关卡通过 |
+| push / main | [38288877911](https://github.com/aloneio/runmesh/actions/runs/38288877911) / 1 | `e4656476f2b7ad8f1f873c1362ef0262404c0a45` | 8/8 作业成功，28/28 关卡通过 |
+| 正式发布 / main | [38291058364](https://github.com/aloneio/runmesh/actions/runs/38291058364) / 1 | `e4656476f2b7ad8f1f873c1362ef0262404c0a45` | 10/10 作业成功，复用 CI 的 28/28 关卡通过 |
+
+PR119 的实际合成提交按顺序以 `04d50baadc774abc328d065cfe4fdde3c7370382`、`e4656476f2b7ad8f1f873c1362ef0262404c0a45` 为父提交，tree 与发布源码一致。push、PR、main 各七个实际 checkout 作业的日志与对应执行身份吻合；每轮关卡报告的 commit、tree、clean 状态分别与自身运行一致。独立来源策略 [38286668497](https://github.com/aloneio/runmesh/actions/runs/38286668497) attempt 1、job `114936575419` 成功，回执为 `main-from-dev-v1`、`allowed=true`、PR119。
+
+GitHub main 在 `2026-10-12T18:08:12Z` 的提升记录之后执行上述精确提交 push CI。GitLab 同源 main 验收由正常发布工作流的 provider 门禁确认：发布 job `114954733405` 在 `2026-10-12T18:44:29.8729849Z` 记录 `observed_provider_ci`、commit=e465647、branch=main，GitHub run `38288877911` attempt 1 和 GitLab project `85844627` / pipeline `2939775389` 均为 `passed`。该门禁输出先于签名步骤，原始日志独立保存。
+
+每轮 28 项关卡包含 verify 的 26 项以及 Windows transport、browser 各 1 项。各轮 Linux 源码传输和已打包 Runner 传输分别通过 41/41，browser 通过 5/5，这些测试的 failed / skipped / todo 均为 0。其他测试层按其原始日志保留平台跳过计数，重复执行的覆盖不相加为唯一测试总数。
+
+| Windows 执行 | transport 通过 / 总数 | 混合请求完成 / 总数 | gate 耗时 ms | c1 / c4 / c8 / c16 的 p95 ms |
+| --- | ---: | ---: | ---: | --- |
+| push / dev | 41/41 | 512/512 | 128820 | 498 / 1761 / 1619 / 1827 |
+| PR119 | 41/41 | 512/512 | 161487 | 701 / 1930 / 1134 / 1656 |
+| push / main | 41/41 | 512/512 | 75497 | 213 / 478 / 602 / 855 |
+| release 复用 CI | 41/41 | 512/512 | 84676 | 175 / 469 / 636 / 908 |
+
+四轮 Windows transport 均为 failed / skipped / todo=0。每档 128 次请求包含 `read`、`workspace_list`、`job_get`、`job_logs` 各 32 次；p95 是客户端请求延迟，gate 耗时覆盖整套验证。main 的 Linux 源码、安装包、browser gate 耗时分别为 33442、35402、115668 ms；release 的对应耗时为 31636、34203、136333 ms。
+
+push、PR、main 每轮八份日志和三份 CI ZIP 均完整归档，ZIP provider digest、展开文件集合、字节数和哈希已核对。release 的十份日志、三份 CI ZIP、63 个展开文件及原始 run/jobs/终态快照共 79 项文件指纹也逐项吻合。全部关卡报告仍保留 `ci_gate_execution`、`self_reported` 证据属性。
+
+### 正式资产与公开独立校验
+
+[Runmesh v0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) 的 Release ID 为 `410904870`，GitHub 原始元数据记录于 `2026-10-12T18:44:39Z` 公开发布，`draft=false`、`prerelease=false`、`immutable=true`。工作流始于 `18:27:44Z`，终态更新时间为 `18:44:44Z`，结果为 success。annotated tag `v0.1.8` 的对象为 `b12f17556ea4b0b1525acb2193c0b1808cc6c3cb`，创建者为 `aloneio <git@aloneio.aleeas.com>`，指向发布提交 e465647；原始 Git data commit 响应确认 tree3db3b812。
+
+发布 job 先对最终 `release/assets/runmesh-runner-0.1.8.tgz` 执行 `scripts/test-packed-runner.mjs`，于 `18:44:04.6812909Z` 输出 `EXACT_PACKAGED_RUNNER_E2E_OK 0.1.8`。该正式包在 Linux 完成 41/41 项测试、512/512 次混合请求，failed / skipped / todo 均为 0；四档 p95 为 34、128、180、357 ms。随后 22 项安全回归、11 个测试文件通过，`security_readiness=verified` 绑定同一发布提交。打包后的 tracked 源码一致性检查、双平台 main 门禁、签名、draft 回读校验、公开发布、immutable 检查和公开回读校验按工作流顺序完成。
+
+公开下载于 `18:45:58.0896940Z` 开始、`18:46:14.3407564Z` 完成，保留四份原始 provider JSON、九项资产及 13 次初始资源 GET 的 URL、时间、字节数与 SHA256。资产从官方公开 URL 无授权头下载；永久文件使用 CreateNew，helper 的四份原始暂存响应再经逐字节复制校验进入永久归档。13 个请求目标与四份暂存的 17 项指纹已复核。
+
+独立离线验签收据于 `18:47:21.626Z` 记录 `state=verified`。校验覆盖版本、release/tag/source/tree、官方 URL、资产 ID/大小/digest、严格九项资产集合与 Ed25519 签名。签名直接覆盖 `manifest.json`，key ID 为 `runmesh-preview-2026-01`；清单中的大小和 SHA256 将 Runner 包绑定到已认证清单。源码中的 trust keyring、LICENSE、NOTICE、THIRD_PARTY_NOTICES.md 与公开字节一致，SHA256SUMS 精确覆盖其余八项资产。
+
+| 正式资产身份 | 核验值 |
+| --- | --- |
+| manifest SHA256 | `88eda689c8ce877f4c66ef464e1c465047855444fdd7e2aa79060bc3aba98408` |
+| Runner 资产 / GitHub Asset ID | `runmesh-runner-0.1.8.tgz` / `634654776` |
+| Runner 字节数 / SHA256 | 1217457 / `33f1a65af0fae61a295d78c53fddace867363cffe2488d72c53c378fb7e9ff7b` |
+| 签名 CI artifact | `11766697573`，ZIP 1223415 字节 |
+| 签名 CI ZIP SHA256 | `0213bac6e748e5dede7a1241f10f8f1688ccaf485bb52ca668e55a93e79eabde` |
+
+九项官方资产为 LICENSE、NOTICE、SHA256SUMS、THIRD_PARTY_NOTICES.md、manifest.json、manifest.sig、manifest.signature.json、runmesh-runner-0.1.8.tgz、trust-keyring.json。签名 CI ZIP 内九项条目、对应展开文件和九项公开下载资产的大小及 SHA256 逐项一致。清单的 `published_at=2026-10-12T17:47:39Z` 按工作流取自源码提交时间，实际公开时间采用 GitHub release 的 `18:44:39Z`。
+
+### 公开安装包的本机 Windows 单次验收
+
+公开下载的同一 tarball 经过离线安装，以既有 `scripts/test-packed-runner.mjs` 入口在 Windows x64、Node 22.23.2、npm 10.9.3 下执行一次完整验证。执行窗口为 `2026-10-12T18:47:56.012Z` 至 `18:50:02.723Z`，外层驱动耗时 126711 ms，exit_code=0、attempt=1、`problems=[]`。实际公开包直接作为输入，源码 commit/tree/clean 和四项输入指纹在执行前后保持一致。
+
+原始 Vitest 报告为 1 文件、41/41 通过、failed / skipped / todo=0，封存报告与工作副本逐字节一致；`EXACT_PACKAGED_RUNNER_E2E_OK 0.1.8` 出现一次。41 项覆盖安装后读取、权限、分页、文件变更、命令与队列、Context、服务发现、Git、离线快照、会话替换和正常关闭等路径。
+
+| 并发 | 完成请求 | 失败 | p50 ms | p95 ms | 混合阶段耗时 ms |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 128 | 0 | 75 | 107 | 8998 |
+| 4 | 128 | 0 | 193 | 577 | 7474 |
+| 8 | 128 | 0 | 343 | 549 | 5690 |
+| 16 | 128 | 0 | 579 | 1947 | 6132 |
+
+独立复核从封存日志重新提取 16 条 load_timing 与 192 条 load_metric。四类操作和四档并发的全部组合各有一条完成记录，均为 started=32、completed=32、failed=0；完成数在响应解析、错误检查与操作结果断言通过后累加，合计 512/512。测试用例数与压力请求数分别报告。八项封存文件、四项执行输入的字节数和哈希均与收据匹配。外层预算保持 420000 ms、既有 E2E 入口预算保持 300000 ms，每输出流 8388608 字节；该次没有超时覆盖，signal 与 termination_reason 均为 null。
+
+### 历史 Windows 失败的归属边界
+
+Runner 与 Worker 的补充复核没有建立由现有代码和历史归档共同证明的新产品缺陷，`a259abd` 的 Windows 传输失败底层原因仍未归属。被动诊断、后续通过及公开包验收各自保留证据，不据其倒推历史故障已经根治。
+
+一次 Windows 自有进程探针在直接父进程 exit 7 后未观察到仍存活的子孙进程；前置测试中的继承输出管道用例已有精确 PID 清理或 80 ms 自然退出路径。该观察支持保留当前生命周期实现，其覆盖限于已测试拓扑。历史 PR c8 的两次 workspace_list 客户端响应头等待为 24.345–24.380 秒，Worker header 的 server_total 为 295–308 ms。固定 native workerd 的该时钟读取宿主墙钟毫秒，客户端使用 Node 单调时钟；差值仅说明未被测得的 Worker begin→header 区间解释，不能据此指定客户端、系统、运行时调度或某一传输组件负责。
+
+历史授权 deadline 缺少请求级关联，5 秒预算包含签名、fetch 与正文读取。SSE 首个非空块可能是 keepalive；客户端请求汇合、SDK close 和 HTTP trace 完成也不代表内部 handler 或 RunnerDO 工作全部排空。当前材料没有形成请求级因果关联或应用等待环；本轮保持请求数量、预算及生产取消语义。完整归属记录与失败原字节保存在下列索引中。
+
+### 发布证据索引与后续验收
+
+以下为私有归档索引，路径相对于仓库根目录；各摘要继续索引原始 run/jobs、完整日志、ZIP 及展开文件清单。公开工作流链接见本节运行表。
+
+| 归档文件 | SHA256 |
+| --- | --- |
+| `.audit/e465647-ci/push-summary-20261012T1803024854476Z.json` | `9f0c2ac07e13d00c69b59c8fb7b3637ff0886280f71a1a10d08375514a324026` |
+| `.audit/e465647-ci/pr-summary-20261012T1803458882658Z.json` | `db70b0d7d289961d6884a36fda170c42569caab8419eeede4b0385cd4a36dd8e` |
+| `.audit/e465647-ci/pr-source-artifact-verification-20261012T180457493Z.json` | `e9448a3e400ba57f41024a2b8376f021015e4b75161ebc5247fb5be420361903` |
+| `.audit/e465647-ci/policy-summary-20261012T1751337041914Z.json` | `5a53f8468363c33a43b8929310010323000f4f25088101e5a3d705de1cb11acd` |
+| `.audit/e465647-ci/main-summary-20261012T1819257640675Z.json` | `b35458c3a2c1d3c6331ecafc5567f666d427e555c3a684634fb8995141263e01` |
+| `.audit/release-0.1.8/release-summary-20261012T1847221248039Z.json` | `63b99db3b32f1bfde5e1ff474e761ff15ae2c1fea45a78962e9cc259f9271b75` |
+| `.audit/release-0.1.8/release-job-114954733405.log` | `62f314bdd913dd44bba84a0eb80eaaab89f446b644a84a0edf41448f93addc9c` |
+| `.audit/release-0.1.8/public-metadata/download-provenance.json` | `286ae332c77a8e9e872bf46a9a2f07a685bc5857389bda234ca96978b6286d71` |
+| `.audit/release-0.1.8/public-metadata/independent-verification.json` | `52e3764a973f900a9583bfbcc1a5c81e798693516070bac1fe60a83d953e4a0f` |
+| `.audit/release-0.1.8/signed-ci-public-comparison.json` | `35d7451b109947129467bc0c952a93c9c2f1fbedcb529ad0cef079eff8d27476` |
+| `.audit/release-0.1.8/public-package-windows/receipt.json` | `4ce54e3d6408517a3d00e1cdb71f7f72fc97addfe2b7d03570bdb987fe8ff8e8` |
+| `.audit/e465647-ci/success-appendix-draft.md` | `f0909f99eed573de72aaa5b2bc085da29a466fe8fd63a1ddbe0d72a161106771` |
+| `.audit/e465647-ci/main-appendix-draft.md` | `9938a268f8b32b9f1b3f4a8314a1c67d6f63f25b24eb81bde57c0f4425ed36dd` |
+| `.audit/release-0.1.8/publication-appendix-draft.md` | `be3dccdfa4ca347c916bad215504db806ea52cbb40fe749a9df35d7579bde8e5` |
+| `.audit/release-0.1.8/windows-public-appendix-draft.md` | `3ccb67fb8f169a032b94b86881d7f15a882c77426232f243e9a8128f86908c94` |
+| `.audit/e465647-ci/runner-root-cause-followup.md` | `88020c96279178f454a169a10969c706e0ccfab8db48dcb96706aacff90bf324` |
+| `.audit/e465647-ci/worker-root-cause-followup.md` | `f21b118c1b3b91b14599bace867c585c5e4f49fbad2827c7bf36268ae179ceb9` |
+
+本节确认 0.1.8 正式发布、公开资产独立校验和公开安装包的上述 Windows 验收。后续激活按受保护分支流程提交真实 publication commit 与 manifest hash，部署后以实际生产健康和稳定分发响应独立验收；不可变发布提交持续保留 `e4656476f2b7ad8f1f873c1362ef0262404c0a45`。
