@@ -49,6 +49,36 @@ export async function stopFixtureProcess(child, afterExit = false) {
   }
 }
 
+/** Wait only on a controlled detached fixture child; a timeout also owns cleanup. */
+export function waitForFixtureExit(child, timeout, detail = () => "") {
+  assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900_000);
+  return new Promise((resolve, reject) => {
+    let timer, settled = false, timingOut = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("exit", onExit); child.off("error", onError);
+      error ? reject(error) : resolve();
+    };
+    const onExit = () => { if (!timingOut) finish(); };
+    const onError = error => { if (!timingOut) finish(error); };
+    child.once("exit", onExit); child.on("error", onError);
+    if (child.exitCode !== null || child.signalCode !== null) { finish(); return; }
+    timer = setTimeout(() => {
+      // Claim the timeout before terminating: the resulting exit is not success.
+      timingOut = true;
+      let output = "", diagnosticError;
+      try { output = detail(); } catch (error) { diagnosticError = error; }
+      const failure = new Error(`process did not exit after ${timeout}ms\n${output}`,
+        diagnosticError === undefined ? undefined : { cause: diagnosticError });
+      // Keep the error listener until tree cleanup ends and preserve the deadline
+      // failure even when termination itself fails.
+      void stopFixtureProcess(child, true).catch(error => { failure.cause ??= error; }).finally(() => finish(failure));
+    }, timeout);
+  });
+}
+
 /** Bound a private reporter subprocess and terminate its entire fixture group. */
 export async function runFixtureCommand(file, args, { timeout, maxBuffer = 1024 * 1024, ...options }) {
   assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900_000);

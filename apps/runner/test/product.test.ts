@@ -1,7 +1,9 @@
 import { chmod, chown, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { join, resolve, win32 } from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
@@ -9,9 +11,12 @@ import { classifyConnectionFailure, RunnerConnection } from "../src/connection.j
 import { enrollRunner, EnrollmentOutcomeUnknownError } from "../src/enrollment.js";
 import { isCliErrorReported } from "../src/cli/reporting.js";
 import { enrollmentCode } from "../src/cli/enrollment.js";
+import { HELP } from "../src/cli/help.js";
+import { RUNNER_VERSION } from "../src/version.js";
 import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
 import { createServiceManager, createServiceProvisioner, hashContent, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceLayout, serviceProfilePath, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
+import { runFixtureCommand } from "../../../scripts/worker-fixture.mjs";
 
 vi.mock("node:fs/promises", async importOriginal => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
@@ -75,6 +80,64 @@ describe("stdin enrollment input", () => {
 
   it("releases input listeners after a read error", async () => {
     await withEnrollmentInput(input => input.destroy(new Error("synthetic read failure")), result => expect(result).rejects.toThrow("--code-stdin input could not be read"));
+  });
+});
+
+describe("executable CLI command loading", () => {
+  it.each([
+    { name: "help", args: ["--help"], code: 0, stdout: `${HELP}\n`, stderr: "", full: false, enrollment: false },
+    { name: "short help", args: ["-h"], code: 0, stdout: `${HELP}\n`, stderr: "", full: false, enrollment: false },
+    { name: "version", args: ["--version"], code: 0, stdout: `${RUNNER_VERSION}\n`, stderr: "", full: false, enrollment: false },
+    { name: "enrollment argument error", args: ["enroll", "--unknown"], code: 1, stdout: "", stderr: "Runmesh Runner command failed: unknown or incomplete option: --unknown\n", full: false, enrollment: true },
+    { name: "reported enrollment error", args: ["enroll", "--server", "https://example.test", "--code", "invalid code"], code: 1, stdout: "", stderr: "--code must be a one-time enrollment code\n", full: false, enrollment: true },
+    { name: "delegated command", args: ["unknown"], code: 1, stdout: "", stderr: `${HELP}\n`, full: true, enrollment: true },
+    { name: "unsupported Node", args: ["--version"], code: 1, stdout: "", stderr: "Runmesh Runner command failed: Runmesh requires supported Node 22.23.2+ (22.x) or 24.21.0+ (24.x)\n", full: false, enrollment: false, nodeVersion: "20.0.0" },
+  ])("preserves $name output and loads only its command dependencies", async scenario => {
+    const root = await mkdtemp(join(tmpdir(), "runner-cli-entry-"));
+    const sourceRoot = fileURLToPath(new URL("../src/", import.meta.url));
+    const repository = fileURLToPath(new URL("../../../", import.meta.url));
+    const observed = join(root, "modules.txt"), preload = join(root, "preload.mjs");
+    try {
+      // Observe successful source-module loads in a fresh Node process. This
+      // executes the real entry and CLI modules, with no command mocks.
+      await writeFile(observed, "");
+      await writeFile(join(root, "loader.mjs"), `
+        import { appendFileSync } from "node:fs";
+        import { isAbsolute, relative } from "node:path";
+        import { fileURLToPath } from "node:url";
+        export async function load(url, context, nextLoad) {
+          const loaded = await nextLoad(url, context);
+          if (url.startsWith("file:")) {
+            const path = relative(${JSON.stringify(sourceRoot)}, fileURLToPath(url));
+            if (!path.startsWith("..") && !isAbsolute(path)) appendFileSync(${JSON.stringify(observed)}, path.replaceAll("\\\\", "/") + "\\n");
+          }
+          return loaded;
+        }
+      `);
+      await writeFile(preload, `import { register } from "node:module"; register("./loader.mjs", import.meta.url);\n${scenario.nodeVersion === undefined ? "" : `Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(scenario.nodeVersion)} });`}`);
+      const loader = createRequire(import.meta.url).resolve("tsx");
+      let result: { code: number; stdout: string; stderr: string };
+      try {
+        const output = await runFixtureCommand(process.execPath, ["--import", pathToFileURL(loader).href, "--import", pathToFileURL(preload).href,
+          join(sourceRoot, "runmesh-entry.ts"), ...scenario.args], {
+          cwd: repository, timeout: 15_000, maxBuffer: 128 * 1024,
+          env: { ...process.env, RUNMESH_RUNNER_PROFILE: join(root, "profile.json") },
+        });
+        result = { ...output, code: 0 };
+      } catch (error) {
+        const failed = error as Error & { code: number; stdout: string; stderr: string; termination_reason?: string };
+        expect(failed.termination_reason).toBeUndefined();
+        result = { code: failed.code, stdout: failed.stdout, stderr: failed.stderr };
+      }
+      expect(result).toEqual({ code: scenario.code, stdout: scenario.stdout, stderr: scenario.stderr });
+      const modules = new Set((await readFile(observed, "utf8")).trim().split("\n"));
+      expect(modules.has("runmesh-entry.ts")).toBe(true);
+      expect(modules.has("cli.ts")).toBe(scenario.full);
+      expect(modules.has("cli/enrollment.ts")).toBe(scenario.enrollment);
+      for (const name of ["cli/supervisor.ts", "connection.ts", "runtime.ts", "jobs.ts", "updates/agent.ts"]) {
+        expect(modules.has(name), name).toBe(scenario.full);
+      }
+    } finally { await rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }); }
   });
 });
 

@@ -16,17 +16,36 @@ export async function checkPermission(env: McpRequestEnv, clientId: string, runn
   if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return fail("permission_denied", "Workspace permission could not be resolved.", "Use a workspace identifier managed by the administrator.");
   const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-permissions/${encodeURIComponent(runnerId)}?workspace_id=${encodeURIComponent(workspaceId)}`);
   if (!call.ok) return call.error.code === "not_found" ? fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.") : call;
-  const permissions = isRecord(call.value) && isRecord(call.value.permissions) ? call.value.permissions : undefined;
+  return workspacePermission(call.value, required);
+}
+
+function workspacePermission(value: unknown, required: PermissionBit): PermissionCheck | undefined {
+  const permissions = isRecord(value) && isRecord(value.permissions) ? value.permissions : undefined;
   if (permissions === undefined || typeof permissions[required] !== "boolean") return fail("authorization_response_invalid", "Workspace authorization returned an invalid response.", "Ask the administrator to check the control-plane logs.", "not_started");
   if (permissions?.[required] !== true) return fail(required === "edit" ? "readonly_workspace" : "permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
   return undefined;
 }
 
-export async function policyReadiness(env: McpRequestEnv, runnerId: string): Promise<{ readonly ok: true; readonly value: ActivePolicyReadiness } | { readonly ok: false; readonly error: PermissionCheck }> {
+type PolicyReadinessCheck = { readonly ok: true; readonly value: ActivePolicyReadiness } | { readonly ok: false; readonly error: PermissionCheck };
+
+/** Request-local preflight only; dispatch still rechecks current authority. */
+export async function workspacePreflight(env: McpRequestEnv, clientId: string, runnerId: string, workspaceId: unknown, required: PermissionBit): Promise<PolicyReadinessCheck> {
+  if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return { ok: false, error: fail("permission_denied", "Workspace permission could not be resolved.", "Use a workspace identifier managed by the administrator.") };
+  const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-permissions/${encodeURIComponent(runnerId)}?workspace_id=${encodeURIComponent(workspaceId)}&policy_readiness_for=${required}`);
+  if (!call.ok) return { ok: false, error: call.error.code === "not_found" ? fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.") : call };
+  const permission = workspacePermission(call.value, required);
+  if (permission !== undefined) return { ok: false, error: permission };
+  return parsePolicyReadiness(isRecord(call.value) ? call.value.policy_readiness : undefined);
+}
+
+export async function policyReadiness(env: McpRequestEnv, runnerId: string): Promise<PolicyReadinessCheck> {
   const readiness = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/policy-readiness`);
   if (!readiness.ok) return { ok: false, error: readiness };
-  if (!isRecord(readiness.value)) return { ok: false, error: fail("authorization_response_invalid", "Policy readiness returned an invalid response.", "Ask the operator to check the control plane; no operation was dispatched.", "not_started") };
-  const value = readiness.value;
+  return parsePolicyReadiness(readiness.value);
+}
+
+function parsePolicyReadiness(value: unknown): PolicyReadinessCheck {
+  if (!isRecord(value)) return { ok: false, error: fail("authorization_response_invalid", "Policy readiness returned an invalid response.", "Ask the operator to check the control plane; no operation was dispatched.", "not_started") };
   const policy = appliedPolicyIdentity(value);
   const connectionEpoch = typeof value.connection_epoch === "number" && Number.isSafeInteger(value.connection_epoch) && value.connection_epoch >= 0 ? value.connection_epoch : undefined;
   const credentialVersion = typeof value.credential_version === "number" && Number.isSafeInteger(value.credential_version) && value.credential_version >= 0 ? value.credential_version : undefined;

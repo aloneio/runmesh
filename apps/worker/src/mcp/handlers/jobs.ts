@@ -14,7 +14,7 @@ import { JobInputSchema } from "../catalog.js";
 import { MCP_RPC_ACTIONS } from "../actions.js";
 import type { McpRequestEnv } from "../contracts.js";
 import type { PermissionBit } from "../contracts.js";
-import { policyReadiness } from "../authorization.js";
+import { workspacePreflight } from "../authorization.js";
 import { projectRunnerResult } from "../results/project.js";
 import { recordRunnerToolCall } from "../audit.js";
 import { registryCall } from "../transport.js";
@@ -60,9 +60,7 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
   if (requestedJobId === undefined || workspaceId === undefined || !isSafeIdentifier(workspaceId)) {
     return runnerFailure(fail("permission_denied", "The operation is not permitted for this job.", "Use a job identifier belonging to an authorized workspace.").error, selected.value);
   }
-  const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, requiredPermission);
-  if (permission !== undefined) return asToolResult(permission);
-  const readiness = await policyReadiness(env, selected.value.runnerId);
+  const readiness = await workspacePreflight(env, clientId, selected.value.runnerId, workspaceId, requiredPermission);
   if (!readiness.ok) return asToolResult(readiness.error);
   const startedAtMs = Date.now();
   // The supplied workspace is an expectation, never an authorization grant.
@@ -125,21 +123,21 @@ async function activeJobList(env: McpRequestEnv, clientId: string, filters: Reco
   filters = { ...filters, limit: typeof filters.limit === "number" ? filters.limit : 10 };
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
-  if (filters.workspace_id !== undefined) {
-    const permission = await checkPermission(env, clientId, selected.value.runnerId, filters.workspace_id, "read");
-    if (permission !== undefined) return asToolResult(permission);
-  } else {
-    const permission = await checkAnyReadPermission(env, clientId, selected.value.runnerId);
-    if (permission !== undefined) return asToolResult(permission);
-  }
   if (typeof filters.workspace_id === "string" && selected.value.context.state === "online") {
-    const readiness = await policyReadiness(env, selected.value.runnerId);
+    const readiness = await workspacePreflight(env, clientId, selected.value.runnerId, filters.workspace_id, "read");
     if (!readiness.ok) return asToolResult(readiness.error);
     const live = await callRunner(env, selected.value.runnerId, "job.list", filters, readiness.value.applied_revision, readiness.value.active_checksum);
     if (!live.ok) return runnerFailure(live.error, selected.value);
     const jobs = Array.isArray(live.value) ? live.value : isRecord(live.value) && Array.isArray(live.value.jobs) ? live.value.jobs : undefined;
     if (jobs === undefined || jobs.some((job) => !isRecord(job) || job.workspace_id !== filters.workspace_id)) return runnerFailure(fail("permission_denied", "The Runner returned jobs from an unexpected workspace.", "Use an authorized workspace and a current Runner.").error, selected.value);
     return runnerSuccess({ jobs: jobs.slice(0, typeof filters.limit === "number" ? filters.limit : 10).map(safeJobMetadata), source: "runner_live" }, selected.value);
+  }
+  if (filters.workspace_id !== undefined) {
+    const permission = await checkPermission(env, clientId, selected.value.runnerId, filters.workspace_id, "read");
+    if (permission !== undefined) return asToolResult(permission);
+  } else {
+    const permission = await checkAnyReadPermission(env, clientId, selected.value.runnerId);
+    if (permission !== undefined) return asToolResult(permission);
   }
   const call = await registryCall(env, registryJobsPath(selected.value.runnerId, filters));
   if (!call.ok) return runnerFailure(call.error, selected.value);
@@ -182,12 +180,12 @@ async function activeJobGet(env: McpRequestEnv, clientId: string, jobId: string,
   if (workspaceId === undefined || !isSafeIdentifier(workspaceId)) {
     return runnerFailure(fail("permission_denied", "The operation is not permitted for this job.", "Use a job identifier belonging to an authorized workspace.").error, selected.value);
   }
-  const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read");
-  if (permission !== undefined) return asToolResult(permission);
   if (selected.value.context.state !== "online") {
+    const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read");
+    if (permission !== undefined) return asToolResult(permission);
     return runnerSuccess({ ...safeJobMetadata(snapshot.value), source: "registry_snapshot", runner_state: "offline" }, selected.value);
   }
-  const readiness = await policyReadiness(env, selected.value.runnerId);
+  const readiness = await workspacePreflight(env, clientId, selected.value.runnerId, workspaceId, "read");
   if (!readiness.ok) return asToolResult(readiness.error);
   const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId, expected_workspace_id: workspaceId }, readiness.value.applied_revision, readiness.value.active_checksum);
   if (live.ok) {

@@ -224,10 +224,10 @@ it("AUDIT-LIST: malformed workspace response is not a confirmed empty workspace 
   expect(result.isError).toBe(true);
 });
 
-it("AUDIT-AUTH: a policy-readiness outage is reported as dependency unavailability rather than stale policy", async () => {
+it("AUDIT-AUTH: a workspace preflight outage retains dependency unavailability", async () => {
   const f = await fixture();
   const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
-  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => new URL(request.url).pathname.endsWith("/policy-readiness") ? Response.json({ error: { code: "unavailable" } }, { status: 503 }) : original(id).fetch(request) });
+  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => new URL(request.url).searchParams.has("policy_readiness_for") ? Response.json({ error: { code: "unavailable" } }, { status: 503 }) : original(id).fetch(request) });
   const result = (await f.call("shell", { workspace_id: "w", command: "synthetic-not-executed" })).body.result;
   console.log(JSON.stringify({ audit: "readiness_outage", code: result.structuredContent?.error?.code, dispatched: f.forwarded.length }));
   expect(f.forwarded).toHaveLength(0);

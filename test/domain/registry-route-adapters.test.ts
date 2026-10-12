@@ -73,6 +73,48 @@ it("signed browser selection uses the owner-admitted session and the same mutati
   expect(route(request("clients/c/active-runner?admin_session=owner-verified", { runner_id: "r" }))?.status).toBe(409);
 });
 
+it("workspace preflight captures permission and policy before yielding, and reads fresh state each time", async () => {
+  const order: string[] = [];
+  const permissions = { read: true, edit: false, shell: false, job_control: false };
+  const readiness = { ok: false as const, code: "policy_pending" as const, reason: "awaiting acknowledgement" };
+  const route = createClientsRoutes(ports<ClientsRoutePorts>({
+    effectivePermissions(...args) {
+      expect(args).toEqual(["c", "r", "w"]);
+      order.push("permissions");
+      queueMicrotask(() => order.push("next-turn"));
+      return { ...permissions };
+    },
+    getPolicyReadiness(runnerId) { expect(runnerId).toBe("r"); order.push("readiness"); return readiness; },
+  }));
+  const input = request("clients/c/effective-permissions/r?workspace_id=w&policy_readiness_for=read", {}, "GET");
+  const response = route(input);
+  expect(response).toBeInstanceOf(Response);
+  expect(order).toEqual(["permissions", "readiness"]);
+  expect(await response?.json()).toEqual({ permissions, policy_readiness: readiness });
+  permissions.read = false;
+  expect(await route(input)?.json()).toEqual({ permissions });
+  expect(order.filter(value => value === "permissions")).toHaveLength(2);
+  expect(order.filter(value => value === "readiness")).toHaveLength(1);
+});
+
+it.each(["read", "edit", "shell", "job_control"])("denied %s preflight preserves the permission result without a policy dependency", async required => {
+  const permissions = { read: false, edit: false, shell: false, job_control: false };
+  const route = createClientsRoutes(ports<ClientsRoutePorts>({ effectivePermissions: () => permissions }));
+  const response = route(request(`clients/c/effective-permissions/r?workspace_id=w&policy_readiness_for=${required}`, {}, "GET"));
+  expect(await response?.json()).toEqual({ permissions });
+});
+
+it("missing workspace authorization retains 404 without reading readiness", () => {
+  const route = createClientsRoutes(ports<ClientsRoutePorts>({ effectivePermissions: () => undefined }));
+  expect(route(request("clients/c/effective-permissions/r?workspace_id=w&policy_readiness_for=read", {}, "GET"))?.status).toBe(404);
+});
+
+it("plain permission observation retains its existing response and dependencies", async () => {
+  const permissions = { read: true, edit: true, shell: true, job_control: true };
+  const route = createClientsRoutes(ports<ClientsRoutePorts>({ effectivePermissions: () => permissions }));
+  expect(await route(request("clients/c/effective-permissions/r?workspace_id=w", {}, "GET"))?.json()).toEqual({ permissions });
+});
+
 it("workspace listing checks runner existence without leaking storage records", () => {
   const route = createRunnerPolicyRoutes(ports<RunnerPolicyRoutePorts>({ hasRunner: () => false }));
   expect(route(request("runners/r/managed-workspaces", {}, "GET"))?.status).toBe(404);

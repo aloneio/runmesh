@@ -5,9 +5,11 @@ import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { WebSocketServer } from "ws";
 import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../scripts/browser-worker-fixture.mjs";
-import { runFixtureCommand, spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../scripts/worker-fixture.mjs";
+import { runFixtureCommand, spawnWorkerFixture, stopFixtureProcess, waitForFixtureExit, waitForWorker } from "../scripts/worker-fixture.mjs";
 import { createTestHttpScope, runBoundedConcurrentLoad } from "../scripts/test-http-scope.mjs";
 import * as browserDiagnostics from "../scripts/browser-evidence.mjs";
 import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
@@ -191,6 +193,182 @@ test("Bounded concurrent load preserves primitive failures when an async observe
   }
 });
 
+test("Test HTTP scope joins raw bodies and keeps restoration separate from cancelled business work", { timeout: 8_000 }, async t => {
+  const scope = createTestHttpScope(), lifetime = new AbortController();
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), events = [];
+  const http = await localHttpFixture(t, (_, response) => response.end("restored"));
+  await scope.run(lifetime.signal, async () => {
+    const body = scope.trackBody(async () => {
+      entered.resolve();
+      await release.promise;
+      await assert.rejects(scope.fetch(http.origin + "/late-business"), { name: "AbortError" });
+      await scope.cleanup(async () => {
+        assert.equal(await (await scope.fetch(http.origin + "/restore")).text(), "restored");
+      });
+      await assert.rejects(scope.fetch(http.origin + "/later-business"), { name: "AbortError" });
+      events.push("body-settled");
+    });
+    await entered.promise;
+    lifetime.abort();
+    const finished = scope.finish().then(() => events.push("joined"));
+    await Promise.resolve();
+    assert.deepEqual(events, []);
+    release.resolve();
+    await finished; await body;
+    assert.deepEqual(events, ["body-settled", "joined"]);
+  });
+  assert.deepEqual(http.requests, ["/restore"]);
+});
+
+test("Test HTTP scope quarantines an unfinished body when the hook deadline expires", { timeout: 8_000 }, async () => {
+  const scope = createTestHttpScope(globalThis.fetch, { cleanupTimeoutMs: 25 });
+  const release = Promise.withResolvers(), entered = Promise.withResolvers();
+  let body, nextStarted = false;
+  try {
+    await scope.run(new AbortController().signal, async () => {
+      body = scope.trackBody(() => { entered.resolve(); return release.promise; });
+      await entered.promise;
+      await assert.rejects(scope.finish(), /hook deadline/);
+    });
+    assert.throws(() => scope.run(new AbortController().signal, () => { nextStarted = true; }), /hook deadline|quarantined/);
+    assert.equal(nextStarted, false);
+  } finally { release.resolve(); await body; }
+});
+
+test("Tracked Vitest bodies preserve collection and join timeout restoration before failure hooks", { timeout: 30_000 }, async t => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const audit = join(root, ".audit"); await mkdir(audit, { recursive: true });
+  const directory = await mkdtemp(join(audit, "http-scope-vitest-"));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const eventsPath = join(directory, "events.json"), reporter = join(directory, "report.json");
+  const source = `
+    import { afterAll, afterEach, aroundEach, beforeAll, beforeEach, describe, expect, it as baseIt } from "vitest";
+    import { createServer } from "node:http";
+    import { writeFile } from "node:fs/promises";
+    import { createTestHttpScope, trackTestBodies } from ${JSON.stringify(pathToFileURL(join(root, "scripts/test-http-scope.mjs")).href)};
+    const scope = createTestHttpScope(), it = trackTestBodies(baseIt, scope);
+    const events = [], requests = [], rows = [], unhandled = [];
+    const observe = error => unhandled.push(error.name); process.on("unhandledRejection", observe);
+    const server = createServer((request, response) => {
+      requests.push(request.url);
+      if (request.url === "/held") { response.writeHead(200); response.write("partial"); }
+      else response.end("restored");
+    });
+    let origin, held;
+    const releaseCleanup = Promise.withResolvers();
+    beforeAll(async () => { await new Promise(resolve => server.listen(0, "127.0.0.1", resolve)); origin = "http://127.0.0.1:" + server.address().port; });
+    aroundEach((runTest, { signal }) => scope.run(signal, runTest));
+    beforeEach(async ({ task }) => {
+      // Prepare a real open body before the test's deliberate timeout begins.
+      if (task.name === "keeps the configured timeout") {
+        held = await scope.fetch(origin + "/held");
+        expect(held.status).toBe(200);
+      }
+    });
+    afterEach(async () => {
+      const joined = scope.finish();
+      releaseCleanup.resolve();
+      await joined;
+    });
+    afterAll(async () => {
+      server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+      process.off("unhandledRejection", observe);
+      await writeFile(${JSON.stringify(eventsPath)}, JSON.stringify({ events, requests, rows, unhandled }));
+    });
+    describe.sequential("tracked body lifecycle", () => {
+      it.fails("keeps the configured timeout", async ({ signal, onTestFinished, onTestFailed }) => {
+        signal.addEventListener("abort", () => events.push("signal-abort"), { once: true });
+        onTestFinished(() => { events.push("finished-hook"); expect(events).toContain("body-settled"); });
+        onTestFailed(() => { events.push("failed-hook"); expect(events).toContain("body-settled"); });
+        try { await held.text(); }
+        finally {
+          events.push("cleanup-start");
+          await releaseCleanup.promise;
+          await scope.cleanup(async () => { expect(await (await scope.fetch(origin + "/restore")).text()).toBe("restored"); });
+          await expect(scope.fetch(origin + "/late-business")).rejects.toThrow();
+          events.push("body-settled");
+        }
+      }, 100);
+      it("starts the next body after restoration", { timeout: 1000 }, async () => {
+        events.push("next-body");
+        expect(events.indexOf("body-settled")).toBeLessThan(events.indexOf("failed-hook"));
+        expect(events.indexOf("failed-hook")).toBeLessThan(events.indexOf("next-body"));
+        expect(requests).toEqual(["/held", "/restore"]);
+      });
+      it.each([[1, "one"], [4, "four"], [8, "eight"], [16, "sixteen"]])("retains each row %i %s", (number, name) => { rows.push([number, name]); expect(name).toBeTypeOf("string"); }, 1000);
+      it("retains options and callback context", { timeout: 1000 }, ({ signal }) => { expect(rows).toHaveLength(4); expect(signal.aborted).toBe(false); });
+      const extended = trackTestBodies(baseIt.extend({ value: async ({}, use) => { await use("fixture-value"); } }), scope);
+      extended("retains fixture destructuring", ({ value }) => { expect(value).toBe("fixture-value"); });
+    });
+  `;
+  await writeFile(join(directory, "lifecycle.test.mjs"), source);
+  const config = join(directory, "vitest.config.mjs");
+  await writeFile(config, `export default { test: { include: [${JSON.stringify(join(directory, "lifecycle.test.mjs").replaceAll("\\", "/"))}], exclude: [], testTimeout: 2000, hookTimeout: 5000, fileParallelism: false, pool: "forks" } };`);
+  await runFixtureCommand(process.execPath, [join(root, "node_modules/vitest/vitest.mjs"), "run", "--config", config, "--reporter=json", `--outputFile=${reporter}`], {
+    cwd: root, timeout: 20_000, maxBuffer: 1024 * 1024, env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+  }).catch(async error => { throw new Error(`${error.message}\n${error.stdout}\n${error.stderr}\n${await readFile(reporter, "utf8").catch(() => "report absent")}`, { cause: error }); });
+  const result = JSON.parse(await readFile(reporter, "utf8")), observed = JSON.parse(await readFile(eventsPath, "utf8"));
+  assert.equal(result.numTotalTests, 8); assert.equal(result.numFailedTests, 0);
+  assert.deepEqual(observed.events, ["signal-abort", "cleanup-start", "body-settled", "finished-hook", "failed-hook", "next-body"]);
+  assert.deepEqual(observed.requests, ["/held", "/restore"]);
+  assert.deepEqual(observed.rows, [[1, "one"], [4, "four"], [8, "eight"], [16, "sixteen"]]);
+  assert.deepEqual(observed.unhandled, []);
+  const names = result.testResults.flatMap(file => file.assertionResults.map(test => test.title));
+  assert.ok(names.includes("retains each row 16 sixteen"));
+  t.diagnostic(JSON.stringify({ lifecycle_events: observed.events, requests: observed.requests, unhandled_rejections: observed.unhandled.length }));
+});
+
+test("Tracked Vitest bodies quarantine the fixture when Vitest's hook deadline wins", { timeout: 30_000 }, async t => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const audit = join(root, ".audit"); await mkdir(audit, { recursive: true });
+  const directory = await mkdtemp(join(audit, "http-scope-deadline-"));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const eventsPath = join(directory, "events.json"), reporter = join(directory, "report.json");
+  await writeFile(join(directory, "deadline.test.mjs"), `
+    import { afterAll, afterEach, aroundEach, describe, it as baseIt } from "vitest";
+    import { writeFile } from "node:fs/promises";
+    import { createTestHttpScope, trackTestBodies } from ${JSON.stringify(pathToFileURL(join(root, "scripts/test-http-scope.mjs")).href)};
+    const scope = createTestHttpScope(globalThis.fetch, { cleanupTimeoutMs: 1000 });
+    const it = trackTestBodies(baseIt, scope), release = Promise.withResolvers(), settled = Promise.withResolvers();
+    const events = [], unhandled = [], failures = []; const observe = error => unhandled.push(error.name);
+    process.on("unhandledRejection", observe);
+    aroundEach((runTest, { signal }) => scope.run(signal, runTest));
+    afterEach(() => scope.finish(), 50);
+    afterAll(async () => {
+      release.resolve(); await settled.promise;
+      process.off("unhandledRejection", observe);
+      await writeFile(${JSON.stringify(eventsPath)}, JSON.stringify({ events, unhandled, failures }));
+    });
+    describe.sequential("hook deadline quarantine", () => {
+      it("retains the primary timeout before cleanup timeout", async ({ signal, onTestFailed }) => {
+        onTestFailed(({ task }) => { failures.push(...task.result.errors.map(error => error.message)); });
+        try { await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })); }
+        finally {
+          events.push("cleanup-start"); await release.promise;
+          try { await scope.cleanup(() => { events.push("late-restore"); }); }
+          catch { events.push("closed-restore-rejected"); }
+          events.push("body-settled"); settled.resolve();
+        }
+      }, 50);
+      it("blocks the next business body", () => { events.push("next-body"); });
+    });
+  `);
+  const config = join(directory, "vitest.config.mjs");
+  await writeFile(config, `export default { test: { include: [${JSON.stringify(join(directory, "deadline.test.mjs").replaceAll("\\", "/"))}], exclude: [], testTimeout: 1000, hookTimeout: 5000, fileParallelism: false, pool: "forks" } };`);
+  await assert.rejects(runFixtureCommand(process.execPath, [join(root, "node_modules/vitest/vitest.mjs"), "run", "--config", config, "--reporter=json", `--outputFile=${reporter}`], {
+    cwd: root, timeout: 20_000, maxBuffer: 1024 * 1024, env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+  }), error => error.code === 1);
+  const result = JSON.parse(await readFile(reporter, "utf8")), observed = JSON.parse(await readFile(eventsPath, "utf8"));
+  assert.equal(result.numTotalTests, 2); assert.equal(result.numFailedTests, 2);
+  const failures = result.testResults.flatMap(file => file.assertionResults);
+  assert.match(observed.failures[0], /Test timed out in 50ms/);
+  assert.ok(observed.failures.some(message => /Hook timed out in 50ms/.test(message)));
+  assert.ok(failures[1].failureMessages.some(message => /shared fixture is quarantined/.test(message)));
+  assert.deepEqual(observed.events, ["cleanup-start", "closed-restore-rejected", "body-settled"]);
+  assert.deepEqual(observed.unhandled, []);
+  t.diagnostic(JSON.stringify({ quarantine_events: observed.events, failed_tests: result.numFailedTests, next_body_started: observed.events.includes("next-body"), unhandled_rejections: observed.unhandled.length }));
+});
+
 function authenticationResponses() {
   const csrf = "x".repeat(43), form = `<input name="csrf_token" value="${csrf}">`;
   return [new Response(form, { headers: { "set-cookie": "__Host-runmesh_setup_csrf=setup-cookie" } }),
@@ -304,6 +482,70 @@ test("Shared Worker launch owns an IPC-discovered port and shuts down its proces
   await stopFixtureProcess(child);
   assert.ok(child.exitCode !== null || child.signalCode !== null);
   await assert.rejects(fetch(origin + "/health", { signal: AbortSignal.timeout(1_000) }));
+});
+
+test("Fixture exit wait clears successful and already-exited child deadlines and listeners", async () => {
+  const fixtureUrl = new URL("../scripts/worker-fixture.mjs", import.meta.url).href;
+  const script = `
+    import assert from 'node:assert/strict';
+    import { spawn } from 'node:child_process';
+    import { waitForFixtureExit } from ${JSON.stringify(fixtureUrl)};
+    for (const code of [0, 7]) {
+      const child = spawn(process.execPath, ['-e', 'process.exit(' + code + ')'], { detached: true, stdio: 'ignore', windowsHide: true });
+      await waitForFixtureExit(child, 30000);
+      assert.equal(child.exitCode, code);
+      assert.equal(child.listenerCount('exit'), 0); assert.equal(child.listenerCount('error'), 0);
+      await waitForFixtureExit(child, 30000);
+      assert.equal(child.listenerCount('exit'), 0); assert.equal(child.listenerCount('error'), 0);
+    }
+    console.log('exited-without-deadline-handles');
+  `;
+  // A retained 30-second deadline would prevent this outer process from exiting.
+  const result = await runFixtureCommand(process.execPath, ["--input-type=module", "-e", script], { timeout: 8_000 });
+  assert.equal(result.stdout.trim(), "exited-without-deadline-handles");
+  assert.equal(result.stderr, "");
+});
+
+test("Fixture exit wait preserves spawn errors and removes their deadline and listeners", async () => {
+  const fixtureUrl = new URL("../scripts/worker-fixture.mjs", import.meta.url).href;
+  const script = `
+    import assert from 'node:assert/strict';
+    import { spawn } from 'node:child_process';
+    import { waitForFixtureExit } from ${JSON.stringify(fixtureUrl)};
+    const child = spawn(process.execPath + '.missing-fixture-executable', [], { detached: true, stdio: 'ignore', windowsHide: true });
+    let original;
+    child.once('error', error => { original = error; });
+    await assert.rejects(waitForFixtureExit(child, 30000), error => error === original && error.code === 'ENOENT');
+    assert.equal(child.listenerCount('exit'), 0); assert.equal(child.listenerCount('error'), 0);
+    console.log('spawn-error-preserved');
+  `;
+  const result = await runFixtureCommand(process.execPath, ["--input-type=module", "-e", script], { timeout: 8_000 });
+  assert.equal(result.stdout.trim(), "spawn-error-preserved");
+  assert.equal(result.stderr, "");
+});
+
+for (const detailFails of [false, true]) test(`Fixture exit wait terminates a ready descendant tree and retains its timeout${detailFails ? " when diagnostics fail" : ""}`, async t => {
+  const descendant = "const s=require('node:http').createServer((q,r)=>r.end('alive'));s.listen(0,'127.0.0.1',()=>process.send(s.address().port))";
+  const parent = `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});c.on('message',p=>process.send(p))`;
+  const child = spawn(process.execPath, ["-e", parent], { detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true });
+  t.after(() => stopFixtureProcess(child));
+  // Start the synthetic deadline only after the descendant has bound its port.
+  const [port] = await once(child, "message", { signal: AbortSignal.timeout(8_000) });
+  assert.ok(Number.isInteger(port) && port > 0 && port <= 65_535);
+  const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1_000) });
+  assert.equal(await response.text(), "alive");
+  const diagnosticError = new Error("synthetic detail failure");
+  await assert.rejects(waitForFixtureExit(child, 50, () => {
+    if (detailFails) throw diagnosticError;
+    return "synthetic detail";
+  }), error => {
+    assert.equal(error.message, `process did not exit after 50ms\n${detailFails ? "" : "synthetic detail"}`);
+    if (detailFails) assert.equal(error.cause, diagnosticError);
+    return true;
+  });
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+  assert.equal(child.listenerCount("exit"), 0); assert.equal(child.listenerCount("error"), 0);
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1_000) }));
 });
 
 test("Fixture command timeout terminates a command before readiness", async () => {

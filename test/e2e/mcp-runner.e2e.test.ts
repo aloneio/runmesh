@@ -1,5 +1,5 @@
 import { BUILD_PROVENANCE } from "../../apps/worker/src/generated-provenance.js";
-import { afterAll, aroundEach, beforeAll, beforeEach, describe, expect, it, onTestFailed } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeAll, beforeEach, describe, expect, it as vitestIt, onTestFailed } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,15 +11,17 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpLoadTimingDiagnostic, mcpServerTiming, mcpToolResultDiagnostic, mcpWorkerSnapshotDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
-import { spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../../scripts/worker-fixture.mjs";
-import { createTestHttpScope, runBoundedConcurrentLoad } from "../../scripts/test-http-scope.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, emitMcpFailureDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpLoadTimingDiagnostic, mcpServerTiming, mcpToolResultDiagnostic, mcpWorkerSnapshotDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
+import { spawnWorkerFixture, stopFixtureProcess, waitForFixtureExit, waitForWorker } from "../../scripts/worker-fixture.mjs";
+import { createTestHttpScope, runBoundedConcurrentLoad, trackTestBodies } from "../../scripts/test-http-scope.mjs";
 import WebSocket from "ws";
 import { decodeWireFrame, encodeWireFrame, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 
 const testHttp = createTestHttpScope();
+const it = trackTestBodies(vitestIt, testHttp);
 const fetch = testHttp.fetch;
-aroundEach((runTest, context) => testHttp.run(context.signal, runTest));
+aroundEach((runTest, { signal }) => testHttp.run(signal, runTest));
+afterEach(() => testHttp.finish());
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -129,6 +131,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   let runnerState = "";
   let enrolledProfile = "";
   let enrollmentCode = "";
+  let enrollmentCli: ChildProcess | undefined;
   let worker: ChildProcess | undefined;
   let workerLog: (() => string) | undefined;
   let setupComplete = false;
@@ -220,12 +223,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // Exercise the real source CLI against the Worker enrollment endpoint using
     // its isolated profile, then start from that saved profile (no service manager).
     enrolledProfile = join(root, "enrolled-profile.json");
-    const enrollmentCli = spawn(process.execPath, [...runnerInvocation, "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
+    enrollmentCli = spawn(process.execPath, [...runnerInvocation, "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["pipe", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     enrollmentCli.stdin?.end(`${enrollmentCode}\n`);
     const enrollmentCliLog = collectOutput(enrollmentCli);
-    await waitForExit(enrollmentCli, 15_000, enrollmentCliLog);
+    await waitForFixtureExit(enrollmentCli, 15_000, enrollmentCliLog);
     expect(enrollmentCli.exitCode, enrollmentCliLog().replaceAll(enrollmentCode, "[synthetic-code-redacted]")).toBe(0);
     expect(enrollmentCliLog()).not.toContain(enrollmentCode);
     const profile = await readFile(enrolledProfile, "utf8");
@@ -272,7 +275,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }
     teardownStarted = true;
     try {
-      await stop(runner); await stop(worker);
+      const stopped = await Promise.allSettled([stop(enrollmentCli), stop(runner), stop(worker)]);
+      const failures = stopped.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failures.length > 0) throw new AggregateError(failures.map(result => result.reason), "Fixture process cleanup failed");
       if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     } catch (error) {
       reportWorkerDiagnostics("teardown failed");
@@ -642,7 +647,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     phase = "mixed_requests";
     loadStarted = performance.now();
     await runBoundedConcurrentLoad({ count: 128, concurrency,
-      onFirstFailure: () => { firstFailureProgress ??= progress(); firstFailureTiming ??= timingDiagnostic("failed"); },
+      onFirstFailure: (error: unknown) => {
+        firstFailureProgress ??= progress(); firstFailureTiming ??= timingDiagnostic("failed");
+        emitMcpFailureDiagnostic("test_failure", error);
+      },
       run: async (index: number, signal: AbortSignal) => {
         next = index + 1;
         const operation = operations[index % operations.length]!;
@@ -769,12 +777,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       // Release markers also settle a launch whose HTTP reply did not expose its Job ID.
       await attemptCleanup(cleanupErrors, () => writeFile(join(workspace,".queue-e2e-release-1"),"release"), { fixture: "queue", phase: "release" });
       await attemptCleanup(cleanupErrors, () => writeFile(join(workspace,".queue-e2e-release-2"),"release"), { fixture: "queue", phase: "release" });
-      await cleanupJobs([
+      await testHttp.cleanup(() => cleanupJobs([
         { id: queuedId, client: other, workspaceId: "workspace-1" },
         { id: firstId, client: clientA, workspaceId: "workspace-1" },
         { id: secondSlotId, client: clientA, workspaceId: "workspace-1" },
         { id: replayId, client: other, workspaceId: "workspace-1" },
-      ], cleanupErrors, { timeoutMs: 8000, sharedBudget: true, fixture: "queue" });
+      ], cleanupErrors, { timeoutMs: 8000, sharedBudget: true, fixture: "queue" }));
     }
   });
 
@@ -798,9 +806,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       reportFixtureFailure("busy", "primary", error);
       throw error;
     } finally {
-      await cleanupJobs([
+      await testHttp.cleanup(() => cleanupJobs([
         { id: firstId, client: clientA }, { id: secondId, client: clientA }, { id: thirdId, client: clientA },
-      ], cleanupErrors, { timeoutMs: 12000, fixture: "busy" });
+      ], cleanupErrors, { timeoutMs: 12000, fixture: "busy" }));
     }
   });
 
@@ -843,8 +851,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       await progress.run("job_logs", () => waitFor(async () => String((await mcpTool("job", { action: "logs", ...address }, clientB)).structuredContent?.data).includes("authorized-input"), 10000), "poll");
       const log = await progress.run("job_logs", () => mcpTool("job", { action: "logs", ...address }, clientB));
       expect(String(log.structuredContent?.data)).not.toContain("unauthorized-input");
-    }, cancel: () => progress.run("job_cancel", () => mcpTool("job", { action: "cancel", ...address })),
-    observe: () => progress.run("job_poll", () => waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", ...address })).structuredContent?.status)), 12000), "poll"),
+    }, cancel: () => testHttp.cleanup(() => progress.run("job_cancel", () => mcpTool("job", { action: "cancel", ...address }))),
+    observe: () => testHttp.cleanup(() => progress.run("job_poll", () => waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", ...address })).structuredContent?.status)), 12000), "poll")),
     }, (diagnostic: string) => { progress.captureFailure(); process.stderr.write(diagnostic); });
   });
 
@@ -984,7 +992,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       expect(logs.structuredContent?.data).toContain("batched-live-log");
     } catch (error) { progress.captureFailure(); throw error; }
     finally {
-      try { expect((await save("immediate")).status).toBe(303); }
+      try { await testHttp.cleanup(async () => { expect((await save("immediate")).status).toBe(303); }); }
       catch (error) { cleanupErrors.push(error); }
     }
   });
@@ -1285,7 +1293,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       if (observe !== undefined) observe("body", mcpServerTiming(response.headers.get("server-timing")));
       if (response.status !== 200) throw await mcpHttpFailure(response, id, name, args);
       return await readMcp(response);
-    } catch (error) { observe?.("failure"); throw error; }
+    } catch (error) { emitMcpFailureDiagnostic("request_failure", error); observe?.("failure"); throw error; }
     finally { observe?.("complete"); }
   }
 
@@ -1507,13 +1515,6 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeout: num
   const output = detail?.() ?? "";
   throw new Error(`timed out after ${timeout}ms${output ? `\n${output}` : ""}`);
 }
-async function waitForExit(child: ChildProcess, timeout: number, detail: () => string): Promise<void> {
-  await Promise.race([
-    new Promise<void>((resolveExit) => child.once("exit", () => resolveExit())),
-    delay(timeout).then(() => { throw new Error(`process did not exit after ${timeout}ms\n${detail()}`); }),
-  ]);
-}
-
 function collectOutput(child: ChildProcess, diagnostics = false): () => string {
   let output = "";
   for (const stream of [child.stdout, child.stderr]) {
