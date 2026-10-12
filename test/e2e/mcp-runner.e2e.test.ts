@@ -1173,6 +1173,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   }
   async function setupAdminAndClients(): Promise<{ readonly clientA: McpClient; readonly clientB: McpClient }> {
     const setupPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
+    if (setupPage.status !== 200) console.error(await adminSetupHttpDiagnostic(setupPage, "setup_page"));
     expect(setupPage.status).toBe(200);
     const setupHtml = await setupPage.text();
     const setupCsrf = formToken(setupHtml);
@@ -1180,14 +1181,17 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const setup = await submitForm("/setup", {
       csrf_token: setupCsrf, password: adminPassword, confirm_password: adminPassword,
     }, cookieJar([["__Host-runmesh_setup_csrf", setupCookie]]));
+    if (setup.status !== 303) console.error(await adminSetupHttpDiagnostic(setup, "setup_submit"));
     expect(setup.status).toBe(303);
 
     const loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
+    if (loginPage.status !== 200) console.error(await adminSetupHttpDiagnostic(loginPage, "login_page"));
     expect(loginPage.status).toBe(200);
     const loginHtml = await loginPage.text();
     const loginCsrf = formToken(loginHtml);
     const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
     const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-runmesh_login_csrf", loginCookie]]));
+    if (login.status !== 303) console.error(await adminSetupHttpDiagnostic(login, "login_submit"));
     expect(login.status).toBe(303);
     const session = cookieFrom(login, "__Host-runmesh_admin_session");
     const csrf = cookieFrom(login, "__Host-runmesh_admin_csrf");
@@ -1327,6 +1331,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const contentType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mediaType) && mediaType.length <= 128 ? mediaType : "absent-or-invalid";
     const responseMetadata = { status: loginPage.status, contentType };
     if (loginPage.status !== 200 || mediaType !== "text/html") {
+      console.error(await adminSetupHttpDiagnostic(loginPage, "login_page"));
       void loginPage.body?.cancel().catch(() => undefined);
       throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "headers", ...responseMetadata })}`);
     }
@@ -1348,6 +1353,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     progress?.("admin_login", "headers");
     const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-runmesh_login_csrf", loginCookie]]));
     progress?.("admin_login", "validation");
+    if (login.status !== 303) console.error(await adminSetupHttpDiagnostic(login, "login_submit"));
     expect(login.status).toBe(303);
     const csrf = cookieFrom(login, "__Host-runmesh_admin_csrf");
     return { adminJar: cookieJar([["__Host-runmesh_admin_session", cookieFrom(login, "__Host-runmesh_admin_session")], ["__Host-runmesh_admin_csrf", csrf]]), csrf };

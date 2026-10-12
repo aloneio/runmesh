@@ -140,7 +140,14 @@ export async function runFixtureCommand(file, args, { timeout, maxBuffer = 1024 
 export function waitForWorker(child, timeout, detail = () => "") {
   return new Promise((resolve, reject) => {
     const controller = new AbortController();
-    let settled = false, checking = false;
+    const deadline = performance.now() + timeout, maximumHealthBytes = 64 * 1024;
+    let settled = false, checking = false, activeReader;
+    const cancelReader = reader => {
+      // Cleanup must not wait for the peer's cancellation acknowledgement.
+      try { void reader.cancel().catch(() => undefined); } catch { /* Preserve the readiness failure. */ }
+      try { reader.releaseLock(); } catch { /* A canceled reader may already be released. */ }
+      if (activeReader === reader) activeReader = undefined;
+    };
     const finish = (error, origin) => {
       if (settled) return;
       settled = true;
@@ -148,12 +155,20 @@ export function waitForWorker(child, timeout, detail = () => "") {
       child.off("message", onMessage);
       child.off("exit", onExit);
       child.off("error", onError);
-      controller.abort();
-      if (error) reject(error); else resolve(origin);
+      if (error) {
+        controller.abort();
+        if (activeReader) cancelReader(activeReader);
+        reject(error);
+      } else resolve(origin);
     };
     const failure = message => {
-      const output = detail();
-      return new Error(`${message}${output ? `\n${output}` : ""}`);
+      let output = "", diagnosticError;
+      try { output = detail(); } catch (error) { diagnosticError = error; }
+      return new Error(`${message}${output ? `\n${output}` : ""}`,
+        diagnosticError === undefined ? undefined : { cause: diagnosticError });
+    };
+    const checkDeadline = () => {
+      if (performance.now() >= deadline) throw failure(`timed out after ${timeout}ms`);
     };
     const onExit = (code, signal) => finish(failure(`Worker exited before readiness (code=${code}, signal=${signal})`));
     const onError = error => finish(failure(`Worker failed to start: ${error.message}`));
@@ -170,11 +185,33 @@ export function waitForWorker(child, timeout, detail = () => "") {
       const origin = `http://127.0.0.1:${message.port}`;
       void (async () => {
         while (!controller.signal.aborted) {
+          let reader;
           try {
+            checkDeadline();
             const response = await fetch(`${origin}/health`, { signal: controller.signal });
-            await response.body?.cancel();
+            // Own late response bodies too, even if fetch settles after abort.
+            reader = activeReader = response.body?.getReader();
+            checkDeadline();
+            if (settled) return;
+            if (response.ok && reader) {
+              let bytes = 0, emptyChunks = 0;
+              while (true) {
+                // Check wall time as well as the timer: already-resolved reads
+                // can otherwise keep its callback from running.
+                checkDeadline();
+                const { done, value } = await reader.read();
+                checkDeadline();
+                if (settled) return;
+                if (done) break;
+                bytes += value.byteLength;
+                emptyChunks = value.byteLength === 0 ? emptyChunks + 1 : 0;
+                if (bytes > maximumHealthBytes || emptyChunks > 64) throw new Error("Worker health response exceeded its limit");
+              }
+              reader.releaseLock(); activeReader = undefined; reader = undefined;
+            }
             if (response.ok) { finish(undefined, origin); return; }
-          } catch (error) { if (controller.signal.aborted) throw error; }
+          } catch (error) { if (controller.signal.aborted || performance.now() >= deadline) throw error; }
+          finally { if (reader) cancelReader(reader); }
           await delay(100, undefined, { signal: controller.signal });
         }
       })().catch(error => finish(error));

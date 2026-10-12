@@ -67,7 +67,7 @@ export function regenerateEnrollmentFromControlPlane(env: WorkerEnv, runnerId: s
       lifecycleId: snapshot.lifecycleId
     }, input.ttlMs, input.window, mutation),
     release: async (id, mutation) => {
-      const response = await boundedJsonReceipt(() => cancelRunnerPolicyMutation(env, id, mutation), [409, 503]);
+      const response = await boundedJsonReceipt(() => cancelRunnerPolicyMutation(env, id, mutation), [204, 409, 503]);
       if (response?.status === 204) return {
         released: true
       };

@@ -5,7 +5,54 @@ import { requestRunnerRegistry } from "../src/platform/runner-registry.js";
 import worker from "../src/index.js";
 import { internalHeaders, randomBase64Url, sha256Hex } from "../src/security.js";
 import { env, runInDurableObject } from "cloudflare:test";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+
+it.each([
+  ["fence", 409, "resolved"], ["fence", 503, "pending"], ["fence", 409, "rejected"],
+  ["cancel", 409, "resolved"], ["cancel", 503, "pending"], ["cancel", 409, "rejected"],
+  ["cancel", 204, "resolved"],
+] as const)("releases enrollment %s HTTP %s receipts when cleanup is %s", async (phase, status, cleanupMode) => {
+  let release!: () => void;
+  const cleanup = new Promise<void>(resolve => { release = resolve; });
+  onTestFinished(() => release());
+  const cancel = vi.fn(() => cleanupMode === "pending" ? cleanup
+    : cleanupMode === "rejected" ? Promise.reject(new Error("synthetic cleanup failure")) : undefined);
+  const redeemCancel = vi.fn(), paths: string[] = [];
+  const failedReceipt = () => new Response(status === 204 ? null : new ReadableStream({ cancel }), { status });
+  const localEnv = { ...env, RUNMESH_PUBLIC_ORIGIN: "https://enrollment-receipt.example",
+    REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: (request: Request) => {
+      const path = new URL(request.url).pathname; paths.push(path);
+      if (path === "/enrollments/lookup") return Response.json({ runner_id: "receipt-runner" });
+      if (path === "/enrollments/redeem") return new Response(new ReadableStream({ cancel: redeemCancel }), { status: 401 });
+      if (path === "/runners/receipt-runner/mutation-state") return Response.json({ mutation_committed: false, runner_exists: true });
+      throw new Error("Unexpected synthetic enrollment Registry route");
+    } }) },
+    RUNNER: { idFromName: () => "runner", get: () => ({ fetch: (request: Request) => {
+      const path = new URL(request.url).pathname; paths.push(path);
+      if (path === "/begin-policy-mutation") return phase === "fence" ? failedReceipt() : new Response(null, { status: 204 });
+      if (path === "/cancel-policy-mutation" && phase === "cancel") return failedReceipt();
+      throw new Error("Unexpected synthetic enrollment Runner route");
+    } }) },
+  } as unknown as typeof env;
+  const operation = worker.fetch(new Request("https://enrollment-receipt.example/runner/enroll", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enrollment_code: "c".repeat(43), runner_public_info: {
+      platform: "linux", architecture: "x64", hostname: "synthetic-host", runner_version: "1.0.0", protocol_version: 2,
+    } }),
+  }), localEnv, {} as ExecutionContext);
+  try {
+    const response = await operation;
+    expect(response.status).toBe(phase === "fence" && status === 409 ? 409 : status === 204 ? 401 : 503);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.text()).toBe(phase === "fence" && status === 409 ? "Runner credential mutation is already in progress"
+      : status === 204 ? "invalid enrollment" : "enrollment service unavailable; Runner remains safely fenced");
+    expect(cancel).toHaveBeenCalledTimes(status === 204 ? 0 : 1);
+    expect(redeemCancel).toHaveBeenCalledTimes(phase === "cancel" ? 1 : 0);
+    expect(paths).toEqual(phase === "fence" ? ["/enrollments/lookup", "/begin-policy-mutation"]
+      : ["/enrollments/lookup", "/begin-policy-mutation", "/enrollments/redeem", "/runners/receipt-runner/mutation-state", "/cancel-policy-mutation"]);
+  } finally { release(); await operation; }
+});
 
 async function fixture() {
   const runnerId = "enrollment-recovery-" + crypto.randomUUID();

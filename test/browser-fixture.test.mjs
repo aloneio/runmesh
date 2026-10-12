@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { WebSocketServer } from "ws";
 import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../scripts/browser-worker-fixture.mjs";
 import { runFixtureCommand, spawnWorkerFixture, stopFixtureProcess, waitForFixtureExit, waitForWorker } from "../scripts/worker-fixture.mjs";
@@ -448,6 +448,130 @@ for (const outcome of ["recorded", "degraded", "missing_row"]) test(`Browser fix
   const registration = JSON.parse(requests[0].init.body);
   assert.equal(registration.execution_mode, "dedicated_user");
   assert.equal(requests[1].authorization, `Bearer ${registration.token}`);
+});
+
+function readinessChild() {
+  return Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+}
+
+function announceReadiness(child) {
+  child.emit("message", { event: "DEV_SERVER_READY", ip: "127.0.0.1", port: 12345 });
+}
+
+function assertReadinessListenersRemoved(child) {
+  for (const event of ["message", "exit", "error"]) assert.equal(child.listenerCount(event), 0);
+}
+
+test("Worker readiness consumes successful health through EOF without aborting", { timeout: 8_000 }, async t => {
+  const child = readinessChild();
+  let body, canceled = 0, signal, ready = false;
+  const response = new Response(new ReadableStream({
+    start(controller) { body = controller; controller.enqueue(new Uint8Array(32 * 1024)); },
+    cancel() { canceled += 1; },
+  }));
+  t.mock.method(globalThis, "fetch", async (_, init) => { signal = init.signal; return response; });
+  const pending = waitForWorker(child, 2_000).then(origin => { ready = true; return origin; });
+  announceReadiness(child);
+  await new Promise(setImmediate);
+  assert.equal(ready, false, "Successful headers and a partial body must not establish readiness");
+  assert.equal(signal.aborted, false);
+  body.enqueue(new Uint8Array(32 * 1024)); body.close();
+  assert.equal(await pending, "http://127.0.0.1:12345");
+  assert.equal(canceled, 0); assert.equal(signal.aborted, false);
+  assert.equal(response.body.locked, false);
+  assertReadinessListenersRemoved(child);
+});
+
+for (const invalid of ["oversized", "empty_chunks", "truncated"]) test(`Worker readiness retries ${invalid} health bodies`, { timeout: 8_000 }, async t => {
+  const child = readinessChild();
+  let calls = 0, canceled = 0, signal;
+  const response = new Response(new ReadableStream({
+    start(controller) {
+      if (invalid === "oversized") controller.enqueue(new Uint8Array(64 * 1024 + 1));
+      if (invalid === "truncated") controller.error(new Error("PRIVATE_HEALTH_BODY_FAILURE"));
+    },
+    pull(controller) { if (invalid === "empty_chunks") controller.enqueue(new Uint8Array()); },
+    cancel() { canceled += 1; return new Promise(() => {}); },
+  }));
+  t.mock.method(globalThis, "fetch", async (_, init) => {
+    signal = init.signal; calls += 1;
+    return calls === 1 ? response : new Response("healthy");
+  });
+  const pending = waitForWorker(child, 2_000);
+  announceReadiness(child);
+  assert.equal(await pending, "http://127.0.0.1:12345");
+  assert.equal(calls, 2); assert.equal(signal.aborted, false);
+  assert.equal(canceled, invalid === "truncated" ? 0 : 1);
+  assert.equal(response.body.locked, false);
+  assertReadinessListenersRemoved(child);
+});
+
+for (const cancelOutcome of ["pending", "rejected"]) test(`Worker readiness retries a non-ok open body with ${cancelOutcome} cancellation`, { timeout: 8_000 }, async t => {
+  const child = readinessChild();
+  let calls = 0, canceled = 0, signal;
+  const response = new Response(new ReadableStream({
+    cancel() { canceled += 1; return cancelOutcome === "pending" ? new Promise(() => {}) : Promise.reject(new Error("PRIVATE_CANCEL_FAILURE")); },
+  }), { status: 503 });
+  t.mock.method(globalThis, "fetch", async (_, init) => {
+    signal = init.signal; calls += 1;
+    return calls === 1 ? response : new Response("healthy");
+  });
+  const pending = waitForWorker(child, 2_000);
+  announceReadiness(child);
+  assert.equal(await pending, "http://127.0.0.1:12345");
+  assert.equal(calls, 2); assert.equal(canceled, 1); assert.equal(signal.aborted, false);
+  assert.equal(response.body.locked, false);
+  assertReadinessListenersRemoved(child);
+});
+
+test("Worker readiness bounds an unfinished health body by its original deadline", { timeout: 8_000 }, async t => {
+  const child = readinessChild();
+  let canceled = 0, signal;
+  const response = new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode("partial")); },
+    cancel() { canceled += 1; return new Promise(() => {}); },
+  }));
+  t.mock.method(globalThis, "fetch", async (_, init) => { signal = init.signal; return response; });
+  const pending = assert.rejects(waitForWorker(child, 100), /timed out after 100ms/u);
+  announceReadiness(child);
+  await pending;
+  assert.equal(canceled, 1); assert.equal(signal.aborted, true);
+  assert.equal(response.body.locked, false);
+  assertReadinessListenersRemoved(child);
+});
+
+for (const outcome of ["exit", "error"]) test(`Worker readiness cleans an active health body after child ${outcome}`, { timeout: 8_000 }, async t => {
+  const child = readinessChild(), diagnosticError = new Error("diagnostic callback failed");
+  let canceled = 0, signal;
+  const response = new Response(new ReadableStream({ cancel() { canceled += 1; return new Promise(() => {}); } }));
+  t.mock.method(globalThis, "fetch", async (_, init) => { signal = init.signal; return response; });
+  const pending = assert.rejects(waitForWorker(child, 2_000, () => { throw diagnosticError; }), error => {
+    assert.match(error.message, outcome === "exit" ? /Worker exited before readiness/u : /Worker failed to start: child failure/u);
+    assert.equal(error.cause, diagnosticError); return true;
+  });
+  announceReadiness(child);
+  await new Promise(setImmediate);
+  if (outcome === "exit") child.emit("exit", 1, null);
+  else child.emit("error", new Error("child failure"));
+  await pending;
+  assert.equal(canceled, 1); assert.equal(signal.aborted, true);
+  assert.equal(response.body.locked, false);
+  assertReadinessListenersRemoved(child);
+});
+
+test("Worker readiness cancels health headers arriving after its deadline", { timeout: 8_000 }, async t => {
+  const child = readinessChild(), headers = Promise.withResolvers();
+  let canceled = 0, signal;
+  t.mock.method(globalThis, "fetch", (_, init) => { signal = init.signal; return headers.promise; });
+  const pending = assert.rejects(waitForWorker(child, 100), /timed out after 100ms/u);
+  announceReadiness(child);
+  await pending;
+  const response = new Response(new ReadableStream({ cancel() { canceled += 1; return new Promise(() => {}); } }));
+  headers.resolve(response);
+  await new Promise(setImmediate);
+  assert.equal(canceled, 1); assert.equal(signal.aborted, true);
+  assert.equal(response.body.locked, false);
+  assertReadinessListenersRemoved(child);
 });
 
 test("Shared Worker launch owns an IPC-discovered port and shuts down its process", async t => {
