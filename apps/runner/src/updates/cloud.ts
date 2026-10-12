@@ -23,21 +23,50 @@ export function createCloudMaintenance(options: { readonly profile: () => Promis
     const profile = await options.profile(); const url = maintenanceEndpoint(profile); url.pathname += suffix;
     const deadline = AbortSignal.timeout(10_000);
     const signal = options.signal === undefined ? deadline : AbortSignal.any([options.signal, deadline]);
-    const response = await fetchImpl(url, { method: body === undefined ? "GET" : "POST", redirect: "error", credentials: "omit", cache: "no-store", signal,
-      headers: { authorization: `Bearer ${profile.token}`, accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    signal.throwIfAborted();
+    let stop!: () => void;
+    const interrupted = new Promise<never>((_, reject) => {
+      stop = () => reject(signal.reason ?? new Error("maintenance request aborted"));
+      signal.addEventListener("abort", stop, { once: true });
+      if (signal.aborted) stop();
+    });
+    let response: Response;
+    try {
+      response = await Promise.race([fetchImpl(url, { method: body === undefined ? "GET" : "POST", redirect: "error", credentials: "omit", cache: "no-store", signal,
+        headers: { authorization: `Bearer ${profile.token}`, accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), interrupted]) as Response;
+    } finally { signal.removeEventListener("abort", stop); }
+    // A custom transport may ignore AbortSignal and resolve after the
+    // maintenance request has already expired. The response is orphaned at
+    // that point; do not inspect or cancel its body after the lifecycle ends.
+    if (signal.aborted) throw signal.reason ?? new Error("maintenance request aborted");
     if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new MaintenanceHttpError(response.status, retryAfterDelayMs(response.headers.get("retry-after") ?? undefined)); }
     const limit = 32 * 1024;
     const declared = response.headers.get("content-length");
     if (response.body === null || (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit))) { void response.body?.cancel().catch(() => undefined); throw new Error("invalid maintenance response"); }
     const reader = response.body.getReader(); const parts: Uint8Array[] = []; let total = 0;
+    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+    const abort = () => { void reader.cancel().catch(() => undefined); };
+    const release = (): void => { try { reader.releaseLock(); } catch { /* a read may still be pending */ } };
+    signal.addEventListener("abort", abort, { once: true });
     try {
       for (let chunks = 0; ; chunks++) {
         if (chunks >= 256) throw new Error("invalid maintenance response");
-        const part = await reader.read(); if (part.done) break;
+        const read = reader.read();
+        pendingRead = read;
+        let part: ReadableStreamReadResult<Uint8Array>;
+        try { part = await read; }
+        finally { if (pendingRead === read) pendingRead = undefined; }
+        if (part.done) break;
         total += part.value.byteLength; if (total > limit) throw new Error("invalid maintenance response"); parts.push(part.value);
       }
-    } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    } finally {
+      signal.removeEventListener("abort", abort);
+      void reader.cancel().catch(() => undefined);
+      const read = pendingRead;
+      if (read !== undefined) void read.then(release, release);
+      else release();
+    }
     return RunnerUpdateResponseSchema.parse(JSON.parse(Buffer.concat(parts, total).toString("utf8")));
   };
   return {
