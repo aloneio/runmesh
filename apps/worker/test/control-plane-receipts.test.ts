@@ -3,6 +3,9 @@ import { runnerEnvironment, runnerExecutionSnapshot } from "../src/application/r
 import { authThrottlePorts, runnerQueryPorts } from "../src/platform/control-plane-receipts.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import { loadAdminPageData, loadClientDetailData } from "../src/http/admin-query.js";
+import { boundedJsonReceipt } from "../src/bounded-json.js";
+import { reportControlPlaneFailure } from "../src/platform/control-plane-diagnostics.js";
+import { requestRunnerRegistry } from "../src/platform/runner-registry.js";
 
 const checksum = "a".repeat(64);
 const ready = { ok: true, policy_status: "applied", desired_revision: 1, applied_revision: 1, runner_reported_policy_revision: 1,
@@ -148,4 +151,87 @@ it("accepts every producer feature with a maximum escaped error within the share
   const data = await loadAdminPageData(env, "clients");
   expect(data?.clients).toEqual([adminClient]); expect(data?.runners).toEqual([adminRunner]); expect(data?.notices).toHaveLength(5);
   expect(data?.notices.some(notice => notice.title === "Feature health status unavailable")).toBe(false);
+});
+
+it.each([
+  ["Network connection lost.", "network_connection_lost"],
+  ["Cannot perform I/O on behalf of a different request.", "cross_request_io"],
+  ["A promise was resolved or rejected from a different request context than the one it was created in.", "cross_request_promise"],
+  ["The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response.", "hung_request"],
+  ["This ReadableStream is locked to a reader.", "locked_reader"],
+])("classifies an exact runtime control-plane signature without exception text (%#)", (message, reason) => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    const error = new Error(message); error.stack = "synthetic-private-stack";
+    reportControlPlaneFailure("runner_registry_fetch", "exception", error);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(`RUNMESH_CONTROL_PLANE_FAILURE stage=runner_registry_fetch outcome=exception kind=error reason=${reason} status=none`);
+  } finally { warn.mockRestore(); }
+});
+
+it("keeps partial runtime matches and unexpected diagnostic fields private", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    reportControlPlaneFailure("private-stage" as never, "private-outcome" as never, new Error("Network connection lost. synthetic-private-value"), Number.NaN);
+    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=other outcome=other kind=error reason=unknown status=none");
+  } finally { warn.mockRestore(); }
+});
+
+it("preserves one failed Registry transport attempt and its existing unavailable response", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetch = vi.fn(async () => { throw new Error("Network connection lost."); });
+  try {
+    const response = await requestRunnerRegistry(environment(fetch), "runner-1", "/mcp-authorization", { method: "POST", body: "{}" });
+    expect(response.status).toBe(503); expect(await response.text()).toBe("registry unavailable");
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=runner_registry_fetch outcome=exception kind=error reason=network_connection_lost status=none");
+  } finally { warn.mockRestore(); }
+});
+
+it("retains the first receipt deadline when a transport rejects after cancellation", async () => {
+  vi.useFakeTimers();
+  let reject!: (error: Error) => void, signal: AbortSignal | undefined;
+  const delayed = new Promise<Response>((_resolve, rejectResponse) => { reject = rejectResponse; });
+  const observer = vi.fn();
+  const fetch = vi.fn((input: AbortSignal) => { signal = input; return delayed; });
+  const operation = boundedJsonReceipt(fetch, [200, 403, 409], 5000, 16384, undefined, observer);
+  try {
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(await operation).toBeUndefined();
+    expect(signal?.aborted).toBe(true); expect(fetch).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "deadline" });
+    reject(new Error("Network connection lost."));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(observer).toHaveBeenCalledOnce();
+  } finally { reject(new Error("synthetic cleanup")); await operation; vi.useRealTimers(); }
+});
+
+it("distinguishes parent cancellation from the receipt deadline", async () => {
+  const parent = new AbortController(), observer = vi.fn(), cancel = vi.fn();
+  const operation = boundedJsonReceipt(async () => new Response(new ReadableStream({ cancel })), [200], 5000, 16384, parent.signal, observer);
+  await Promise.resolve();
+  parent.abort();
+  expect(await operation).toBeUndefined();
+  expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "parent_abort", status: 200 });
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+it("preserves an unexpected status and cancels its body when the diagnostic observer throws", async () => {
+  const cancel = vi.fn(), observer = vi.fn(() => { throw new Error("synthetic observer failure"); });
+  expect(await boundedJsonReceipt(async () => new Response(new ReadableStream({ cancel }), { status: 503 }), [200, 403, 409], 5000, 16384, undefined, observer)).toEqual({ status: 503 });
+  expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "unexpected_status", status: 503 });
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+it.each(["stream", "json"] as const)("distinguishes %s receipt failure without accepting authorization", async source => {
+  const error = new Error("Network connection lost."), observer = vi.fn();
+  const response = source === "stream" ? new Response(new ReadableStream({ start(controller) { controller.error(error); } })) : new Response("{synthetic-private-value");
+  expect(await boundedJsonReceipt(async () => response, [200], 5000, 16384, undefined, observer)).toBeUndefined();
+  expect(observer).toHaveBeenCalledOnce();
+  expect(observer.mock.calls[0]?.[0]).toMatchObject({ outcome: source === "stream" ? "exception" : "invalid_json", status: 200 });
+});
+
+it("keeps completed authorization receipts free from failure diagnostics", async () => {
+  const observer = vi.fn();
+  expect(await boundedJsonReceipt(async () => Response.json({ ok: true }), [200, 403, 409], 5000, 16384, undefined, observer)).toEqual({ status: 200, value: { ok: true } });
+  expect(observer).not.toHaveBeenCalled();
 });

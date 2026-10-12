@@ -11,7 +11,7 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpToolResultDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpToolResultDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
 import { spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../../scripts/worker-fixture.mjs";
 import { createTestHttpScope } from "../../scripts/test-http-scope.mjs";
 import WebSocket from "ws";
@@ -32,6 +32,7 @@ type CleanupJob = { readonly id: string | undefined; readonly client: McpClient 
 type CookieJar = Map<string, string>;
 type FormFields = Record<string, string | readonly string[]>;
 type FixtureProgress = (phase: string, boundary: string) => void;
+type McpObservation = (boundary: "headers" | "body" | "failure" | "complete") => void;
 
 let workerUrl = "";
 // Both fixtures launch Wrangler and build the Worker before serving requests.
@@ -551,8 +552,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   it.each([1, 4, 8, 16])("keeps mixed MCP reads and task results consistent with %i concurrent requests", async (concurrency) => {
     const begin = performance.now(), latencies: number[] = [];
     let next = 0, completed = 0, phase = "job_setup";
-    onTestFailed(() => console.error("RUNMESH_MCP_LOAD_PROGRESS=" + JSON.stringify({ concurrency, phase,
-      started: next, completed, elapsed_ms: Math.round(performance.now() - begin) })));
+    const pending = { headers: 0, body: 0 };
+    const progress = () => ({ concurrency, phase, started: next, completed,
+      ...(phase === "mixed_requests" ? { pending_headers: pending.headers, pending_body: pending.body } : {}),
+      elapsed_ms: Math.min(900_000, Math.max(0, Math.round(performance.now() - begin))) });
+    let firstFailureProgress: ReturnType<typeof progress> | undefined;
+    onTestFailed(() => process.stderr.write(mcpLoadProgressDiagnostic(firstFailureProgress ?? progress()) ?? ""));
     const started = await mcpTool("shell", {
       workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('load-log\\n')"), background: true,
     });
@@ -568,16 +573,32 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     ];
     phase = "mixed_requests";
     const loadStarted = performance.now();
-    await Promise.all(Array.from({ length: concurrency }, async () => {
-      while (next < 128) {
-        const operation = operations[next++ % operations.length]!;
-        const start = performance.now();
-        const result = await mcpTool(operation.name, operation.args);
-        latencies.push(performance.now() - start);
-        expect(result.isError, mcpToolResultDiagnostic("mixed_load", result)).not.toBe(true);
-        operation.check(result); completed++;
+    let stopped = false, firstFailure: unknown;
+    await Promise.allSettled(Array.from({ length: concurrency }, async () => {
+      try {
+        while (!stopped && next < 128) {
+          const operation = operations[next++ % operations.length]!;
+          const start = performance.now();
+          let boundary: "headers" | "body" | undefined;
+          const observe: McpObservation = state => {
+            if (state === "failure") { firstFailureProgress ??= progress(); return; }
+            if (boundary !== undefined) pending[boundary]--;
+            boundary = state === "complete" ? undefined : state;
+            if (boundary !== undefined) pending[boundary]++;
+          };
+          const result = await mcpTool(operation.name, operation.args, clientA, observe);
+          latencies.push(performance.now() - start);
+          expect(result.isError, mcpToolResultDiagnostic("mixed_load", result)).not.toBe(true);
+          operation.check(result); completed++;
+        }
+      } catch (error) {
+        if (!stopped) { firstFailure = error; firstFailureProgress ??= progress(); }
+        stopped = true;
       }
     }));
+    // Preserve the first failure and settle admitted requests before the next
+    // case. The enclosing HTTP scope still aborts work at the test deadline.
+    if (stopped) throw firstFailure;
     latencies.sort((a, b) => a - b);
     expect(completed).toBe(128);
     console.log("RUNMESH_MCP_LOAD=" + JSON.stringify({ fixture: "local_worker_runner", concurrency,
@@ -1157,25 +1178,28 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }, 10_000, () => diagnostic("timeout"));
   }
 
-  async function mcpTool(name: string, args: Record<string, unknown>, client = clientA): Promise<ToolResult> {
-    const message = await mcpMessage(name, args, client);
+  async function mcpTool(name: string, args: Record<string, unknown>, client = clientA, observe?: McpObservation): Promise<ToolResult> {
+    const message = await mcpMessage(name, args, client, observe);
     if (message.result?.isError === true) console.error(`E2E MCP ${name}:`, JSON.stringify(message.result.structuredContent));
     if (message.error) throw new Error(message.error.message ?? "MCP JSON-RPC error");
     return message.result ?? {};
   }
 
-  async function mcpMessage(name: string, args: Record<string, unknown>, client = clientA): Promise<JsonRpc> {
+  async function mcpMessage(name: string, args: Record<string, unknown>, client = clientA, observe?: McpObservation): Promise<JsonRpc> {
     if (client === undefined) throw new Error("MCP client setup did not complete");
     const id = requestId++;
-    const response = await fetch(client.endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
-    });
-    if (response.status !== 200) {
-      throw await mcpHttpFailure(response, id, name, args);
-    }
-    return readMcp(response);
+    observe?.("headers");
+    try {
+      const response = await fetch(client.endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
+      });
+      observe?.("body");
+      if (response.status !== 200) throw await mcpHttpFailure(response, id, name, args);
+      return await readMcp(response);
+    } catch (error) { observe?.("failure"); throw error; }
+    finally { observe?.("complete"); }
   }
 
   function fixtureProgress(fixture: "job_recording" | "job_history" | "job_sharing", onTestFailed: (handler: () => void) => void) {
