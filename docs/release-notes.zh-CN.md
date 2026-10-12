@@ -2,9 +2,9 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
-## 0.1.8 — 发布候选版
+## 0.1.8 — 已发布正式版
 
-Runmesh 0.1.8 汇集了以下 dev 改进。选择安装包时请查看[发行状态](release-readiness.zh-CN.md)；体验候选功能可使用 [Runner 开发渠道](dev-runner-prereleases.zh-CN.md)。
+[Runmesh 0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) 已发布，提供签名便携 Runner 安装包。安装方式见[发行状态](release-readiness.zh-CN.md)，更新已有实例时请按[升级指南](upgrading.zh-CN.md)操作。
 
 - **远程管理 Runner 版本。** 在控制端选择签名发行包，也可切换到旧版。标准受管安装使用独立版本管理器，保留 Runner 配置，等待本地任务结束并检查重新连接。变更中断后可通过本地日志恢复；切换失败时尝试还原原安装包。安装要求与恢复指引见 [Runner 版本管理](runner-versions.zh-CN.md)。
 - **MCP 连接检查与工具搜索。** 检查连接状态和声明的能力，从 MCP Registry 的 `server.json` 文件导入支持的远程条目，通过 `remote_search` 跨已启用服务查找已发布工具。详见[连接 MCP](central-remote-mcp.zh-CN.md)。

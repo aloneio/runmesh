@@ -2,9 +2,9 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.8 — release candidate
+## 0.1.8 — published stable release
 
-Runmesh 0.1.8 brings the following changes from dev. Use the [release status](release-readiness.md) to choose a published package, or the [development Runner channel](dev-runner-prereleases.md) to evaluate the candidate.
+[Runmesh 0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) is available with a signed portable Runner package. See [release status](release-readiness.md) for installation options and the [upgrade guide](upgrading.md) to update an existing installation.
 
 - **Remote Runner version management.** Choose a signed release from the control panel, including an earlier version. Managed installations use an independent version manager that preserves the Runner's configuration, waits for local tasks, and checks reconnection. A local journal supports interrupted-change recovery; a failed switch triggers an attempt to restore the previous package. See [Runner versions](runner-versions.md) for installation requirements and recovery guidance.
 - **MCP connection checks and tool search.** Inspect a connection's status and declared capabilities, import supported remote entries from MCP Registry `server.json` files, and use `remote_search` to find published tools across enabled services. See [connecting an MCP](central-remote-mcp.md).
