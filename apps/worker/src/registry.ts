@@ -21,6 +21,7 @@ import { PackedJobHistory } from "./job-history-store.js";
 import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
 import { ExternalAuditHistory } from "./external-audit.js";
 import { controlPlaneUnavailableResponse } from "./control-plane-errors.js";
+import { reportControlPlaneFailure } from "./platform/control-plane-diagnostics.js";
 import { ensureHistoryRetentionSchema } from "./history-retention.js";
 import type { RunnerMetadata } from "@aloneio/runmesh-protocol";
 import type { RunnerPolicy } from "@aloneio/runmesh-protocol";
@@ -254,28 +255,30 @@ export class RegistryDO {
       markDisconnected: (...args) => this.markDisconnected(...args)
     });
     this.ctx.blockConcurrencyWhile(async () => {
-      // Durable Objects may be evicted and reconstructed for every request.
-      // Replaying CREATE TABLE/INDEX IF NOT EXISTS on every reconstruction is
-      // still counted as a SQL write on the free tier, so fast-path fully
-      // initialized objects with a read-only schema check.
-      if (!this.schemaIsCurrent()) {
-        if (this.hasPersistedRegistrySchema()) {
-          throw new Error("incompatible Registry schema: deploy this clean-break release to a fresh Durable Object namespace");
+      try {
+        // Durable Objects may be evicted and reconstructed for every request.
+        // Replaying CREATE TABLE/INDEX IF NOT EXISTS on every reconstruction is
+        // still counted as a SQL write on the free tier, so fast-path fully
+        // initialized objects with a read-only schema check.
+        if (!this.schemaIsCurrent()) {
+          if (this.hasPersistedRegistrySchema()) {
+            throw new Error("incompatible Registry schema: deploy this clean-break release to a fresh Durable Object namespace");
+          }
+          createCoreRegistrySchema(this.ctx.storage.sql);
         }
-        createCoreRegistrySchema(this.ctx.storage.sql);
-      }
-      this.loadFeatureHealth();
-      this.ctx.storage.transactionSync(() => ensureRunnerUpdatesSchema(this.ctx.storage.sql));
-      // No legacy audit body is exposed, even if optional cleanup hits a quota.
-      try { this.ctx.storage.transactionSync(() => { ensureMetadataOnlyAudit(this.ctx.storage.sql); ensureHistoryRetentionSchema(this.ctx.storage.sql); ensureJobHistorySettings(this.ctx.storage.sql); }); }
-      catch (error) { this.disableFeatureHealth("mcp_audit", error, Date.now()); }
+        this.loadFeatureHealth();
+        this.ctx.storage.transactionSync(() => ensureRunnerUpdatesSchema(this.ctx.storage.sql));
+        // No legacy audit body is exposed, even if optional cleanup hits a quota.
+        try { this.ctx.storage.transactionSync(() => { ensureMetadataOnlyAudit(this.ctx.storage.sql); ensureHistoryRetentionSchema(this.ctx.storage.sql); ensureJobHistorySettings(this.ctx.storage.sql); }); }
+        catch (error) { this.disableFeatureHealth("mcp_audit", error, Date.now()); }
 
-      // Existing v2 stores pass schemaIsCurrent and skip initial DDL. Add the
-      // optional source buckets once without breaking their administrator,
-      // Runner, or session data, and retain bounded fallback on quota failure.
-      try { this.ctx.storage.transactionSync(() => ensureAuthSourceThrottleSchema(this.ctx.storage.sql)); }
-      catch (error) { this.disableFeatureHealth("auth_throttle", error, Date.now()); }
-      await this.scheduleMaintenanceAlarm(Date.now());
+        // Existing v2 stores pass schemaIsCurrent and skip initial DDL. Add the
+        // optional source buckets once without breaking their administrator,
+        // Runner, or session data, and retain bounded fallback on quota failure.
+        try { this.ctx.storage.transactionSync(() => ensureAuthSourceThrottleSchema(this.ctx.storage.sql)); }
+        catch (error) { this.disableFeatureHealth("auth_throttle", error, Date.now()); }
+        await this.scheduleMaintenanceAlarm(Date.now());
+      } catch (error) { reportControlPlaneFailure("registry_initialize", "exception", error); throw error; }
     });
   }
 
@@ -574,7 +577,7 @@ export class RegistryDO {
 
   public async fetch(request: Request): Promise<Response> {
     try { return await this.handleRequest(request); }
-    catch { return controlPlaneUnavailableResponse(); }
+    catch (error) { reportControlPlaneFailure("registry_fetch", "exception", error); return controlPlaneUnavailableResponse(); }
   }
 
   private async handleRequest(request: Request): Promise<Response> {

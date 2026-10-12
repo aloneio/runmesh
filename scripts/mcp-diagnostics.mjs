@@ -12,12 +12,20 @@ const runtimeSignatures = new Map([
   ["hung_request", "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response."],
   ["locked_reader", "This ReadableStream is locked to a reader."],
 ]);
+const runtimeLifecycleMessages = new Map([
+  ["restart_failed", "The Workers runtime failed to restart after an unexpected crash."],
+  ["restart_callback_failed", "The Workers runtime restarted, but the runtime restart callback failed."],
+  ["access_violation", "There was an access violation in the runtime."],
+]);
 const rpcCodes = [-32700, -32600, -32601, -32602, -32603, -32000, "other", "absent"];
 const rpcIds = ["matches", "null", "absent", "other"];
 const errorKinds = ["type_error", "range_error", "syntax_error", "abort_error", "error", "other"];
 const stages = ["request_validation", "identity_verification", "request_body", "module_loading", "provider_setup",
   "handler_dispatch", "server_factory", "sdk_transport", "response_priming", "response_headers"];
 const reasons = ["invalid_auth_context", "conflicting_auth_context", "already_connected", "network_connection_lost", "unknown"];
+const controlPlaneStages = ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization", "other"];
+const controlPlaneOutcomes = ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "body_limit", "invalid_json", "invalid_receipt", "other"];
+const controlPlaneReasons = [...runtimeSignatures.keys(), "unknown"];
 const proxyMethods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 const proxyAttempts = (method, attempts) => proxyMethods.includes(method) && Number.isInteger(attempts)
   && attempts >= 1 && attempts <= (["GET", "HEAD"].includes(method) ? 3 : 1);
@@ -209,11 +217,23 @@ function workerEvent(line) {
   const match = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|\u25b2 \[WARNING\] )?RUNMESH_MCP_HANDLER_ERROR kind=([a-z_]+) stage=([a-z_]+) reason=([a-z_]+)$/u.exec(text);
   if (match && errorKinds.includes(match[1]) && stages.includes(match[2]) && reasons.includes(match[3]))
     return { event: "mcp_handler_error", kind: match[1], stage: match[2], reason: match[3] };
+  const control = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] )?RUNMESH_CONTROL_PLANE_FAILURE stage=([a-z_]+) outcome=([a-z_]+) kind=([a-z_]+) reason=([a-z_]+) status=(none|[1-5]\d{2})$/u.exec(text);
+  if (control) return safeWorkerEvent({ event: "control_plane_failure", stage: control[1], outcome: control[2], kind: control[3], reason: control[4],
+    status: control[5] === "none" ? null : Number(control[5]) });
   // Runtime failures can bypass the MCP handler entirely. Match complete fixed
   // messages, including the pinned Wrangler error prefix, never arbitrary logs.
   const runtime = text.replace(/^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] )/u, "").replace(/^Error: /u, "");
   for (const [signature, message] of runtimeSignatures) {
     if (runtime === message) return { event: "runtime_log", signature };
+  }
+  // Pinned Miniflare can restart workerd while the Wrangler launcher stays
+  // alive. Preserve only its complete fixed lifecycle messages, not causes.
+  const lifecycle = runtime.replace(/^\[wrangler:(?:warn|error)\] /u, "")
+    .replace(/^(?:Error|MiniflareCoreError \[ERR_RUNTIME_FAILURE\]): /u, "");
+  const crash = /^The Workers runtime crashed unexpectedly and is being restarted \(crash #([1-9]\d{0,3})\)\. Any additional runtime output above may indicate the cause\.$/u.exec(lifecycle);
+  if (crash) return { event: "runtime_lifecycle", reason: "crash_restarting", crash_count: Number(crash[1]) };
+  for (const [reason, message] of runtimeLifecycleMessages) {
+    if (lifecycle === message) return { event: "runtime_lifecycle", reason };
   }
   // Pinned Wrangler wraps an upstream fetch failure with its method, URL and
   // attempt count. Only the fixed classification and bounded numeric fields
@@ -246,7 +266,16 @@ function safeWorkerEvent(value) {
       ...(value.runtime_signature === undefined ? {} : { runtime_signature: value.runtime_signature }) };
   if (value.event === "mcp_handler_error" && errorKinds.includes(value.kind) && stages.includes(value.stage) && reasons.includes(value.reason))
     return { event: "mcp_handler_error", kind: value.kind, stage: value.stage, reason: value.reason };
+  if (value.event === "control_plane_failure" && controlPlaneStages.includes(value.stage) && controlPlaneOutcomes.includes(value.outcome)
+    && errorKinds.includes(value.kind) && controlPlaneReasons.includes(value.reason)
+    && (value.status === null || (Number.isInteger(value.status) && value.status >= 100 && value.status <= 599)))
+    return { event: "control_plane_failure", stage: value.stage, outcome: value.outcome, kind: value.kind, reason: value.reason, status: value.status };
   if (value.event === "runtime_log" && runtimeSignatures.has(value.signature)) return { event: "runtime_log", signature: value.signature };
+  if (value.event === "runtime_lifecycle") {
+    if (value.reason === "crash_restarting" && Number.isInteger(value.crash_count) && value.crash_count >= 1 && value.crash_count <= 9999)
+      return { event: "runtime_lifecycle", reason: value.reason, crash_count: value.crash_count };
+    if (runtimeLifecycleMessages.has(value.reason)) return { event: "runtime_lifecycle", reason: value.reason };
+  }
   if (value.event === "proxy_upstream_connection_lost" && proxyAttempts(value.method, value.attempts))
     return { event: "proxy_upstream_connection_lost", method: value.method, attempts: value.attempts };
   if (value.event === "launcher_snapshot" && launcherReasons.includes(value.reason) && exitCode(value.exit_code)
@@ -256,6 +285,17 @@ function safeWorkerEvent(value) {
   if (value.event === "fixture_progress" && progressFixtures.includes(value.fixture) && progressPhases.includes(value.phase)
     && progressBoundaries.includes(value.boundary) && Number.isInteger(value.elapsed_ms) && value.elapsed_ms >= 0 && value.elapsed_ms <= 900000)
     return { event: "fixture_progress", fixture: value.fixture, phase: value.phase, boundary: value.boundary, elapsed_ms: value.elapsed_ms };
+  if (value.event === "load_progress" && [1, 4, 8, 16].includes(value.concurrency) && ["job_setup", "mixed_requests"].includes(value.phase)
+    && Number.isInteger(value.started) && value.started >= 0 && value.started <= 128
+    && Number.isInteger(value.completed) && value.completed >= 0 && value.completed <= value.started
+    && Number.isInteger(value.elapsed_ms) && value.elapsed_ms >= 0 && value.elapsed_ms <= 900000
+    && ((value.pending_headers === undefined && value.pending_body === undefined)
+      || (Number.isInteger(value.pending_headers) && value.pending_headers >= 0 && value.pending_headers <= 16
+        && Number.isInteger(value.pending_body) && value.pending_body >= 0 && value.pending_body <= 16
+        && value.pending_headers + value.pending_body <= value.concurrency)))
+    return { event: "load_progress", concurrency: value.concurrency, phase: value.phase,
+      started: value.started, completed: value.completed, elapsed_ms: value.elapsed_ms,
+      ...(value.pending_headers === undefined ? {} : { pending_headers: value.pending_headers, pending_body: value.pending_body }) };
   if (value.event === "fixture_failure" && fixtureNames.includes(value.fixture) && fixturePhases.includes(value.phase) && fixtureFailureKinds.includes(value.kind)) {
     const base = { event: "fixture_failure", fixture: value.fixture, phase: value.phase, kind: value.kind };
     if (value.kind !== "mcp_http_failure") return base;
@@ -279,6 +319,11 @@ export function mcpLauncherDiagnostic(value) {
 /** Failure-only snapshots identify a pending fixture boundary, never its inputs. */
 export function mcpFixtureProgressDiagnostic(value) {
   return eventMarker({ ...value, event: "fixture_progress" });
+}
+
+/** Preserve the first bounded load snapshot without request inputs or results. */
+export function mcpLoadProgressDiagnostic(value) {
+  return eventMarker({ ...value, event: "load_progress" });
 }
 
 /** Keep the primary failure and each cleanup phase distinct without error text. */
@@ -322,10 +367,12 @@ function eventBudget() {
   const counts = new Map();
   return event => {
     // Separate bounds preserve launcher and fixture evidence during log floods.
-    // Totals: 16 handler + 8 runtime + 8 proxy + 4 launcher + 3 primary + 24 cleanup + 3 progress + 9 admin = 75.
+    // Totals: 16 handler + 16 control + 8 runtime + 8 lifecycle + 8 proxy + 4 launcher + 3 primary + 24 cleanup + 3 progress + 4 load + 9 admin = 103.
     const key = event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
+      : event.event === "load_progress" ? `load:${event.concurrency}`
       : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
-    const limit = event.event === "admin_http" || event.event === "fixture_progress" ? 1 : event.event === "mcp_handler_error" ? 16 : event.event === "launcher_snapshot" ? 4
+    const limit = event.event === "admin_http" || event.event === "fixture_progress" || event.event === "load_progress" ? 1
+      : event.event === "mcp_handler_error" || event.event === "control_plane_failure" ? 16 : event.event === "launcher_snapshot" ? 4
       : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;
     const count = counts.get(key) ?? 0;
     if (count >= limit) return false;

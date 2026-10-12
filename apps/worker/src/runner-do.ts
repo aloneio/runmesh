@@ -14,6 +14,7 @@ export type { WorkerEnv } from "./platform/env.js";
 import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { signQueueGrant, verifyQueueGrant, launchDigest } from "./queue-grant.js";
 import { ControlPlaneUnavailableError, controlPlaneUnavailableResponse, registryRejectedSession, registrySessionClose } from "./control-plane-errors.js";
+import { reportControlPlaneFailure } from "./platform/control-plane-diagnostics.js";
 import {
   ProtocolFrameError,
   decodeWireFrame,
@@ -81,7 +82,7 @@ export class RunnerDO {
 
   public async fetch(request: Request): Promise<Response> {
     try { return await this.handleRequest(request); }
-    catch { return controlPlaneUnavailableResponse(); }
+    catch (error) { reportControlPlaneFailure("runner_fetch", "exception", error); return controlPlaneUnavailableResponse(); }
   }
 
   private async handleRequest(request: Request): Promise<Response> {
@@ -588,10 +589,13 @@ export class RunnerDO {
           ...(reportingLaunch ? { include_job_recording: true } : {}),
         }) });
         return authorized;
-      }, [200, 403, 409]);
+      }, [200, 403, 409], 5000, 16384, undefined, failure => reportControlPlaneFailure("runner_mcp_authorization", failure.outcome, failure.error, failure.status));
       const decision = receipt?.value;
       if (receipt === undefined || !isRecord(decision) || typeof decision.ok !== "boolean"
-        || (receipt.status !== 200 && !((receipt.status === 403 || receipt.status === 409) && decision.ok === false))) return preDispatchError("control_plane_unavailable", "MCP authorization could not be verified", 503, controlPlaneUnavailableResponse(authorized).headers);
+        || (receipt.status !== 200 && !((receipt.status === 403 || receipt.status === 409) && decision.ok === false))) {
+        if (receipt !== undefined && [200, 403, 409].includes(receipt.status)) reportControlPlaneFailure("runner_mcp_authorization", "invalid_receipt", undefined, receipt.status);
+        return preDispatchError("control_plane_unavailable", "MCP authorization could not be verified", 503, controlPlaneUnavailableResponse(authorized).headers);
+      }
       if (receipt.status !== 200 || decision.ok !== true) return preDispatchError("permission_denied", "MCP authorization is no longer valid", 403);
       // Reuse this exact final decision; no extra lookup or cached permission.
       // Missing optional capture evidence suppresses history, not execution.

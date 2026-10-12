@@ -13,7 +13,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence, testFailureEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence, runMcpFixtureWithCleanup } from "../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence, runMcpFixtureWithCleanup } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
@@ -851,6 +851,98 @@ test("fixed runtime messages survive fragmented Worker logs without copying text
   assert.doesNotMatch(emitted.join(""), /private|Network connection|ReadableStream/u);
 });
 
+test("fixed runtime lifecycle messages survive fragmentation without exposing native errors or causes", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  forward("\u001b[33m[wrangler:warn]\u001b[0m The Workers runtime crashed unexpectedly and is being rest");
+  forward("arted (crash #1). Any additional runtime output above may indicate the cause.\r\n");
+  forward("[wrangler:error] MiniflareCoreError [ERR_RUNTIME_FAILURE]: The Workers runtime failed to restart after an unexpected crash.\n  at private-stack\nCaused by: private-error\n");
+  forward("[wrangler:error] Error: The Workers runtime restarted, but the runtime restart callback failed.\n");
+  forward("\u001b[31m\u2718 [ERROR]\u001b[0m There was an access violation in the runtime.\nOn Windows, private-guidance\n");
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), [
+    { event: "runtime_lifecycle", reason: "crash_restarting", crash_count: 1 },
+    { event: "runtime_lifecycle", reason: "restart_failed" },
+    { event: "runtime_lifecycle", reason: "restart_callback_failed" },
+    { event: "runtime_lifecycle", reason: "access_violation" },
+  ]);
+  assert.doesNotMatch(emitted.join(""), /private|Workers runtime|Miniflare|ERR_RUNTIME_FAILURE|wrangler|Caused by/u);
+});
+
+test("runtime lifecycle diagnostics reject unknown formats and reconstruct only bounded fields", () => {
+  const message = "The Workers runtime crashed unexpectedly and is being restarted (crash #1). Any additional runtime output above may indicate the cause.";
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  for (const line of ["private " + message, "[private:warn] " + message, message + " private-token", message.replace("#1", "#0"),
+    message.replace("#1", "#01"), message.replace("#1", "#10000"), message.replace("#1", "#1.5"),
+    "[wrangler:warn] " + message.replace("crashed unexpectedly", "private-error"), "x".repeat(1025),
+    "*** Received signal #11: private-native-error", "[wrangler:error] There was an access violation in the runtime. private-token"])
+    forward(line + "\n");
+  assert.deepEqual(emitted, []);
+  const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  const valid = { event: "runtime_lifecycle", reason: "crash_restarting", crash_count: 9999 };
+  assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, stack: "private-stack", message: "private-message" })), [valid]);
+  for (const patch of [{ reason: "private" }, { crash_count: null }, { crash_count: "1" }, { crash_count: 0 }, { crash_count: 10000 }, { crash_count: 1.5 }])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, ...patch })), []);
+  assert.deepEqual(mcpWorkerFailureEvidence(marker({ event: "runtime_lifecycle", reason: "access_violation", crash_count: "private", cause: "private" })),
+    [{ event: "runtime_lifecycle", reason: "access_violation" }]);
+});
+
+test("control plane diagnostics preserve fixed failure boundaries across fragmented logs", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  forward("\u001b[33m\u25b2 [WARNING]\u001b[0m RUNMESH_CONTROL_PLANE_FAILURE stage=runner_mcp_authorization outcome=unexpected_");
+  forward("status kind=other reason=unknown status=503\r\nprivate-token\n");
+  forward("RUNMESH_CONTROL_PLANE_FAILURE stage=registry_initialize outcome=exception kind=error reason=network_connection_lost status=none\n");
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), [
+    { event: "control_plane_failure", stage: "runner_mcp_authorization", outcome: "unexpected_status", kind: "other", reason: "unknown", status: 503 },
+    { event: "control_plane_failure", stage: "registry_initialize", outcome: "exception", kind: "error", reason: "network_connection_lost", status: null },
+  ]);
+  assert.doesNotMatch(emitted.join(""), /private|WARNING|RUNMESH_CONTROL_PLANE_FAILURE/u);
+});
+
+test("control plane diagnostics validate each fixed field and discard unrelated private data", () => {
+  const valid = { event: "control_plane_failure", stage: "runner_registry_fetch", outcome: "exception", kind: "error", reason: "network_connection_lost", status: null };
+  const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, url: "https://private-token", stack: "private-stack" })), [valid]);
+  for (const patch of [{ stage: "private" }, { outcome: "private" }, { kind: "private" }, { reason: "private" },
+    { status: "none" }, { status: "503" }, { status: 99 }, { status: 600 }, { status: 200.5 }])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, ...patch })), []);
+  const fields = {
+    stage: ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization", "other"],
+    outcome: ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "body_limit", "invalid_json", "invalid_receipt", "other"],
+    kind: ["type_error", "range_error", "syntax_error", "abort_error", "error", "other"],
+    reason: ["network_connection_lost", "cross_request_io", "cross_request_promise", "hung_request", "locked_reader", "unknown"], status: [null, 100, 599],
+  };
+  for (const [field, values] of Object.entries(fields)) for (const value of values)
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, [field]: value })), [{ ...valid, [field]: value }]);
+  const line = "RUNMESH_CONTROL_PLANE_FAILURE stage=runner_registry_fetch outcome=exception kind=error reason=network_connection_lost status=none";
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(value => emitted.push(value));
+  for (const invalid of ["private " + line, "[PRIVATE] " + line, line + " private-token", line.replace("status=none", "status=600"),
+    line.replace("outcome=exception", "outcome=private"), line.replace("stage=runner_registry_fetch", "stage=private"),
+    line.replace("kind=error", "kind=private"), line.replace("reason=network_connection_lost", "reason=private"), "x".repeat(1025)])
+    forward(invalid + "\n");
+  assert.deepEqual(emitted, []);
+});
+
+test("load progress diagnostics retain only bounded counters and fixed phases", () => {
+  const valid = { concurrency: 8, phase: "mixed_requests", started: 128, completed: 127, elapsed_ms: 900000 };
+  const expected = { event: "load_progress", ...valid };
+  assert.deepEqual(mcpWorkerFailureEvidence(mcpLoadProgressDiagnostic({ ...valid, event: "private", args: "private-token", response: "private-body" })), [expected]);
+  for (const [pending_headers, pending_body] of [[0, 0], [8, 0], [0, 8], [3, 5]])
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpLoadProgressDiagnostic({ ...valid, pending_headers, pending_body })),
+      [{ ...expected, pending_headers, pending_body }]);
+  for (const concurrency of [1, 4, 8, 16]) for (const phase of ["job_setup", "mixed_requests"])
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpLoadProgressDiagnostic({ concurrency, phase, started: 0, completed: 0, elapsed_ms: 0 })),
+      [{ event: "load_progress", concurrency, phase, started: 0, completed: 0, elapsed_ms: 0 }]);
+  const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  for (const patch of [{ concurrency: 2 }, { concurrency: "8" }, { phase: "private" }, { started: -1 }, { started: 129 }, { started: 127.5 },
+    { completed: -1 }, { completed: 129 }, { completed: 0.5 }, { started: 0, completed: 1 }, { elapsed_ms: -1 }, { elapsed_ms: 900001 }, { elapsed_ms: "1" }, { elapsed_ms: 0.5 },
+    { pending_headers: 1 }, { pending_body: 1 }, { pending_headers: null, pending_body: 0 }, { pending_headers: 0, pending_body: "1" },
+    { pending_headers: -1, pending_body: 0 }, { pending_headers: 0, pending_body: -1 }, { pending_headers: 0.5, pending_body: 0 },
+    { pending_headers: 0, pending_body: 0.5 }, { pending_headers: 17, pending_body: 0 }, { pending_headers: 0, pending_body: 17 }, { pending_headers: 4, pending_body: 5 }]) {
+    assert.equal(mcpLoadProgressDiagnostic({ ...valid, ...patch }), undefined);
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...expected, ...patch })), []);
+  }
+  assert.doesNotMatch(mcpLoadProgressDiagnostic({ ...valid, command: "private-token" }), /private|command/u);
+});
+
 test("pinned Wrangler proxy connection failures preserve only method and attempt count", () => {
   const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
   const prefix = "Error inside ProxyWorker (the affected request failed; the dev server continues): ";
@@ -997,29 +1089,40 @@ test("job-sharing progress distinguishes shared owner and cleanup reads while re
 
 test("runtime floods preserve the first fixture primary and independent launcher evidence", () => {
   const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
-  for (let i = 0; i < 40; i++) forward("Error: Network connection lost.\nRUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown\n");
-  assert.equal(emitted.length, 24);
+  for (let i = 0; i < 40; i++) forward("Error: Network connection lost.\nRUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown\n"
+    + "[wrangler:warn] The Workers runtime crashed unexpectedly and is being restarted (crash #1). Any additional runtime output above may indicate the cause.\n"
+    + "RUNMESH_CONTROL_PLANE_FAILURE stage=registry_fetch outcome=exception kind=error reason=unknown status=none\n");
+  assert.equal(emitted.length, 48);
   const primary = mcpFixtureFailureDiagnostic("queue", "primary", { name: "AssertionError", message: "private" });
   const later = mcpFixtureFailureDiagnostic("queue", "primary", new Error("timed out"));
   const cleanup = mcpFixtureFailureDiagnostic("queue", "cancel", new Error("private"));
   const launcher = mcpLauncherDiagnostic({ reason: "test_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false });
-  const events = mcpWorkerFailureEvidence(emitted.join("").repeat(3) + primary + later.repeat(30) + cleanup.repeat(30) + launcher);
+  const load = [1, 4, 8, 16].map(concurrency => mcpLoadProgressDiagnostic({ concurrency, phase: "mixed_requests", started: 5, completed: 4, elapsed_ms: 200 })).join("");
+  const laterLoad = [1, 4, 8, 16].map(concurrency => mcpLoadProgressDiagnostic({ concurrency, phase: "mixed_requests", started: 128, completed: 127, elapsed_ms: 300 })).join("");
+  const events = mcpWorkerFailureEvidence(emitted.join("").repeat(3) + primary + later.repeat(30) + cleanup.repeat(30) + load + laterLoad.repeat(30) + launcher);
   assert.equal(events.filter(event => event.event === "runtime_log").length, 8);
+  assert.equal(events.filter(event => event.event === "runtime_lifecycle").length, 8);
+  assert.equal(events.filter(event => event.event === "control_plane_failure").length, 16);
   assert.equal(events.filter(event => event.event === "mcp_handler_error").length, 16);
+  assert.deepEqual(events.filter(event => event.event === "load_progress"), [1, 4, 8, 16].map(concurrency =>
+    ({ event: "load_progress", concurrency, phase: "mixed_requests", started: 5, completed: 4, elapsed_ms: 200 })));
   assert.deepEqual(events.filter(event => event.event === "fixture_failure" && event.phase === "primary"),
     [{ event: "fixture_failure", fixture: "queue", phase: "primary", kind: "assertion_failed" }]);
   assert.equal(events.filter(event => event.event === "fixture_failure" && event.phase === "cancel").length, 8);
   assert.equal(events.filter(event => event.event === "launcher_snapshot").length, 1);
-  assert.ok(events.length <= 46);
+  assert.ok(events.length <= 74);
 });
 
 test("a failed child preserves runtime, primary, cleanup and launcher classes through the existing CI outlet", () => {
   const helper = new URL("../scripts/mcp-diagnostics.mjs", import.meta.url).href;
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
-    import { createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpLauncherDiagnostic } from ${JSON.stringify(helper)};
+    import { createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic } from ${JSON.stringify(helper)};
     const forward = createMcpWorkerDiagnosticForwarder(line => process.stderr.write(line));
     forward("[ERROR] Error: Network connection lost.\\nprivate worker stack\\n");
     forward("[ERROR] Error inside ProxyWorker (the affected request failed; the dev server continues): POST http://127.0.0.1:43210/private-token/mcp (failed after 1 attempt): Network connection lost.\\n");
+    forward("[wrangler:warn] The Workers runtime crashed unexpectedly and is being restarted (crash #1). Any additional runtime output above may indicate the cause.\\n");
+    forward("RUNMESH_CONTROL_PLANE_FAILURE stage=runner_mcp_authorization outcome=deadline kind=other reason=unknown status=none\\n");
+    process.stderr.write(mcpLoadProgressDiagnostic({concurrency:8,phase:"mixed_requests",started:60,completed:52,elapsed_ms:300,pending_headers:6,pending_body:2}));
     process.stderr.write(mcpFixtureFailureDiagnostic("busy", "primary", {name:"AssertionError", message:"private-token"}));
     process.stderr.write(mcpFixtureFailureDiagnostic("busy", "cancel", new Error("private cleanup")));
     process.stderr.write(mcpLauncherDiagnostic({reason:"test_failed",exit_code:null,signal:null,teardown_started:false,exited_before_teardown:false}));
@@ -1027,7 +1130,7 @@ test("a failed child preserves runtime, primary, cleanup and launcher classes th
   `], { encoding: "utf8", timeout: 10000 });
   assert.equal(child.status, 1);
   const summary = { error: browserErrorDiagnostic({ code: child.status }), worker_events: mcpWorkerFailureEvidence(child.stderr) };
-  assert.deepEqual(summary.worker_events.map(event => event.event), ["runtime_log", "proxy_upstream_connection_lost", "fixture_failure", "fixture_failure", "launcher_snapshot"]);
+  assert.deepEqual(summary.worker_events.map(event => event.event), ["runtime_log", "proxy_upstream_connection_lost", "runtime_lifecycle", "control_plane_failure", "load_progress", "fixture_failure", "fixture_failure", "launcher_snapshot"]);
   assert.deepEqual(summary.worker_events[1], { event: "proxy_upstream_connection_lost", method: "POST", attempts: 1 });
   assert.doesNotMatch(JSON.stringify(summary), /private|127\.0\.0\.1|43210|https?:/u);
 });
