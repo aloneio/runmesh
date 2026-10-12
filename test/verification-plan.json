@@ -288,6 +288,7 @@
         "test/test-collection.test.mjs",
         "test/ui-navigation-probe.test.mjs",
         "test/verification-tools.test.mjs",
+        "test/worker-runtime-observer.test.mjs",
         "test/worker-validation.test.mjs"
       ]
     },

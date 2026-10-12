@@ -273,6 +273,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       body: JSON.stringify({ runner_id: otherRunnerId, token: "e2e-runner-secondary-token-0123456789", execution_mode: "dedicated_user" }),
     });
     expect(enrollment.status).toBe(200);
+    expect((await enrollment.json() as { runner_id?: unknown }).runner_id).toBe(otherRunnerId);
 
     const { adminJar, csrf } = await adminCredentials();
     const clientC = await createMcpClient("Client C E2E", ["coding:read"], adminJar, csrf);
@@ -1000,6 +1001,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
       body: JSON.stringify({ runner_id: rootRunnerId, token, execution_mode: "dedicated_user" }) });
     expect(registration.status).toBe(200);
+    expect((await registration.json() as { runner_id?: unknown }).runner_id).toBe(rootRunnerId);
     const rootProfile = join(root, "root-git-profile.json");
     await writeFile(rootProfile, JSON.stringify({ version: 1, server_url: `${workerUrl.replace("http:", "ws:")}/runner/connect`,
       runner_id: rootRunnerId, token, workspaces: [], insecure_local: true, management_mode: "central", execution_mode: "dedicated_user" }), { mode: 0o600 });
@@ -1162,7 +1164,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const job = response.result?.structuredContent;
       status = job?.status === undefined ? "absent" : typeof job.status === "string" && ["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(job.status) ? job.status : "other";
       const code = job?.exit_code;
-      exitCode = typeof code === "number" && Number.isSafeInteger(code) && code >= -(2 ** 31) && code < 2 ** 31 ? code : null;
+      exitCode = typeof code === "number" && Number.isSafeInteger(code) && code >= -(2 ** 31) && code < 2 ** 32 ? code : null;
       if (response.error !== undefined || response.result?.isError === true) throw new Error(`Job did not complete successfully\n${diagnostic("tool_error")}`);
       // A terminal process failure is evidence now, not another ten seconds
       // of waiting. Arguments, IDs and Runner-authored text remain private.

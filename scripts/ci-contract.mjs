@@ -66,6 +66,7 @@ export const REQUIRED_GITHUB_JOBS = Object.freeze([
 export const NATIVE_ADDED_COMMANDS = Object.freeze([
   "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs",
   "node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs",
+  "node --test test/worker-runtime-observer.test.mjs",
 ]);
 export const NATIVE_COMMANDS = Object.freeze([
   "npm ci", "npm run typecheck", "npm run build", "npm run test --workspace=@aloneio/runmesh-runner", "npm run pack:smoke",

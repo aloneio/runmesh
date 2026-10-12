@@ -208,13 +208,20 @@ export function jobCompletionDiagnostic(text) {
     const value = JSON.parse(raw);
     if (!record(value) || !["timeout", "terminal_failure", "tool_error"].includes(value.outcome)
       || !jobStatuses.includes(value.status) || !(value.exit_code === null
-        || (Number.isInteger(value.exit_code) && value.exit_code >= -2147483648 && value.exit_code <= 2147483647))) return undefined;
+        || (Number.isInteger(value.exit_code) && value.exit_code >= -2147483648 && value.exit_code <= 4294967295))) return undefined;
     return { outcome: value.outcome, status: value.status, exit_code: value.exit_code };
   } catch { return undefined; }
 }
 
 function workerEvent(line) {
   const text = clean(line).trim();
+  const processEvent = /^RUNMESH_E2E_RUNTIME_(?:PROCESS|OBSERVER)=(\{[^\r\n]{1,512}\})$/u.exec(text);
+  if (processEvent) {
+    try {
+      const value = JSON.parse(processEvent[1]);
+      return value?.event === "runtime_process" || value?.event === "runtime_observer" ? safeWorkerEvent(value) : undefined;
+    } catch { return undefined; }
+  }
   const match = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|\u25b2 \[WARNING\] |[\u2718X] \[ERROR\] )?RUNMESH_MCP_HANDLER_ERROR kind=([a-z_]+) stage=([a-z_]+) reason=([a-z_]+)$/u.exec(text);
   if (match && errorKinds.includes(match[1]) && stages.includes(match[2]) && reasons.includes(match[3]))
     return { event: "mcp_handler_error", kind: match[1], stage: match[2], reason: match[3] };
@@ -256,10 +263,20 @@ const progressFixtures = ["job_recording", "job_history", "job_sharing"];
 const progressPhases = ["admin_login_page", "admin_login", "client_create", "runner_select", "recording_update", "history_settings", "history_restore", "shell", "job_logs", "job_metadata", "job_poll", "job_list", "job_list_live", "job_list_snapshot",
   "job_share_read", "job_input_denied", "job_cancel_denied", "job_owner_read", "job_input", "job_cancel"];
 const progressBoundaries = ["headers", "body", "validation", "request", "filesystem", "poll"];
-const exitCode = value => value === null || (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647);
+const exitCode = value => value === null || (Number.isInteger(value) && value >= -2147483648 && value <= 4294967295);
 
 function safeWorkerEvent(value) {
   if (!record(value)) return undefined;
+  if (value.event === "runtime_observer" && ["installed", "worker_thread", "runtime_override", "resolution_failed"].includes(value.coverage))
+    return { event: "runtime_observer", coverage: value.coverage };
+  if (value.event === "runtime_process" && ["spawn", "exit"].includes(value.phase)
+    && Number.isInteger(value.runtime_index) && value.runtime_index >= 1 && value.runtime_index <= 16
+    && Number.isInteger(value.elapsed_ms) && value.elapsed_ms >= 0 && value.elapsed_ms <= 900000
+    && (value.exit_code === null || (Number.isInteger(value.exit_code) && value.exit_code >= -2147483648 && value.exit_code <= 4294967295))
+    && (value.signal === null || launcherSignals.includes(value.signal))
+    && (value.phase !== "spawn" || (value.exit_code === null && value.signal === null)))
+    return { event: "runtime_process", phase: value.phase, runtime_index: value.runtime_index, elapsed_ms: value.elapsed_ms,
+      exit_code: value.exit_code, signal: value.signal };
   if (value.event === "admin_http" && adminStages.includes(value.stage) && Number.isInteger(value.status) && value.status >= 100 && value.status <= 599
     && contentTypes.includes(value.content_type) && adminBodyKinds.includes(value.body_kind)
     && (value.runtime_signature === undefined || runtimeSignatures.has(value.runtime_signature)))
@@ -370,11 +387,13 @@ function eventBudget() {
   const counts = new Map();
   return event => {
     // Separate bounds preserve launcher and fixture evidence during log floods.
-    // Totals: 16 handler + 16 control + 8 runtime + 8 lifecycle + 8 proxy + 4 launcher + 3 primary + 24 cleanup + 3 progress + 4 load + 9 admin = 103.
+    // Independent bounds preserve direct native-process observations alongside
+    // the existing 103 request, runtime-log, fixture and launcher events.
     const key = event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
       : event.event === "load_progress" ? `load:${event.concurrency}`
       : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
-    const limit = event.event === "admin_http" || event.event === "fixture_progress" || event.event === "load_progress" ? 1
+    const limit = event.event === "runtime_process" ? 64 : event.event === "runtime_observer" ? 8
+      : event.event === "admin_http" || event.event === "fixture_progress" || event.event === "load_progress" ? 1
       : event.event === "mcp_handler_error" || event.event === "control_plane_failure" ? 16 : event.event === "launcher_snapshot" ? 4
       : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;
     const count = counts.get(key) ?? 0;
