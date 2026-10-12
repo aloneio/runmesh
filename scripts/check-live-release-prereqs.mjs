@@ -30,8 +30,12 @@ export async function readReleaseHealth(configuredOrigin, fetchImpl = fetch, sig
     redirect: "error", cache: "no-store", credentials: "omit", signal,
     headers: { accept: "application/json", "cache-control": "no-cache" },
   });
+  // A transport may ignore AbortSignal and resolve after the deadline. The
+  // response then belongs to the retired preflight; fence it before reading
+  // status or touching its body.
+  signal.throwIfAborted();
   if (response.status !== 200) {
-    await response.body?.cancel().catch(() => undefined);
+    void response.body?.cancel().catch(() => undefined);
     throw new Error("public control plane is unavailable");
   }
   assert.ok(response.body, "public control plane returned no health body");

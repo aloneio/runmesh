@@ -47,10 +47,14 @@ export async function releasePhase<T>(phase: DevelopmentReleaseFailure["phase"],
 
 /** Every redirect, retry and asset retains the request owner's original budget. */
 export function releaseFetchWithinDeadline(fetchImpl: typeof fetch, deadline: AbortSignal): typeof fetch {
-  return (input, init) => {
+  return async (input, init) => {
     deadline.throwIfAborted();
     const signal = init?.signal == null ? deadline : AbortSignal.any([deadline, init.signal]);
-    return fetchImpl(input, { ...init, signal });
+    const response = await fetchImpl(input, { ...init, signal });
+    // A transport may ignore AbortSignal and resolve after the request owner
+    // has retired. Do not inspect or cancel that late response.
+    signal.throwIfAborted();
+    return response;
   };
 }
 
@@ -90,16 +94,23 @@ function releaseRetryAtMs(response: Response, now = Date.now()): number | undefi
   }
   return retryAt === undefined ? undefined : Math.min(now + MAX_RELEASE_RETRY_WINDOW_MS, retryAt);
 }
-export async function releaseFetch(input: string, init: Omit<RequestInit, "signal">, fetchImpl: typeof fetch, phase: DevelopmentReleaseFailure["phase"] = "discovery"): Promise<Response> {
+export async function releaseFetch(input: string, init: Omit<RequestInit, "signal">, fetchImpl: typeof fetch, phase: DevelopmentReleaseFailure["phase"] = "discovery", ownerSignal?: AbortSignal): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt < DEV_RELEASE_FETCH_ATTEMPTS; attempt++) {
     try {
-      const response = await fetchImpl(input, { ...init, signal: AbortSignal.timeout(10_000) });
+      const attemptSignal = AbortSignal.timeout(10_000);
+      const response = await fetchImpl(input, { ...init, signal: attemptSignal });
+      // Keep the per-attempt budget authoritative even when an injected or
+      // platform transport resolves after its signal was aborted.
+      attemptSignal.throwIfAborted();
       if (!retryableReleaseResponse(response) || releaseRetryAtMs(response) !== undefined || attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) return response;
       // Start disposal without letting a peer's cleanup promise own the retry budget.
       void response.body?.cancel().catch(() => undefined);
     } catch (error) {
       lastError = error;
+      // The request owner has already retired. Do not spend another retry
+      // delay or inspect a response from a late continuation.
+      if (ownerSignal?.aborted) throw releaseError(error, phase, "timeout");
       if (attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) throw releaseError(error, phase, error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name) ? "timeout" : "network_error");
     }
     await new Promise(resolve => setTimeout(resolve, DEV_RELEASE_RETRY_DELAY_MS * (attempt + 1)));
@@ -108,30 +119,54 @@ export async function releaseFetch(input: string, init: Omit<RequestInit, "signa
 }
 
 /** Own the response body even when status or headers reject it before reading. */
-export async function boundedJson(response: Response): Promise<unknown> {
+export async function boundedJson(response: Response, signal?: AbortSignal): Promise<unknown> {
   return releasePhase("discovery", "invalid_response", async () => {
+    signal?.throwIfAborted();
     if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new DevelopmentReleaseError("development release discovery failed", { phase: "discovery", reason: "http_error", http_status: response.status }, releaseRetryAtMs(response)); }
     const declared = response.headers.get("content-length");
     if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > MAX_DISCOVERY_BYTES)) { void response.body?.cancel().catch(() => undefined); throw new Error("development release discovery response is too large"); }
     if (response.body === null) throw new Error("development release discovery response is empty");
     const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;
+    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+    let readSettled = false;
+    const abort = () => { void reader.cancel().catch(() => undefined); };
+    const release = (): void => { try { reader.releaseLock(); } catch { /* a read may still be pending */ } };
+    signal?.addEventListener("abort", abort, { once: true });
     try {
       for (let index = 0; ; index++) {
         if (index >= 1024) throw new Error("development release discovery response is fragmented");
-        const part = await reader.read(); if (part.done) break;
+        const read = reader.read(); pendingRead = read; readSettled = false;
+        let part: ReadableStreamReadResult<Uint8Array>;
+        if (signal === undefined) { part = await read; readSettled = true; }
+        else {
+          let onAbort!: () => void;
+          const interrupted = new Promise<never>((_, reject) => { onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError")); signal.addEventListener("abort", onAbort, { once: true }); });
+          try { part = await Promise.race([read, interrupted]); readSettled = true; }
+          finally { signal.removeEventListener("abort", onAbort); }
+        }
+        if (readSettled) pendingRead = undefined;
+        if (part.done) break;
+        signal?.throwIfAborted();
         bytes += part.value.byteLength; if (bytes > MAX_DISCOVERY_BYTES) throw new Error("development release discovery response is too large"); chunks.push(part.value);
       }
-    } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      void reader.cancel().catch(() => undefined);
+      const read = pendingRead;
+      if (read !== undefined && !readSettled) void read.then(release, release);
+      else release();
+    }
     const body = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
   });
 }
 
-export async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof fetch, phase: DevelopmentReleaseFailure["phase"]): Promise<Uint8Array> {
+export async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof fetch, phase: DevelopmentReleaseFailure["phase"], signal?: AbortSignal): Promise<Uint8Array> {
   let current = new URL(url);
   for (let redirect = 0; redirect <= 4; redirect++) {
     if (current.protocol !== "https:" || !ALLOWED_RELEASE_ORIGINS.has(current.origin)) throw new Error("development release redirect origin is not trusted");
-    const response = await releaseFetch(current.toString(), { method: "GET", redirect: "manual", cache: "no-store", credentials: "omit", headers: { accept: "application/octet-stream", "user-agent": "runmeshdev-release-verifier/1" } }, fetchImpl, phase);
+    const response = await releaseFetch(current.toString(), { method: "GET", redirect: "manual", cache: "no-store", credentials: "omit", headers: { accept: "application/octet-stream", "user-agent": "runmeshdev-release-verifier/1" } }, fetchImpl, phase, signal);
+    signal?.throwIfAborted();
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location"); void response.body?.cancel().catch(() => undefined);
       if (location === null || redirect === 4) throw new Error("development release redirect is invalid");
@@ -141,13 +176,35 @@ export async function boundedReleaseBytes(url: string, limit: number, fetchImpl:
     const declared = response.headers.get("content-length");
     if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit)) { void response.body.cancel().catch(() => undefined); throw new Error("development release asset exceeds its size bound"); }
     const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;
+    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+    let readSettled = false;
+    const abort = () => { void reader.cancel().catch(() => undefined); };
+    const release = (): void => { try { reader.releaseLock(); } catch { /* a read may still be pending */ } };
+    signal?.addEventListener("abort", abort, { once: true });
     try {
       for (let index = 0; ; index++) {
         if (index >= 256) throw new Error("development release asset is fragmented");
-        const part = await reader.read(); if (part.done) break;
+        const read = reader.read(); pendingRead = read; readSettled = false;
+        let part: ReadableStreamReadResult<Uint8Array>;
+        if (signal === undefined) { part = await read; readSettled = true; }
+        else {
+          let onAbort!: () => void;
+          const interrupted = new Promise<never>((_, reject) => { onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError")); signal.addEventListener("abort", onAbort, { once: true }); });
+          try { part = await Promise.race([read, interrupted]); readSettled = true; }
+          finally { signal.removeEventListener("abort", onAbort); }
+        }
+        if (readSettled) pendingRead = undefined;
+        if (part.done) break;
+        signal?.throwIfAborted();
         bytes += part.value.byteLength; if (bytes > limit) throw new Error("development release asset exceeds its size bound"); chunks.push(part.value);
       }
-    } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      void reader.cancel().catch(() => undefined);
+      const read = pendingRead;
+      if (read !== undefined && !readSettled) void read.then(release, release);
+      else release();
+    }
     if (bytes === 0) throw new Error("development release asset is empty");
     const result = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
     return result;
@@ -160,15 +217,18 @@ function parseJsonBytes(bytes: Uint8Array): unknown { return JSON.parse(new Text
 export interface DevelopmentReleaseTrust { readonly key_id: string; readonly public_key_pem: string; }
 const FIXED_DEVELOPMENT_TRUST: DevelopmentReleaseTrust = { key_id: FIXED_RELEASE_KEY_ID, public_key_pem: FIXED_RELEASE_PUBLIC_KEY_PEM };
 
-export async function verifyDevelopmentRunnerRelease(descriptor: RunnerReleaseDescriptor, fetchImpl: typeof fetch = fetch, trust: DevelopmentReleaseTrust = FIXED_DEVELOPMENT_TRUST): Promise<void> {
+export async function verifyDevelopmentRunnerRelease(descriptor: RunnerReleaseDescriptor, fetchImpl: typeof fetch = fetch,
+  signalOrTrust?: AbortSignal | DevelopmentReleaseTrust, trustedKeyring: DevelopmentReleaseTrust = FIXED_DEVELOPMENT_TRUST): Promise<void> {
+  const signal = signalOrTrust !== undefined && typeof (signalOrTrust as AbortSignal).throwIfAborted === "function" ? signalOrTrust as AbortSignal : undefined;
+  const trust = signal === undefined && signalOrTrust !== undefined ? signalOrTrust as DevelopmentReleaseTrust : trustedKeyring;
   if (descriptor.channel !== "dev" || !descriptor.distributable || !isDevelopmentReleaseVersion(descriptor.package_version)) throw new DevelopmentReleaseError("development release descriptor is invalid", { phase: "verification", reason: "invalid_manifest" });
   const target = installerReleaseTarget(descriptor.package_version, "dev");
   // Fetch sequentially: three concurrent unauthenticated GitHub asset requests
   // multiplied transient edge failures and made a valid dev release intermittently
   // unavailable. Each fixed-origin GET has its own bounded retry budget.
-  const manifestBytes = await releasePhase("manifest", "invalid_response", () => boundedReleaseBytes(target.manifest_url, 64 * 1024, fetchImpl, "manifest"));
-  const signatureBytes = await releasePhase("signature", "invalid_response", () => boundedReleaseBytes(target.signature_url, 1024, fetchImpl, "signature"));
-  const signatureDescriptorBytes = await releasePhase("signature_descriptor", "invalid_response", () => boundedReleaseBytes(target.signature_descriptor_url, 16 * 1024, fetchImpl, "signature_descriptor"));
+  const manifestBytes = await releasePhase("manifest", "invalid_response", () => boundedReleaseBytes(target.manifest_url, 64 * 1024, fetchImpl, "manifest", signal));
+  const signatureBytes = await releasePhase("signature", "invalid_response", () => boundedReleaseBytes(target.signature_url, 1024, fetchImpl, "signature", signal));
+  const signatureDescriptorBytes = await releasePhase("signature_descriptor", "invalid_response", () => boundedReleaseBytes(target.signature_descriptor_url, 16 * 1024, fetchImpl, "signature_descriptor", signal));
   const signatureDescriptor = await releasePhase("signature_descriptor", "invalid_response", () => parseJsonBytes(signatureDescriptorBytes));
   if (!isRecord(signatureDescriptor) || signatureDescriptor.schema_version !== 1 || signatureDescriptor.algorithm !== "ed25519" || signatureDescriptor.key_id !== trust.key_id || signatureDescriptor.encoding !== "base64" || signatureDescriptor.signed_file !== "manifest.json") throw new DevelopmentReleaseError("development release signature descriptor is invalid", { phase: "signature_descriptor", reason: "invalid_signature" });
   const manifest = await releasePhase("verification", "invalid_signature", () => verifyRunnerReleaseSignature(manifestBytes, signatureBytes, signatureDescriptorBytes, trust));

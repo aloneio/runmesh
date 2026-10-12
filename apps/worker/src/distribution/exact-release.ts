@@ -10,9 +10,9 @@ export async function resolveExactRunnerRelease(version: string, fetchImpl: type
   const target = exactRunnerRelease(version);
   const deadline = AbortSignal.timeout(EXACT_RELEASE_VERIFICATION_BUDGET_MS);
   const boundedFetch = releaseFetchWithinDeadline(fetchImpl, deadline);
-  const manifest = await releasePhase("manifest", "invalid_response", () => boundedReleaseBytes(target.manifest_url, 65536, boundedFetch, "manifest"));
-  const signature = await releasePhase("signature", "invalid_response", () => boundedReleaseBytes(target.signature_url, 1024, boundedFetch, "signature"));
-  const descriptor = await releasePhase("signature_descriptor", "invalid_response", () => boundedReleaseBytes(target.signature_descriptor_url, 16384, boundedFetch, "signature_descriptor"));
+  const manifest = await releasePhase("manifest", "invalid_response", () => boundedReleaseBytes(target.manifest_url, 65536, boundedFetch, "manifest", deadline));
+  const signature = await releasePhase("signature", "invalid_response", () => boundedReleaseBytes(target.signature_url, 1024, boundedFetch, "signature", deadline));
+  const descriptor = await releasePhase("signature_descriptor", "invalid_response", () => boundedReleaseBytes(target.signature_descriptor_url, 16384, boundedFetch, "signature_descriptor", deadline));
   const verified = await releasePhase("verification", "invalid_signature", () => verifyRunnerReleaseSignature(manifest, signature, descriptor));
   const problem = releaseManifestProblem(verified, { ...target, protocol_min: PROTOCOL_MIN_VERSION, protocol_max: PROTOCOL_CURRENT_VERSION,
     max_asset_bytes: MAX_RELEASE_ASSET_BYTES, compatibility: "overlap", node_major: 22 });

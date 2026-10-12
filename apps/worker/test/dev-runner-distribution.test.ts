@@ -170,7 +170,7 @@ describe("release rate-limit windows", () => {
     expect(onRefreshFailure).toHaveBeenCalledWith({ phase: "manifest", reason: "http_error", http_status: 429 });
   });
 
-  it("preserves a late asset retry window when the refresh deadline is already aborted", async () => {
+it("retires a late asset response when the refresh deadline is already aborted", async () => {
     vi.useFakeTimers(); vi.setSystemTime(started);
     const controller = new AbortController(), timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
@@ -181,7 +181,7 @@ describe("release rate-limit windows", () => {
     const runtime = createDevelopmentReleaseRuntime(), onRefreshFailure = vi.fn();
     try {
       expect((await resolveRelease(devEnv, { fetch: fetchImpl, verify: verifyDevelopmentRunnerRelease, cache: undefined, now: () => Date.now(), runtime, onRefreshFailure })).distributable).toBe(false);
-      expect(fetchImpl).toHaveBeenCalledTimes(2); expect(runtime.next_refresh_at_ms).toBe(started + 120_000);
+      expect(fetchImpl).toHaveBeenCalledTimes(2); expect(runtime.next_refresh_at_ms).toBe(started + 5_000);
       expect(onRefreshFailure).toHaveBeenCalledWith({ phase: "manifest", reason: "timeout" });
     } finally { timeout.mockRestore(); }
   });
@@ -296,7 +296,7 @@ describe("development Runner distribution", () => {
     ]), verify);
     expect(descriptor).toMatchObject({ channel: "dev", distributable: true, package_version: "0.1.6-dev.35" });
     expect(descriptor.package_spec).toBe("https://github.com/aloneio/runmesh/releases/download/v0.1.6-dev.35/runmesh-runner-0.1.6-dev.35.tgz");
-    expect(verify).toHaveBeenCalledExactlyOnceWith(descriptor, expect.any(Function));
+    expect(verify).toHaveBeenCalledExactlyOnceWith(descriptor, expect.any(Function), expect.any(AbortSignal));
   });
 
   it.each([
@@ -345,7 +345,7 @@ describe("development Runner distribution", () => {
       release("0.1.8-dev.38", "2026-10-04T09:00:00Z"),
     ]), verify);
     expect(descriptor.package_version).toBe("0.1.8-dev.38");
-    expect(verify).toHaveBeenCalledExactlyOnceWith(descriptor, expect.any(Function));
+    expect(verify).toHaveBeenCalledExactlyOnceWith(descriptor, expect.any(Function), expect.any(AbortSignal));
   });
 
   it.each(["0.1.6-dev.35", "0.1.8-dev.38"])("verifies the signature and protocol of development release %s", async version => {
@@ -1459,7 +1459,7 @@ describe("reverification after a discovery outage", () => {
     const dependencies = { fetch: fetchImpl, verify, cache: f.cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime(), onRefreshFailure };
     const pending = resolveRelease(devEnv, dependencies).then(value => { settled = true; return value; });
     await vi.advanceTimersByTimeAsync(300);
-    expect(verify).toHaveBeenCalledExactlyOnceWith(f.descriptor, expect.any(Function));
+    expect(verify).toHaveBeenCalledExactlyOnceWith(f.descriptor, expect.any(Function), expect.any(AbortSignal));
     expect(settled).toBe(false);
     expect(f.cache.put).not.toHaveBeenCalled();
     expect(f.state.record!.verified_at_ms).toBe(oldTimestamp);
@@ -1542,7 +1542,7 @@ describe("reverification after a discovery outage", () => {
     const result = await resolveRelease(devEnv, { fetch: responseFetch([release(devVersion(43), "2026-10-06T00:00:00Z")]), verify,
       cache: f.cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
     expect(result.package_version).toBe(devVersion(43));
-    expect(verify).toHaveBeenCalledExactlyOnceWith(result, expect.any(Function));
+    expect(verify).toHaveBeenCalledExactlyOnceWith(result, expect.any(Function), expect.any(AbortSignal));
   });
 
   it("returns the newer Registry winner when an older candidate finishes revalidation last", async () => {

@@ -48,8 +48,8 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
     const response = await releaseFetch(DEV_RELEASE_DISCOVERY_URL, {
       method: "GET", redirect: "manual", cache: "no-store", credentials: "omit",
       headers: { accept: "application/vnd.github+json", "user-agent": "runmeshdev-release-discovery/1", "x-github-api-version": "2026-03-10" },
-    }, boundedFetch);
-    const releases = await boundedJson(response);
+    }, boundedFetch, "discovery", deadline);
+    const releases = await boundedJson(response, deadline);
     if (!Array.isArray(releases)) throw new DevelopmentReleaseError("development release discovery response is invalid", { phase: "discovery", reason: "invalid_response" });
     candidates = releases.flatMap(value => { const descriptor = developmentDescriptor(value); return descriptor === undefined ? [] : [descriptor]; });
     candidates.sort((a, b) => compareDevelopmentReleaseVersions(b.package_version, a.package_version));
@@ -69,7 +69,7 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
   let candidateFailure: DevelopmentReleaseFailure | undefined;
   for (const descriptor of candidates) {
     try {
-      await verify(descriptor, boundedFetch);
+      await verify(descriptor, boundedFetch, deadline);
       deadline.throwIfAborted();
       const verifiedAtMs = now();
       // An older request finishing late must not roll back a newer committed

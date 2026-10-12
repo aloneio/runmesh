@@ -211,6 +211,19 @@ test("release health does not dispatch after an already expired deadline", async
   assert.equal(fetched, false);
 });
 
+test("release health fences a response that arrives after its deadline", async () => {
+  const controller = new AbortController();
+  let resolveFetch;
+  let cancelled = false;
+  const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+  const pending = readReleaseHealth("https://preflight.invalid", () => new Promise(resolve => { resolveFetch = resolve; }), controller.signal);
+  controller.abort(new Error("health deadline"));
+  resolveFetch(response);
+  await assert.rejects(pending, /health deadline/u);
+  assert.equal(cancelled, false, "a late response must remain untouched");
+  assert.equal(response.body.locked, false);
+});
+
 test("release health enforces encoded bytes rather than UTF-16 string length", async () => {
   const text = JSON.stringify({ padding: "汉".repeat(30000) });
   assert.ok(text.length < MAX_RELEASE_HEALTH_BYTES);

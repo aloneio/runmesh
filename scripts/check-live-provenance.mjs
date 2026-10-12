@@ -10,23 +10,33 @@ export async function checkLiveProvenance(origin, expected, fetchImpl = fetch) {
   assert.ok(expected && /^[a-f0-9]{40}$/u.test(expected.commit) && ["main", "dev"].includes(expected.branch), "Supply the expected full commit and main|dev branch");
   const signal = AbortSignal.timeout(10000);
   const response = await fetchImpl(new URL("/health", url), { redirect: "error", cache: "no-store", credentials: "omit", headers: { accept: "application/json", "cache-control": "no-store" }, signal });
+  // A late transport response is no longer owned by this provenance probe.
+  signal.throwIfAborted();
   if (response.status !== 200) {
-    await response.body?.cancel().catch(() => undefined);
+    void response.body?.cancel().catch(() => undefined);
     throw new Error("Health request was not successful");
   }
   assert.ok(response.body, "Missing health body");
   const reader = response.body.getReader(), chunks = [];
   let bytes = 0, reads = 0;
+  let pendingRead;
+  let readSettled = false;
   // Abort native and injected streams, including a stalled read. The same
   // request deadline covers the body; byte limits alone do not bound empty
   // chunks or an indefinitely open response.
   const abortBody = () => { void reader.cancel().catch(() => undefined); };
+  const release = () => { try { reader.releaseLock(); } catch { /* a read may still be pending */ } };
   signal.addEventListener("abort", abortBody, { once: true });
   try {
     for (;;) {
       signal.throwIfAborted();
       if (++reads > 256) throw new Error("Health response exceeds the fragment budget");
-      const item = await reader.read();
+      const read = reader.read(); pendingRead = read; readSettled = false;
+      let onAbort;
+      const interrupted = new Promise((_, reject) => { onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError")); signal.addEventListener("abort", onAbort, { once: true }); });
+      let item;
+      try { item = await Promise.race([read, interrupted]); readSettled = true; }
+      finally { signal.removeEventListener("abort", onAbort); if (readSettled) pendingRead = undefined; }
       signal.throwIfAborted();
       if (item.done) break;
       bytes += item.value.byteLength;
@@ -35,8 +45,10 @@ export async function checkLiveProvenance(origin, expected, fetchImpl = fetch) {
     }
   } finally {
     signal.removeEventListener("abort", abortBody);
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    void reader.cancel().catch(() => undefined);
+    const read = pendingRead;
+    if (read !== undefined && !readSettled) void read.then(release, release);
+    else release();
   }
   const result = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
   const source = result?.deployment;

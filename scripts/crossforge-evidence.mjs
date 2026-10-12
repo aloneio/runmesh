@@ -49,17 +49,32 @@ export async function readProviderJson(url, headers, fetchImpl = fetch) {
   assert.ok(!target.username && !target.password && target.protocol === "https:");
   const signal = AbortSignal.timeout(15000);
   const response = await fetchImpl(target, { headers: { accept: "application/json", ...headers }, redirect: "error", cache: "no-store", credentials: "omit", signal });
-  if (response.status !== 200) { await response.body?.cancel().catch(() => undefined); throw new Error("provider_evidence_unavailable"); }
+  // Do not inspect or cancel a response that arrived after the bounded
+  // provider observation had already expired.
+  signal.throwIfAborted();
+  if (response.status !== 200) { void response.body?.cancel().catch(() => undefined); throw new Error("provider_evidence_unavailable"); }
   assert.ok(response.body); const reader = response.body.getReader(); const chunks = []; let bytes = 0;
+  let pendingRead; let readSettled = false;
   const abort = () => { void reader.cancel().catch(() => undefined); };
+  const release = () => { try { reader.releaseLock(); } catch { /* a read may still be pending */ } };
   signal.addEventListener("abort", abort, { once: true });
   try {
     for (let i = 0; ; i++) {
       assert.ok(i < 2048, "provider fragment limit");
       signal.throwIfAborted();
-      const item = await reader.read(); signal.throwIfAborted(); if (item.done) break;
+      const read = reader.read(); pendingRead = read; readSettled = false;
+      let onAbort;
+      const interrupted = new Promise((_, reject) => { onAbort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError")); signal.addEventListener("abort", onAbort, { once: true }); });
+      let item;
+      try { item = await Promise.race([read, interrupted]); readSettled = true; }
+      finally { signal.removeEventListener("abort", onAbort); if (readSettled) pendingRead = undefined; }
+      signal.throwIfAborted(); if (item.done) break;
       bytes += item.value.byteLength; assert.ok(bytes <= 1048576, "provider response byte limit"); chunks.push(item.value);
     }
-  } finally { signal.removeEventListener("abort", abort); await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+  } finally {
+    signal.removeEventListener("abort", abort); void reader.cancel().catch(() => undefined);
+    const read = pendingRead;
+    if (read !== undefined && !readSettled) void read.then(release, release); else release();
+  }
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
 }
