@@ -143,14 +143,14 @@ tools/call 派发前检查权限和档案代次；新 tools/list 将所选定义
 | 出站请求／单响应 | 64 KiB／1 MiB |
 | 累计响应 | 2 MiB |
 | HTTP 请求／目录分页 | 12／8 |
-| 完整目录工具数量 | 128，另受 W04 字节和节点约束 |
+| 完整目录工具数量 | 128，同时遵循[目录的字节和节点预算](../central-catalog.zh-CN.md#存储预算与恢复) |
 | 响应片段／SSE 事件 | 4,096／256 |
 | 返回内容块 | 32 |
 | 出站端点策略 | 64 项／16 KiB |
 
 这些是准入上限，不是吞吐量或费用承诺；单次预算包含连接、目录检查、验证和执行。
 暂态并发限制不是分布式限流器，重启不会重放操作。调用不会创建 Runner Job，不向
-审计表写入参数／结果正文，也不留下请求生命周期以外的定时器。W09 通过
+审计表写入参数／结果正文，也不留下请求生命周期以外的定时器。中央治理通过
 CENTRAL_GOVERNANCE_ENABLED=1 加入可选元数据回执、所有者内速率限制与冷却，
 见[中央管理与治理](central-administration.zh-CN.md)。费用和线上验证仍须外部验收。
 
@@ -160,7 +160,8 @@ CENTRAL_GOVERNANCE_ENABLED=1 加入可选元数据回执、所有者内速率限
 DO／SQLite 和 Registry 权限链，以及模拟上游服务。覆盖两种协议、UTF-8 分片 SSE、
 凭据隔离、定义变化、撤权、并发准入、过大／损坏响应和派发后失败。新增回归覆盖
 检查过程不调用业务工具或发布目录、HTTP 字段投影、Registry 私密字段过滤及占位符、
-确定性搜索、有界结果数量，以及权限和发布状态变化。真实公网服务验收见发布记录。
+确定性搜索、有界结果数量，以及权限和发布状态变化。部署后按[部署检查流程](../central-rollout.zh-CN.md)
+验证实例连接的公网服务，并保存实际结果。
 
 实现参考：[官方 TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)、
 [Cloudflare 公网 fetch 配置](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public)、

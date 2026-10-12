@@ -189,7 +189,7 @@ hashing and the final publication transaction.
 | Outbound request / response | 64 KiB / 1 MiB |
 | Aggregate response bytes | 2 MiB |
 | HTTP requests / tools/list pages | 12 / 8 |
-| Tools in a complete catalog | 128, within existing W04 byte/node bounds |
+| Tools in a complete catalog | 128, within the [catalog byte and node budgets](../central-catalog.md#storage-budgets-and-recovery) |
 | Body fragments / SSE events | 4,096 / 256 |
 | Returned content items | 32 |
 | Outbound endpoint policy | 64 entries / 16 KiB |
@@ -198,7 +198,7 @@ These are admission ceilings, not throughput or cost guarantees. They include
 connect, list, validation and execution work. Transient concurrency state is not
 a distributed rate limiter. Restart does not replay work. Calls do not create
 Runner Jobs, write argument/result payloads to audit tables or install timers
-outside their request lifetime. W09 adds optional metadata-only durable call
+outside their request lifetime. Central governance adds optional metadata-only durable call
 receipts, owner-local rate limits and cooldown via CENTRAL_GOVERNANCE_ENABLED=1;
 see [administration and governance](central-administration.md). Broader cost
 measurements and live acceptance remain external gates.
@@ -212,8 +212,8 @@ credential isolation, changed schemas, revoked access, concurrent admission,
 oversize/invalid responses and post-dispatch failures. Additional regressions
 cover inspection without business calls or publication, projected HTTP results,
 Registry secret filtering and placeholders, deterministic search, bounded result
-counts and authorization/publication changes. Live public-provider acceptance is
-recorded in the rollout ledger.
+counts and authorization/publication changes. Use the [deployment checklist](../central-rollout.md)
+to verify an installed instance with its configured public providers and record the results.
 
 Primary implementation references:
 - [Official TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
