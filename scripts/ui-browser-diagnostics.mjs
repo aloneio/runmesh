@@ -20,6 +20,7 @@ export async function probeUiNavigationServer(origin, cookie, { fetchImpl = fetc
       try {
         const response = await fetchImpl(new URL(path, base), { redirect: "manual", signal: controller.signal,
           headers: authenticated ? { cookie } : {} });
+        if (controller.signal.aborted) return { state: "timeout", status: null };
         void response.body?.cancel().catch(() => undefined);
         return { state: "response", status: statusCode(response.status) ? response.status : null };
       } catch { return { state: controller.signal.aborted ? "timeout" : "network_error", status: null }; }

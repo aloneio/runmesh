@@ -61,7 +61,7 @@ export interface CachedDevelopmentReleaseRecord {
 }
 
 
-export type DevelopmentReleaseVerifier = (descriptor: RunnerReleaseDescriptor, fetchImpl: typeof fetch) => Promise<void>;
+export type DevelopmentReleaseVerifier = (descriptor: RunnerReleaseDescriptor, fetchImpl: typeof fetch, signal?: AbortSignal) => Promise<void>;
 export type DevelopmentReleaseRefreshScheduler = (work: Promise<void>) => void;
 export interface DevelopmentReleaseFailure {
   readonly phase: "discovery" | "manifest" | "signature" | "signature_descriptor" | "verification";
