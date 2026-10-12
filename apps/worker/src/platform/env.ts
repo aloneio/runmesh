@@ -1,6 +1,9 @@
 import type { RuntimeConfiguration } from "../runtime-config.js";
+import type { McpDiagnosticTrace } from "./mcp-diagnostics.js";
 
 export interface WorkerEnv extends RuntimeConfiguration {
+  /** Test-mode request-local observation; never a deployment binding or authorization input. */
+  readonly mcpDiagnostic?: McpDiagnosticTrace;
   /** Request-local browser admission; never a deployment binding or cached grant. */
   readonly adminSessionHash?: string;
   /** Optional independent metadata-only audit store; never an auth fallback. */

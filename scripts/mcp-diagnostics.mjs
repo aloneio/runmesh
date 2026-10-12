@@ -1,3 +1,6 @@
+import { safeMcpTimingEvent, mcpTimingEventBudgetKey } from "./mcp-timing-diagnostics.mjs";
+export { mcpServerTiming, mcpLoadTimingDiagnostic, mcpWorkerSnapshotDiagnostic } from "./mcp-timing-diagnostics.mjs";
+
 // Diagnostic input can include credentials. Only fixed classifications cross
 // this boundary; no response text, request arguments, IDs or log lines escape.
 const contentTypes = ["json", "html", "text", "sse", "other", "absent"];
@@ -267,6 +270,8 @@ const exitCode = value => value === null || (Number.isInteger(value) && value >=
 
 function safeWorkerEvent(value) {
   if (!record(value)) return undefined;
+  const timingEvent = safeMcpTimingEvent(value);
+  if (timingEvent !== undefined) return timingEvent;
   if (value.event === "runtime_observer" && ["installed", "worker_thread", "runtime_override", "resolution_failed"].includes(value.coverage))
     return { event: "runtime_observer", coverage: value.coverage };
   if (value.event === "runtime_process" && ["spawn", "exit"].includes(value.phase)
@@ -389,10 +394,11 @@ function eventBudget() {
     // Separate bounds preserve launcher and fixture evidence during log floods.
     // Independent bounds preserve direct native-process observations alongside
     // the existing 103 request, runtime-log, fixture and launcher events.
-    const key = event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
+    const timingKey = mcpTimingEventBudgetKey(event);
+    const key = timingKey ?? (event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
       : event.event === "load_progress" ? `load:${event.concurrency}`
-      : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event;
-    const limit = event.event === "runtime_process" ? 64 : event.event === "runtime_observer" ? 8
+      : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event);
+    const limit = timingKey !== undefined ? 1 : event.event === "runtime_process" ? 64 : event.event === "runtime_observer" ? 8
       : event.event === "admin_http" || event.event === "fixture_progress" || event.event === "load_progress" ? 1
       : event.event === "mcp_handler_error" || event.event === "control_plane_failure" ? 16 : event.event === "launcher_snapshot" ? 4
       : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;

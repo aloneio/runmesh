@@ -37,6 +37,7 @@ import { runnerRelease } from "./http/distribution.js";
 import { runnerUninstallScript } from "./http/distribution.js";
 import type { WorkerEnv } from "./platform/env.js";
 import { historyLifecycleReader } from "./platform/history-lifecycle.js";
+import { mcpDiagnostics, observeMcpResponse } from "./platform/mcp-diagnostics.js";
 
 // must never be opened or migrated in place.
 export { RegistryDO, RegistryDOv2, RunnerDO };
@@ -55,8 +56,11 @@ export default {
   },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     env = resolveRuntimeConfiguration(env, request);
-    try { return localizeHtmlResponse(request, await handleRequest(request, env, ctx)); }
+    const diagnostic = isMcpPath(new URL(request.url).pathname) ? mcpDiagnostics.begin(env.RUNMESH_TEST_MODE) : undefined;
+    if (diagnostic !== undefined) env = { ...env, mcpDiagnostic: diagnostic };
+    try { return observeMcpResponse(localizeHtmlResponse(request, await handleRequest(request, env, ctx)), diagnostic); }
     catch (error) {
+      diagnostic?.finish("error");
       if (error instanceof ControlPlaneUnavailableError) return controlPlaneUnavailableResponse();
       throw error;
     }
@@ -75,6 +79,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       ok: true,
       service: "runmesh-agent-control-plane",
       worker_version: PRODUCT_VERSION,
+      ...(env.RUNMESH_TEST_MODE === "1" ? { mcp_diagnostics: mcpDiagnostics.snapshot(env.RUNMESH_TEST_MODE) } : {}),
       mcp_catalog: MCP_CATALOG_SUMMARY,
       runtime_configuration: { schema: "minimal-v1", required_secrets: ["INTERNAL_CONTROL_SECRET", "RUNNER_TOKEN_PEPPER"], manual_public_origin_required: false },
       ui: { locale_rendering: "server-v1", refresh: "explicit" },

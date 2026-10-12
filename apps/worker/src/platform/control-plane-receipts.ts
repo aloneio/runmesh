@@ -6,7 +6,18 @@ import { registryRequest, runnerRpc } from "./control-plane.js";
 import type { WorkerEnv } from "./env.js";
 
 export function mcpIdentityVerifier(env: WorkerEnv): McpIdentityVerifier {
-  return verifier => boundedJsonReceipt(signal => registryRequest(env, "/auth/mcp/verify", "POST", JSON.stringify({ secret_verifier: verifier, identity_version: 2 }), signal), [200, 404]);
+  if (env.mcpDiagnostic === undefined) return verifier => boundedJsonReceipt(signal => registryRequest(env, "/auth/mcp/verify", "POST", JSON.stringify({ secret_verifier: verifier, identity_version: 2 }), signal), [200, 404]);
+  return async verifier => {
+    const diagnostic = env.mcpDiagnostic!;
+    diagnostic.dependency("identity", "fetch");
+    const receipt = await boundedJsonReceipt(async signal => {
+      // This facade includes signing in its fetch span. Body also includes receipt decoding.
+      const response = await registryRequest(env, "/auth/mcp/verify", "POST", JSON.stringify({ secret_verifier: verifier, identity_version: 2 }), signal);
+      if (!signal.aborted) diagnostic.dependency("identity", "body"); return response;
+    }, [200, 404]);
+    diagnostic.dependency("none", "none");
+    return receipt;
+  };
 }
 
 export function enrollmentPorts(env: WorkerEnv): EnrollmentPorts {

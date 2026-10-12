@@ -17,10 +17,103 @@ import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-b
 import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpToolResultDiagnostic, mcpToolResultFailureDiagnostic, mcpWorkerFailureEvidence, runMcpFixtureWithCleanup } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
+import { mcpServerTiming, mcpLoadTimingDiagnostic, mcpWorkerSnapshotDiagnostic } from "../scripts/mcp-diagnostics.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plan = JSON.parse(await readFile(join(root, "test/verification-plan.json"), "utf8"));
 const files = plan.groups.flatMap(g => g.files);
+
+test("MCP timing diagnostics expose bounded numeric durations without private headers", () => {
+  assert.deepEqual(mcpServerTiming("rm_identity;dur=12, rm_registry_fetch;dur=23.4, private-token;desc=private"), { identity: 12, registry_fetch: 23 });
+  for (const value of [null, "rm_total;dur=900001", "rm_total;dur=-1", "rm_total;dur=NaN", "x".repeat(1025), "rm_total;dur=1,rm_total;dur=2"])
+    assert.deepEqual(mcpServerTiming(value), {});
+  assert.deepEqual(mcpServerTiming("rm_action;dur=2.5,rm_total;dur=900000"), { action: 3, total: 900000 });
+});
+
+const timingNames = ["identity", "setup", "reauth", "action", "priming", "total", "registry_sign", "registry_fetch", "registry_body"];
+const timingValues = Object.fromEntries(timingNames.map(name => [name, 1]));
+const emptyDistribution = { samples: 0, p50_ms: null, p95_ms: null, max_ms: null };
+const sampleDistribution = { samples: 2, p50_ms: 1, p95_ms: 2, max_ms: 2 };
+function timingFixture() {
+  return { concurrency: 4, outcome: "failed", elapsed_ms: 30,
+    operations: ["read", "workspace_list", "job_get", "job_logs"].map(operation => ({ operation, started: 3, completed: 2, failed: 1,
+      headers: { ...sampleDistribution, samples: 3 }, body: sampleDistribution, total: sampleDistribution,
+      server_timing: Object.fromEntries(timingNames.map(name => [name, sampleDistribution])) })) };
+}
+
+test("MCP timing diagnostics preserve incomplete loads and independent bounded metric samples", () => {
+  const input = timingFixture();
+  input.operations[1] = { operation: "workspace_list", started: 1, completed: 0, failed: 0,
+    headers: emptyDistribution, body: emptyDistribution, total: emptyDistribution };
+  input.operations[0].url = "private-token";
+  input.operations[0].server_timing.private = { message: "private-token" };
+  const text = mcpLoadTimingDiagnostic(input), events = mcpWorkerFailureEvidence(text);
+  assert.equal(events.length, 43);
+  assert.deepEqual(events.find(value => value.event === "load_timing" && value.operation === "workspace_list"), {
+    event: "load_timing", concurrency: 4, operation: "workspace_list", outcome: "failed", elapsed_ms: 30, started: 1, completed: 0, failed: 0,
+  });
+  assert.deepEqual(events.find(value => value.operation === "workspace_list" && value.metric === "total"), {
+    event: "load_metric", concurrency: 4, operation: "workspace_list", metric: "total", ...emptyDistribution,
+  });
+  assert.doesNotMatch(text, /private|url/u);
+  assert.ok(text.trim().split("\n").every(line => line.length < 768));
+  assert.deepEqual(mcpWorkerFailureEvidence(text.repeat(3)), events);
+});
+
+test("MCP timing diagnostics reject invalid distributions and project archived marker fields again", () => {
+  for (const patch of [{ samples: 33 }, { samples: -1 }, { p50_ms: "private" }, { p95_ms: 0 }, { max_ms: 900001 }, { samples: 0 }]) {
+    const value = timingFixture(); value.operations[0].body = { ...sampleDistribution, ...patch };
+    assert.equal(mcpLoadTimingDiagnostic(value), undefined);
+  }
+  for (const patch of [{ completed: 3, failed: 1 }, { started: 33 }, { operation: "private" }]) {
+    const value = timingFixture(); Object.assign(value.operations[0], patch);
+    assert.equal(mcpLoadTimingDiagnostic(value), undefined);
+  }
+  const event = { event: "load_metric", concurrency: 16, operation: "job_logs", metric: "server_registry_body", ...sampleDistribution };
+  const marker = value => `RUNMESH_E2E_MCP_WORKER_EVENT=${JSON.stringify(value)}\n`;
+  assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...event, url: "private-token" })), [event]);
+  assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...event, metric: "private" })), []);
+});
+
+function snapshotFixture() {
+  const base = { tool: "workspace_list", stage: "priming", tool_stage: "action", dependency: "workspaces", dependency_phase: "fetch", elapsed_ms: 40 };
+  return { concurrency: 8, outcome: "received", diagnostics: { schema_version: 1, entered: 2, finished: 1, dropped: 0,
+    active: [{ ...base, sequence: 2 }], recent: [{ ...base, sequence: 1, stage: "complete", outcome: "eof", timing: timingValues }] } };
+}
+
+test("MCP stage snapshots keep bounded outstanding boundaries without retaining request data", () => {
+  const input = snapshotFixture(); input.diagnostics.active[0].request_id = "private-request";
+  input.diagnostics.recent[0].parameters = { path: "private-path" };
+  const text = mcpWorkerSnapshotDiagnostic(input), events = mcpWorkerFailureEvidence(text);
+  assert.equal(events.length, 3);
+  assert.deepEqual(events[0], { event: "mcp_stage_snapshot", concurrency: 8, outcome: "received", schema_version: 1, entered: 2, finished: 1, dropped: 0 });
+  assert.equal(events[1].dependency, "workspaces"); assert.equal(events[1].dependency_phase, "fetch");
+  assert.equal(events[2].timing.registry_fetch, 1);
+  assert.doesNotMatch(text, /private|request_id|parameters/u);
+  assert.ok(text.trim().split("\n").every(line => line.length < 768));
+  assert.deepEqual(mcpWorkerFailureEvidence(text.repeat(2)), events);
+  for (const outcome of ["timeout", "http_error", "invalid", "unavailable"])
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpWorkerSnapshotDiagnostic({ concurrency: 8, outcome, diagnostics: input.diagnostics })), [{ event: "mcp_stage_snapshot", concurrency: 8, outcome }]);
+});
+
+test("MCP stage snapshots reject malformed counters, private classifications, duplicate sequences and floods", () => {
+  for (const change of [
+    value => { value.diagnostics.entered = 2147483648; }, value => { value.diagnostics.finished = 3; },
+    value => { value.diagnostics.active[0].stage = "private"; }, value => { value.diagnostics.active[0].dependency = "private"; },
+    value => { value.diagnostics.active[0].elapsed_ms = -1; }, value => { value.diagnostics.active[0].sequence = 1; },
+    value => { value.diagnostics.recent[0].timing = { ...timingValues, total: "private" }; },
+    value => { value.diagnostics.active = Array.from({ length: 33 }, (_, index) => ({ ...value.diagnostics.active[0], sequence: index + 3 })); },
+  ]) {
+    const value = snapshotFixture(); change(value);
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpWorkerSnapshotDiagnostic(value)), [{ event: "mcp_stage_snapshot", concurrency: 8, outcome: "invalid" }]);
+  }
+  const value = snapshotFixture(); value.diagnostics.entered = 48; value.diagnostics.finished = 16;
+  value.diagnostics.active = Array.from({ length: 32 }, (_, index) => ({ ...value.diagnostics.active[0], sequence: index + 17, elapsed_ms: 900000 }));
+  value.diagnostics.recent = Array.from({ length: 16 }, (_, index) => ({ ...value.diagnostics.recent[0], sequence: index + 1, timing: Object.fromEntries(timingNames.map(name => [name, 900000])) }));
+  const text = mcpWorkerSnapshotDiagnostic(value);
+  assert.equal(mcpWorkerFailureEvidence(text.repeat(10)).length, 49);
+  assert.ok(text.trim().split("\n").every(line => line.length < 768));
+});
 
 for (const [config, testDirectory, testFile] of [["vitest.e2e.config.ts", "e2e", "mcp-runner.e2e.test.ts"], ["vitest.browser.config.ts", "browser", "admin-ui.browser.test.ts"]]) {
   test(`${config} preserves real Vitest failure messages without mutating errors or exporting private text`, async t => {
@@ -96,7 +189,7 @@ async function transportFixture(t) {
   });
   await mkdir(join(directory, "scripts"));
   await mkdir(join(directory, "node_modules/vitest"), { recursive: true });
-  for (const file of ["run-e2e.mjs", "worker-fixture.mjs", "worker-runtime-observer.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const file of ["run-e2e.mjs", "worker-fixture.mjs", "worker-runtime-observer.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "mcp-timing-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await writeFile(join(directory, "scripts", file), await readFile(join(root, "scripts", file)));
   await writeFile(join(directory, "scripts/build-provenance.mjs"), "export async function writeBuildProvenance() {}\n");
   await writeFile(join(directory, "node_modules/vitest/vitest.mjs"), `

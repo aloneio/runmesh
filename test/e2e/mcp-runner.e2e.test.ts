@@ -11,7 +11,7 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
-import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpToolResultDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpLoadTimingDiagnostic, mcpServerTiming, mcpToolResultDiagnostic, mcpWorkerSnapshotDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
 import { spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../../scripts/worker-fixture.mjs";
 import { createTestHttpScope, runBoundedConcurrentLoad } from "../../scripts/test-http-scope.mjs";
 import WebSocket from "ws";
@@ -32,7 +32,55 @@ type CleanupJob = { readonly id: string | undefined; readonly client: McpClient 
 type CookieJar = Map<string, string>;
 type FormFields = Record<string, string | readonly string[]>;
 type FixtureProgress = (phase: string, boundary: string) => void;
-type McpObservation = (boundary: "headers" | "body" | "failure" | "complete") => void;
+type McpServerDurations = Partial<Record<"identity" | "setup" | "reauth" | "action" | "priming" | "total" | "registry_sign" | "registry_fetch" | "registry_body", number>>;
+type McpObservation = (boundary: "headers" | "body" | "failure" | "complete", serverTiming?: McpServerDurations) => void;
+
+function loadDurationSummary(samples: readonly number[]) {
+  const sorted = [...samples].sort((left, right) => left - right);
+  const milliseconds = (value: number) => Math.min(900_000, Math.max(0, Math.round(value)));
+  return { samples: sorted.length, p50_ms: sorted.length === 0 ? null : milliseconds(sorted[Math.ceil(sorted.length * 0.5) - 1]!),
+    p95_ms: sorted.length === 0 ? null : milliseconds(sorted[Math.ceil(sorted.length * 0.95) - 1]!),
+    max_ms: sorted.length === 0 ? null : milliseconds(sorted[sorted.length - 1]!) };
+}
+
+async function loadWorkerSnapshot(concurrency: number): Promise<void> {
+  type Snapshot = { outcome: "received" | "timeout" | "http_error" | "invalid" | "unavailable"; diagnostics?: unknown };
+  const controller = new AbortController();
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<Snapshot>(resolve => {
+    deadline = setTimeout(() => { controller.abort(); resolve({ outcome: "timeout" }); }, 1_000);
+  });
+  const readSnapshot = async (): Promise<Snapshot> => {
+    // The failed test's HTTP scope is already cancelled; this one bounded
+    // diagnostic request has its own lifetime and never enters the load.
+    const response = await globalThis.fetch(`${workerUrl}/health`, { signal: controller.signal, cache: "no-store" });
+    if (response.status !== 200) { await response.body?.cancel(); return { outcome: "http_error" }; }
+    if (response.body === null) return { outcome: "invalid" };
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > 32 * 1024) { await reader.cancel(); return { outcome: "invalid" }; }
+        chunks.push(part.value);
+      }
+      let health: unknown;
+      try { health = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return { outcome: "invalid" }; }
+      if (typeof health !== "object" || health === null || !("mcp_diagnostics" in health)) return { outcome: "invalid" };
+      return { outcome: "received", diagnostics: health.mcp_diagnostics };
+    } finally { reader.releaseLock(); }
+  };
+  let snapshot: Snapshot;
+  // Promise.race retains rejection handlers for the aborted read even if the
+  // deadline wins before the underlying HTTP implementation finishes cleanup.
+  try { snapshot = await Promise.race([readSnapshot().catch((): Snapshot => ({ outcome: "unavailable" })), timeout]); }
+  finally { clearTimeout(deadline); }
+  const diagnostic = mcpWorkerSnapshotDiagnostic({ concurrency, ...snapshot });
+  if (diagnostic !== undefined) process.stderr.write(diagnostic);
+}
 
 let workerUrl = "";
 // Both fixtures launch Wrangler and build the Worker before serving requests.
@@ -554,11 +602,28 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const begin = performance.now(), latencies: number[] = [];
     let next = 0, completed = 0, phase = "job_setup";
     const pending = { headers: 0, body: 0 };
+    const timings = (["read", "workspace_list", "job_get", "job_logs"] as const).map(operation => ({
+      operation, started: 0, completed: 0, failed: 0, headers: [] as number[], body: [] as number[], total: [] as number[],
+      serverTiming: {} as Partial<Record<keyof McpServerDurations, number[]>>,
+    }));
+    let loadStarted: number | undefined;
+    const timingDiagnostic = (outcome: "passed" | "failed") => mcpLoadTimingDiagnostic({ concurrency, outcome,
+      elapsed_ms: loadStarted === undefined ? 0 : Math.min(900_000, Math.max(0, Math.round(performance.now() - loadStarted))),
+      operations: timings.map(item => ({ operation: item.operation, started: item.started, completed: item.completed, failed: item.failed,
+        headers: loadDurationSummary(item.headers), body: loadDurationSummary(item.body), total: loadDurationSummary(item.total),
+        server_timing: Object.fromEntries(Object.entries(item.serverTiming).map(([stage, samples]) => [stage, loadDurationSummary(samples)])),
+      })),
+    });
     const progress = () => ({ concurrency, phase, started: next, completed,
       ...(phase === "mixed_requests" ? { pending_headers: pending.headers, pending_body: pending.body } : {}),
       elapsed_ms: Math.min(900_000, Math.max(0, Math.round(performance.now() - begin))) });
     let firstFailureProgress: ReturnType<typeof progress> | undefined;
-    onTestFailed(() => process.stderr.write(mcpLoadProgressDiagnostic(firstFailureProgress ?? progress()) ?? ""));
+    let firstFailureTiming: string | undefined;
+    onTestFailed(async () => {
+      process.stderr.write(mcpLoadProgressDiagnostic(firstFailureProgress ?? progress()) ?? "");
+      process.stderr.write(firstFailureTiming ?? timingDiagnostic("failed") ?? "");
+      try { await loadWorkerSnapshot(concurrency); } catch { /* Diagnostics cannot replace the original test failure. */ }
+    });
     const started = await mcpTool("shell", {
       workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('load-log\\n')"), background: true,
     });
@@ -573,24 +638,47 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       { name: "job", args: { action: "logs", job_id: jobId, stream: "stdout", limit: 128 }, check: (value: ToolResult) => expect(value.structuredContent?.data).toBe("load-log\n") },
     ];
     phase = "mixed_requests";
-    const loadStarted = performance.now();
+    loadStarted = performance.now();
     await runBoundedConcurrentLoad({ count: 128, concurrency,
-      onFirstFailure: () => { firstFailureProgress ??= progress(); },
+      onFirstFailure: () => { firstFailureProgress ??= progress(); firstFailureTiming ??= timingDiagnostic("failed"); },
       run: async (index: number, signal: AbortSignal) => {
         next = index + 1;
         const operation = operations[index % operations.length]!;
+        const timing = timings[index % timings.length]!;
+        timing.started++;
         const start = performance.now();
         let boundary: "headers" | "body" | undefined;
-        const observe: McpObservation = state => {
-          if (state === "failure") { firstFailureProgress ??= progress(); return; }
+        let headersStarted: number | undefined, bodyStarted: number | undefined, transportFailed = false;
+        const observe: McpObservation = (state, serverTiming) => {
+          const now = performance.now();
+          if (state === "failure") { transportFailed = true; firstFailureProgress ??= progress(); return; }
+          if (state === "headers") headersStarted = now;
+          if (state === "body") {
+            if (headersStarted !== undefined) timing.headers.push(now - headersStarted);
+            bodyStarted = now;
+            for (const stage of ["identity", "setup", "reauth", "action", "priming", "total", "registry_sign", "registry_fetch", "registry_body"] as const) {
+              const duration = serverTiming?.[stage];
+              if (duration !== undefined) (timing.serverTiming[stage] ??= []).push(duration);
+            }
+          }
+          // A finally/abort notification closes accounting, but is not a
+          // completed response-body sample unless reading and parsing passed.
+          if (state === "complete" && !transportFailed && bodyStarted !== undefined) timing.body.push(now - bodyStarted);
           if (boundary !== undefined) pending[boundary]--;
           boundary = state === "complete" ? undefined : state;
           if (boundary !== undefined) pending[boundary]++;
         };
-        const result = await mcpTool(operation.name, operation.args, clientA, observe, signal);
-        latencies.push(performance.now() - start);
-        expect(result.isError, mcpToolResultDiagnostic("mixed_load", result)).not.toBe(true);
-        operation.check(result); completed++;
+        try {
+          const result = await mcpTool(operation.name, operation.args, clientA, observe, signal);
+          const elapsed = performance.now() - start;
+          latencies.push(elapsed);
+          expect(result.isError, mcpToolResultDiagnostic("mixed_load", result)).not.toBe(true);
+          operation.check(result); completed++; timing.completed++; timing.total.push(elapsed);
+        } catch (error) {
+          timing.failed++;
+          firstFailureProgress ??= progress(); firstFailureTiming ??= timingDiagnostic("failed");
+          throw error;
+        }
       },
     });
     latencies.sort((a, b) => a - b);
@@ -598,6 +686,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     console.log("RUNMESH_MCP_LOAD=" + JSON.stringify({ fixture: "local_worker_runner", concurrency,
       requests: completed, failed: 0, p50_ms: Math.round(latencies[Math.ceil(latencies.length * 0.5) - 1]!),
       p95_ms: Math.round(latencies[Math.ceil(latencies.length * 0.95) - 1]!), elapsed_ms: Math.round(performance.now() - loadStarted) }));
+    process.stderr.write(timingDiagnostic("passed") ?? "");
   }, 60_000);
 
   it("GA-001 writable MCP add/update/move/delete returns success consistent with disk", async () => {
@@ -1191,7 +1280,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
         headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
         body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
       });
-      observe?.("body");
+      if (observe !== undefined) observe("body", mcpServerTiming(response.headers.get("server-timing")));
       if (response.status !== 200) throw await mcpHttpFailure(response, id, name, args);
       return await readMcp(response);
     } catch (error) { observe?.("failure"); throw error; }

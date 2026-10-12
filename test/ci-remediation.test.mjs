@@ -33,6 +33,100 @@ test("CI04 stalled Job fixtures retain one bounded phase snapshot without privat
   }
 });
 
+const timingEventNames = new Set(["load_timing", "load_metric", "mcp_stage_snapshot", "mcp_stage_request"]);
+function maximumMcpSupplementEvents() {
+  const names = ["identity", "setup", "reauth", "action", "priming", "total", "registry_sign", "registry_fetch", "registry_body"];
+  const distribution = { samples: 32, p50_ms: 900000, p95_ms: 900000, max_ms: 900000 };
+  let markers = "";
+  const append = (event, count = 1) => { markers += (`RUNMESH_E2E_MCP_WORKER_EVENT=${JSON.stringify(event)}\n`).repeat(count); };
+  append({ event: "runtime_process", phase: "exit", runtime_index: 16, elapsed_ms: 900000, exit_code: -2147483648, signal: "SIGTERM" }, 64);
+  append({ event: "runtime_observer", coverage: "resolution_failed" }, 8);
+  for (const stage of ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "recording_disable", "recording_enable", "history_settings", "history_restore", "other"])
+    append({ event: "admin_http", stage, status: 599, content_type: "absent", body_kind: "read_timeout", runtime_signature: "cross_request_promise" });
+  append({ event: "mcp_handler_error", kind: "syntax_error", stage: "identity_verification", reason: "network_connection_lost" }, 16);
+  append({ event: "control_plane_failure", stage: "runner_mcp_authorization", outcome: "unexpected_status", kind: "syntax_error", reason: "cross_request_promise", status: 599, phase: "json_parse" }, 16);
+  append({ event: "runtime_log", signature: "cross_request_promise" }, 8);
+  append({ event: "runtime_lifecycle", reason: "crash_restarting", crash_count: 9999 }, 8);
+  append({ event: "proxy_upstream_connection_lost", method: "DELETE", attempts: 1 }, 8);
+  append({ event: "launcher_snapshot", reason: "unexpected_exit", exit_code: -2147483648, signal: "SIGTERM", teardown_started: false, exited_before_teardown: true }, 4);
+  for (const fixture of ["job_recording", "job_history", "job_sharing"])
+    append({ event: "fixture_progress", fixture, phase: "job_input_denied", boundary: "filesystem", elapsed_ms: 900000 });
+  for (const fixture of ["queue", "busy", "job_sharing"]) for (const [phase, count] of [["primary", 1], ["observe", 8]])
+    append({ event: "fixture_failure", fixture, phase, kind: "mcp_http_failure", http_status: 599,
+      mcp_response: { content_type: "other", phase: "read_continuation", body_kind: "not_rpc_error", rpc_code: "absent", rpc_id: "matches", runtime_signature: "cross_request_promise" } }, count);
+  for (const concurrency of [1, 4, 8, 16]) {
+    append({ event: "load_progress", concurrency, phase: "mixed_requests", started: 128, completed: 127, elapsed_ms: 900000, pending_headers: 1, pending_body: 0 });
+    markers += mcpDiagnostics.mcpLoadTimingDiagnostic({ concurrency, outcome: concurrency === 4 ? "passed" : "failed", elapsed_ms: 900000,
+      operations: ["read", "workspace_list", "job_get", "job_logs"].map(operation => ({ operation, started: 32, completed: 32, failed: 0,
+        headers: distribution, body: distribution, total: distribution, private: "private-original-output",
+        server_timing: Object.fromEntries(names.map(name => [name, distribution])) })) });
+    const request = { tool: "workspace_list", stage: "dispatch", tool_stage: "reauth", dependency: "rpc_authorization", dependency_phase: "fetch", elapsed_ms: 900000 };
+    markers += mcpDiagnostics.mcpWorkerSnapshotDiagnostic({ concurrency, outcome: "received", diagnostics: {
+      schema_version: 1, entered: 2147483647, finished: 2147483615, dropped: 2147483647,
+      active: Array.from({ length: 32 }, (_, index) => ({ ...request, sequence: 2147483647 - index, url: "https://private.invalid/token" })),
+      recent: Array.from({ length: 16 }, (_, index) => ({ ...request, sequence: 2147483615 - index, outcome: "cancelled", timing: Object.fromEntries(names.map(name => [name, 900000])) })),
+    } });
+  }
+  return mcpDiagnostics.mcpWorkerFailureEvidence(markers);
+}
+
+test("CI08 supplemental timing preserves primary evidence within the existing 64 KiB bound", async t => {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-ci-supplement-budget-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const value = { schema_version: 1, state: "failed", source: { commit: "a".repeat(40), tree: "b".repeat(40), state: "clean" },
+    stage: "test_execution", subprocess_exit_code: 1, failed_files: 1, failed_tests: 3, skipped_tests: 0,
+    failures: [{ file: "test/e2e/mcp-runner.e2e.test.ts", kind: "test_timeout", test_index: 19 }], worker_events: maximumMcpSupplementEvents() };
+  assert.equal(value.worker_events.length, 579);
+  const original = structuredClone(value);
+  const freeze = item => { if (item && typeof item === "object") { Object.values(item).forEach(freeze); Object.freeze(item); } };
+  freeze(value);
+  assert.ok(Buffer.byteLength(JSON.stringify(value, null, 2)) > 65536);
+  await writeSupplement("transport-tests", value, root);
+  const text = await readFile(join(root, "ci-results/transport-tests.json"), "utf8"), written = JSON.parse(text);
+  assert.ok(Buffer.byteLength(text) <= 65536);
+  assert.doesNotMatch(text, /private|https?:/u);
+  assert.deepEqual(value, original, "the complete safe CI log keeps the original diagnostic object");
+  const { worker_events: retained, worker_event_truncation: truncation, ...primary } = written;
+  const { worker_events: initial, ...originalPrimary } = original;
+  assert.deepEqual(primary, originalPrimary);
+  assert.deepEqual(retained.filter(event => !timingEventNames.has(event.event)), initial.filter(event => !timingEventNames.has(event.event)));
+  assert.equal(truncation.omitted, initial.length - retained.length); assert.ok(truncation.omitted > 0);
+  const activeCounts = [];
+  for (const concurrency of [1, 4, 8, 16]) {
+    assert.equal(retained.filter(event => event.concurrency === concurrency && event.event === "mcp_stage_snapshot").length, 1);
+    assert.equal(retained.filter(event => event.concurrency === concurrency && event.event === "load_timing").length, 4);
+    activeCounts.push(retained.filter(event => event.concurrency === concurrency && event.event === "mcp_stage_request" && event.scope === "active").length);
+  }
+  assert.ok(Math.min(...activeCounts) > 0); assert.ok(Math.max(...activeCounts) - Math.min(...activeCounts) <= 1);
+  let priorIndex = -1;
+  for (const event of retained) {
+    const serialized = JSON.stringify(event);
+    const nextIndex = initial.findIndex((candidate, index) => index > priorIndex && JSON.stringify(candidate) === serialized);
+    assert.ok(nextIndex > priorIndex, "retained events keep their original order"); priorIndex = nextIndex;
+  }
+});
+
+test("CI08 small supplemental timing remains byte-for-byte unchanged", async t => {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-ci-supplement-small-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const value = { schema_version: 1, state: "failed", failures: [{ kind: "test_timeout" }], worker_events: [
+    { event: "mcp_stage_snapshot", concurrency: 1, outcome: "timeout" },
+    { event: "runtime_observer", coverage: "installed" },
+  ] };
+  await writeSupplement("transport-tests", value, root);
+  assert.equal(await readFile(join(root, "ci-results/transport-tests.json"), "utf8"), JSON.stringify(value, null, 2) + "\n");
+  assert.equal(Object.hasOwn(value, "worker_event_truncation"), false);
+});
+
+test("CI08 supplemental diagnostic trimming never removes oversized primary fields", async t => {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-ci-supplement-primary-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const previous = { state: "not_run" };
+  await writeSupplement("transport-tests", previous, root);
+  for (const events of [[], [{ event: "mcp_stage_snapshot", concurrency: 1, outcome: "timeout" }]]) {
+    const value = { state: "failed", failures: [{ kind: "test_timeout", evidence: "x".repeat(65536) }], worker_events: events };
+    await assert.rejects(writeSupplement("transport-tests", value, root), { code: "ERR_ASSERTION" });
+    assert.equal(await readFile(join(root, "ci-results/transport-tests.json"), "utf8"), JSON.stringify(previous, null, 2) + "\n");
+  }
+});
+
 function fixture() {
   const pkg = { scripts: { "test:unit": "npm run test:domain && npm run test:contracts && npm run test --workspaces", "test:release-tools": "node --test test/x.test.mjs", "test:e2e": "node ./scripts/run-e2e.mjs", "test:package:e2e": "node scripts/run-package-e2e.mjs", "test:browser": "node scripts/run-browser-e2e.mjs" } };
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
@@ -286,7 +380,7 @@ test("CI08 failed attempts replace successful reports atomically", async t => {
 for (const id of ["verify", "transport", "browser"]) test(`CI08 ${id} initialization creates and resets only its evidence before dependency installation`, async t => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-ci-initialize-")); t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "scripts"));
-  for (const name of ["ci-check.mjs", "ci-contract.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const name of ["ci-check.mjs", "ci-contract.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "mcp-timing-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, "scripts", name));
   const initialize = () => {
     const result = spawnSync(process.execPath, [join(root, "scripts/ci-check.mjs"), "--initialize", id], { cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true });
@@ -318,7 +412,7 @@ async function ciFailureFixture(t, id, command, stop = async () => {}) {
   const root = await mkdtemp(join(tmpdir(), "runmesh-ci-failure-"));
   t.after(async () => { try { await stop(); } finally { await rm(root, { recursive: true, force: true }); } });
   await mkdir(join(root, "scripts"));
-  for (const name of ["ci-check.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const name of ["ci-check.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "test-evidence.mjs", "evidence-io.mjs", "windows-tools.mjs", "mcp-diagnostics.mjs", "mcp-timing-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(root, "scripts", name));
   await writeFile(join(root, "scripts/ci-contract.mjs"), `export const CI_CHECKS=${JSON.stringify({ [id]: command })}; export const CHECK_IDS=Object.keys(CI_CHECKS);\n`);
   await writeFile(join(root, "scripts/fixture-pass.mjs"), "process.exitCode = 0;\n");

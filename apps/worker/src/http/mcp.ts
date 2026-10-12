@@ -20,6 +20,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   const boundary: { stage: McpHandlerStage } = { stage: "request_validation" };
   try { return await handleMcpRequest(request, env, url, boundary); }
   catch (error) {
+    env.mcpDiagnostic?.finish("error");
     // Preserve the original failure. SDK callbacks do not observe exceptions
     // before dispatch or while preparing the outgoing HTTP response.
     try { reportMcpHandlerError(error, boundary.stage); }
@@ -34,11 +35,13 @@ async function handleMcpRequest(request: Request, env: WorkerEnv, url: URL, boun
   const secret = parts[0];
   if (secret === undefined || !MCP_SECRET_RE.test(secret)) return mcpHttpError(404, "Not found", await readRejectedMcpRequestId(request));
   boundary.stage = "identity_verification";
+  env.mcpDiagnostic?.mark("identity");
   const verified = await verifyMcpClient(mcpIdentityVerifier(env), await sha256Hex(secret)).catch(async error => { await readRejectedMcpRequestId(request); throw error; });
   if (verified === undefined) return mcpHttpError(404, "Not found", await readRejectedMcpRequestId(request));
   // createMcpHandler requires an exact /mcp route. Forward the bounded body
   // and its parsed value; protocol validation remains owned by the SDK.
   boundary.stage = "request_body";
+  env.mcpDiagnostic?.mark("body");
   const rewritten = new URL(request.url);
   rewritten.pathname = "/mcp";
   rewritten.search = "";
@@ -54,6 +57,8 @@ async function handleMcpRequest(request: Request, env: WorkerEnv, url: URL, boun
       parsedBody = JSON.parse(new TextDecoder().decode(body)) as unknown;
       const rpc = parsedBody as { method?: string; params?: { name?: string } } | null;
       if (rpc?.method === "tools/call" && typeof rpc.params?.name === "string") calledTool = rpc.params.name;
+      const action = (rpc?.params as { arguments?: { action?: unknown } } | undefined)?.arguments?.action;
+      env.mcpDiagnostic?.classify(calledTool, action);
       discoversProviders = rpc?.method === "tools/list" || rpc?.method === "resources/list" || rpc?.method === "resources/templates/list";
       needsDirectory = env.CENTRAL_DIRECT_TOOLS_ENABLED === "1" && (rpc?.method === "tools/list" || (rpc?.method === "tools/call" && typeof rpc.params?.name === "string" && (rpc.params.name.startsWith("rm_") || rpc.params.name === "remote_status")));
     } catch { /* The SDK owns malformed JSON-RPC responses. */ }
@@ -69,6 +74,7 @@ async function handleMcpRequest(request: Request, env: WorkerEnv, url: URL, boun
     extra: { client_label: verified.label, secret_version: verified.secret_version },
   };
   boundary.stage = "module_loading";
+  env.mcpDiagnostic?.mark("setup");
   const [{ createMcpHandler }, { createCodingMcpServer, MCP_TOOL_NAMES }] = await Promise.all([
     import("agents/mcp/server"),
     import("../mcp/server.js"),
@@ -146,9 +152,12 @@ async function handleMcpRequest(request: Request, env: WorkerEnv, url: URL, boun
       onerror: error => reportMcpHandlerError(error, handlerStage),
     },
   );
+  env.mcpDiagnostic?.mark("dispatch");
   const handled = await handler.fetch(forwarded, { authInfo: auth, ...(parsedBody !== undefined ? { parsedBody } : {}) });
   boundary.stage = "response_priming";
-  const response = await primeMcpResponse(handled, parsedBody);
+  env.mcpDiagnostic?.mark("priming");
+  const response = await primeMcpResponse(handled, parsedBody, env.mcpDiagnostic);
+  env.mcpDiagnostic?.mark("stream");
   // The MCP credential is carried in the request path.  Do not allow an SDK
   // response (or an intermediary) to cache that path or disclose it through
   // a referrer when a client follows a response link.  These headers also
