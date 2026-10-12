@@ -85,12 +85,21 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, options:
     const tool = (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => { disable(): void })(name, { description: spec.description, ...publishedToolSchemas[name], annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
+      env.mcpDiagnostic?.toolStage("reauth");
       const live = await reauthorizePrincipal(async signal => {
         if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) throw new Error("internal service unavailable");
         const path = "/auth/mcp/revalidate", body = JSON.stringify({ ...env.mcpPrincipal, identity_version: 2 });
+        env.mcpDiagnostic?.dependency("reauth", "sign");
         const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body);
-        return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal }));
+        env.mcpDiagnostic?.dependency("reauth", "fetch");
+        const pending = env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal }));
+        if (env.mcpDiagnostic === undefined) return pending;
+        const response = await pending;
+        if (!signal.aborted) env.mcpDiagnostic?.dependency("reauth", "body");
+        return response;
       }, env.mcpPrincipal);
+      env.mcpDiagnostic?.dependency("none", "none");
+      env.mcpDiagnostic?.toolStage("done");
       if (live.state === "unavailable") {
         return failure("registry_unavailable", "Current authorization could not be checked because its dependency is temporarily unavailable.", "Keep the current connection and retry after the dependency recovers; no operation was dispatched.", "not_started");
       }
@@ -107,10 +116,11 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, options:
         return failure("insufficient_scope", `This tool requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
       }
       try {
+        env.mcpDiagnostic?.toolStage("action");
         return verifyToolResult(name, input, await action(input, scopes));
       } catch {
         return failure("internal_error", "The MCP tool could not confirm the operation outcome.", "Inspect the existing Job or change receipt before deciding what to do next; do not blindly repeat a write or command. Contact the operator if the outcome cannot be established.");
-      }
+      } finally { env.mcpDiagnostic?.toolStage("done"); }
     });
     if (options.hideNative) tool.disable();
   }

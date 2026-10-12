@@ -1,8 +1,10 @@
+import type { McpDiagnosticTrace } from "../platform/mcp-diagnostics.js";
+
 /** Do not commit HTTP success while the SDK has yet to produce any SSE bytes.
  * A termination before those bytes cannot leave an already committed empty 200.
  * The remainder still streams with backpressure; no result buffering or retry.
  */
-export async function primeMcpResponse(response: Response, parsedBody: unknown): Promise<Response> {
+export async function primeMcpResponse(response: Response, parsedBody: unknown, diagnostic?: McpDiagnosticTrace): Promise<Response> {
   if (response.status !== 200 || !response.headers.get("content-type")?.includes("text/event-stream")) return response;
   const reader = response.body?.getReader();
   let first: ReadableStreamReadResult<Uint8Array> | undefined;
@@ -27,6 +29,7 @@ export async function primeMcpResponse(response: Response, parsedBody: unknown):
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 
   async function unavailable(reason: "empty_stream" | "stream_error"): Promise<Response> {
+    diagnostic?.finish("error");
     try { await reader?.cancel(); } catch { /* The failed source may already be closed. */ }
     finally { reader?.releaseLock(); }
     // Platform invocation logs supply correlation. Do not log arguments, IDs,

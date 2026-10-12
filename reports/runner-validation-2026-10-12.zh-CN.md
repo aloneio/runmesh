@@ -2,6 +2,8 @@
 
 日期：2026-10-12。基线：`origin/dev` 的 `115ba45`，以及本次 0.1.8 候选修复。执行平台：Windows，Node.js 22.23.2。
 
+当前状态：候选 `aab0b18` 的 push CI 全部成功；PR CI 的 Windows 网络 E2E 记录 3 项失败，其余 jobs 成功。本机干净源码与安装包 E2E 各 41/41 通过、混合请求各 512 次成功；源码日志另记录原生运行时退出与重启，所处测试或收尾阶段尚未归因。完整证据与历史 `5984ae8` 记录分别保存，0.1.8 保持 candidate。
+
 ## 检查与修复
 
 检查覆盖作业排队、stdin、日志分页、取消、终态持久化和重启恢复，以及协议、Context 证据、原生服务和独立升级管理器。审阅以待发布 dev 分支为准；dev 已包含的历史修复未重复列为缺陷。
@@ -101,6 +103,62 @@ observer 定向 10/10、browser-fixture 定向 5/5、完整原生退出码诊断
 CI 接线初次替换冻结的旧 native 命令，产生 5 项布局契约失败；`.audit/observer-ci-wiring-tests.log` 保留 238 通过、5 失败、2 跳过的首轮结果。改为 `NATIVE_ADDED_COMMANDS` 独立 step 后，ci-layout 复验 6/6 通过、0 跳过、362.823 ms，日志为 `.audit/observer-ci-layout-corrected.log`。产品请求与负载预算保持原值。
 
 本轮 format（1,051 文件）、架构（473 模块、2,422 边、0 环）、清单（9 组、260 文件）、CI 契约（26 门禁）、文档源码事实、3 项 runbook、版本一致性及 TypeScript 检查通过。这些属于冻结前工作区验证，新的干净提交源码 E2E 结果另行追加。
+
+## `aab0b18` 网络与原生平台复验
+
+候选提交 `aab0b183a4b6759fe92d944847f445b1cacbbdf6`，源码树 `7fed2f3c6b498c4c13a594ee1e7d351b32c777e1`。PR 工件的合成提交为 `6727f81fb8dddd19254b5b3e495c840f1ba3fe20`，Git 提交 API 与工件 source 均确认相同源码树。托管 [push CI 38211958047](https://github.com/aloneio/runmesh/actions/runs/38211958047) 全部成功；[PR CI 38211962274](https://github.com/aloneio/runmesh/actions/runs/38211962274) 唯一失败 job 为 Windows native，失败 step 为传输与恢复 E2E，均为 attempt 1。
+
+两侧 Windows Runner 单元测试各 1,494 通过、142 平台跳过、0 失败，Vitest 总耗时 222.32/271.87 秒。Linux/macOS native、Node 22.23.2/24.21.0 LTS、browser 和 Linux verify 均成功。两侧 Linux unit 各为 Vitest 4,696 通过、36 跳过，加根级 Node 305/305，合计 5,001 通过、0 失败、36 跳过。tooling 独立计量，各 1,050 通过、23 跳过；Linux 源码与安装包 E2E 各 41/41、browser 各 5/5。
+
+push Windows 网络 E2E 41/41 通过，Vitest 总耗时 180.04 秒，wrapper 182,174 ms。各档混合负载均为 128 请求、0 失败，总计 512 请求。
+
+| 并发 | push Windows P50/P95（ms） | 该档耗时（ms） |
+| --- | --- | --- |
+| 1 | 139 / 2,186 | 51,326 |
+| 4 | 499 / 887 | 16,732 |
+| 8 | 1,190 / 2,298 | 19,739 |
+| 16 | 2,457 / 3,008 | 18,109 |
+
+单并发耗时接近 60 秒测试预算，仍需结合正常请求路径评估延迟。该次通过仅作为本轮成功证据，历史网络失败的触发原因继续独立定位。
+
+PR Windows 网络工件保留 3 项失败、0 跳过，失败列表未截断；完整通过计数与成功负载汇总按工件缺失保留。wrapper 为 291,786 ms，子进程退出码 1，低于整体 300,000 ms 截止，门禁为 `failed`。
+
+| 并发 / 测试索引 | 失败类别 | 首错快照 |
+| --- | --- | --- |
+| 1 / 19 | `test_timeout`，位置 `test/e2e/mcp-runner.e2e.test.ts:1188:24` | 60,020 ms；started/completed 122/121；pending_headers/pending_body 1/0。 |
+| 8 / 21 | `job_get` HTTP 500，文本非 JSON，固定特征 `network_connection_lost`；位置 `test/e2e/mcp-runner.e2e.test.ts:1195:42` | 54,610 ms；started/completed 122/114；pending_headers/pending_body 7/1。 |
+| 16 / 22 | 同类 HTTP 500，安全阶段分类保留为 `other`，位置同上 | 13,040 ms；started/completed 35/19；pending_headers/pending_body 15/1。 |
+
+PR 记录 POST 连接丢失事件 3 条，各 attempts 1；launcher 的 `test_failed` 快照中退出码/信号为 null，teardown 尚未开始、未提前退出。原生观察器有 installed 两次及 spawn index 1/2，耗时 2,763/3,529 ms；push 对应 spawn 为 3,293/4,212 ms。两侧归档日志与工件均未记录 native exit 或 runtime restart。该观测补充了实际原生子进程事件，但事件缺席本身不构成进程全程存活或故障原因的证明。
+
+Windows 本机两组在干净候选源码上各 41/41 通过、0 跳过，每组混合请求各 512 次成功。源码 Vitest 总耗时 97.93 秒、wrapper 100,368 ms；安装包为 104.94 秒、132,382 ms。
+
+| 并发 | 本机源码 P50/P95（ms） | 本机安装包 P50/P95（ms） |
+| --- | --- | --- |
+| 1 | 76 / 97 | 92 / 177 |
+| 4 | 244 / 386 | 308 / 444 |
+| 8 | 513 / 625 | 665 / 1,435 |
+| 16 | 1,013 / 1,281 | 1,025 / 1,363 |
+
+本机源码日志同时记录 index 1 在 `elapsed_ms=87126` 以退出码 1 退出，随后出现 `crash_restarting`、`crash_count=1`，index 3 于 `elapsed_ms=87175` 启动。耗时基准为观察器启动，不是单个子进程寿命；事件没有 teardown 字段，Vitest JSON 也没有各组收尾的绝对时刻。本轮保留退出与重启事实，尚不能将其归为活跃测试中的崩溃或收尾终止。本机安装包日志仅记录两次 native spawn。
+
+本机包为 1,206,785 字节，SHA256 `d3e4b189f58d5de200acae76f0e54531122af3c481f7c4b37dfc864d0320042a`，签名与发布状态均为 false。证据为 `.audit/source-e2e-aab0b18` 的 log/json/evidence.json/gate.json，以及 `.audit/package-e2e-aab0b18.json` 和对应 log。
+
+本轮四个工作流全部终态、6 ZIP 与 5 日志归档至 `.audit/aab0b18-ci`；main-source-policy 成功，开发预发布 cadence 为 `due=false`，后续发布步骤按节奏跳过。`safe-summary.json` SHA256 为 `9e99cbfa359393834dba855205181ebf884025064ec021f54da4bef10eead3a2`，`state=complete`、`archive_state=complete`、`validation_state=failed`。详细源码身份、Linux 负载与发布边界见[项目检查书](project-audit-2026-10-12.zh-CN.md)。历史 `5984ae8` 归档保持原样，后续修复按新的源码身份验收。
+
+## 后续阶段耗时与证据容量观测
+
+`aab0b18` 之后新增测试观测，按 read、workspace_list、job/get、job/logs 汇总等待响应头、正文与完整结果的有限耗时样本。四档并发、每档 128 请求、每档 60 秒用例预算以及产品调用顺序和预算保持原值。失败后单独请求一次 `/health` 快照，设 1 秒截止，作为独立失败收尾开销计量。
+
+Worker 仅在 `RUNMESH_TEST_MODE=1` 保留固定分类与数值，正常请求采样不新增定时器或外部调用。每个 isolate 的活动项上限 32、最近结束项上限 16；响应包装按下游读取并传递取消，生产响应保持原路径。导出字段不包含凭据、URL、参数或结果正文。快照缺失不证明健康，也不将不同 isolate 的计数合并解释。
+
+服务端响应头中的 total 截止于返回响应头前，最近结束记录的 total 截止于 EOF、取消或错误；Registry fetch 包含依赖处理和排队，身份核验 facade 的 fetch 还包含签名。各阶段可能重叠，计数分别解释。客户端等待响应头包含 Worker 首个 SSE 字节的准备，阶段耗时用于下一轮定位，不作为本轮网络根因已修复的依据。
+
+补充工件维持 65,536 字节合同，完整保留 source、failures 与既有 runtime 事件，新增阶段和分布事件按优先级及并发档位裁剪并记录省略数；主证据超限仍拒绝写入。裁剪不修改输入记录或完整安全日志。容量定向验证 3/3 通过，包含 579 条事件的极值输入、四档并发记录与原顺序保留、小工件逐字节一致，以及主证据超限时原文件保持完整。
+
+Worker 定向验证 4 个文件、252/252 通过、0 跳过，耗时 48.19 秒，覆盖生产路径、流转发和取消等边界。工具层 4 套测试为 394 通过、14 跳过，耗时 91.661 秒，日志为 `.audit/mcp-timing-tooling-full.log`；其中包含此前 5/5 通过的解析器测试，其日志为 `.audit/mcp-timing-parser-tests.log`。工具完整集合运行于容量裁剪修改之前，3 项容量用例随后单独执行；Worker 与容量结果以本轮工具执行回执为证据，未另存日志文件。
+
+TypeScript、文档、runbook 与版本检查通过；format 为 1,054 文件，架构为 474 模块、2,426 条依赖边、0 环，测试清单为 9 组、261 文件，CI 契约为 26 门禁。上述结果用于确认观测实现与证据容量边界，最新完整 CI 仍以 `aab0b18` 的 push 成功、PR Windows 三项失败为准，正式版 0.1.7 与 0.1.8 candidate 状态保持原样。
 
 ## 证据边界
 

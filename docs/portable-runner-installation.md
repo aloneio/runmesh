@@ -139,7 +139,7 @@ console.log({ version: m.version, tag: m.tag, commit_sha: m.commit_sha, artifact
 ' "$DOWNLOAD/manifest.json"
 ```
 
-On Windows, run the equivalent checks from an elevated PowerShell session. The
+On Windows, run the equivalent checks from a PowerShell session. The
 checksum parser rejects paths that would escape the download directory:
 
 ```powershell

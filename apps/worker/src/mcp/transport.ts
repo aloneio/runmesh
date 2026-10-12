@@ -19,6 +19,7 @@ import { safeJobLogResult } from "./results/jobs.js";
 import { safeReadResult } from "./results/files.js";
 import type { ToolCall } from "./contracts.js";
 import { reportControlPlaneFailure, type ControlPlaneFailureStage } from "../platform/control-plane-diagnostics.js";
+import type { McpDiagnosticDependency } from "../platform/mcp-diagnostics.js";
 
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
   return isKnownRpcFailureCode(value) ? value : fallback;
@@ -44,6 +45,18 @@ function reportRegistryFailure(stage: ControlPlaneFailureStage, failure: Bounded
   // A missing record retains its normal not_found result, not an outage event.
   if (failure.outcome === "unexpected_status" && failure.status === 404) return;
   reportControlPlaneFailure(stage, failure.outcome, failure.error, failure.status, failure.phase);
+}
+
+function diagnosticDependency(stage: ControlPlaneFailureStage): McpDiagnosticDependency {
+  switch (stage) {
+    case "mcp_active_runner": return "active_runner";
+    case "mcp_permissions": return "permissions";
+    case "mcp_policy_readiness": return "policy_readiness";
+    case "mcp_workspaces": return "workspaces";
+    case "mcp_job_snapshot": return "job_snapshot";
+    case "mcp_rpc_authorization": return "rpc_authorization";
+    default: return "registry_other";
+  }
 }
 
 export async function callRunner(env: McpRequestEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string, workspaceBoundJob = false): Promise<ToolCall> {
@@ -111,11 +124,18 @@ export function registryJobsPath(runnerId: string, filters: Record<string, unkno
 export async function registryCall(env: McpRequestEnv, path: string): Promise<ToolCall> {
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.", "not_started");
   const stage = registryDiagnosticStage(path, "GET");
+  const diagnostic = env.mcpDiagnostic, dependency = diagnosticDependency(stage);
   let headers: HeadersInit;
+  diagnostic?.dependency(dependency, "sign");
   try { headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, ""); }
   catch (error) { reportControlPlaneFailure(stage, "exception", error); throw error; }
   try {
-    const response = await boundedJsonReceipt(signal => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers, signal })), [200], 5000, MAX_FRAME_BYTES, undefined, failure => reportRegistryFailure(stage, failure));
+    diagnostic?.dependency(dependency, "fetch");
+    const fetchResponse = (signal: AbortSignal) => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers, signal }));
+    const response = await boundedJsonReceipt(diagnostic === undefined ? fetchResponse : async signal => {
+      const result = await fetchResponse(signal); if (!signal.aborted) diagnostic.dependency(dependency, "body"); return result;
+    }, [200], 5000, MAX_FRAME_BYTES, undefined, failure => reportRegistryFailure(stage, failure));
+    diagnostic?.dependency("none", "none");
     if (response?.status === 200) return { ok: true, value: response.value };
     return fail(response?.status === 404 ? "not_found" : "registry_unavailable", response?.status === 404 ? "The requested registry record was not found." : "The registry is unavailable.", response?.status === 404 ? "Use runner_list to discover valid identifiers." : "Retry shortly; the runner may still be available for live tools.", "not_started");
   } catch (error) {
@@ -128,11 +148,18 @@ export async function registryPostCall(env: McpRequestEnv, path: string, input: 
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
   const body = JSON.stringify(input);
   const stage = registryDiagnosticStage(path, "POST");
+  const diagnostic = env.mcpDiagnostic, dependency = diagnosticDependency(stage);
   let headers: HeadersInit;
+  diagnostic?.dependency(dependency, "sign");
   try { headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body); }
   catch (error) { reportControlPlaneFailure(stage, "exception", error); throw error; }
   try {
-    const response = await boundedJsonReceipt(signal => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal })), receiptKind === "audit" ? [200, 403, 409, 202] : [200, 403, 409], 5000, 16384, undefined, failure => reportRegistryFailure(stage, failure));
+    diagnostic?.dependency(dependency, "fetch");
+    const fetchResponse = (signal: AbortSignal) => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal }));
+    const response = await boundedJsonReceipt(diagnostic === undefined ? fetchResponse : async signal => {
+      const result = await fetchResponse(signal); if (!signal.aborted) diagnostic.dependency(dependency, "body"); return result;
+    }, receiptKind === "audit" ? [200, 403, 409, 202] : [200, 403, 409], 5000, 16384, undefined, failure => reportRegistryFailure(stage, failure));
+    diagnostic?.dependency("none", "none");
     // Authority and selection require completed JSON receipts at 200. Only
     // the audit caller opts into the documented disabled/degraded 202 receipt;
     // neither that receipt nor a conflict/denial can become an execution grant.

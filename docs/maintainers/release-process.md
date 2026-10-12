@@ -32,6 +32,8 @@ Use the published version, its full 40-character source commit and the manifest'
 
 ```sh
 npm run generate:version
+npm run generate:facts
+npm run check:docs
 node scripts/check-release-contract.mjs --require-distributable
 ```
 
