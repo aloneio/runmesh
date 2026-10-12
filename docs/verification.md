@@ -25,7 +25,7 @@ The `test:browser` gate requires Linux. Run candidate-bound `test:security` on L
 
 When adding a test file, assign it one owner in `test/verification-plan.json`. Run `npm run check:verification` to detect missing or duplicate ownership and confirm that root Node tests appear in executable commands.
 
-Transport tests live in `test/e2e/`; browser tests live in `test/browser/`. Each suite starts its own temporary Worker, and the browser gate also runs isolated product scenarios. The collection check compares each suite with its ownership manifest. Add new cases to the entry point for their module.
+Source and installed-package transport tests in `test/e2e/` use real HTTP and WebSocket connections to the native entry point of the local Miniflare/workerd runtime, created from the Wrangler configuration with its resource bindings and asset routing. Browser tests in `test/browser/` use Wrangler's local development server and also run isolated product scenarios. Each suite owns a temporary Worker and isolated state. The collection check compares each suite with its ownership manifest. Add new cases to the entry point for their module.
 
 Exercise domain rules through public APIs and keep adapter integration in its dedicated suites. The [source dependency checks](architecture-gates.md) define the allowed imports, including deterministic `node:crypto`.
 

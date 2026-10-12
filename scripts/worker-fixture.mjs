@@ -1,12 +1,21 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
 import { isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { resolveTrustedTaskkillPath } from "./windows-tools.mjs";
 
-/** Source and browser fixtures share the exact local Worker launch contract. */
-export function spawnWorkerFixture({ cwd, persistTo, vars, env = process.env }) {
+/** Both transports retain the real Wrangler config and native Worker runtime. */
+export function spawnWorkerFixture({ cwd, persistTo, vars, env = process.env, transport = "proxy" }) {
   assert.ok(isAbsolute(cwd) && isAbsolute(persistTo), "Worker fixture paths must be absolute");
+  assert.ok(transport === "proxy" || transport === "native", "Unknown Worker fixture transport");
+  if (transport === "native") {
+    return spawn(process.execPath, ["--import", new URL("./worker-runtime-observer.mjs", import.meta.url).href,
+      fileURLToPath(new URL("./worker-runtime-launcher.mjs", import.meta.url))], {
+      cwd, env: { ...env, ...vars, RUNMESH_WORKER_FIXTURE_CONFIGURATION: JSON.stringify({ persistTo, vars }) },
+      stdio: ["ignore", "pipe", "pipe", "ipc"], detached: true, windowsHide: true,
+    });
+  }
   return spawn(process.execPath, ["--import", new URL("./worker-runtime-observer.mjs", import.meta.url).href,
     join(cwd, "node_modules/wrangler/bin/wrangler.js"), "dev", "--local", "--ip", "127.0.0.1",
     "--config", "apps/worker/wrangler.jsonc", "--port", "0", "--inspector-port", "0", "--persist-to", persistTo,

@@ -1,9 +1,9 @@
 # Runmesh 项目检查书
 
-检查日期：2026-10-12（Asia/Shanghai）
+检查日期：2026-10-12 至 2026-10-13（Asia/Shanghai）
 
 检查基线：`dev`，`115ba45`
-阶段：12 项检查发现已完成对应修正，用户文档已整理。最新诊断提交 `a455499` 的 push CI 全部成功，PR CI 的 Windows 压力验证触及既有 300 秒上限，汇总检查随之失败。正式发布仍受该门禁阻塞，0.1.8 尚未正式发布或激活。线上健康检查通过，稳定分发保持 0.1.7；已验证的开发预发布为 `v0.1.8-dev.63`。
+阶段：12 项检查发现及后续回执、夹具生命周期问题已完成对应修正，用户文档已整理。候选 `04d50ba` 的独立 main CI 暴露 Windows 开发代理转发阶段的连接失败后，传输夹具已改为真实 Worker 运行时的原生 HTTP 入口。修复的源码与安装包单次验证各通过 41/41 项测试和 512/512 次压力请求；后续进入新候选的跨平台验收。完整失败与修复证据见末节。0.1.8 尚未正式发布或激活，线上健康检查通过，稳定分发保持 0.1.7。
 
 ## 范围与方法
 
@@ -939,3 +939,95 @@ Windows x64、Node 22.23.2 的单次完整源码 E2E 于 15:27:39.654Z 开始，
 本次日志保留 212 条安全事件，未出现代理断连或测试失败事件。摘要 SHA256 为 `4819b3829e9e88ae8224b5b05ae59cb53ee911c3592f70508582d1155a9e8e73`，完整日志 SHA256 为 `045389a2315b0556a3ec52e8faedfbd6d82e0983c53635c052cb20f5a939a6d0`；文件分别为该目录的 `source_transport-summary.json` 和 `source_transport.log`。类型、文档、格式、架构和 whitespace 检查通过；本段在测试完成后追加，不回写冻结计划的源文件摘要。
 
 用户文档与四份发布激活草稿另经只读复核，版本能力、中英文说明和历史条目保持一致；实际签名发布完成后再更新正式版本选择和已核验的发布证据。本轮仅在工程检查书保存故障调查、用例和计数。
+
+## `04d50ba` 修复候选首次托管 CI 验收
+
+本轮修复候选为 `04d50baadc774abc328d065cfe4fdde3c7370382`，源码树为 `c5a71e48c15dbe29a94499a0eb7891c67413fcb5`。GitHub Push CI [38271142398](https://github.com/aloneio/runmesh/actions/runs/38271142398) 与 PR CI [38271150342](https://github.com/aloneio/runmesh/actions/runs/38271150342) 均在首次执行（attempt 1）完成 8/8 作业，全部成功。Push 实际执行候选提交；PR 实际执行合成提交 `296b8dac7f50a4e48aa66c17652abe5ef16d7aa4`，其父提交为原 main `a18f3c015740458cfc90ce9b6c1626580937e6b9` 与上述候选，源码树与候选完全一致。两套执行身份分别核验并保存，没有将 PR 合成提交写成候选提交。
+
+每套归档包含 8 份作业日志和 verify、Windows、browser 三个 ZIP，展开文件数分别为 57、3、3。六个 ZIP 的 SHA256 均与提供方摘要匹配，ZIP 条目、下载收据及展开后的完整文件集合逐项一致；两个汇总均为 `archive_state=complete`。每套 28 份 `ci_gate_execution` 记录均为 `passed`、退出码 0、源码状态 `clean`，提交分别匹配对应执行身份，源码树全部匹配上述候选树。归档与核验过程只读取既有 CI 结果，没有追加测试或远端写入。
+
+| 验证项 | Push CI | PR CI |
+| --- | --- | --- |
+| 全部作业 | 8/8 成功 | 8/8 成功 |
+| Windows 源码 E2E | 41/41，0 失败、0 跳过；160,909 ms | 41/41，0 失败、0 跳过；94,289 ms |
+| Windows 混合负载 | 512/512 请求，0 失败 | 512/512 请求，0 失败 |
+| Linux 源码 E2E | 41/41，0 失败、0 跳过 | 41/41，0 失败、0 跳过 |
+| Linux 安装包 E2E | 41/41，0 失败、0 跳过 | 41/41，0 失败、0 跳过 |
+| 真实浏览器 E2E | 5/5，0 失败、0 跳过 | 5/5，0 失败、0 跳过 |
+
+两套 Windows 均使用 Node 22.23.2、x64。并发 1、4、8、16 各完成 128/128 请求；每档 read、workspace_list、job_get、job_logs 分别启动并完成 32/32，失败数均为 0。Push 四档混合负载耗时依次为 32,733/24,205/16,991/6,468 ms，PR 为 17,506/8,731/6,971/6,588 ms。上述 512 是各次实际完成数量，完整 41 项测试包含这些负载用例，计数分别按测试与请求口径保存。
+
+| 核验摘要 | SHA256 |
+| --- | --- |
+| `.audit/04d50ba-ci/push-summary-20261012T1552317885959Z.json` | `946c898c3dd48ea038fc0cb93ae523df5147b876b305f7564c433247ee7808cf` |
+| `.audit/04d50ba-ci/pr-summary-20261012T1552318529632Z.json` | `f9c366658d5a9501402ed9fec753cae2f75aef050234e2505a7091c7bb6363d8` |
+| `.audit/04d50ba-ci/source-load-verification-20261012T1555507365801Z.json` | `4627fe4e4a7148e4839b5667bb1537da3a06d609a59f8011fb5df2e6b0c1a13c` |
+
+最后一份摘要保留六个 ZIP 的摘要、每套 16 行操作完成记录及各测试报告来源，并通过 `supersedes` 引用同目录早先 `source-load-verification-20261012T1554554825207Z.json`。早先摘要的四档原始计数完整，但聚合字段因 PowerShell 字典投影写为 null；更正稿依据保留记录重算为每套 512/0，原稿继续保留。
+
+这是新修复候选的首次双套托管 CI 成功，支持本轮回执与夹具生命周期修复通过该源码状态下的验证。此前 `73d7309` PR Windows 的 setup POST 断连和其他历史失败继续保留独立证据；本次通过不构成其单一根因已经证明的结论。
+
+候选验收后的提升阶段记录：GitHub 已于 `2026-10-12T15:54:35Z` 通过 [PR 118](https://github.com/aloneio/runmesh/pull/118) 按正常保护流程将 main 快进到上述候选，main CI [38273637739](https://github.com/aloneio/runmesh/actions/runs/38273637739) 仍在运行。GitLab MR 59 已设置门禁满足后自动合并，正在等待门禁。正式 0.1.8 尚未发布、尚未激活；后续主分支、跨平台合并、签名资产及线上激活结果按各自实际证据另行追加。
+
+### main 首次 CI 的 Windows 混合负载失败
+
+上述 main CI [38273637739](https://github.com/aloneio/runmesh/actions/runs/38273637739) 随后结束，6 个作业成功，Windows 作业 `114893724160` 与汇总作业 `114897692686` 失败。执行来源仍为 `04d50baadc774abc328d065cfe4fdde3c7370382`、树 `c5a71e48c15dbe29a94499a0eb7891c67413fcb5`、状态 `clean`。本次结果与此前通过的 Push、PR 两次执行分别保留；此前通过不替代这次主分支门禁。
+
+main 的 8 份作业日志及 verify、Windows、browser 三个 ZIP 均已完整归档。三份 ZIP 与提供方摘要一致，分别展开 57、3、3 个文件，逐文件摘要和完整集合校验通过，汇总为 `archive_state=complete`。28 份门禁记录全部匹配该源码身份，其中 27 份通过，Windows transport 失败；完整归档仅表示证据齐全。
+
+Windows transport 在 115,028 ms 后以退出码 1 结束。失败摘要为 `stage=test_execution`、`report_available=true`、1 个失败文件、1 项失败、0 跳过，定位到第 19 项测试中的 `job_logs` 请求：HTTP 500，正文分类为非 JSON 文本，固定运行时签名为 `network_connection_lost`。原始 Vitest reporter 在包装器执行时可用，但公开的三个工件及作业日志只保留失败安全投影，未保留最终 passed/total 计数；本记录不将已知测试清单减去失败数写成实际报告的“40/41”。
+
+首错出现在并发 1 的混合负载第 104 个已启动请求。现场进度为 started 104、completed 103、pending_headers 0、pending_body 1；四类操作分别为 read 26/26、workspace_list 26/26、job_get 26/26、job_logs 26 次启动、25 次完成和 1 次失败。负载计时记录为 26,872 ms，包含任务准备的进度记录为 27,315 ms，两种计时口径分别保存。代理诊断同时记录一次 POST 上游连接丢失、attempts 1。
+
+后续并发 4、8、16 的用例继续完成，各档四种操作均为 32/32、0 失败，即每档实际完成 128 次请求；耗时分别为 26,490、7,409、5,083 ms。首错后的 Worker 阶段快照记录 entered 194、finished 194、dropped 0；最近一项为 sequence 194 的 `job_get`，状态 `eof`。这些记录限定了当前观察窗口中的进度和事件，不能单独证明底层连接丢失的原因，也不将该快照外推为所有 Worker 实例或后续请求的完整状态。
+
+| main 失败证据 | SHA256 |
+| --- | --- |
+| `.audit/04d50ba-ci/main-summary-20261012T1610129802710Z.json` | `5f36f8d02ca7a3ecfec3ca807324c870dd2b4bb52fa512ccbb2d7362b9891cce` |
+| `.audit/04d50ba-ci/main-job-114893724160.log` | `d2723986c71125f490db553916fa2e8cc54ad4531b1e4dfffb06eca600732145` |
+| `.audit/04d50ba-ci/main-windows-artifact/transport-tests.json` | `9413751ecf3d4228dc3e3993b74921ad16335e0736ded7abcf2b1936dbfed398` |
+| `.audit/04d50ba-ci/main-windows-artifact.zip` | `52f652c69d3b03dc63c66d670d6cd404cf41956762a509e82e75c953dc13f3d9` |
+
+本段据首次 main 执行的保留证据追加，未重新触发 CI。正式 0.1.8 的签名发布与激活继续等待后续验收结论。
+
+## 原生 Worker 传输夹具修复与单次双通道验证
+
+GitLab [MR 59](https://gitlab.com/aloneio/runmesh/-/merge_requests/59) 随后于 `2026-10-12T16:06:23.840Z` 完成受保护合并，GitHub 与 GitLab 的 dev、main 均落在 `04d50baadc774abc328d065cfe4fdde3c7370382`。该事实记录于 `.audit/04d50ba-ci/gitlab-promotion-after.json`；主分支 Windows 失败仍是本轮发布门禁，未重新运行旧提交的 CI。
+
+上述首错发生于 Wrangler ProxyWorker 向 UserRuntime 转发 POST、尚未收到响应头的阶段。失败后的业务入口快照没有该条 `job_logs`，原生运行时观察窗口中没有退出、重启或重载证据；负载取消发生在首错之后。这将修复范围收窄到本地开发代理的网络跳转。现有证据尚不足以认定底层 TCP/keepalive 机制，未据此改写业务截止时间或增加 POST 重试。
+
+实际依赖链为 Wrangler `4.149.0` → Wrangler 嵌套 Miniflare `5.20261006.1-alpha` → 对应 workerd `1.20261006.1`。新增 `scripts/worker-runtime-launcher.mjs` 使用 Wrangler 公开导出的 `unstable_DevEnv`，从同一配置建立运行时，并交叉核对唯一 local runtime 的 `mf.ready` 与 `reloadComplete.proxyData.userWorkerUrl`。传输测试连接其真实 `127.0.0.1` HTTP socket，经 Miniflare core/资源路由进入 Worker，保留 D1、Durable Object、变量绑定、持久化目录、Runner 和 WebSocket。浏览器夹具与默认 CLI 启动契约继续使用 Wrangler 开发服务器入口。实现没有修改依赖包或直接调用应用 handler。
+
+夹具关闭文件监听和实时重载；意外的第二次 reload 会使验证失败关闭。启动错误、父 IPC 断开、teardown 拒绝和挂起均有有界清理；超时清理只回收当前夹具拥有的进程组或 Windows 子进程树。十项新增契约使用独立真实 HTTP 端口、IPC 和后代进程验证这些行为。
+
+### 契约验证中的退出等待修正
+
+首次轻量契约命令保留在 `.audit/native-worker-fixture-20261013/contracts.log`：原有启动契约通过，首个 native 用例在约 326 ms 后因 pending Promise 且事件循环已结束而被取消，其余九项随父取消，总计 1 passed、10 cancelled。独立 IPC 小复现及 Node 22.23.2 内置源码核对确认：父进程主动 `child.disconnect()` 后，两条输出流已结束、子进程已以 0 退出，但 `ChildProcess.close` 未发出，关闭计数为 3/4。新增测试将日志收集绑定到该事件造成永久等待。
+
+修正为分别等待 stdout/stderr 结束，并设置 1 秒有引用的排空期限。相同筛选命令在修正后通过 11/11，0 failed/cancelled/skipped；其中包含 teardown 挂起及拒绝时真实后代服务的回收验证。首次失败、小复现和修正后的完整日志分别保存，未覆盖旧结果。
+
+| 契约证据 | SHA256 |
+| --- | --- |
+| `contracts.log` | `036d870baea652510b0ffa765d23bd90c0553bb224caee5a2f58fc9c42d3cb90` |
+| `ipc-close-repro-result.json` | `32487af3b6de8d7b6187266ceb493582aced3f2976df5cbdc0a45ef0caa01f7d` |
+| `contracts-v2.log` | `27d81d01b7dc846a566f61d7a58f42a99d9f678861bfb52a5234688ebc5adf9e` |
+
+### 冻结源码与安装包验证
+
+完整验证前，私有驱动冻结 20 个输入文件、staged/unstaged diff、工作区状态、Node 可执行文件及命令预算。计划位于 `.audit/native-worker-fixture-20261013/plan.json`，SHA256 `2ade65e9c8d0fc0d2a7275d90d130656e65ac15f954146c53420d82223ed067f`。身份为 `04d50ba` 基线上包含本轮修复的 dirty 工作区；基线 tree 不是修复后的 tree。每条通道执行一次，启动占位与结果均写入新文件，执行前后快照深比较一致；独立复核确认全部 20 个输入指纹保持不变。
+
+两条通道均保留 41 项测试、每档 128 次请求、并发 1/4/8/16、30 秒普通测试期限、60 秒负载期限、200 ms 后断开且仅发送一次的断线场景和 300 秒 E2E 期限。安装包验证还保留原有 420 秒 package 及 480 秒 gate 期限。310/490 秒外层观察器只收集结果并回收进程树。
+
+| 验证项 | 源码 | 实际安装包 |
+| --- | --- | --- |
+| 命令 | `node scripts/run-e2e.mjs` | `node scripts/ci-check.mjs installed_transport` |
+| 测试结果 | 41/41，0 失败、0 跳过 | 41/41，0 失败、0 跳过 |
+| 混合负载 | 512/512，0 失败 | 512/512，0 失败 |
+| 四档耗时（ms） | 8,816 / 7,180 / 6,205 / 5,780 | 8,928 / 7,667 / 6,037 / 5,104 |
+| 外层观察耗时 | 133,479 ms | 167,661 ms |
+| 原始 gate 耗时 | 127,289 ms | 162,680 ms |
+| 结果摘要 SHA256 | `0162baf7b95ccdeb229b49c5ea921c3d892e9d8bd4244c7c9558d04668b66584` | `a3dea979553d2e0458078afbb139519d80f0d46e097f8f1833585ed4acc26a14` |
+
+结果摘要文件分别为同目录 `source_transport-summary.json` 与 `installed_transport-summary.json`。每档四种操作均启动并完成 32/32 次。两个主夹具的运行时 observer 均记录已安装，归档安全事件中没有失败或重载事件；该观察范围不等同于完整进程生命周期。安装包 SHA256 为 `7040077f3e3bbb55978a3efc7c979e40e3dce4d403bf687c464e88d1092e025b`，大小 1,217,455 字节，是本地打包验收产物，尚未签名或发布。
+
+类型、架构、测试收集、版本同步、文档、格式及 whitespace 检查通过。中英文验证文档准确说明传输和浏览器的验收入口，故障调查保留在工程检查书。此段在冻结验证结束后追加；后续新候选 CI、公开签名资产和生产激活依据各自执行记录继续验收。

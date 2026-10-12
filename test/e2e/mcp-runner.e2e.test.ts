@@ -151,8 +151,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   }
 
   function workerDiagnosticState(): string {
-    // These are the Wrangler launcher's events; its wrapper can map an inner
-    // process's signal termination to exit code 0, so timing also matters.
+    // These are the fixture launcher's events. Native runtime exits are
+    // observed separately, so retain launcher timing as well as its exit code.
     return JSON.stringify({ pid: worker?.pid, exitCode: worker?.exitCode, signalCode: worker?.signalCode, teardownStarted, events: workerEvents });
   }
 
@@ -198,7 +198,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await writeFile(join(workspace, "note.txt"), "hello from a real local runner\n");
     await writeFile(join(workspace, "utf8.txt"), "Hello你好😀éWorld", "utf8");
 
-    worker = spawnWorkerFixture({ cwd: projectDirectory, persistTo: workerPersist, vars: workerEnv });
+    worker = spawnWorkerFixture({ cwd: projectDirectory, persistTo: workerPersist, vars: workerEnv, transport: "native" });
     workerLog = collectOutput(worker, true);
     worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
     worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
@@ -1388,7 +1388,7 @@ describe.sequential("real local SQLite Runner sessions", () => {
     // This fixture needs SQLite history, independent of the main D1 suite.
     // Keep process startup outside the unchanged transport assertion budget.
     root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-sqlite-"));
-    worker = spawnWorkerFixture({ cwd: projectDirectory, persistTo: root, vars: { ...workerEnv, RUNMESH_JOB_HISTORY_BACKEND: "sqlite" } });
+    worker = spawnWorkerFixture({ cwd: projectDirectory, persistTo: root, vars: { ...workerEnv, RUNMESH_JOB_HISTORY_BACKEND: "sqlite" }, transport: "native" });
     const logs = collectOutput(worker);
     origin = await waitForWorker(worker, WORKER_READINESS_TIMEOUT_MS, logs);
     const registration = await fetch(`${origin}/admin/runners`, { method: "POST", signal: AbortSignal.timeout(5_000),

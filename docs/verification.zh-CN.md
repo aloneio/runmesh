@@ -25,7 +25,7 @@
 
 新增测试文件时，在 `test/verification-plan.json` 中指定唯一归属，并运行 `npm run check:verification` 检查遗漏、重复和 Node 测试的执行入口。
 
-传输测试使用 `test/e2e/`，浏览器测试使用 `test/browser/`。两类检查分别启动自己的临时 Worker；浏览器还运行独立的产品操作场景。测试收集检查会核对各自目录与清单，新增用例按所属模块加入对应入口。
+`test/e2e/` 中的源码和安装包传输测试通过真实 HTTP 和 WebSocket 连接本地 Miniflare/workerd 运行时的原生入口，运行时按 Wrangler 配置创建，保留资源绑定和静态资源路由。`test/browser/` 中的浏览器测试通过 Wrangler 本地开发服务器访问页面，并运行独立的产品操作场景。每类检查都有自己的临时 Worker 和隔离状态。测试收集检查会核对各自目录与清单，新增用例按所属模块加入对应入口。
 
 领域规则通过公开 API 验证，适配器集成放在对应测试套件中。[源码依赖检查](architecture-gates.md)定义允许的导入关系，其中包括确定性的 `node:crypto`。
 
