@@ -117,5 +117,5 @@ system or a promise of distributed rate limiting.
 
 Browser checks cover immediate availability, OAuth
 callbacks, Skill updates, stale confirmations, failed refresh and no replay.
-Real supplier consent, two real AI hosts and production promotion require the
-separate evidence in [the rollout ledger](../central-rollout.md).
+Use the [deployment checklist](../central-rollout.md) to verify provider sign-in
+and each supported AI client, then retain those results with the release record.

@@ -7,7 +7,12 @@ export function jobEventMessage(event: JobEvent, runnerId: string): WireMessage 
       if (event.type === "started") {
         return { type: "job.started", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, workspace: { workspace_id: event.job.workspace_id, persistence: "persistent", labels: {} }, started_at_ms: event.job.started_at_ms ?? event.job.updated_at_ms };
       } else if (event.type === "completed" && (event.job.status === "succeeded" || event.job.status === "failed" || event.job.status === "cancelled")) {
-        return { type: "job.completed", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, completed_at_ms: event.job.completed_at_ms ?? event.job.updated_at_ms, outcome: event.job.status, exit_code: event.job.exit_code };
+        // The v2 lifecycle frame predates native Windows exit statuses. Keep
+        // its negotiated range intact; detailed job RPC results and local
+        // persistence retain the original code without truncation or wrapping.
+        const code = event.job.exit_code;
+        const exitCode = code !== null && Number.isInteger(code) && code >= -1 && code <= 255 ? code : null;
+        return { type: "job.completed", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, completed_at_ms: event.job.completed_at_ms ?? event.job.updated_at_ms, outcome: event.job.status, exit_code: exitCode };
       } else if (event.type === "status") {
         return { type: "job.status", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job };
       }

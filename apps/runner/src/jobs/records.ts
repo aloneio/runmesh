@@ -1,4 +1,5 @@
 import { isMaintenanceJobStatus, safeMaintenanceJobId, type MaintenanceJobStatus } from "../maintenance-contract.js";
+import { isProcessExitCode } from "@aloneio/runmesh-protocol";
 
 export type LocalJobStatus = MaintenanceJobStatus;
 
@@ -92,7 +93,7 @@ export function normalizeJobRecord(value: unknown, expectedJobId?: string): JobR
   const completed = nullableTimestamp(item.completed_at_ms);
   if (started === undefined || completed === undefined) return undefined;
   const exitCode = item.exit_code;
-  if (exitCode !== undefined && exitCode !== null && (!Number.isSafeInteger(exitCode) || Math.abs(exitCode as number) > 2 ** 31)) return undefined;
+  if (exitCode !== undefined && exitCode !== null && !isProcessExitCode(exitCode)) return undefined;
   const signal = item.signal;
   if (signal !== undefined && signal !== null && (typeof signal !== "string" || signal.length > 64 || /[\u0000-\u001f\u007f]/u.test(signal))) return undefined;
   const fingerprint = item.process_start_fingerprint;

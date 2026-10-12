@@ -6,6 +6,8 @@ import { TOOL_OUTPUT_SCHEMAS } from "../src/mcp/output-contracts.js";
 import { validateToolOutput, ACTION_OUTPUT_CONTRACTS } from "../src/mcp/action-output-contracts.js";
 import { MCP_RPC_ACTIONS } from "../src/mcp/actions.js";
 import { catalogContract } from "../src/mcp/catalog-contract.js";
+import { safeJobMetadata } from "../src/mcp/results/jobs.js";
+import { safeContextResult } from "../src/mcp/results/context.js";
 
 const handlers = () => Object.fromEntries(REGISTERED_TOOL_NAMES.map(name => [name, async () => ({})])) as ToolHandlers;
 it("AR05 every Runner action has an output contract", () => {
@@ -77,6 +79,21 @@ const validCases: Array<{ tool: ToolName; input: unknown; value: unknown }> = [
   { tool: "context", input: { action: "rebuild" }, value: { rebuilt: true, records: 0 } },
 ];
 describe("AR05 successful output boundaries", () => {
+  it("preserves native exit statuses in job, shell and context evidence results", () => {
+    for (const code of [-(2 ** 31), -1, 0, 255, 3010, 2 ** 31, 0xc0000005, 0xffffffff]) {
+      const value = safeJobMetadata({ job_id: "j", status: code === 0 ? "succeeded" : "failed", exit_code: code });
+      expect(value.exit_code).toBe(code);
+      expect(validateToolOutput("job", { action: "get" }, value)).toBe(true);
+      expect(validateToolOutput("shell", {}, value)).toBe(true);
+      const context = safeContextResult({ context: { schema_version: 2, context_id: "ctx", evidence: [{ kind: "job", status: "observed", job_id: "j", exit_code: code }] } });
+      expect(context).toMatchObject({ context: { evidence: [{ exit_code: code }] } });
+      expect(validateToolOutput("context", { action: "read" }, context)).toBe(true);
+    }
+    for (const code of [-(2 ** 31) - 1, 2 ** 32, 0.5, "3010"]) {
+      expect(safeJobMetadata({ exit_code: code })).not.toHaveProperty("exit_code");
+      expect(validateToolOutput("job", { action: "get" }, { job_id: "j", status: "failed", exit_code: code })).toBe(false);
+    }
+  });
   it.each(["read", "checkpoint"])("rejects an empty or null Context %s record", action => {
     expect(validateToolOutput("context", { action }, { context: {} })).toBe(false);
     expect(validateToolOutput("context", { action }, { context: null })).toBe(false);

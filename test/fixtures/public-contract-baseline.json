@@ -1,6 +1,6 @@
 {
   "source_commit": "8159b081a8d89c423add7bd492516262839e66bf",
-  "change_reason": "Reviewed agent-facing input publication, cross-field constraints, safe shell annotations and recovery descriptions; the wire schema is unchanged.",
+  "change_reason": "Preserve signed and unsigned native process exit statuses in Job, shell and Context evidence outputs; the v2 lifecycle wire schema and maintenance v1 client remain unchanged.",
   "tools": [
     "context",
     "edit",
@@ -13,7 +13,7 @@
     "shell",
     "workspace_list"
   ],
-  "mcp_catalog_sha256": "98092badf8b2be0438fa17a1ea9c1f6178cf3bf97bae9f0ffca54457d520a8d9",
+  "mcp_catalog_sha256": "48bfcaf177ef63dc428764013c712df1609eaa8cc1ff5dcc9416732649fc2299",
   "wire_schema_sha256": "7d1f2eaadbf88685f5a416785de44e86f44945aa938bc7a103c907d22b41c7f2",
   "maintenance_v1": {
     "source_commit": "e3cf4bae5f96c96d3fd27dcf7f9f45321b8c9eb8",

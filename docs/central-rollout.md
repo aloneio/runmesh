@@ -1,83 +1,46 @@
-# Central capability rollout and acceptance ledger
+# Deploy MCP connections and Skills
 
-## Historical baseline: 2026-09-25
+[简体中文](central-rollout.zh-CN.md) · [Administrator guide](admin-guide.md) · [Upgrade guide](upgrading.md)
 
-The following baseline records implementation and open acceptance items on that date. Later acceptance records are appended separately.
+Use this sequence to add shared MCP connections and Skills to an existing Runmesh instance, then verify them from the AI clients your users rely on.
 
-Baseline fetched on 2026-09-25: GitHub dev ab95550 (W06), GitHub/GitLab main
-77e82a1. GitLab dev was f25486b at the initial fetch and subsequently synchronized
-to the W07-W09 candidate 47a8eeb. Work continues in an isolated checkout; the
-original main working tree's eight staged release/document changes are preserved.
-Development continues directly on dev in the isolated working tree, as requested.
-This ledger distinguishes implementation, local verification and external
-acceptance. It is not a production release sign-off.
+## Prepare the instance
 
-| Package | Implementation | Acceptance awaiting evidence at this baseline |
-| --- | --- | --- |
-| W00 | Current remote baseline isolated; old edits retained | Original real-host Job/workspace catalog and host Git diagnosis |
-| W01-W06 | Inherited architecture, identity, profiles, reviewed catalog, HTTP MCP and OAuth/session baseline | Real supplier OAuth and deployment network boundary |
-| W07 | Shared active Skill lifecycle, immutable versions, paginated tools/resources | Real host resource behavior; general YAML/archive import remains unsupported |
-| W08 | Guided shared library, retired assignment APIs, direct and bounded discovery catalogs | Two actual AI host versions, cache refresh and Job recovery evidence |
-| W09 | Optional durable call budgets, cooldown, metadata receipts | Account-level quota and cost measurements; distributed rate limiting is not promised |
-| W10 | Local domain/SQLite/HTTP/SDK/compatibility regression fixtures | Public DNS/SSRF, actual host matrix, measured CPU/peak memory/p50/p95 under production-like load |
-| W11 | Independent opt-ins, retained tables/versions, rollout and disable instructions | Canary deployment, dev-to-main promotion, published CI/release evidence |
+1. Choose the control-plane version from the [release status](release-readiness.md) and review its [release notes](release-notes.md).
+2. Save a backup of the deployment configuration and retained data. Keep the existing Worker, Registry, Runner and Capabilities resources, D1 bindings and deployment secrets.
+3. Deploy through your existing production path. Confirm the running commit and environment using [build provenance](build-provenance.md).
 
-## Required canary sequence
+OAuth connections use the existing `INTERNAL_CONTROL_SECRET`; Runner credentials use `RUNNER_TOKEN_PEPPER`. Preserve both values during an upgrade so existing account connections and registered machines continue working. The [runtime configuration guide](runtime-config.md) covers setup for a new instance.
 
-Runmesh 0.1.6 configures CAPABILITIES / CapabilitiesDOv1 in development with the
-central-dev-v1 SQLite migration and enables Skills, direct tools and governance.
-Both production source configurations use a declarative CapabilitiesDOv1 export and enable the same features. Existing Registry/Runner identities, tombstones and D1 bindings remain intact. The [release and deployment guide](release-readiness.md) describes signed publication, production activation and live verification as separate steps. Remote endpoints are connected through the control panel; OAuth encryption uses the existing deployment secret. The existing GitLab dev connection
-triggers Cloudflare Workers Builds; local Cloudflare account access is not needed
-to trigger that path. Verify the exact candidate on GitHub, fast-forward GitLab
-dev, then compare the live health commit/tag and authenticated central page. A
-successful push alone is not evidence that the build or deployment succeeded.
+## Connect a service and install a Skill
 
-1. Review the fixed candidate commit and CI results. Keep the native catalog and
-   Worker-Runner wire baseline unchanged. Do not force-push main or disable checks.
-2. Use a separate approved deployment with the existing optional Capabilities
-   SQLite DO binding/migration and existing control secret. Retain public-only
-   egress and exact HTTPS endpoint policies. Do not modify the old namespaces.
-3. Verify the source-configured CENTRAL_SKILLS_ENABLED, CENTRAL_DIRECT_TOOLS_ENABLED and CENTRAL_GOVERNANCE_ENABLED flags. Runmesh 0.1.6 enables all three; OAuth requires no additional secret beyond the existing control secret.
-   Control-panel connections persist exact endpoint admission; no provider environment configuration is supported.
-4. With no Runner, configure two approved public MCP suppliers and one text Skill;
-   connect two independently credentialed real clients to the shared publications,
-   without creating grant rows.
-   Record product/version/date, tools/resources support, schemas and cache refresh.
-5. Add a Runner without reconfiguring those central capabilities. Verify native
-   read/write policy, offline selected Runner behavior, original Job ID plus
-   workspace_id recovery, and no unknown-operation replay.
-6. Revoke a client credential after caching the directory. Disable a connector. Simulate
-   central storage and receipt failures. Verify denied new calls and unaffected
-   native calls. Measure bytes, CPU, memory and p50/p95, including a slow supplier.
-7. Turn off all new flags and the remote configuration before rolling Worker
-   code back. Retain new tables, ciphertext and immutable bundles. Old code cannot
-   interpret newer central identities/OAuth; use the previously documented native
-   compatibility matrix, never reset identity or Runner registration.
-8. Promote only through the existing dev-to-main policy after the external gates
-   are recorded. Do not overwrite immutable Runner releases or infer approval
-   from passing local fixtures.
+1. Open **MCP & Skill → MCP**, enter the provider's public HTTPS endpoint and select its authentication method. Follow [Connect an MCP](central-remote-mcp.md), including the provider's sign-in flow when using OAuth.
+2. Open the saved connection's tool list and confirm that the tools you expect are present.
+3. Open **MCP & Skill → Skills**, install a folder containing `SKILL.md` and its text references, then inspect the installed files. See [Install and update a Skill](central-skills.md).
+4. Create a client connection with the access your user needs, copy its MCP address and add it to that user's AI client.
 
-## Evidence discipline
+Shared tools and Skills can be used directly through the client connection. For file access and host commands, also enable computer access and configure a Runner with approved workspaces.
 
-Local results are stored under ignored .verification/ with command, exit status
-and logs. The final development report records actual counts and skipped checks.
-No real upstream secrets, production deployment, public-host acceptance or
-published release is fabricated by this implementation.
+## Check the complete workflow
 
-中文说明：代码实现与本地测试不等于完成 W00/W10 的真实双宿主、公网网络和性能验收，
-也不等于 W11 灰度或发布。0.1.6 源码已包含生产绑定和功能开关；[发行与部署说明](release-readiness.md)分别列出签名发行、生产激活和部署验证的步骤。上述外部门禁未取得证据前，整体
-计划不得标为已验收完成；使用独立部署按步骤验收后，再通过既有 dev→main 门禁。
+Use separate credentials in each AI client that will access the instance. Refresh the Runmesh tool and resource lists, then complete these checks:
 
-## Acceptance observations: 2026-10-04
+| Check | Expected result |
+| --- | --- |
+| Read a Skill and one referenced file | Both reads use the selected Skill version. |
+| Call a harmless provider tool | The client receives the provider's result. |
+| Update a Skill or refresh a provider's tools | A refreshed client sees the selected version and current catalog. |
+| Pause and re-enable a connection | Access follows the connection's current state. |
+| Rotate a test client credential | The replacement address works and the retired address is rejected. |
+| Use an approved Runner workspace | File access and a small test command follow the configured permissions. |
+| Follow a test command | The original Job ID and workspace ID retrieve its status and retained logs. |
 
-**Actual AI clients.** Two independent Codex CLI/app-server 0.160.0 instances used separate credentials, threads and caches. On `676276ef57f95aab15336f665eb43c788e66a468`, both registered the five MCP/Skill tools and read Skill versions v2 and v3 in persistent sessions. Both credentials also completed real-model public documentation searches; A's search came from an earlier A process. The original revoked-client call timed out after 30 seconds. After request-associated error responses were added in `43214bc7d9e7025dd195e02addd6eef8fa57ba37`, a fresh A2/B2 pair kept its sessions throughout the follow-up: revoked A2 received an explicit JSON-RPC rejection in 930 ms, while the original B2 process continued listing Skills. Both tested clients were instances of the same product.
+For workflows that use long tasks, input or cancellation, exercise those operations in a test workspace too. Record the component versions, provider and client names, test time and result so future upgrades can repeat the same checks.
 
-**Protocol load and lifecycle checks.** On dev `676276ef57f95aab15336f665eb43c788e66a468`, scripted checks covered 1,032 Linux Runner samples and 982 MCP/Skill samples, including six public upstream calls. The first sustained attempt stopped after 264 samples: 260 passed and four Runner reads/Jobs timed out. A separate same-load run completed 1,200/1,200 samples with unchanged transport and timeout behavior. The first four timeouts remain recorded; their root cause is unresolved. These protocol samples are separate from the actual-model calls above and overlap in coverage, so they are reported as individual suites.
+## Monitor and recover
 
-**CI and targeted diagnostics.** For `85d5ea419c65d03ebc9d79c9b2e7f2491c6b256b`, GitHub dev CI run 37194315084 passed all eight checks; native GitLab browser job 16920451376 passed 37/37 cases with zero skips. A frozen diagnostic overlay on `c0f8c13` passed nine diagnostic tests and 21 real Worker SDK registration tests, followed by 30 rejection-to-paging groups and 120 MCP requests. The later predecessor-chain overlay on base `85d5ea4` passed ten disconnect/reconnect, background-Job, rejection and paging groups: 40 selected cases, 120 operations and 126 state polls, with zero operation retries. Its first two preparation attempts are retained separately: missing generated provenance, then a diagnostic startup-request cap; neither reached a business MCP call.
+Review response times and Cloudflare usage with representative traffic before expanding access. Use the [cost measurement guide](cost-baseline.md) to compare storage, CPU and request usage over consistent time windows.
 
-**Retained intermittent failure.** Earlier GitLab browser job 16920211719 returned HTTP 500 during R07. The subsequent passing runs did not reproduce it; its root cause remains unresolved. The candidate adds bounded per-request diagnostics for a recurrence. No transport retry or timeout increase was used to turn that historical failure into a pass.
+When a provider needs attention, inspect its card, refresh its tools or complete sign-in. After a call times out, check its result at the provider before repeating a change. Keep the original Job ID when following work on a Runner. The [troubleshooting guide](troubleshooting.md) gives the recovery steps for each component.
 
-These observations cover the identified development deployments, actual-client sessions and local diagnostic overlays. Package publication, production activation and live production checks are recorded by the release operator as separate observations.
-
-Evidence records: `release112-real-host-report.md`, `audit111-report.md`, `release115-validation-report.md`, and `release116-linux-chain-run3/report.md` in the local operator evidence archive. Each retains source identities and the preceding failures.
+For an upgrade rollback, restore the tested combination of program, configuration and data versions while retaining the current secrets and registered identities. Follow the [upgrade guide](upgrading.md) and keep the backup until the restored workflow passes the same checks.

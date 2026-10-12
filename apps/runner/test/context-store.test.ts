@@ -20,6 +20,19 @@ afterEach(async () => {
 });
 
 describe("ContextStore", () => {
+  it("round-trips native process exit statuses in checkpoint evidence", async () => {
+    const test = await fixture();
+    const codes = [-(2 ** 31), -1, 0, 255, 3010, 2 ** 31, 0xc0000005, 0xffffffff];
+    const evidence = codes.map(exit_code => ({ kind: "job", status: "observed", job_id: "j", exit_code }));
+    const created = await test.store.checkpoint({ workspace_id: "workspace", turn_id: "native-status", goal: "retain process results", evidence });
+    expect(created).toMatchObject({ context: { evidence } });
+    const restored = new ContextStore({ stateDir: test.state });
+    expect(await restored.bootstrap({ workspace_id: "workspace" })).toMatchObject({ context: { evidence } });
+    for (const exit_code of [-(2 ** 31) - 1, 2 ** 32, 0.5]) {
+      await expect(test.store.checkpoint({ workspace_id: "workspace", turn_id: "invalid-status", goal: "validate process results",
+        evidence: [{ kind: "job", status: "observed", exit_code }] })).rejects.toMatchObject({ code: "invalid_params" });
+    }
+  });
   it("keeps bootstrap read-only when no context exists", async () => {
     const test = await fixture();
     await expect(test.store.bootstrap({ workspace_id: "workspace" })).resolves.toEqual({ workspace_id: "workspace", state: "missing", context: null });

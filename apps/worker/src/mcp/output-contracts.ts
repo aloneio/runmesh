@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BytePageMetadataSchema, BoundFileCursorSchema, BoundLogCursorSchema, ContextStorageReportSchema, ContextPruneReportSchema, RunnerCapabilityReportSchema } from "@aloneio/runmesh-protocol";
+import { BytePageMetadataSchema, BoundFileCursorSchema, BoundLogCursorSchema, ContextStorageReportSchema, ContextPruneReportSchema, RunnerCapabilityReportSchema, ProcessExitCodeSchema } from "@aloneio/runmesh-protocol";
 
 // These schemas describe the already-redacted public boundary, never internal
 // Registry rows or Runner records. Optional legacy observations stay optional;
@@ -15,7 +15,7 @@ const cursor = z.string().max(128).regex(/^(?:\d+|s1:[a-f0-9]{16}:\d+)$/u);
 const fileCursor = z.union([cursor, BoundFileCursorSchema]);
 const logCursor = z.union([cursor, BoundLogCursorSchema]);
 const status = z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]);
-const exit = z.number().int().min(-(2 ** 31)).max(2 ** 31).nullable();
+const exit = ProcessExitCodeSchema.nullable();
 const permissions = z.object({ read: z.boolean(), edit: z.boolean(), shell: z.boolean(), job_control: z.boolean() }).strict();
 const runnerContext = z.object({ runner_id: id.optional(), state: z.enum(["online", "offline", "stale", "unavailable"]).optional(), available: z.boolean().optional(), updated_at_ms: count.nullable().optional(), automatic_selection: z.boolean().optional() }).strict();
 

@@ -65,7 +65,7 @@ For a client using computers, open **AI connections**, choose **MCP, Skills and 
 | Delete a Runner | Removes the control-plane record, workspace/policy settings and client selections; old lifecycle history is reclaimed after confirmation and its retention window; uninstall the host separately |
 | Change the administrator password | Invalidates existing administrator sessions |
 
-To retire the host installation, use the enrollment page's maintenance uninstaller when its release channel is available. It handles old or partial installations, deletes local Job history and preserves project workspaces. With hosted distribution unavailable, the page provides a local CLI command; check its version's purge support in [complete uninstall](runner-uninstall.md). Perform removal from a local console or SSH session, then delete the control-plane record.
+To retire the host installation, use the maintenance uninstaller or local CLI command provided on the enrollment page. The maintenance program handles old or partial installations, deletes local Job history and preserves project workspaces. Check the selected version's steps in [complete uninstall](runner-uninstall.md), perform removal from a local console or SSH session, then delete the control-plane record.
 
 ## Set Job recording and retention
 
@@ -92,5 +92,7 @@ Back up control-plane data through your storage provider's recovery process. Pro
 An upgrade keeps the existing Worker, Registry/Runner namespaces, `CAPABILITIES` namespace, any D1 binding and secrets. Plan Worker deployment and Runner installation as separate steps. Before restarting a Runner, stop new submissions, drain active/queued work and inspect uncertain recovered processes. Record its actual service executable and version, then follow the [upgrade guide](upgrading.md).
 
 For a managed installation with the independent version manager, open **Runner version** on the Runner details page to choose the latest release for that environment or an exact published version. Follow [Change a Runner version](runner-versions.md) to enable the manager on an older installation and check the outcome.
+
+After updating shared capabilities, follow [Deploy MCP connections and Skills](central-rollout.md) to verify provider sign-in, catalog refresh, Skill versions and the AI clients your users rely on.
 
 For daily operation, review Runner/client access and recent Jobs, configure edge-log redaction, and keep a credential-rotation and host-shutdown procedure available.

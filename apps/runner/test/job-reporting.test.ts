@@ -6,6 +6,8 @@ import { JobManager } from "../src/jobs.js";
 import { normalizeJobRecord } from "../src/jobs/records.js";
 import { PathPolicy } from "../src/path-policy.js";
 import { jobRecord } from "./helpers/job-record.js";
+import { encodeWireFrame, decodeWireFrame } from "@aloneio/runmesh-protocol";
+import { jobEventMessage } from "../src/connection/job-events.js";
 
 async function fixture(completedRecords = 0) {
   const base = await mkdtemp(join(tmpdir(), "runmesh-reporting-"));
@@ -34,6 +36,43 @@ async function fixture(completedRecords = 0) {
     await rm(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   } };
 }
+
+it("recovers full native exit codes and projects legacy-compatible completion frames", async () => {
+  const f = await fixture();
+  const codes = [-(2 ** 31), -1, 0, 255, 256, 3010, 2 ** 31, 0xc0000005, 0xffffffff];
+  try {
+    for (const [index, code] of codes.entries()) {
+      const job = jobRecord({ job_id: "job-00000000-0000-0000-0000-" + String(index).padStart(12, "0"), workspace_id: "w",
+        status: code === 0 ? "succeeded" : "failed", pid: null, completed_at_ms: 4, exit_code: code });
+      expect(normalizeJobRecord(job)?.exit_code).toBe(code);
+      const directory = join(f.base, "state", "jobs", job.job_id);
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await writeFile(join(directory, "meta.json"), JSON.stringify(job));
+      const frame = jobEventMessage({ type: "completed", job }, "runner");
+      expect(frame).toBeDefined();
+      expect(decodeWireFrame(encodeWireFrame(frame!))).toMatchObject({ type: "job.completed", outcome: job.status,
+        exit_code: code >= -1 && code <= 255 ? code : null });
+    }
+    const restored = new JobManager({ policy: f.policy, stateDir: join(f.base, "state") });
+    await restored.initialize();
+    expect(restored.list().map(job => job.exit_code).sort((a, b) => a! - b!)).toEqual([...codes].sort((a, b) => a - b));
+    for (const code of [-(2 ** 31) - 1, 2 ** 32, 0.5, "3010"]) expect(normalizeJobRecord({ ...jobRecord(), exit_code: code })).toBeUndefined();
+  } finally { await f.close(); }
+});
+
+it.skipIf(process.platform !== "win32")("retains Windows native child exit status through completion and restart", async () => {
+  const f = await fixture();
+  try {
+    for (const [requested, expected] of [[3010, 3010], [-1073741819, 0xc0000005]]) {
+      const job = await f.jobs.start({ ...f.input(`windows-exit-${expected}`), command: [process.execPath, "-e", `process.exit(${requested})`] });
+      await f.finished(job.job_id);
+      expect(f.jobs.get(job.job_id)).toMatchObject({ status: "failed", exit_code: expected });
+      const restored = new JobManager({ policy: f.policy, stateDir: join(f.base, "state") });
+      await restored.initialize();
+      expect(restored.get(job.job_id)).toMatchObject({ status: "failed", exit_code: expected });
+    }
+  } finally { await f.close(); }
+});
 
 it("active history IDs include a long job outside the history page and omit private jobs", async () => {
   const f = await fixture(100), started: string[] = [];

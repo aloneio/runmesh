@@ -1,5 +1,4 @@
-
-
+import { isProcessExitCode } from "@aloneio/runmesh-protocol";
 export function safePositiveIntegerValue(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
@@ -57,7 +56,7 @@ export function isSafeCursor(value: unknown): value is string {
 }
 
 export function isSafeExitCode(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && Math.abs(value) <= 2 ** 31;
+  return isProcessExitCode(value);
 }
 
 export function copyRequiredTimestamp(value: Record<string, unknown>, output: Record<string, unknown>, key: string): void {

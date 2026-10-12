@@ -56,7 +56,7 @@ Use the signed stable release listed in [release status](docs/release-readiness.
 5. Create an MCP client and copy the URL shown when it is created. On instances with shared MCP and Skills, choose that access type for the shared collection or add computer access; computer permissions start with Read selected.
 6. Share the URL with its intended user, and rotate or revoke it when necessary.
 
-The standard installer downloads a fixed, verified release, supplies the runtime, enrolls the Runner, and configures its service. If hosted installation is unavailable, the dashboard shows the offline-verifiable portable procedure. See the [administrator guide](docs/admin-guide.md).
+The standard installer downloads a fixed, verified release, supplies the runtime, enrolls the Runner, and configures its service. The dashboard shows a hosted command or the portable procedure according to the selected release channel. See the [administrator guide](docs/admin-guide.md).
 
 The copied enrollment command contains a single-use credential; keep the complete command private. For hidden manual code entry, follow the [interactive installation steps](docs/portable-runner-installation.md); Windows also requires removing `-NonInteractive` from the copied PowerShell command.
 

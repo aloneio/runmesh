@@ -4,6 +4,8 @@
 
 ## 当前正式版：0.1.7
 
+0.1.8 正在进行发布验证，功能变化见[版本说明](release-notes.zh-CN.md)。体验签名预览包可使用[开发渠道](dev-runner-prereleases.zh-CN.md)。
+
 [Runmesh 0.1.7](https://github.com/aloneio/runmesh/releases/tag/v0.1.7) 已发布，提供签名 Runner 安装包。本版改进了 Linux、macOS、Windows 用户级服务管理和 MCP 连接稳定性，具体变化见[版本说明](release-notes.zh-CN.md)。
 
 | 你要做什么 | 下一步 |

@@ -4,9 +4,13 @@ Use the output schema in `tools/list` to interpret each of Runmesh's ten native 
 
 ## Interpret a receipt
 
-Older Runners may omit optional observations. Treat those fields as unavailable and use the evidence that is present. For example, `job.input` returns the accepted byte count in `accepted` and optional `eof`; these describe input delivery, while the Job's subsequent output/status show how the process handled it.
+Older Runners may omit optional observations. Base your decision on the fields returned by the installed Runner. For example, `job.input` returns the accepted byte count in `accepted` and optional `eof`; these describe input delivery, while the Job's subsequent output/status show how the process handled it.
 
 Action-specific required evidence must be present. Wrong types, undeclared fields, missing required evidence and empty success objects produce `tool_result_invalid`. The Worker performs these checks in addition to the aggregate JSON Schema published for the tool.
+
+## Read process exit codes
+
+With a compatible 0.1.8-series Worker and Runner, `shell`, detailed `job` results and Context evidence preserve the host's complete exit code, including Windows values such as `3010` and `3221225477`. Interpret the code using the executed program's documentation and keep it with the Job's status and logs. Use a workspace-bound `job` query when you need the complete process result after a lifecycle notification.
 
 ## Recover from an invalid result
 

@@ -186,5 +186,5 @@ Lifecycle fixtures cover 32-to-33-version capacity, explicit cleanup recovery,
 active/staged/pinned protection, preview replacement and expiry, concurrent
 install/activation/retention, receipt validation and transactional rollback.
 Source fixtures cover exact commits, bounded traversal and preview-to-install
-consistency. Check the current verification report alongside
-[real-host rollout evidence](../central-rollout.md) before release.
+consistency. Before release, follow the [deployment checklist](../central-rollout.md)
+with the intended clients and keep the results alongside the candidate's test report.

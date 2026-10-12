@@ -40,6 +40,6 @@
 
 授权开始前会检查凭据加密是否可用。缺少或无效的 `INTERNAL_CONTROL_SECRET` 返回 `oauth_configuration_required`（503，`not_started`），不会访问提供方或覆盖已有账号；此时应恢复现有部署密钥。正常配置的实例无需额外初始化 OAuth，用户填写 MCP URL、选择 OAuth 后即可前往提供方授权页。此错误与提供方不支持或暂时不可用分别展示。
 
-测试覆盖加密绑定、密钥轮换、回调身份与 origin、刷新占用、撤销、会话清理及不重放。本地协议样例不能证明每个真实提供方的同意流程；部署启用与外部授权证据记录在[上线核验表](../central-rollout.md)。
+测试覆盖加密绑定、密钥轮换、回调身份与 origin、刷新占用、撤销、会话清理及不重放。按[部署检查流程](../central-rollout.zh-CN.md)验证实例所用的每个提供方登录流程，并随部署记录保存实际结果。
 
 参见[产品使用流程](central-administration.zh-CN.md)、[MCP 授权](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)和 [MCP 传输](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)。

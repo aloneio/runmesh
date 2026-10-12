@@ -27,11 +27,20 @@ export function initializeSkillSchema(storage: Pick<DurableObjectStorage, "sql" 
     if (version !== 1 || existing.length !== 3 || !existing.includes("skill_bundles_v1")) throw new Error("skill_schema_unsupported");
     createContentTables(sql);
     initializeSkillCapacity(sql);
-    for (const row of sql.exec<{ skill_id: string; digest: string; content_json: string; bytes: number; approved: number }>("SELECT skill_id,digest,content_json,bytes,approved FROM skill_bundles_v1").toArray()) {
+    // Read one body at a time within the atomic upgrade. Exhaust each cursor
+    // before writing so a failed upgrade leaves no read lock for its retry.
+    type LegacyRow = { migration_rowid: number; skill_id: string; digest: string; content_json: string; bytes: number; approved: number };
+    let after: number | undefined;
+    for (;;) {
+      const row: LegacyRow | undefined = (after === undefined
+        ? sql.exec<LegacyRow>("SELECT rowid AS migration_rowid,skill_id,digest,content_json,bytes,approved FROM skill_bundles_v1 ORDER BY rowid LIMIT 1")
+        : sql.exec<LegacyRow>("SELECT rowid AS migration_rowid,skill_id,digest,content_json,bytes,approved FROM skill_bundles_v1 WHERE rowid>? ORDER BY rowid LIMIT 1", after)).toArray()[0];
+      if (row === undefined) break;
       const bundle = JSON.parse(row.content_json) as SkillBundle;
       if (bundle.skill_id !== row.skill_id || bundle.digest !== row.digest || ![0, 1].includes(row.approved)
         || new TextEncoder().encode(row.content_json).byteLength !== row.bytes) throw new Error("skill_record_invalid");
       insertSkillContent(sql, bundle, row.bytes, row.approved === 1);
+      after = row.migration_rowid;
     }
     sql.exec("DROP TABLE skill_bundles_v1");
     sql.exec("UPDATE skill_meta SET schema_version=2 WHERE id=1");

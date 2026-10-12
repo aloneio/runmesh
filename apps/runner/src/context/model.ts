@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isProcessExitCode } from "@aloneio/runmesh-protocol";
 import { RpcRuntimeError } from "../errors.js";
 
 /** Record validation and deterministic transformations; no filesystem or process access. */
@@ -137,7 +138,7 @@ export function evidenceList(value: unknown): readonly ContextEvidence[] {
     const evidence: Record<string, unknown> = { kind: source.kind, status: source.status };
     if (source.job_id !== undefined) evidence.job_id = safeId(source.job_id, "evidence.job_id");
     if (source.job_status !== undefined) evidence.job_status = boundedString(source.job_status, "evidence.job_status", 1, 64);
-    if (source.exit_code === null || (typeof source.exit_code === "number" && Number.isSafeInteger(source.exit_code))) evidence.exit_code = source.exit_code;
+    if (source.exit_code === null || isProcessExitCode(source.exit_code)) evidence.exit_code = source.exit_code;
     else if (source.exit_code !== undefined) throw new RpcRuntimeError("invalid_params", "evidence.exit_code is invalid");
     if (source.ref !== undefined) evidence.ref = boundedString(source.ref, "evidence.ref", 1, 256);
     if (source.summary !== undefined) evidence.summary = boundedString(source.summary, "evidence.summary", 1, 1_024);

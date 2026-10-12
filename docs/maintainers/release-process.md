@@ -6,7 +6,7 @@
 
 Keep package and lockfile versions, installer identity and release notes aligned at the selected version. Promote reviewed changes from `dev` to protected `main` through the [main promotion policy](../main-promotion-policy.md).
 
-Prepare publication notes in `docs/releases/<version>.md`, starting with `# Runmesh <version>`. The release workflow uses these versioned notes. Record real-client and MCP provider checks in the [central rollout ledger](../central-rollout.md).
+Prepare publication notes in `docs/releases/<version>.md`, starting with `# Runmesh <version>`. The release workflow uses these versioned notes. Use the [deployment checklist](../central-rollout.md) for real-client and MCP provider checks, and keep their results with the candidate's verification record.
 
 ## Verify and publish
 

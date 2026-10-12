@@ -2,14 +2,15 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## Unreleased — current dev
+## 0.1.8 — release candidate
 
-These changes are available in the current dev source. The published stable release remains 0.1.7; see [release status](release-readiness.md) and the [development Runner channel](dev-runner-prereleases.md) for package availability.
+Runmesh 0.1.8 brings the following changes from dev. Use the [release status](release-readiness.md) to choose a published package, or the [development Runner channel](dev-runner-prereleases.md) to evaluate the candidate.
 
 - **Remote Runner version management.** Choose a signed release from the control panel, including an earlier version. Managed installations use an independent version manager that preserves the Runner's configuration, waits for local tasks, and checks reconnection. A local journal supports interrupted-change recovery; a failed switch triggers an attempt to restore the previous package. See [Runner versions](runner-versions.md) for installation requirements and recovery guidance.
 - **MCP connection checks and tool search.** Inspect a connection's status and declared capabilities, import supported remote entries from MCP Registry `server.json` files, and use `remote_search` to find published tools across enabled services. See [connecting an MCP](central-remote-mcp.md).
 - **Skill imports and version management.** Import a public GitHub folder at an exact commit, inspect file manifests, compare saved versions, retain important versions, restore an earlier version and preview storage cleanup. See [Skill installation and updates](central-skills.md).
-- **Control-panel improvements.** Updated navigation and Runner actions, clearer MCP and Skill status, and recovery guidance that stays visible after validation errors.
+- **Control-panel improvements.** Updated navigation and Runner actions, clearer MCP and Skill status, concise client credential statuses, and dates with UTC times. Recovery guidance stays visible after validation errors.
+- **Task results and library upgrades.** Detailed task results retain Windows process exit codes. Skill library upgrades process saved bundles in sequence to keep memory use bounded.
 - **Documentation and video.** Updated English and Chinese guides and added a [60-second Runmesh overview](media/README.md) with narration and captions in both languages.
 
 ## 0.1.7 — published stable release
@@ -25,10 +26,6 @@ These changes are available in the current dev source. The published stable rele
 
 - Temporary control-plane interruptions preserve the existing OAuth connection. Authorization opens when the account needs to sign in again.
 - Runner connections release unused responses during disconnects and temporary control-plane failures.
-
-### Control panel
-
-- Client lists show concise credential statuses and put dates and UTC times on separate lines, with full timestamps available for reference.
 
 ### Security
 

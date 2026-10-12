@@ -40,6 +40,6 @@ Before tool discovery, an existing connection's current catalog returns HTTP 200
 
 Authorization checks credential encryption before contacting the provider. A missing or invalid `INTERNAL_CONTROL_SECRET` returns `oauth_configuration_required` (503, `not_started`) without contacting the provider or replacing an existing account. Restore the existing deployment secret if it becomes unavailable. A normally configured instance needs no additional OAuth setup: users enter the MCP URL, select OAuth and continue to the provider's authorization page. Configuration failures are presented separately from unsupported or unavailable providers.
 
-Tests cover encryption binding, key rotation, callback identity/origin, refresh claims, revocation, session cleanup and no replay. Local protocol fixtures do not prove consent with every real provider. Deployment activation and external consent evidence remain in [the rollout ledger](../central-rollout.md).
+Tests cover encryption binding, key rotation, callback identity/origin, refresh claims, revocation, session cleanup and no replay. Follow the [deployment checklist](../central-rollout.md) to verify sign-in with each provider used by the instance, and retain the observed result with the deployment record.
 
 See [the product workflow](central-administration.md), [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) and [MCP transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
