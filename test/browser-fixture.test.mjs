@@ -8,10 +8,12 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { finished } from "node:stream/promises";
 import { EventEmitter, once } from "node:events";
+import { channel } from "node:diagnostics_channel";
 import { WebSocketServer } from "ws";
 import { authenticateBrowserFixture, seedBrowserFixtureHistory } from "../scripts/browser-worker-fixture.mjs";
 import { runFixtureCommand, spawnWorkerFixture, stopFixtureProcess, waitForFixtureExit, waitForWorker } from "../scripts/worker-fixture.mjs";
 import { createTestHttpScope, runBoundedConcurrentLoad } from "../scripts/test-http-scope.mjs";
+import { createFixtureTransportObserver } from "../scripts/fixture-transport-observer.mjs";
 import * as browserDiagnostics from "../scripts/browser-evidence.mjs";
 import { initializeSourceCheckout } from "./helpers/source-checkout.mjs";
 
@@ -31,6 +33,228 @@ async function localHttpFixture(t, handle) {
   });
   return { origin: `http://127.0.0.1:${server.address().port}`, requests };
 }
+
+function fixtureTransport(t) {
+  const origin = "http://127.0.0.1:43173", observer = createFixtureTransportObserver(origin);
+  t.after(() => observer.close());
+  const emit = (name, value) => channel(`undici:${name}`).publish(value);
+  return { origin, observer, emit,
+    connect(socket, connectParams = { protocol: "http:", hostname: "127.0.0.1", port: "43173" }) {
+      emit("client:connected", { connectParams, socket });
+    },
+    request(socket, requestOrigin = origin) {
+      const request = { origin: requestOrigin };
+      emit("request:create", { request });
+      if (socket !== undefined) emit("client:sendHeaders", { request, socket });
+      return request;
+    },
+    fail(request, error = new Error("PRIVATE_REQUEST_FAILURE")) {
+      emit("request:error", { request, error });
+      return observer.failure(error);
+    },
+  };
+}
+
+test("Fixture transport observer validates its explicit local HTTP origin", () => {
+  for (const origin of ["https://127.0.0.1:43173", "http://localhost:43173", "http://127.0.0.2:43173",
+    "http://127.0.0.1", "http://user:secret@127.0.0.1:43173", "http://127.0.0.1:43173/path",
+    "http://127.0.0.1:43173/?token=PRIVATE", "http://127.0.0.1:43173/#PRIVATE", "PRIVATE_INVALID"])
+    assert.throws(() => createFixtureTransportObserver(origin), { name: "TypeError", message: "Invalid fixture transport origin" });
+  const observer = createFixtureTransportObserver("http://127.0.0.1:43173/");
+  assert.doesNotThrow(() => observer.close());
+});
+
+test("Fixture transport observer distinguishes new, pre-existing and reused sockets", t => {
+  const f = fixtureTransport(t), fresh = { bytesRead: 0, bytesWritten: 0, destroyed: false };
+  f.connect(fresh);
+  const first = f.fail(f.request(fresh));
+  assert.equal(first.request_sequence, 1); assert.equal(first.socket_sequence, 1);
+  assert.equal(first.socket_request_count, 1); assert.equal(first.reused, false); assert.equal(first.idle_ms, null);
+  const preexisting = {}, unknown = f.fail(f.request(preexisting, new URL(f.origin)));
+  assert.equal(unknown.socket_sequence, 2); assert.equal(unknown.socket_request_count, 1);
+  assert.equal(unknown.reused, null); assert.equal(unknown.idle_ms, null);
+  // A connection notification received after its first send does not rewrite age.
+  f.connect(preexisting);
+  const reused = f.fail(f.request(preexisting));
+  assert.equal(reused.socket_sequence, 2); assert.equal(reused.socket_request_count, 2);
+  assert.equal(reused.reused, true); assert.equal(reused.idle_ms, null);
+});
+
+test("Fixture transport observer measures idle only across an observed idle completion", t => {
+  const f = fixtureTransport(t), socket = {};
+  const completed = f.request(socket);
+  f.emit("request:trailers", { request: completed });
+  const afterIdle = f.request(socket), concurrent = f.request(socket);
+  const busyFailure = f.fail(concurrent), idleFailure = f.fail(afterIdle);
+  assert.equal(busyFailure.idle_ms, null);
+  assert.ok(Number.isInteger(idleFailure.idle_ms) && idleFailure.idle_ms >= 0 && idleFailure.idle_ms <= 900_000);
+  const afterFailure = f.fail(f.request(socket));
+  assert.equal(afterFailure.idle_ms, null);
+  const active = f.request(socket), overlapping = f.request(socket);
+  f.emit("request:trailers", { request: overlapping });
+  const stillBusy = f.fail(f.request(socket));
+  assert.equal(stillBusy.idle_ms, null);
+  f.emit("request:trailers", { request: active });
+  // A duplicate terminal event cannot manufacture a second completion boundary.
+  const resumed = f.request(socket);
+  f.emit("request:trailers", { request: active });
+  assert.equal(f.fail(f.request(socket)).idle_ms, null);
+  assert.ok(Number.isInteger(f.fail(resumed).idle_ms));
+});
+
+test("Fixture transport observer filters requests and connection events by exact origin", t => {
+  const f = fixtureTransport(t), socket = {};
+  for (const origin of ["http://127.0.0.1:43174", "https://127.0.0.1:43173", "http://localhost:43173",
+    "http://example.invalid:43173", f.origin + "/PRIVATE_PATH", { origin: f.origin }])
+    assert.equal(f.fail(f.request(socket, origin)), undefined);
+  f.connect(socket, { protocol: "http:", hostname: "127.0.0.1", port: "43174" });
+  f.connect(socket, { protocol: "https:", hostname: "127.0.0.1", port: "43173" });
+  f.connect(socket, { protocol: "http:", hostname: "example.invalid", port: "43173" });
+  const record = f.fail(f.request(socket));
+  assert.equal(record.request_sequence, 1); assert.equal(record.socket_sequence, 1); assert.equal(record.reused, null);
+});
+
+test("Fixture transport observer freezes first-error counters before later cancellation", t => {
+  const f = fixtureTransport(t), socket = { bytesRead: 10, bytesWritten: 20, destroyed: false, remoteAddress: "PRIVATE_REMOTE" };
+  const request = f.request(socket), original = new Error("PRIVATE_ORIGINAL"), later = new Error("PRIVATE_CANCELLED");
+  request.path = "/PRIVATE_PATH"; request.headers = "Authorization: PRIVATE_TOKEN"; request.body = "PRIVATE_BODY";
+  socket.bytesRead = 17; socket.bytesWritten = 31;
+  f.emit("request:headers", { request, response: { headers: ["PRIVATE_HEADER"], statusText: "PRIVATE_STATUS" } });
+  const record = f.fail(request, original), serialized = JSON.stringify(record);
+  assert.equal(Object.isFrozen(record), true);
+  assert.deepEqual(Object.keys(record).sort(), ["request_sequence", "socket_sequence", "socket_request_count", "reused",
+    "idle_ms", "request_elapsed_ms", "headers_received", "socket_destroyed", "socket_bytes_read", "socket_bytes_written",
+    "socket_bytes_read_delta", "socket_bytes_written_delta"].sort());
+  assert.equal(record.headers_received, true); assert.equal(record.socket_destroyed, false);
+  assert.equal(record.socket_bytes_read, 17); assert.equal(record.socket_bytes_written, 31);
+  assert.equal(record.socket_bytes_read_delta, 7); assert.equal(record.socket_bytes_written_delta, 11);
+  assert.ok(Number.isInteger(record.request_elapsed_ms) && record.request_elapsed_ms >= 0 && record.request_elapsed_ms <= 900_000);
+  socket.bytesRead = 100_000; socket.bytesWritten = 200_000; socket.destroyed = true;
+  f.emit("client:sendHeaders", { request, socket });
+  f.emit("request:trailers", { request });
+  assert.equal(f.fail(request, later), record);
+  assert.equal(f.observer.failure(new TypeError("terminated", { cause: original })), record);
+  assert.equal(JSON.stringify(record), serialized); assert.doesNotMatch(serialized, /PRIVATE_/u);
+});
+
+test("Fixture transport observer resolves bounded causes and rejects shared-error ambiguity", t => {
+  const f = fixtureTransport(t), original = new Error("PRIVATE_CAUSE"), request = f.request({});
+  const record = f.fail(request, original);
+  assert.equal(f.observer.failure(new TypeError("fetch failed", { cause: original })), record);
+  assert.equal(f.fail(request, original), record);
+  const loop = {}; loop.cause = loop;
+  assert.equal(f.observer.failure(loop), undefined);
+  assert.equal(f.observer.failure({ get cause() { throw new Error("PRIVATE_ACCESSOR"); } }), undefined);
+  let deep = original;
+  for (let index = 0; index < 8; index++) deep = { cause: deep };
+  assert.equal(f.observer.failure(deep), undefined);
+  assert.equal(f.fail(f.request({}), original), undefined);
+  assert.equal(f.observer.failure(new TypeError("terminated", { cause: original })), undefined);
+  for (const primitive of [null, undefined, false, 0, "PRIVATE_ERROR"]) assert.equal(f.observer.failure(primitive), undefined);
+});
+
+test("Fixture transport observer tolerates hostile diagnostics and bounds byte projections", t => {
+  const f = fixtureTransport(t);
+  for (const name of ["client:connected", "request:create", "client:sendHeaders", "request:headers", "request:trailers", "request:error"])
+    for (const payload of [undefined, null, { get request() { throw new Error("PRIVATE_GETTER"); }, get connectParams() { throw new Error("PRIVATE_GETTER"); } }])
+      assert.doesNotThrow(() => f.emit(name, payload));
+  const inaccessible = { get bytesRead() { throw new Error("PRIVATE_COUNTER"); }, get bytesWritten() { throw new Error("PRIVATE_COUNTER"); },
+    get destroyed() { throw new Error("PRIVATE_SOCKET"); } };
+  const unknown = f.fail(f.request(inaccessible));
+  assert.equal(unknown.socket_bytes_read, null); assert.equal(unknown.socket_bytes_written, null);
+  assert.equal(unknown.socket_bytes_read_delta, null); assert.equal(unknown.socket_bytes_written_delta, null);
+  assert.equal(unknown.socket_destroyed, null);
+  const socket = { bytesRead: 0, bytesWritten: 100, destroyed: false }, request = f.request(socket);
+  socket.bytesRead = Number.MAX_SAFE_INTEGER; socket.bytesWritten = 50;
+  const bounded = f.fail(request);
+  assert.equal(bounded.socket_bytes_read, 2_147_483_647); assert.equal(bounded.socket_bytes_read_delta, 2_147_483_647);
+  assert.equal(bounded.socket_bytes_written, 50); assert.equal(bounded.socket_bytes_written_delta, null);
+  assert.doesNotMatch(JSON.stringify([unknown, bounded]), /PRIVATE_/u);
+});
+
+test("Fixture transport observer bounds requests and error associations", t => {
+  const f = fixtureTransport(t);
+  let last;
+  for (let index = 0; index < 8_192; index++) last = f.request();
+  assert.equal(f.fail(last).request_sequence, 8_192);
+  assert.equal(f.fail(f.request()), undefined);
+  // The first association above consumes one of the 64 identity slots.
+  for (let index = 1; index < 64; index++) assert.ok(f.fail(last, new Error("PRIVATE_REPEATED_ERROR")));
+  assert.equal(f.fail(last, new Error("PRIVATE_OVER_BUDGET")), undefined);
+});
+
+test("Fixture transport observer bounds sockets and clears metadata on an untracked resend", t => {
+  const f = fixtureTransport(t), firstSocket = {};
+  f.connect(firstSocket);
+  const request = f.request(firstSocket);
+  for (let index = 1; index < 2_048; index++) f.connect({});
+  f.emit("client:sendHeaders", { request, socket: { bytesRead: 3, bytesWritten: 4 } });
+  const record = f.fail(request);
+  assert.equal(record.socket_sequence, null); assert.equal(record.socket_request_count, null);
+  assert.equal(record.reused, null); assert.equal(record.idle_ms, null);
+  assert.equal(record.socket_bytes_read, 3); assert.equal(record.socket_bytes_written, 4);
+});
+
+test("Fixture transport observer marks send-count overflow unknown while retaining reuse", t => {
+  const f = fixtureTransport(t), socket = {}, request = f.request(socket);
+  for (let index = 1; index <= 8_192; index++) f.emit("client:sendHeaders", { request, socket });
+  const record = f.fail(request);
+  assert.equal(record.socket_sequence, 1); assert.equal(record.socket_request_count, null);
+  assert.equal(record.reused, true); assert.equal(record.idle_ms, null);
+});
+
+test("Fixture transport observer remains inert when channel subscription or removal throws", t => {
+  const create = channel("undici:request:create"), sentinel = () => {};
+  const ownSubscribe = Object.getOwnPropertyDescriptor(create, "subscribe");
+  const ownUnsubscribe = Object.getOwnPropertyDescriptor(create, "unsubscribe");
+  // Capture ActiveChannel methods: inactive subscribe dispatches through itself.
+  create.subscribe(sentinel);
+  const originalSubscribe = create.subscribe, originalUnsubscribe = create.unsubscribe;
+  const listeners = [];
+  const replace = (name, value) => Object.defineProperty(create, name, { value, configurable: true, writable: true });
+  let f, partial;
+  try {
+    replace("subscribe", function (listener) { listeners.push(listener); return originalSubscribe.call(this, listener); });
+    f = fixtureTransport(t);
+    const error = new Error("PRIVATE_BEFORE_CLOSE");
+    assert.ok(f.fail(f.request(), error));
+    replace("unsubscribe", () => { throw new Error("PRIVATE_REMOVE"); });
+    assert.doesNotThrow(() => f.observer.close()); assert.doesNotThrow(() => f.observer.close());
+    let reads = 0;
+    assert.doesNotThrow(() => f.emit("request:create", { get request() { reads++; throw new Error("PRIVATE_LATE_READ"); } }));
+    assert.equal(reads, 0); assert.equal(f.observer.failure(error), undefined);
+    replace("subscribe", () => { throw new Error("PRIVATE_SUBSCRIBE"); });
+    assert.doesNotThrow(() => { partial = createFixtureTransportObserver(f.origin); });
+    assert.doesNotThrow(() => partial.close());
+  } finally {
+    // Preserve method inheritance: installing a captured ActiveChannel method
+    // on an inactive instance would bypass its next activation transition.
+    for (const [name, descriptor] of [["unsubscribe", ownUnsubscribe], ["subscribe", ownSubscribe]]) {
+      if (descriptor === undefined) delete create[name];
+      else Object.defineProperty(create, name, descriptor);
+    }
+    f?.observer.close(); partial?.close();
+    for (const listener of listeners) originalUnsubscribe.call(create, listener);
+    originalUnsubscribe.call(create, sentinel);
+  }
+  assert.deepEqual(Object.getOwnPropertyDescriptor(create, "subscribe"), ownSubscribe);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(create, "unsubscribe"), ownUnsubscribe);
+});
+
+test("Fixture transport observer associates a real local POST failure without another send", { timeout: 8_000 }, async t => {
+  const http = await localHttpFixture(t, request => { assert.equal(request.method, "POST"); request.socket.destroy(); });
+  const observer = createFixtureTransportObserver(http.origin);
+  t.after(() => observer.close());
+  let failure;
+  try { await fetch(http.origin + "/fixture-close", { method: "POST", body: "fixture-body", signal: AbortSignal.timeout(3_000) }); }
+  catch (error) { failure = error; }
+  assert.ok(failure instanceof TypeError);
+  const record = observer.failure(failure);
+  assert.ok(record); assert.equal(record.request_sequence, 1); assert.equal(record.socket_sequence, 1);
+  assert.equal(record.socket_request_count, 1); assert.equal(record.reused, false);
+  assert.equal(record.headers_received, false); assert.equal(record.idle_ms, null);
+  assert.deepEqual(http.requests, ["/fixture-close"]);
+});
 
 test("Test HTTP scope keeps fixture setup requests outside a test usable", { timeout: 8_000 }, async t => {
   const scope = createTestHttpScope();

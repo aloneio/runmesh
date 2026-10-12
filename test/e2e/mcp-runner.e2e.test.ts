@@ -14,6 +14,7 @@ import { inspectInputCases } from "../helpers/inspect-input-cases.js";
 import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, emitMcpFailureDiagnostic, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpLoadTimingDiagnostic, mcpServerTiming, mcpToolResultDiagnostic, mcpWorkerSnapshotDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
 import { spawnWorkerFixture, stopFixtureProcess, waitForFixtureExit, waitForWorker } from "../../scripts/worker-fixture.mjs";
 import { createTestHttpScope, runBoundedConcurrentLoad, trackTestBodies } from "../../scripts/test-http-scope.mjs";
+import { createFixtureTransportObserver } from "../../scripts/fixture-transport-observer.mjs";
 import WebSocket from "ws";
 import { decodeWireFrame, encodeWireFrame, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 
@@ -134,6 +135,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   let enrollmentCli: ChildProcess | undefined;
   let worker: ChildProcess | undefined;
   let workerLog: (() => string) | undefined;
+  let transportObserver: ReturnType<typeof createFixtureTransportObserver> | undefined;
+  let activeTestSignal: AbortSignal | undefined;
   let setupComplete = false;
   let testFailed = false;
   let teardownStarted = false;
@@ -181,7 +184,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     console.error(`E2E Worker diagnostic (${reason}): ${workerDiagnosticState()}\n${output || "[no Worker output]"}`);
   }
 
-  beforeEach(({ onTestFailed }) => {
+  beforeEach(({ onTestFailed, signal }) => {
+    activeTestSignal = signal;
     onTestFailed(() => { testFailed = true; });
   });
 
@@ -204,6 +208,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
     worker.once("close", (code, signal) => recordWorkerEvent("close", code, signal));
     workerUrl = await waitForWorker(worker, WORKER_READINESS_TIMEOUT_MS, workerDiagnosticState);
+    transportObserver = createFixtureTransportObserver(workerUrl);
     const createdClients = await setupAdminAndClients();
     enrollmentCode = await createBrowserRunnerEnrollment();
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -282,7 +287,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     } catch (error) {
       reportWorkerDiagnostics("teardown failed");
       throw error;
-    }
+    } finally { transportObserver?.close(); }
   }, 30_000);
 
   it("R01 actual local Worker exposes its compiled source without a deployment tag", async () => {
@@ -626,6 +631,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       elapsed_ms: Math.min(900_000, Math.max(0, Math.round(performance.now() - begin))) });
     let firstFailureProgress: ReturnType<typeof progress> | undefined;
     let firstFailureTiming: string | undefined;
+    let firstFailureContext: Record<string, unknown> | undefined;
     onTestFailed(async () => {
       process.stderr.write(mcpLoadProgressDiagnostic(firstFailureProgress ?? progress()) ?? "");
       process.stderr.write(firstFailureTiming ?? timingDiagnostic("failed") ?? "");
@@ -649,7 +655,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await runBoundedConcurrentLoad({ count: 128, concurrency,
       onFirstFailure: (error: unknown) => {
         firstFailureProgress ??= progress(); firstFailureTiming ??= timingDiagnostic("failed");
-        emitMcpFailureDiagnostic("test_failure", error);
+        emitMcpFailureDiagnostic("test_failure", error, undefined, firstFailureContext);
       },
       run: async (index: number, signal: AbortSignal) => {
         next = index + 1;
@@ -658,10 +664,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
         timing.started++;
         const start = performance.now();
         let boundary: "headers" | "body" | undefined;
+        let failureBoundary: "headers" | "body" | undefined;
         let headersStarted: number | undefined, bodyStarted: number | undefined, transportFailed = false;
         const observe: McpObservation = (state, serverTiming) => {
           const now = performance.now();
-          if (state === "failure") { transportFailed = true; firstFailureProgress ??= progress(); return; }
+          if (state === "failure") { failureBoundary = boundary; transportFailed = true; firstFailureProgress ??= progress(); return; }
           if (state === "headers") headersStarted = now;
           if (state === "body") {
             if (headersStarted !== undefined) timing.headers.push(now - headersStarted);
@@ -687,6 +694,13 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
         } catch (error) {
           timing.failed++;
           firstFailureProgress ??= progress(); firstFailureTiming ??= timingDiagnostic("failed");
+          // Freeze the first rejected request before the load cancels its peers.
+          // The observer only reads diagnostics; dispatch and deadlines stay intact.
+          firstFailureContext ??= { concurrency, operation: timing.operation, request_index: index,
+            boundary: failureBoundary ?? boundary ?? "validation", signal_aborted: signal.aborted,
+            test_signal_aborted: activeTestSignal?.aborted,
+            elapsed_ms: Math.min(900_000, Math.max(0, Math.round(performance.now() - start))),
+            network: transportFailure(error) };
           throw error;
         }
       },
@@ -1297,8 +1311,13 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       if (observe !== undefined) observe("body", mcpServerTiming(response.headers.get("server-timing")));
       if (response.status !== 200) throw await mcpHttpFailure(response, id, name, args);
       return await readMcp(response);
-    } catch (error) { emitMcpFailureDiagnostic("request_failure", error); observe?.("failure"); throw error; }
+    } catch (error) { emitMcpFailureDiagnostic("request_failure", error, undefined, { network: transportFailure(error) }); observe?.("failure"); throw error; }
     finally { observe?.("complete"); }
+  }
+
+  function transportFailure(error: unknown): unknown {
+    try { return transportObserver?.failure(error); }
+    catch { return undefined; }
   }
 
   function fixtureProgress(fixture: "job_recording" | "job_history" | "job_sharing", onTestFailed: (handler: () => void) => void) {

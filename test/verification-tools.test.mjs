@@ -612,7 +612,7 @@ test("MCP direct failure diagnostics classify only fixed errors and preserve ini
   for (const [name, kind] of [["AssertionError", "assertion_failed"], ["TimeoutError", "timeout"], ["AbortError", "abort_error"],
     ["TypeError", "type_error"], ["SyntaxError", "syntax_error"], ["RangeError", "range_error"], ["Error", "error"], ["private-name", "other"]]) {
     const original = Object.assign(new Error("private-error at https://private-url"), { name, cause: { message: "private-cause" } });
-    assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("request_failure", original)), [{ event: "request_failure", kind }]);
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("request_failure", original)), [{ event: "request_failure", kind, cause_code: "absent", cause_name: "absent" }]);
     assert.throws(() => {
       try { throw original; }
       catch (error) { emitMcpFailureDiagnostic("request_failure", error, () => { throw new Error("closed stderr"); }); throw error; }
@@ -620,6 +620,140 @@ test("MCP direct failure diagnostics classify only fixed errors and preserve ini
   }
   assert.equal(mcpFailureDiagnostic("private-event", new Error("private")), undefined);
   assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("test_failure", "private-thrown-value")), [{ event: "test_failure", kind: "other" }]);
+});
+
+function loadFailureContext(concurrency = 4) {
+  return { concurrency, operation: "job_logs", request_index: 79, boundary: "headers", signal_aborted: false, test_signal_aborted: false, elapsed_ms: 11041 };
+}
+
+function failureNetwork() {
+  return { request_sequence: 82, socket_sequence: 3, socket_request_count: 20, reused: true, idle_ms: 42, request_elapsed_ms: 71,
+    headers_received: false, socket_destroyed: true, socket_bytes_read: 4096, socket_bytes_written: 8192,
+    socket_bytes_read_delta: 0, socket_bytes_written_delta: 256 };
+}
+
+test("MCP fetch causes retain fixed classifications and bounded socket counters without private error fields", () => {
+  const codes = ["UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_ABORTED",
+    "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE"];
+  for (const code of codes) {
+    const cause = { code, name: "SocketError", message: "private-message", stack: "private-stack", address: "private-address",
+      socket: { bytesRead: 42, bytesWritten: 84, timeout: 0, localAddress: "private-local", remoteAddress: "private-remote", localPort: 12345, remotePort: 54321 },
+      cause: { code: "PRIVATE_NESTED_SECRET" } };
+    const error = new TypeError("private-url https://private-token", { cause });
+    const line = mcpFailureDiagnostic("request_failure", error);
+    assert.deepEqual(mcpWorkerFailureEvidence(line), [{ event: "request_failure", kind: "type_error", cause_code: code, cause_name: "SocketError",
+      socket: { bytes_read: 42, bytes_written: 84, timeout_ms: 0 } }]);
+    assert.doesNotMatch(line, /private|address|[Pp]ort|message|stack/iu);
+    assert.equal(error.cause, cause);
+  }
+  for (const name of ["SocketError", "ConnectTimeoutError", "HeadersTimeoutError", "BodyTimeoutError", "RequestAbortedError", "AbortError", "TypeError", "Error", "AggregateError"])
+    assert.equal(mcpWorkerFailureEvidence(mcpFailureDiagnostic("request_failure", new TypeError("private", { cause: { name } })))[0].cause_name, name);
+  const unknown = new TypeError("private", { cause: { code: "PRIVATE_UPPERCASE_TOKEN", name: "private-name", socket: {
+    bytesRead: Number.MAX_SAFE_INTEGER, bytesWritten: Number.MAX_SAFE_INTEGER, timeout: Number.MAX_SAFE_INTEGER, remoteAddress: "private" } } });
+  assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("request_failure", unknown)), [{ event: "request_failure", kind: "type_error",
+    cause_code: "other", cause_name: "other", socket: { bytes_read: 2_147_483_647, bytes_written: 2_147_483_647, timeout_ms: 900000 } }]);
+  for (const value of [-1, 1.5, NaN, Infinity, "private", null]) {
+    const error = new TypeError("private", { cause: { socket: { bytesRead: value, bytesWritten: value, timeout: value } } });
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("request_failure", error)), [{ event: "request_failure", kind: "type_error", cause_code: "absent", cause_name: "absent", socket: {} }]);
+  }
+});
+
+test("MCP archived cause fields are reconstructed and reject unknown enums or invalid socket numbers", () => {
+  const encoded = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  const expected = { event: "request_failure", kind: "type_error", cause_code: "UND_ERR_SOCKET", cause_name: "SocketError",
+    socket: { bytes_read: 1, bytes_written: 2, timeout_ms: 0 } };
+  const line = encoded({ ...expected, message: "private", cause: { code: "PRIVATE_SECRET" }, socket: { ...expected.socket, remoteAddress: "private", remotePort: 12345 } });
+  assert.deepEqual(mcpWorkerFailureEvidence(line), [expected]);
+  for (const patch of [{ cause_code: "PRIVATE_SECRET" }, { cause_name: "private" }, { cause_code: undefined }, { cause_name: undefined },
+    { socket: null }, { socket: { bytes_read: -1 } }, { socket: { bytes_written: 1.5 } }, { socket: { bytes_read: 2_147_483_648 } },
+    { socket: { timeout_ms: 900001 } }, { socket: { timeout_ms: Infinity } }])
+    assert.deepEqual(mcpWorkerFailureEvidence(encoded({ ...expected, ...patch })), []);
+});
+
+test("MCP failure load and network context are independently projected without private request data", () => {
+  const error = new TypeError("private-url", { cause: { code: "ECONNRESET", name: "Error" } });
+  const load = loadFailureContext(), network = failureNetwork();
+  const base = { event: "test_failure", kind: "type_error", cause_code: "ECONNRESET", cause_name: "Error" };
+  let emitted;
+  emitMcpFailureDiagnostic("test_failure", error, line => { emitted = line; }, { ...load, network: { ...network, url: "private-network" }, url: "private-url", event: "private-event", kind: "private-kind" });
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted), [{ ...base, ...load, network }]);
+  assert.doesNotMatch(emitted, /private|url|token|headers"\s*:/u);
+  assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("request_failure", error, { network })), [{ ...base, event: "request_failure", network }]);
+  for (const patch of [{ concurrency: 2 }, { operation: "private" }, { request_index: -1 }, { request_index: 128 }, { request_index: 1.5 },
+    { boundary: "private" }, { signal_aborted: "false" }, { test_signal_aborted: null }, { elapsed_ms: -1 }, { elapsed_ms: 900001 }, { elapsed_ms: NaN }]) {
+    const context = { ...load, ...patch, network };
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("test_failure", error, context)), [{ ...base, network }]);
+  }
+  for (const patch of [{ request_sequence: 0 }, { request_sequence: 8193 }, { socket_sequence: 2049 }, { socket_request_count: 0 },
+    { reused: "private" }, { idle_ms: 900001 }, { request_elapsed_ms: null }, { headers_received: "false" }, { socket_destroyed: 1 },
+    { socket_bytes_read: -1 }, { socket_bytes_written: 2_147_483_648 }, { socket_bytes_read_delta: 0.5 }, { socket_bytes_written_delta: Infinity }])
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("test_failure", error, { ...load, network: { ...network, ...patch } })), [{ ...base, ...load }]);
+  const unavailable = { ...network, socket_sequence: null, socket_request_count: null, reused: null, idle_ms: null, socket_destroyed: null,
+    socket_bytes_read: null, socket_bytes_written: null, socket_bytes_read_delta: null, socket_bytes_written_delta: null };
+  assert.deepEqual(mcpWorkerFailureEvidence(mcpFailureDiagnostic("test_failure", error, { network: unavailable })), [{ ...base, network: unavailable }]);
+});
+
+test("MCP archived load and socket observations filter unknown fields and retain other valid evidence", () => {
+  const encoded = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  const base = { event: "test_failure", kind: "type_error", cause_code: "UND_ERR_SOCKET", cause_name: "SocketError" };
+  const load = loadFailureContext(), network = failureNetwork();
+  assert.deepEqual(mcpWorkerFailureEvidence(encoded({ ...base, ...load, url: "private", network: { ...network, headers: "private", remotePort: 12345 } })), [{ ...base, ...load, network }]);
+  assert.deepEqual(mcpWorkerFailureEvidence(encoded({ ...base, operation: "private", network })), [{ ...base, network }]);
+  for (const patch of [{ concurrency: 3 }, { request_index: 128 }, { boundary: "private" }, { signal_aborted: null }, { elapsed_ms: -1 }])
+    assert.deepEqual(mcpWorkerFailureEvidence(encoded({ ...base, ...load, ...patch, network })), [{ ...base, network }]);
+  for (const patch of [{ request_sequence: 8193 }, { socket_sequence: -1 }, { reused: "private" }, { socket_bytes_read_delta: 2_147_483_648 }])
+    assert.deepEqual(mcpWorkerFailureEvidence(encoded({ ...base, ...load, network: { ...network, ...patch } })), [{ ...base, ...load }]);
+});
+
+test("MCP failure budgets retain the first error for each load concurrency and the original context-free events", () => {
+  const original = new TypeError("private", { cause: { code: "UND_ERR_SOCKET", name: "SocketError" } });
+  const later = new Error("private-cancelled");
+  const first = [4, 8].map(concurrency => mcpFailureDiagnostic("test_failure", original, loadFailureContext(concurrency)));
+  const noise = [4, 8].map(concurrency => mcpFailureDiagnostic("test_failure", later, loadFailureContext(concurrency))).join("").repeat(40);
+  const legacy = mcpFailureDiagnostic("test_failure", new TypeError("private")) + mcpFailureDiagnostic("request_failure", new TypeError("private"));
+  const input = first.join("") + noise + legacy.repeat(40);
+  const expected = [...[4, 8].map(concurrency => ({ event: "test_failure", kind: "type_error", cause_code: "UND_ERR_SOCKET", cause_name: "SocketError", ...loadFailureContext(concurrency) })),
+    { event: "test_failure", kind: "type_error" }, { event: "request_failure", kind: "type_error" }];
+  assert.deepEqual(mcpWorkerFailureEvidence(input), expected);
+  assert.doesNotMatch(JSON.stringify(mcpWorkerFailureEvidence(input)), /private/);
+});
+
+test("MCP complete failure observations fit their bounded archive envelope", () => {
+  const maximum = 2_147_483_647;
+  const error = new TypeError("private", { cause: { code: "UND_ERR_HEADERS_TIMEOUT", name: "HeadersTimeoutError",
+    socket: { bytesRead: maximum, bytesWritten: maximum, timeout: 900000 } } });
+  const load = { ...loadFailureContext(16), operation: "workspace_list", request_index: 127, boundary: "validation", elapsed_ms: 900000 };
+  const network = { ...failureNetwork(), request_sequence: 8192, socket_sequence: 2048, socket_request_count: 8192, idle_ms: 900000, request_elapsed_ms: 900000,
+    socket_bytes_read: maximum, socket_bytes_written: maximum, socket_bytes_read_delta: maximum, socket_bytes_written_delta: maximum };
+  const line = mcpFailureDiagnostic("test_failure", error, { ...load, network });
+  const json = line.slice("RUNMESH_E2E_MCP_WORKER_EVENT=".length).trimEnd();
+  assert.equal(json.length, 698);
+  assert.deepEqual(mcpWorkerFailureEvidence(line), [{ event: "test_failure", kind: "type_error", cause_code: "UND_ERR_HEADERS_TIMEOUT", cause_name: "HeadersTimeoutError",
+    socket: { bytes_read: maximum, bytes_written: maximum, timeout_ms: 900000 }, ...load, network }]);
+  // Maximize the independently accepted fields, including pre-existing HTTP
+  // and tool-page details. Transport observations alone fit the old envelope.
+  const http = { content_type: "absent", phase: "read_continuation", body_kind: "json_rpc_error", rpc_code: "absent", rpc_id: "matches",
+    runtime_signature: "network_connection_lost" };
+  const tool = { phase: "job_logs_continuation", result: "success", error_code: "authorization_response_invalid", failure_class: "authorization",
+    operation_state: "not_started", next_action: "refresh_permissions", pagination: {
+      data_type: "absent", data_bytes: 8_388_608, returned_bytes: 8_388_608, page_protocol: 8_388_608, next_cursor: "absent" } };
+  const maximumNetwork = { ...network, reused: false, socket_destroyed: false };
+  const httpMessage = "RUNMESH_E2E_MCP_HTTP_STATUS=599\nRUNMESH_E2E_MCP_HTTP_DIAGNOSTIC=" + JSON.stringify(http) + "\n";
+  const toolMessage = "RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=" + JSON.stringify(tool) + "\n";
+  for (const [message, kind, detail, bytes] of [
+    [httpMessage, "mcp_http_failure", { http_status: 599, mcp_response: http }, 910],
+    [toolMessage, "assertion_failed", { mcp_tool_result: tool }, 1055],
+    [httpMessage + toolMessage, "mcp_http_failure", { http_status: 599, mcp_response: http, mcp_tool_result: tool }, 1256],
+  ]) {
+    const combinedError = Object.assign(new Error(message, { cause: error.cause }), { name: "AssertionError" });
+    const combined = mcpFailureDiagnostic("request_failure", combinedError, { ...load, network: maximumNetwork });
+    const combinedJson = combined.slice("RUNMESH_E2E_MCP_WORKER_EVENT=".length).trimEnd();
+    assert.equal(combinedJson.length, bytes);
+    assert.ok(bytes > 768 && bytes <= 2048);
+    assert.deepEqual(mcpWorkerFailureEvidence(combined), [{ event: "request_failure", kind, cause_code: "UND_ERR_HEADERS_TIMEOUT", cause_name: "HeadersTimeoutError",
+      socket: { bytes_read: maximum, bytes_written: maximum, timeout_ms: 900000 }, ...load, network: maximumNetwork, ...detail }]);
+  }
+  assert.deepEqual(mcpWorkerFailureEvidence("RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify({ event: "test_failure", kind: "type_error", message: "private".repeat(400) }) + "\n"), []);
 });
 
 test("MCP direct failure evidence reprojects HTTP and tool fields and preserves independent first events", async () => {

@@ -3,7 +3,7 @@
 检查日期：2026-10-12 至 2026-10-13（Asia/Shanghai）
 
 检查基线：`dev`，`115ba45`
-阶段：12 项检查发现及后续回执、夹具生命周期问题已完成对应修正，用户文档已整理。候选 `04d50ba` 的独立 main CI 暴露 Windows 开发代理转发阶段的连接失败后，传输夹具已改为真实 Worker 运行时的原生 HTTP 入口。修复的源码与安装包单次验证各通过 41/41 项测试和 512/512 次压力请求；后续进入新候选的跨平台验收。完整失败与修复证据见末节。0.1.8 尚未正式发布或激活，线上健康检查通过，稳定分发保持 0.1.7。
+阶段：12 项检查发现及后续回执、夹具生命周期问题已完成对应修正，用户文档已整理。候选 `a259abd` 的原生 HTTP 入口在本机源码与安装包单次验证中各通过 41/41 项测试和 512/512 次压力请求，但随后 push、PR 两次 Windows CI 均出现传输失败，各记录 2 项失败。现有证据定位到客户端响应头接收与控制面 200 正文读取截止，底层原因仍需连接证据确认。现已补齐被动诊断，并完成两个本机完整链路的复验，接续新候选的托管 Windows 验证。完整失败与验证证据见末节。0.1.8 尚未正式发布或激活，最近一次线上健康检查通过，稳定分发保持 0.1.7。
 
 ## 范围与方法
 
@@ -1031,3 +1031,185 @@ GitLab [MR 59](https://gitlab.com/aloneio/runmesh/-/merge_requests/59) 随后于
 结果摘要文件分别为同目录 `source_transport-summary.json` 与 `installed_transport-summary.json`。每档四种操作均启动并完成 32/32 次。两个主夹具的运行时 observer 均记录已安装，归档安全事件中没有失败或重载事件；该观察范围不等同于完整进程生命周期。安装包 SHA256 为 `7040077f3e3bbb55978a3efc7c979e40e3dce4d403bf687c464e88d1092e025b`，大小 1,217,455 字节，是本地打包验收产物，尚未签名或发布。
 
 类型、架构、测试收集、版本同步、文档、格式及 whitespace 检查通过。中英文验证文档准确说明传输和浏览器的验收入口，故障调查保留在工程检查书。此段在冻结验证结束后追加；后续新候选 CI、公开签名资产和生产激活依据各自执行记录继续验收。
+
+## a259abd 候选 push/PR 首轮双失败归档
+
+记录日期：2026-10-13（Asia/Shanghai）。本节依据已保存的 GitHub push、PR 首轮运行及安全报告整理。这里的“双事件”是同一 GitHub 候选的 push 和 pull_request 两次独立运行，不表示 GitHub 与 GitLab 两个平台。
+
+### 结论与发布状态
+
+候选 `a259abddfb8a5d6e0dc293c60040f2e0edb5882d` 将源码和安装包传输验收切换到真实本地 Miniflare/workerd 原生 HTTP 入口，保留 Wrangler 配置、绑定和资源路由；浏览器继续使用 Wrangler 本地开发入口。本轮两次 GitHub Windows 传输检查均失败，因此这一入口修复尚未满足 Windows CI 验收要求。
+
+两次运行各有 6 个作业成功，Windows native 作业与依赖它的 `verify-all` 失败。每次 28 份 `ci_gate_execution` 报告中有 27 份通过、1 份 Windows `transport` 失败。Linux 源码 E2E、Linux 实际安装包 E2E 和浏览器检查通过的事实分别保留，不能替代 Windows 结果。
+
+旧候选中 Wrangler 开发代理的拒绝边界只定位了当次可观察的失败位置；本轮原生入口仍出现客户端 fetch 失败及控制面读取截止，现有证据不能把旧代理层、HTTP 空闲复用、某一 socket 或某个运行时退出认定为这些失败的唯一底层原因。继续修复需要新增的被动 cause/socket 观察；本附录不将计划中的诊断当作已取得证据。
+
+0.1.8 正式版尚未发布。本轮继续保持候选状态，暂停晋级、签名发布及生产激活；Linux 测试包报告中的 `signed: false`、`published: false` 也仅描述测试产物。本轮没有重跑旧 CI、修改并发档位或提高测试预算。
+
+### 源码身份与归档完整性
+
+| 项目 | push | PR119 |
+| --- | --- | --- |
+| GitHub run | [38279653518](https://github.com/aloneio/runmesh/actions/runs/38279653518) | [38279812176](https://github.com/aloneio/runmesh/actions/runs/38279812176) |
+| attempt | 1 | 1 |
+| 事件 | push / dev | pull_request / dev → main |
+| 候选 head | `a259abddfb8a5d6e0dc293c60040f2e0edb5882d` | `a259abddfb8a5d6e0dc293c60040f2e0edb5882d` |
+| 实际执行 commit | `a259abddfb8a5d6e0dc293c60040f2e0edb5882d` | `bf2717ea651bd873d3e2bbaa699fe9f2266fc58e` |
+| 实际 tree | `c1645c9cb9a195ac199e9033c5c4fec42a53210f` | `c1645c9cb9a195ac199e9033c5c4fec42a53210f` |
+| 报告源码状态 | clean | clean |
+| Provider conclusion | failure | failure |
+| 归档状态 | complete | complete |
+| Windows job | `114913535766` | `114914069292` |
+| Windows transport elapsed / exit | 99,499 ms / 1 | 156,868 ms / 1 |
+
+PR 合成提交的有序父提交为：
+
+1. main：`04d50baadc774abc328d065cfe4fdde3c7370382`
+2. 候选：`a259abddfb8a5d6e0dc293c60040f2e0edb5882d`
+
+`git ls-remote` 对 PR merge ref 的只读观察和 GitHub commit 对象确认了上述拓扑。PR 的 7 个执行 checkout 日志均记录该合成提交；28 份 gate 报告的 commit、tree、clean 状态均与之匹配。push 的 28 份 gate 报告均匹配原候选和同一文件树。
+
+每次归档包含 8 份完整 job 日志及 3 个 ZIP：verify 57 个文件、Windows 3 个、browser 3 个。6 个 ZIP 均与 GitHub provider digest 匹配；ZIP 清单、展开文件集及文件摘要由 download receipts 和 summary 串联保留。`verify-all` 是汇总失败，不另计为业务测试失败。
+
+### Windows 实际失败计数
+
+两次安全报告均记录：`state=failed`、`stage=test_execution`、`subprocess_exit_code=1`、`report_available=true`、`failed_files=1`、`failed_tests=2`、`skipped_tests=0`。包装器错误分类为 `process_exit`，坐标为 `scripts/worker-fixture.mjs:137:42`。
+
+`report_available=true` 表示包装器执行时取得了私有机器报告。归档的安全报告保留失败数、跳过数及分类，没有保留 Windows 最终 passed/total；原始私有 Vitest reporter 未随产物保存。因此本附录不写成“39/41”，也不从源码用例库存反推最终通过数。
+
+| 运行 | test_index | 分类与位置 | 对应混合负载档位 |
+| --- | --- | --- | --- |
+| push | 20 | `fetch_failed`；`test/e2e/mcp-runner.e2e.test.ts:1291:24` | c4 |
+| push | 21 | `fetch_failed`；`test/e2e/mcp-runner.e2e.test.ts:1291:24` | c8 |
+| PR | 21 | `fetch_failed`；`test/e2e/mcp-runner.e2e.test.ts:1291:24` | c8 |
+| PR | 22 | `assertion_failed`；`test/e2e/mcp-runner.e2e.test.ts:685:85` | c16 |
+
+PR index22 的 MCP 结果分类为 `phase=mixed_load`、`result=error`、`error_code=control_plane_unavailable`、`failure_class=availability`、`operation_state=not_started`。报告里的 `next_action=wait_and_retry` 是被测协议的返回字段，不是本次验证执行过重试的证据，也不是要求重跑 CI 的指令。
+
+### 混合负载的完成记录与首错快照
+
+原计划每次包含 c1、c4、c8、c16 各 128 个混合请求，合计 512 个；每档均包含 `read`、`workspace_list`、`job_get`、`job_logs` 四种操作。失败档位下表中的 started/completed 是首错误冻结时的快照，不是后续取消和清理结束后的最终总数。并发运行中的“已启动 N 个”也不等于“第 N 个请求就是失败请求”。本轮任何一次 Windows 结果都不记为 512/512。
+
+`load_progress.elapsed_ms` 从该用例开始计时，包含任务准备；`load_timing.elapsed_ms` 从混合请求阶段开始计时。两个时钟不能互换。通过档位使用最终 `load_timing`；失败档位使用首错冻结记录。
+
+| 运行 | 并发 | 观察 | started | completed | 首错 pending headers / body | progress elapsed ms | mixed elapsed ms | 首错操作分类 |
+| --- | ---: | --- | ---: | ---: | --- | ---: | ---: | --- |
+| push | 1 | passed | 128 | 128 | — | — | 13,001 | — |
+| push | 4 | first failure snapshot | 82 | 78 | 4 / 0 | 11,041 | 10,650 | `job_logs` fetch failure |
+| push | 8 | first failure snapshot | 46 | 38 | 8 / 0 | 22,280 | 9,943 | `read` fetch failure |
+| push | 16 | passed | 128 | 128 | — | — | 6,971 | — |
+| PR | 1 | passed | 128 | 128 | — | — | 15,958 | — |
+| PR | 4 | passed | 128 | 128 | — | — | 21,170 | — |
+| PR | 8 | first failure snapshot | 10 | 2 | 8 / 0 | 37,060 | 29,545 | `workspace_list` fetch failure |
+| PR | 16 | first failure snapshot | 33 | 17 | 15 / 0 | 15,483 | 10,048 | `read` MCP error result |
+
+每个 passed 档位的四种操作均为 started=32、completed=32、failed=0。失败快照保留的操作计数如下，单元格依次表示 started / completed / failed：
+
+| 运行 / 并发 | read | workspace_list | job_get | job_logs |
+| --- | --- | --- | --- | --- |
+| push / c4 | 21 / 20 / 0 | 21 / 20 / 0 | 20 / 19 / 0 | 20 / 19 / 1 |
+| push / c8 | 12 / 10 / 1 | 12 / 10 / 0 | 11 / 9 / 0 | 11 / 9 / 0 |
+| PR / c8 | 3 / 0 / 0 | 3 / 2 / 1 | 2 / 0 / 0 | 2 / 0 / 0 |
+| PR / c16 | 9 / 4 / 1 | 8 / 5 / 0 | 8 / 4 / 0 | 8 / 4 / 0 |
+
+首错冻结记录保留在触发停止调度和取消前；失败后 Worker 快照中的 `cancelled` 请求可能来自这一清理路径，不能直接倒置为首错原因。四档按顺序分别执行，后续档位通过不撤销此前失败。
+
+### 控制面截止与运行时观察边界
+
+PR c16 附近保留一条固定字段事件：`control_plane_failure`，`stage=runner_mcp_authorization`，`outcome=deadline`，`kind=other`，`reason=unknown`，`status=200`，`phase=body_read`。候选源码 `apps/worker/src/runner-do.ts:592` 为该授权读取设置 5,000 ms 边界。这说明当次控制面读取已取得 HTTP 200 状态，随后在响应体读取阶段达到既定截止；HTTP 状态本身不证明授权回执读取完成。它也不等同于负载用例的 60 秒预算耗尽。
+
+push 安全事件中没有保留该 `control_plane_failure` 记录；这只描述现有记录范围，不能据此排除控制面延迟。两次客户端首错均保留 `request_failure/test_failure kind=type_error` 分类；现有安全字段不包含足以确定底层 socket 单因的 cause/连接细节。
+
+失败后的 Worker 快照：push c4 为 `unavailable`；push c8 为 entered=338、finished=337、dropped=0；PR c8 为 353/352/0；PR c16 为 381/376/0。它们是失败后的有界观测，不是所有请求和依赖的完整追踪。不得把快照缺少某条请求解释为该请求必然没有抵达任何 Worker。
+
+两次都观察到两个 native runtime spawn；push 的 elapsed 为 1,669/2,082 ms，PR 为 2,206/2,635 ms。两次 launcher 快照均为 `reason=test_failed`、exit/signal 为 null、`teardown_started=false`、`exited_before_teardown=false`。这些字段描述 launcher 和已记录事件，不构成所有底层进程或连接均健康的证明。
+
+### 同轮通过的检查
+
+每次成功的 6 个作业为：`verify`、`browser`、Linux native、macOS native、Node LTS 22.23.2、Node LTS 24.21.0。
+
+| 观察 | push | PR |
+| --- | --- | --- |
+| Linux source transport | 41 passed / 41 total；failed/skipped/todo 均 0 | 41 passed / 41 total；failed/skipped/todo 均 0 |
+| Linux installed-package transport | 41 passed / 41 total；failed/skipped/todo 均 0 | 41 passed / 41 total；failed/skipped/todo 均 0 |
+| Browser | 5 passed / 5 total；failed/skipped/todo 均 0 | 5 passed / 5 total；failed/skipped/todo 均 0 |
+
+两次 Linux package 报告均记录测试 tarball 为 1,217,457 bytes，SHA256 `33f1a65af0fae61a295d78c53fddace867363cffe2488d72c53c378fb7e9ff7b`。这些是独立执行的相同覆盖范围，不相加为唯一测试总数。
+
+PR119 的独立 `main-source-policy` run `38279812282` attempt1 成功，job `114914069207`；该结果验证 PR 来源规则，不替代失败的普通 CI。
+
+### 完整归档索引与 SHA256
+
+以下路径均相对于 `.audit/a259abd-ci/`。归档摘要还保留 terminal snapshot、原始 run/jobs 响应的指纹；每份 `*-download.json` 保留对应日志或 ZIP、完整展开文件清单及其摘要，可沿索引追溯原字节。
+
+| 归档文件 | SHA256 |
+| --- | --- |
+| `push-summary-20261012T1659512912074Z.json` | `e7beaa22d0e5e4692efd389c46a1c7a16aed51f33424981afd4ac8c5cd98f2e4` |
+| `pr-summary-20261012T1701533597966Z.json` | `0952dcc1a1a3a2d066621d07a77a3f835de480c6e59d4ca2619795494e6dff6b` |
+| `pr-source-artifact-verification-20261012T1703361500071Z.json` | `bd3e3b90a43238ee55456f9385b8f06c4ed476e3d052b3ba6e591d5d87763dec` |
+| `pr-source-20261012T1649581099088Z-summary.json` | `6be452c24cc89e3f93299ca305feef3ca699c203b4a75690fd07ec26b23add16` |
+| `policy-summary-20261012T1650119977809Z.json` | `081bb937e3d5a884885cd81a4758d7b37638a89938806761d1ef2ef97e08eee7` |
+| `policy-job-114914069207.log` | `911d34c76324f64825812fad1dab22668d649deaabcbf2535b4a0927e467c6f0` |
+| `push-verify-artifact.zip` | `482ddc8f33523c3b92a03dfc278e3bcd957d2eefd706e5a5efb456c05615e7db` |
+| `push-windows-artifact.zip` | `fea6f49b8661c4dd8382548633d115b6822a60cb26a487f25eca6b8780260e95` |
+| `push-browser-artifact.zip` | `ae3135824d1b8f399e5e785acb7b5cfb9d703df4b1fb28c8d0831a24997ef77f` |
+| `pr-verify-artifact.zip` | `b7086830eba4173fa08d1c11b51d323588a40bce9c655509c7a5a6c5d49aac3f` |
+| `pr-windows-artifact.zip` | `9c37f00531378229bb0679eb9db3673f962dada6f48156dcf664669082c2f554` |
+| `pr-browser-artifact.zip` | `42883ff8aef48951254a70964448d4890779a4f9636f4af98e51fa036a4e10dd` |
+| `push-windows-artifact/transport-tests.json` | `344c6b48c6b5d573666e54e431570de305afdff7ee98518da771d2ec76605027` |
+| `pr-windows-artifact/transport-tests.json` | `1fcba7fce996823fce04792701155601215984b2ef1552fee85fbf094d2951ba` |
+
+全部 push job 日志：
+
+| 作业 / 日志 | SHA256 |
+| --- | --- |
+| LTS22 · `push-job-114913535330.log` | `d90a5cee95f24d049c3c7abdc8061fde4f53fcd7674501c812557bdf6d5834d3` |
+| LTS24 · `push-job-114913535569.log` | `f5cfd2ff03261c55c4eb2c3aadee2b577a3a2636d6e793094731bd941e89531d` |
+| verify · `push-job-114913535715.log` | `f740d5af86f8164543085dce57431fe819a4dfa050405fe5713d8acf5dd58612` |
+| macOS · `push-job-114913535734.log` | `51694753ad387c784fb4cb47a68712bea3fb2302b107e17a9e786b257d8afbe9` |
+| Windows · `push-job-114913535766.log` | `1e89335ce53edac6bc9d6b38c102a558a3dd186345081438e7be4fe232773a93` |
+| Linux · `push-job-114913535769.log` | `30f6cc6cf1c94b2a85b15ec44ac469964700d83c4faf3fdb9ac2261db39377e8` |
+| browser · `push-job-114913535862.log` | `3cbd96533ee57cb97e4a99ed5567a3a41d5c1ec0eba41866d75ca0e1af181975` |
+| verify-all · `push-job-114916936775.log` | `7741856acc69bf52cc7476d4f47ae3c218fde8b12dbb0ca7c4165a133f762652` |
+
+全部 PR job 日志：
+
+| 作业 / 日志 | SHA256 |
+| --- | --- |
+| verify · `pr-job-114914069023.log` | `d7e0cf20b41b38f854ea9c22e8ee0090cc9391bc9cc96b40c487624b49c58e91` |
+| Windows · `pr-job-114914069292.log` | `df148cf4b79dfcccde5ec4d57f77e22ed7f11780dee80b101be8e84167088345` |
+| browser · `pr-job-114914069407.log` | `c58c430c36b46967a0edfa18e814a89d7a4c20c3b9d89e875d196d61c71d885c` |
+| LTS24 · `pr-job-114914069411.log` | `7c39aa55693bde57934c5a6b078d92908df969c80b505a48e68b57609c2de4ca` |
+| Linux · `pr-job-114914069414.log` | `0eced370520e7b9c8730b7e18526823c05da37b6f139d8436c90cfd647b1f78a` |
+| macOS · `pr-job-114914069425.log` | `46f4bbb919adac232e3e4fcc08a1bc1b500b3ed1c0a978d741eb37608fb0f810` |
+| LTS22 · `pr-job-114914069463.log` | `7c1de404b770f05edb64cb259ae518e3b352353844e0cdb5999be3549aff51da` |
+| verify-all · `pr-job-114918102417.log` | `44ed41bf00c01333f2bf1bb869e128d2c8cd3918a6c8cdd4e74666168072509b` |
+
+后续补充被动诊断、修复和新候选验证时，应另记源码身份、计划、首次执行和结果，保留本轮失败原始字节与归档指纹。
+
+## 原生连接的被动诊断补充
+
+在 `a259abd` 基线上新增仅观察夹具 HTTP origin 的 Undici diagnostics_channel 订阅，使用弱引用关联请求、连接与错误。错误发生时冻结连接序号、观察到的发送次数、复用与空闲情况、响应头状态及有界字节计数；未观察到连接创建时，首次连接年龄保留未知。同一错误对象对应多个请求时不提供有歧义的连接归属。该观察器不改变 fetch、连接池、请求、取消信号、重试或截止。
+
+每个负载档位在同伴取消前分别记录首错的固定 cause 分类、操作、请求索引、响应头/正文/结果验证阶段和取消状态。日志按固定枚举和数值重新构建，不包含地址、请求内容、凭据、错误消息或堆栈。安全事件包络由 768 调整至 2,048 字符，以容纳已有 HTTP/工具结果详情与新增观察的组合；总捕获上限和测试预算保持原值。这一变更补齐证据，尚不构成 Windows 底层连接故障的修复结论。
+
+首次完整契约验证保存在 `.audit/native-transport-diagnostics-20261013/`：`contracts.mjs` 使用固定 Node 22.23.2 串行运行 browser-fixture、verification-tools 两个完整文件，共 192 项，181 通过、2 失败、9 平台跳过，0 取消，耗时 53,428 ms。执行前后源码和驱动指纹一致。`contracts.log` SHA256 为 `b7028b8ad4c15d44260aaf683a6aa954a29d7791fae88a7a8c34b92b887e0f73`。
+
+两项失败分别定位为新增测试夹具问题：Node 的 mock.restore 将继承的 ActiveChannel 方法写回通道实例，随后通道变为 inactive 时留下了错误的实例方法，导致下一项真实 HTTP 观察未订阅成功；测试现精确恢复原属性描述符或继承状态。另一项原长度夹具实际为 698 字符，未超过旧包络；现保留其准确长度断言，并构造带 HTTP、工具详情的合法组合验证更大记录的完整往返。真实 POST 单次发送、错误关联和全部测试断言均保留，首次失败原始证据独立保存。
+
+上述夹具修正后的完整验证由独立 `contracts-v2.mjs` 执行：192 项中 183 通过、9 平台跳过、0 失败、0 取消，耗时 67,337 ms，执行前后源码及驱动指纹一致。全部 12 项连接观察契约通过，包括一次真实本地 POST 的错误关联与恰好一次发送；698、910、1,055、1,256 字符的合法记录均完整往返，超过包络的记录被拒绝。`contracts-v2.log` SHA256 为 `c34b790b47ed96479337b3095a80e80f7a42128c5af997254da11c65d4c61234`。类型、架构、版本、文档与项目事实、验证清单及测试收集检查均通过。
+
+### 被动诊断候选的单次完整验证
+
+冻结计划位于 `.audit/native-transport-diagnostics-20261013/plan.json`，SHA256 为 `b6e18b7c86a3171bb5972066e13822813a47a2ddc8e5707814cb8d550a45b8ff`，包含 19 个文件。两条路径使用原有入口串行执行，各自一次，保留 41 个用例、并发 1/4/8/16 每档 128 次请求、普通用例 30 秒、负载 60 秒及 200 ms 单次断连预算。两条路径的执行前后源码、文件、差异与运行时指纹均等于冻结计划；工程记录在验证后追加。
+
+| 证据 | 源码路径 | 实际安装包路径 |
+| --- | --- | --- |
+| 测试 | 41/41，0 失败、0 跳过 | 41/41，0 失败、0 跳过 |
+| 压力请求 | 512/512 | 512/512 |
+| 门禁 / 外层耗时 | 126,888 / 132,322 ms | 102,379 / 105,859 ms |
+| c1 / c4 / c8 / c16 负载耗时 | 9,571 / 7,359 / 7,092 / 5,843 ms | 8,104 / 4,728 / 3,974 / 2,911 ms |
+| 安全观察事件 | 211 | 211 |
+| summary SHA256 | `5ae3442c33468df8b59a6933135efd0c00aa8dbb95aa1490016b7931cd8c3ff4` | `82c3a1fff68b3193f2eb8e01ea1e1e96500ee361704bc5641a3931a428f4e376` |
+
+每个并发档位的四种操作均完成 32/32 次，失败数为 0。两条路径分别保留 6、5 个归档文件，其大小、摘要、日志负载行与 211 条安全事件已独立复核；事件仅涵盖已记录的运行时观察、进程启动与负载指标，没有保留失败或 reload 事件，不据此声称所有生命周期均已观察。安装包报告记录本地测试 tarball 为 1,217,455 bytes，SHA256 `7040077f3e3bbb55978a3efc7c979e40e3dce4d403bf687c464e88d1092e025b`，`signed=false`、`published=false`。这些本机结果验证诊断补充后的功能覆盖；托管 Windows 的底层故障仍按新提交的独立 CI 证据定位。
