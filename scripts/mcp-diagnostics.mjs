@@ -26,7 +26,7 @@ const TOOL_RESULT_MARKER = "RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=";
 const WORKER_MARKER = "RUNMESH_E2E_MCP_WORKER_EVENT=";
 const jobStatuses = ["queued", "running", "cancelling", "succeeded", "failed", "cancelled", "interrupted", "unknown", "absent", "other"];
 const toolResultFields = {
-  phase: ["inspect_search_initial", "inspect_search_continuation", "job_logs_initial", "job_logs_continuation", "job_logs_stderr", "other"],
+  phase: ["inspect_search_initial", "inspect_search_continuation", "job_logs_initial", "job_logs_continuation", "job_logs_stderr", "mixed_load", "other"],
   result: ["error", "success", "absent", "other"],
   // Fixed public RPC codes relevant to native tool admission and bounded reads.
   // Other codes remain classified as "other", never reflected from the result.

@@ -8,10 +8,13 @@ import { GitService } from "./git-service.js";
 import { FilesystemService } from "./filesystem.js";
 import { JobManager, type JobEvent } from "./jobs.js";
 import { occupiesProcessSlot } from "./jobs/records.js";
+import { parseStartValues } from "./jobs/values.js";
 import { PatchService } from "./patch-service.js";
 import { PathPolicy, PathPolicyError } from "./path-policy.js";
 import { RpcRuntimeError, failureMetadata, type RpcFailureClass, type RpcNextAction, type RpcOperationState } from "./errors.js";
 import type { JobMetadata } from "./protocol-types.js";
+
+const SHELL_DISCOVERY_COOLDOWN_MS = 5_000;
 
 export interface RunnerRuntimeOptions {
   readonly config: RunnerConfig;
@@ -31,6 +34,8 @@ export class RunnerRuntime {
   private readonly patcher: PatchService;
   private readonly config: RunnerConfig;
   private shellRuntime: ShellRuntime | undefined;
+  private shellDiscovery: Promise<ShellRuntime | undefined> | undefined;
+  private shellRetryAt = 0;
   private readonly environment: EnvironmentReader;
   private readonly maxConcurrentJobs: number;
 
@@ -48,10 +53,37 @@ export class RunnerRuntime {
   }
   public async initialize(): Promise<void> {
     await this.jobs.initialize();
-    this.shellRuntime = await discoverShellRuntime();
-    if (this.shellRuntime === undefined) return;
+    await this.discoverShell();
   }
   public getShellRuntime(): ShellRuntime | undefined { return this.shellRuntime; }
+  private discoverShell(): Promise<ShellRuntime | undefined> {
+    if (this.shellRuntime !== undefined) return Promise.resolve(this.shellRuntime);
+    if (this.shellDiscovery !== undefined) return this.shellDiscovery;
+    if (performance.now() < this.shellRetryAt) return Promise.resolve(undefined);
+    // Only trusted executable discovery is shared. A failed observation expires;
+    // no user command or authorization decision is retained or retried here.
+    this.shellDiscovery = discoverShellRuntime().then(shell => {
+      this.shellRuntime = shell;
+      return shell;
+    }).finally(() => {
+      this.shellRetryAt = performance.now() + SHELL_DISCOVERY_COOLDOWN_MS;
+      this.shellDiscovery = undefined;
+    });
+    return this.shellDiscovery;
+  }
+  private async discoverShellBefore(deadline: number): Promise<ShellRuntime | undefined> {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const shell = await Promise.race([this.discoverShell(), new Promise<undefined>(resolve => {
+        timer = setTimeout(() => resolve(undefined), remaining);
+      })]);
+      // A late trusted probe may populate the capability cache, but cannot
+      // resume command admission for a request whose observation budget ended.
+      return performance.now() < deadline ? shell : undefined;
+    } finally { if (timer !== undefined) clearTimeout(timer); }
+  }
   public applyPolicy(workspaces: readonly import("./config.js").WorkspaceConfig[]): void {
     this.policy.replace(workspaces);
   }
@@ -193,29 +225,45 @@ export class RunnerRuntime {
     return { ...result, context: { ...record, baseline_state: baselineState, commit_state: commitState, working_tree_state: workingTreeState, baseline_scope: "git-tracked-and-untracked-status", current_commit: currentCommit } };
   }
 
-  private async startJob(input: unknown): Promise<import("./jobs.js").JobRecord> {
+  private async startJob(input: unknown, deadline = performance.now() + LOCAL_RUNNER_OPERATION_TIMEOUT_MS): Promise<import("./jobs.js").JobRecord> {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
+    const generation = this.policy.generation;
     this.policy.assertPermission(workspace.workspaceId, "read");
     if (workspace.permissions !== undefined && (!workspace.permissions.edit || workspace.permissions.shell === false || workspace.permissions.job_control === false)) throw new RpcRuntimeError("permission_denied", "Host shell requires read, edit, and job_control permissions");
     // Policy denial must not depend on whether a native shell was discovered.
     if (params.shell === true && !workspace.shell) throw new RpcRuntimeError("permission_denied", "shell execution is disabled for this workspace");
-    if (params.shell === true && this.shellRuntime === undefined) throw new RpcRuntimeError("shell_unavailable", "the configured Host shell runtime is unavailable");
-    const shellParams = params.shell === true && typeof params.command === "string" && this.shellRuntime !== undefined ? { ...params, shell_runtime: this.shellRuntime.buildInvocation(params.command) } : params;
+    if (params.shell === true) parseStartValues(params, workspace);
+    let shell = this.shellRuntime;
+    if (params.shell === true && shell === undefined) {
+      const cwd = await this.policy.resolve(workspace.workspaceId, params.cwd ?? ".", "cwd");
+      if ((await this.policy.snapshot(cwd)).type !== "directory") throw new RpcRuntimeError("invalid_path", "cwd must be a directory");
+      this.policy.assertGeneration(generation);
+      shell = await this.discoverShellBefore(deadline);
+      this.policy.assertGeneration(generation);
+      if (shell === undefined) throw new RpcRuntimeError("shell_unavailable", "the configured Host shell runtime is unavailable");
+    }
+    const shellParams = params.shell === true && typeof params.command === "string" && shell !== undefined ? { ...params, shell_runtime: shell.buildInvocation(params.command) } : params;
     return this.jobs.start(shellParams);
   }
   private async run(input: unknown): Promise<Record<string, unknown>> {
+    const begin = performance.now();
     const params = object(input);
     const requested = params.wait_ms === undefined ? LOCAL_RUNNER_OPERATION_TIMEOUT_MS : positiveInteger(params.wait_ms, "wait_ms");
     if (requested > LOCAL_RUNNER_OPERATION_TIMEOUT_MS) throw new RpcRuntimeError("invalid_params", `wait_ms must be at most ${LOCAL_RUNNER_OPERATION_TIMEOUT_MS}`);
     const startParams = { ...params };
     delete startParams.wait_ms;
-    const job = await this.startJob(startParams);
+    const deadline = begin + requested;
+    const job = await this.startJob(startParams, deadline);
     if (job.status === "queued") return { job, completed: false, queue: this.jobs.queueStatus(), wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
-    const deadline = Date.now() + requested;
     // A live process recovered after restart remains unknown and reserves its
     // execution slot. An idempotent retry must not report that Job complete.
-    while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!occupiesProcessSlot(current)) return { job: current, completed: true, stdout: await this.executionLogs(job.job_id, "stdout"), stderr: await this.executionLogs(job.job_id, "stderr") }; await delay(Math.min(50, deadline - Date.now())); }
-    return { job: this.jobs.get(job.job_id), completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
+    for (;;) {
+      const current = this.jobs.get(job.job_id);
+      if (!occupiesProcessSlot(current)) return { job: current, completed: true, stdout: await this.executionLogs(job.job_id, "stdout"), stderr: await this.executionLogs(job.job_id, "stderr") };
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) return { job: current, completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
+      await delay(Math.min(50, remaining));
+    }
   }
 
   /** A completed execution is not undone by optional inline log retrieval.

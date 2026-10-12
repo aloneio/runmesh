@@ -107,6 +107,7 @@ const failureKinds = [
   [/hook timed out|hook timeout/iu, "hook_timeout"], [/test timed out|test timeout/iu, "test_timeout"],
   [/ECONNREFUSED/u, "connection_refused"], [/fetch failed/iu, "fetch_failed"],
   [/timed? ?out|ETIMEDOUT/iu, "timeout"], [/AssertionError|assertion failed/iu, "assertion_failed"],
+  [/^TypeError(?: \[[A-Z0-9_]+\])?:/mu, "type_error"],
   [/EACCES|EPERM/u, "permission_denied"],
 ];
 
@@ -132,7 +133,10 @@ export function testFailureDetails(messages) {
     .filter(value => typeof value === "string").map(value => value.slice(0, 16384)).join("\n")).replaceAll("\\", "/");
   const toolResult = mcpToolResultFailureDiagnostic(text);
   // A diagnostic code such as "timeout" must not reclassify its assertion.
-  const failureText = toolResult === undefined ? text : text.replace(/^RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=.*$/gmu, "");
+  const messageText = toolResult === undefined ? text : text.replace(/^RUNMESH_E2E_MCP_TOOL_RESULT_DIAGNOSTIC=.*$/gmu, "");
+  // Runner wrappers such as runWithTimeout appear in every error stack. Classify
+  // the messages while retaining the complete stack below for source coordinates.
+  const failureText = messageText.split("\n").filter(line => !/^\s*at\s+/u.test(line)).join("\n");
   const details = { kind: failureKinds.find(([pattern]) => pattern.test(failureText))?.[1] ?? "unclassified" };
   const httpStatus = /^(?:Error: )?RUNMESH_E2E_MCP_HTTP_STATUS=([1-5]\d{2})\r?$/mu.exec(text)?.[1];
   if (httpStatus !== undefined) {

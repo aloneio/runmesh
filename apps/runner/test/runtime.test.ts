@@ -15,6 +15,8 @@ import { PathPolicy } from "../src/path-policy.js";
 import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
 import { RunnerRuntime, rpcError } from "../src/runtime.js";
 import { discoverShellRuntime } from "../src/environment.js";
+import * as environment from "../src/environment.js";
+import type { ShellRuntime } from "../src/environment-contracts.js";
 import type { RunnerConfig, WorkspaceConfig } from "../src/config.js";
 import * as statePath from "../src/state-path.js";
 
@@ -172,6 +174,208 @@ describe("shell runtime discovery", () => {
     expect(result).toMatchObject({ code: 0, stdout: expect.stringContaining("runmesh-shell-probe") });
     expect(result.stderr).toBe("");
   }, 15_000);
+});
+
+describe("shell discovery recovery", () => {
+  const shell: ShellRuntime = { kind: "bash", executable: "/bin/bash", version: "fixture",
+    buildInvocation: command => ({ file: "/bin/bash", args: ["-lc", command] }) };
+  const request = { workspace_id: "workspace-1", command: "fixture-command", shell: true };
+  const pendingProbe = () => {
+    let finish!: (value: ShellRuntime | undefined) => void;
+    const promise = new Promise<ShellRuntime | undefined>(resolve => { finish = resolve; });
+    return { promise, finish };
+  };
+  async function recoveryFixture() {
+    const test = await fixture();
+    const workspace = { ...test.workspace, shell: true };
+    const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [workspace] };
+    const runtime = new RunnerRuntime({ config, stateDir: test.state });
+    vi.spyOn(runtime.jobs, "initialize").mockResolvedValue(undefined);
+    vi.spyOn(runtime.policy, "resolve").mockResolvedValue({ workspace, path: workspace.rootPath });
+    vi.spyOn(runtime.policy, "snapshot").mockResolvedValue({ canonicalPath: workspace.rootPath, device: 1, inode: 1, type: "directory", size: 0, modifiedAtMs: 0 });
+    const start = vi.spyOn(runtime.jobs, "start").mockResolvedValue(jobRecord());
+    vi.useFakeTimers();
+    return { runtime, workspace, start, cleanup: async () => { vi.useRealTimers(); vi.restoreAllMocks(); await test.cleanup(); } };
+  }
+
+  it("expires the initial negative result and shares one recovery probe across concurrent commands", async () => {
+    const test = await recoveryFixture(), probe = pendingProbe();
+    const discover = vi.spyOn(environment, "discoverShellRuntime").mockResolvedValueOnce(undefined).mockReturnValue(probe.promise);
+    try {
+      await test.runtime.initialize();
+      await expect(test.runtime.dispatch("exec.start", request)).rejects.toMatchObject({ code: "shell_unavailable" });
+      await vi.advanceTimersByTimeAsync(4_999);
+      await expect(test.runtime.dispatch("exec.start", request)).rejects.toMatchObject({ code: "shell_unavailable" });
+      expect(discover).toHaveBeenCalledTimes(1); expect(test.start).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      const calls = Array.from({ length: 16 }, (_, index) => test.runtime.dispatch("exec.start", { ...request, command: "fixture-" + index }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(discover).toHaveBeenCalledTimes(2); expect(test.start).not.toHaveBeenCalled();
+      probe.finish(shell);
+      await Promise.all(calls);
+      expect(test.start).toHaveBeenCalledTimes(16);
+      expect(test.start.mock.calls.map(([value]) => (value as { shell_runtime: { args: string[] } }).shell_runtime.args[1]))
+        .toEqual(Array.from({ length: 16 }, (_, index) => "fixture-" + index));
+      await test.runtime.dispatch("exec.start", request);
+      expect(discover).toHaveBeenCalledTimes(2); expect(test.start).toHaveBeenCalledTimes(17);
+      expect(test.runtime.getShellRuntime()).toBe(shell);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { probe.finish(undefined); await test.cleanup(); }
+  });
+
+  it("starts a new cooldown after an unsuccessful shared probe", async () => {
+    const test = await recoveryFixture(), probe = pendingProbe();
+    const discover = vi.spyOn(environment, "discoverShellRuntime").mockResolvedValueOnce(undefined).mockReturnValue(probe.promise);
+    try {
+      await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
+      const calls = Array.from({ length: 16 }, () => test.runtime.dispatch("exec.start", request).catch(rpcError));
+      await vi.advanceTimersByTimeAsync(0);
+      probe.finish(undefined);
+      for (const result of await Promise.all(calls)) expect(result).toMatchObject({ code: "shell_unavailable", operation_state: "not_started" });
+      await expect(test.runtime.dispatch("exec.start", request)).rejects.toMatchObject({ code: "shell_unavailable" });
+      expect(discover).toHaveBeenCalledTimes(2); expect(test.start).not.toHaveBeenCalled();
+    } finally { probe.finish(undefined); await test.cleanup(); }
+  });
+
+  it("checks shell permission before probing and leaves direct executable requests independent", async () => {
+    const test = await recoveryFixture();
+    const discover = vi.spyOn(environment, "discoverShellRuntime").mockResolvedValue(undefined);
+    try {
+      await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
+      test.runtime.applyPolicy([{ ...test.workspace, shell: false }]);
+      await expect(test.runtime.dispatch("exec.start", request)).rejects.toMatchObject({ code: "permission_denied" });
+      expect(test.start).not.toHaveBeenCalled(); expect(discover).toHaveBeenCalledTimes(1);
+      await test.runtime.dispatch("exec.start", { ...request, shell: false });
+      expect(discover).toHaveBeenCalledTimes(1); expect(test.start).toHaveBeenCalledTimes(1);
+    } finally { await test.cleanup(); }
+  });
+
+  it("rejects a policy change while discovery is pending before admitting a command", async () => {
+    const test = await recoveryFixture(), probe = pendingProbe();
+    vi.spyOn(environment, "discoverShellRuntime").mockResolvedValueOnce(undefined).mockReturnValue(probe.promise);
+    try {
+      await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
+      const call = test.runtime.dispatch("exec.start", request).catch(rpcError);
+      await vi.advanceTimersByTimeAsync(0);
+      test.runtime.applyPolicy([{ ...test.workspace, shell: false }]);
+      probe.finish(shell);
+      expect(await call).toMatchObject({ code: "stale_policy" });
+      expect(test.start).not.toHaveBeenCalled();
+      await expect(test.runtime.dispatch("exec.start", request)).rejects.toMatchObject({ code: "permission_denied" });
+      expect(test.start).not.toHaveBeenCalled();
+    } finally { probe.finish(undefined); await test.cleanup(); }
+  });
+
+  it.each([["exec.start", LOCAL_RUNNER_OPERATION_TIMEOUT_MS], ["exec.run", 100]] as const)("never admits a timed-out %s request after a late probe succeeds", async (method, budget) => {
+    const test = await recoveryFixture(), probe = pendingProbe();
+    const discover = vi.spyOn(environment, "discoverShellRuntime").mockResolvedValueOnce(undefined).mockReturnValue(probe.promise);
+    try {
+      await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
+      const call = test.runtime.dispatch(method, { ...request, ...(method === "exec.run" ? { wait_ms: budget } : {}) }).catch(rpcError);
+      await vi.advanceTimersByTimeAsync(budget);
+      expect(await call).toMatchObject({ code: "shell_unavailable", operation_state: "not_started" });
+      expect(test.start).not.toHaveBeenCalled();
+      probe.finish(shell); await vi.advanceTimersByTimeAsync(0);
+      expect(test.runtime.getShellRuntime()).toBe(shell); expect(test.start).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      await test.runtime.dispatch("exec.start", { ...request, command: "new-request" });
+      expect(test.start).toHaveBeenCalledTimes(1);
+      expect(test.start).toHaveBeenLastCalledWith(expect.objectContaining({ command: "new-request" }));
+      expect(discover).toHaveBeenCalledTimes(2);
+    } finally { probe.finish(undefined); await test.cleanup(); }
+  });
+
+  it("includes successful discovery in the run observation budget", async () => {
+    const test = await recoveryFixture(), probe = pendingProbe();
+    vi.spyOn(environment, "discoverShellRuntime").mockResolvedValueOnce(undefined).mockReturnValue(probe.promise);
+    vi.spyOn(test.runtime.jobs, "get").mockReturnValue(jobRecord());
+    try {
+      await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
+      let settled = false;
+      const begin = performance.now();
+      const call = test.runtime.dispatch("exec.run", { ...request, wait_ms: 100 }).then(value => { settled = true; return value; });
+      await vi.advanceTimersByTimeAsync(60); probe.finish(shell); await vi.advanceTimersByTimeAsync(0);
+      expect(test.start).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(39); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true); expect(performance.now() - begin).toBe(100);
+      expect(await call).toMatchObject({ completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS });
+      expect(test.start).toHaveBeenCalledTimes(1);
+    } finally { probe.finish(undefined); await test.cleanup(); }
+  });
+
+  it("reports an already completed run after admission consumes its observation budget", async () => {
+    const test = await recoveryFixture();
+    vi.spyOn(environment, "discoverShellRuntime").mockResolvedValue(shell);
+    const completed = jobRecord({ status: "succeeded", exit_code: 0, completed_at_ms: 100 });
+    test.start.mockImplementation(async () => { await vi.advanceTimersByTimeAsync(100); return completed; });
+    vi.spyOn(test.runtime.jobs, "get").mockReturnValue(completed);
+    vi.spyOn(test.runtime.jobs, "logs").mockResolvedValue({ data: "complete" });
+    try {
+      await test.runtime.initialize();
+      const begin = performance.now();
+      expect(await test.runtime.dispatch("exec.run", { ...request, wait_ms: 100 })).toMatchObject({
+        completed: true, job: { status: "succeeded", exit_code: 0 }, stdout: { data: "complete" }, stderr: { data: "complete" },
+      });
+      expect(performance.now() - begin).toBe(100); expect(test.start).toHaveBeenCalledTimes(1);
+    } finally { await test.cleanup(); }
+  });
+
+  it.each([
+    [{ command: undefined }, "invalid_params"], [{ command: "" }, "invalid_params"], [{ command: "nul\0command" }, "invalid_params"],
+    [{ command: "x".repeat(8_193) }, "invalid_params"], [{ command: [] }, "invalid_params"], [{ args: [null] }, "invalid_params"],
+    [{ request_id: "invalid request" }, "invalid_params"], [{ created_by_client_id: "invalid client" }, "invalid_params"],
+    [{ record_history: "true" }, "invalid_params"], [{ cwd: "../outside" }, "invalid_path"], [{ cwd: [] }, "invalid_path"],
+  ] as const)("validates launch values before shell recovery %#", async (invalid, code) => {
+    const test = await recoveryFixture();
+    const discover = vi.spyOn(environment, "discoverShellRuntime").mockResolvedValue(undefined);
+    vi.mocked(test.runtime.policy.resolve).mockRestore();
+    try {
+      await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
+      await expect(test.runtime.dispatch("exec.start", { ...request, ...invalid })).rejects.toMatchObject({ code });
+      expect(discover).toHaveBeenCalledTimes(1); expect(test.start).not.toHaveBeenCalled();
+      expect(test.runtime.jobs.list()).toEqual([]);
+    } finally { await test.cleanup(); }
+  });
+
+  it("validates shell arguments consistently when a successful runtime is cached", async () => {
+    const test = await recoveryFixture();
+    const discover = vi.spyOn(environment, "discoverShellRuntime").mockResolvedValue(shell);
+    try {
+      await test.runtime.initialize();
+      await expect(test.runtime.dispatch("exec.start", { ...request, args: [null] })).rejects.toMatchObject({ code: "invalid_params" });
+      expect(discover).toHaveBeenCalledTimes(1); expect(test.start).not.toHaveBeenCalled();
+    } finally { await test.cleanup(); }
+  });
+
+  it.each(["file", "missing"] as const)("checks a %s cwd before starting a shell recovery probe", async kind => {
+    const test = await recoveryFixture();
+    const discover = vi.spyOn(environment, "discoverShellRuntime").mockResolvedValue(undefined);
+    vi.mocked(test.runtime.policy.resolve).mockRestore(); vi.mocked(test.runtime.policy.snapshot).mockRestore();
+    try {
+      if (kind === "file") await writeFile(join(test.workspace.rootPath, "cwd-file"), "fixture");
+      await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
+      await expect(test.runtime.dispatch("exec.start", { ...request, cwd: "cwd-" + kind })).rejects.toMatchObject({ code: kind === "file" ? "invalid_path" : "ENOENT" });
+      expect(discover).toHaveBeenCalledTimes(1); expect(test.start).not.toHaveBeenCalled();
+    } finally { await test.cleanup(); }
+  });
+
+  it("releases a rejected shared probe and its timers before later recovery", async () => {
+    const test = await recoveryFixture();
+    const discover = vi.spyOn(environment, "discoverShellRuntime").mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("fixture probe rejection")).mockResolvedValue(shell);
+    try {
+      await test.runtime.initialize(); await vi.advanceTimersByTimeAsync(5_000);
+      const calls = Array.from({ length: 16 }, () => test.runtime.dispatch("exec.start", request).catch(rpcError));
+      for (const result of await Promise.all(calls)) expect(result).toMatchObject({ code: "internal_error" });
+      expect(discover).toHaveBeenCalledTimes(2); expect(test.start).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+      await expect(test.runtime.dispatch("exec.start", request)).rejects.toMatchObject({ code: "shell_unavailable" });
+      expect(discover).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await test.runtime.dispatch("exec.start", request);
+      expect(discover).toHaveBeenCalledTimes(3); expect(test.start).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
+    } finally { await test.cleanup(); }
+  });
 });
 
 describe("workspace path policy", () => {
