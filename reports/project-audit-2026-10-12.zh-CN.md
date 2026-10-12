@@ -1383,6 +1383,25 @@ PR Windows job `114964335473` 的 Runner 单元测试记录 1,500 通过、1 失
 
 ### 历史 Windows 传输故障的当前根因边界
 
-对 `a259abd` 的 push/PR 原始工件、Runner、Worker、native launcher 与新诊断记录的交叉复核，将共同可证明的边界收窄到 Windows socket 到 native listener/dispatch 之前：客户端存在等待响应头的请求，而 Worker 内部快照已接近排空，且没有观察到 launcher 在 teardown 前退出或重载。现有材料没有请求级 socket cause、连接复用/空闲状态与 native ingress 首包之间的关联，因此不能把故障归因于某个 TCP、keepalive、客户端、系统调度或单一传输组件。
+对 `a259abd` 的 push/PR 原始工件、Runner、Worker、native launcher 与新诊断记录的交叉复核，确认客户端在 `fetch` 尚未交回 `Response` 时失败，同时保留了失败后的 Worker 聚合快照。两组观察缺少同一请求标识和同一时刻的跨进程采样，因此仍不能区分请求发送前或到达前、Worker 处理期间、响应返回链路以及取消收尾中的具体边界。现有材料没有请求级 socket cause、连接复用/空闲状态与 native ingress 首包之间的关联，因此不能把故障归因于某个 TCP、keepalive、客户端、系统调度或单一传输组件。
 
 当前候选已补充被动诊断并完成源码、安装包及 512 请求压力验证；这些结果证明诊断不改变功能路径，也没有复现历史失败。下一次托管 Windows 故障需要同时保留 Undici 的连接建立、发送、响应头、trailer/error cause、socket 复用/空闲/字节计数，以及 native listener 的首包和 dispatch ingress 时间，才能继续完成请求级归因。故障归属保持开放，不据通过结果宣称历史问题已经根治。
+
+### 2026-10-13 迟到 I/O 生命周期修复与复验
+
+本轮在上述边界内继续检查所有带有有限截止时间的网络和流读取路径，定位到同一类可复现的生命周期缺陷：调用方已因超时或取消结束，但底层传输仍可能忽略 `AbortSignal` 并在之后交回 `Response` 或完成挂起的 `reader.read()`；原续体随后仍可能触碰响应正文或提前释放读取锁。该路径会把已结束请求的异步工作带入后续 Worker/Runner 生命周期，属于高风险资源边界问题。
+
+修复覆盖 Worker 的有界 JSON 收据、开发版本 Registry 缓存写入、MCP 再授权与请求体读取，以及 Runner 的注册请求、版本包下载和维护接口。超时或取消现在先封闭观察状态；迟到 `Response` 被隔离，不再读取或取消其正文；已取得的正文读取器在挂起读取完成后再释放锁。正常完成仍保留原有正文消费、状态判断、授权和资源清理顺序。
+
+当前源码候选提交序列为 `87cd398`、`132352a`、`a4bb12f`、`26bd257`、`02b79fc`，基于 `a92b782`。本机固定 Windows Node `v22.23.2`、npm `10.9.3` 的复验结果如下：
+
+| 验证面 | 结果 |
+| --- | --- |
+| Worker 全套 | 115 个文件，2,540 项通过，0 失败 |
+| Runner 全套 | 74 个文件，1,589 项通过，142 项平台跳过，0 失败 |
+| Domain / Contracts / Protocol | 537 / 50 / 57 项通过 |
+| 迟到 I/O 定向回归 | Worker 380 项；Runner 181 项（4 项平台跳过）；均 0 失败 |
+| 类型检查 | Worker、Runner 通过 |
+| 文档、事实、格式检查 | 通过；0.1.9 candidate 合约一致 |
+
+Worker、Runner 全套均在修复后的当前源码上完成；安装包 E2E 与跨平台托管门禁须在清洁提交推送后重新生成收据，不能复用此前 dirty 工作树的报告。安全回归仍以 Linux 门禁为准，正式标签、双 provider main 同 SHA、发布工作流和生产激活在这些外部证据齐备前保持候选状态。
