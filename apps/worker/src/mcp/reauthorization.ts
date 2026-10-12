@@ -1,5 +1,6 @@
 import { isSafeIdentifier } from "../security.js";
 import { parseClientIdentity, parseNativeScopes, type CodingScope } from "../contracts/identity.js";
+import { reportControlPlaneFailure, type ControlPlaneFailureOutcome } from "../platform/control-plane-diagnostics.js";
 
 export type ReauthorizationDecision =
   | { readonly state: "allowed"; readonly scopes: readonly CodingScope[] }
@@ -36,34 +37,45 @@ export async function reauthorizePrincipal(
   const expired = (): boolean => controller.signal.aborted || performance.now() >= deadline;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let reported = false, responseStatus: number | undefined;
+  const report = (outcome: ControlPlaneFailureOutcome, error?: unknown): void => {
+    if (reported) return;
+    reported = true;
+    reportControlPlaneFailure("mcp_reauthorize", outcome, error, responseStatus);
+  };
   const observe = async (): Promise<ReauthorizationDecision> => {
     try {
       const response = await fetchDecision(controller.signal);
-      if (expired()) { void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
+      responseStatus = response.status;
+      if (expired()) { report("deadline"); void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
       if ([401, 403, 404].includes(response.status)) { void response.body?.cancel().catch(() => undefined); return { state: "denied" }; }
-      if (response.status !== 200) { void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
-      if (response.body === null) return { state: "malformed" };
+      if (response.status !== 200) { report("unexpected_status"); void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
+      if (response.body === null) { report("empty_body"); return { state: "malformed" }; }
       reader = response.body.getReader();
       const chunks: Uint8Array[] = []; let size = 0;
       for (let reads = 0; ; reads++) {
-        if (expired()) return { state: "unavailable" };
-        if (reads >= 256) return { state: "malformed" };
+        if (expired()) { report("deadline"); return { state: "unavailable" }; }
+        if (reads >= 256) { report("fragment_limit"); return { state: "malformed" }; }
         const item = await reader.read();
         // Promise continuations can run before the timer callback. Recheck
         // elapsed time after every read, including the final done receipt.
-        if (expired()) return { state: "unavailable" };
+        if (expired()) { report("deadline"); return { state: "unavailable" }; }
         if (item.done) break;
-        if (!(item.value instanceof Uint8Array) || (size += item.value.byteLength) > 16384) return { state: "malformed" };
+        if (!(item.value instanceof Uint8Array)) { report("invalid_receipt"); return { state: "malformed" }; }
+        if ((size += item.value.byteLength) > 16384) { report("body_limit"); return { state: "malformed" }; }
         chunks.push(item.value);
       }
       const bytes = new Uint8Array(size); let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
       try {
         const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-        return expired() ? { state: "unavailable" } : projectReauthorization(value, expected);
+        if (expired()) { report("deadline"); return { state: "unavailable" }; }
+        const projected = projectReauthorization(value, expected);
+        if (projected.state === "malformed") report("invalid_receipt");
+        return projected;
       }
-      catch { return { state: "malformed" }; }
-    } catch { return { state: "unavailable" }; }
+      catch (error) { report("invalid_json", error); return { state: "malformed" }; }
+    } catch (error) { report("exception", error); return { state: "unavailable" }; }
     finally {
       if (reader !== undefined) { void reader.cancel().catch(() => undefined); try { reader.releaseLock(); } catch { /* a pending read settles after cancellation */ } }
     }
@@ -72,7 +84,7 @@ export async function reauthorizePrincipal(
     return await Promise.race([
       observe(),
       new Promise<ReauthorizationDecision>(resolve => {
-        timer = setTimeout(() => { controller.abort(); void reader?.cancel().catch(() => undefined); resolve({ state: "unavailable" }); }, timeoutMs);
+        timer = setTimeout(() => { report("deadline"); controller.abort(); void reader?.cancel().catch(() => undefined); resolve({ state: "unavailable" }); }, timeoutMs);
       }),
     ]);
   } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }

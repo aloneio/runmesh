@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { createRequire } from "node:module";
 import { waitForWorker } from "../scripts/worker-fixture.mjs";
 import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWiring } from "../scripts/verification-plan.mjs";
 import { summarizeVitest, packageEvidence, testFailureEvidence } from "../scripts/test-evidence.mjs";
@@ -905,8 +906,9 @@ test("control plane diagnostics validate each fixed field and discard unrelated 
     { status: "none" }, { status: "503" }, { status: 99 }, { status: 600 }, { status: 200.5 }])
     assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, ...patch })), []);
   const fields = {
-    stage: ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization", "other"],
-    outcome: ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "body_limit", "invalid_json", "invalid_receipt", "other"],
+    stage: ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization",
+      "mcp_reauthorize", "mcp_active_runner", "mcp_permissions", "mcp_policy_readiness", "mcp_workspaces", "mcp_job_snapshot", "mcp_rpc_authorization", "mcp_registry_read", "mcp_registry_post", "other"],
+    outcome: ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "body_limit", "fragment_limit", "invalid_json", "invalid_receipt", "other"],
     kind: ["type_error", "range_error", "syntax_error", "abort_error", "error", "other"],
     reason: ["network_connection_lost", "cross_request_io", "cross_request_promise", "hung_request", "locked_reader", "unknown"], status: [null, 100, 599],
   };
@@ -954,6 +956,36 @@ test("pinned Wrangler proxy connection failures preserve only method and attempt
     { event: "proxy_upstream_connection_lost", method: "GET", attempts: 3 }];
   assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), expected);
   assert.doesNotMatch(emitted.join(""), /private|127\.0\.0\.1|43210|https?:|Network connection|Error inside/u);
+});
+
+test("pinned esbuild formatting and the Windows ASCII error prefix preserve only fixed Worker diagnostics", () => {
+  const { formatMessagesSync } = createRequire(createRequire(import.meta.url).resolve("wrangler"))("esbuild");
+  const cases = [
+    ["Error inside ProxyWorker (the affected request failed; the dev server continues): POST http://127.0.0.1:43210/private-token/mcp (failed after 1 attempt): Network connection lost.",
+      { event: "proxy_upstream_connection_lost", method: "POST", attempts: 1 }],
+    ["Error: Network connection lost.", { event: "runtime_log", signature: "network_connection_lost" }],
+    ["There was an access violation in the runtime.", { event: "runtime_lifecycle", reason: "access_violation" }],
+    ["RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=fragment_limit kind=other reason=unknown status=200",
+      { event: "control_plane_failure", stage: "mcp_reauthorize", outcome: "fragment_limit", kind: "other", reason: "unknown", status: 200 }],
+    ["RUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown",
+      { event: "mcp_handler_error", kind: "error", stage: "sdk_transport", reason: "unknown" }],
+  ];
+  for (const [text, expected] of cases) {
+    // Exercise the installed formatter on this platform, plus the exact
+    // Windows ASCII form when the test runs on a Unix host.
+    for (const formatted of [formatMessagesSync([{ text }], { kind: "error", color: true })[0], `X [ERROR] ${text}\n`]) {
+      const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+      const split = Math.floor(formatted.length / 2);
+      forward(formatted.slice(0, split)); forward(formatted.slice(split));
+      assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), [expected]);
+      assert.doesNotMatch(emitted.join(""), /private|127\.0\.0\.1|43210|https?:|Network connection|Error inside|X \[ERROR\]/u);
+    }
+  }
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  for (const [text] of cases) for (const prefix of ["private X [ERROR] ", "XX [ERROR] ", "X [WARNING] ", "X [PRIVATE] "])
+    forward(prefix + text + "\n");
+  forward("X [ERROR] Network connection lost. private-token\nX [ERROR] private-error\n");
+  assert.deepEqual(emitted, []);
 });
 
 test("proxy connection diagnostics reject forged formats and cap their own evidence without copying secrets", () => {

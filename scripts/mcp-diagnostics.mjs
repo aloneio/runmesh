@@ -23,8 +23,9 @@ const errorKinds = ["type_error", "range_error", "syntax_error", "abort_error", 
 const stages = ["request_validation", "identity_verification", "request_body", "module_loading", "provider_setup",
   "handler_dispatch", "server_factory", "sdk_transport", "response_priming", "response_headers"];
 const reasons = ["invalid_auth_context", "conflicting_auth_context", "already_connected", "network_connection_lost", "unknown"];
-const controlPlaneStages = ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization", "other"];
-const controlPlaneOutcomes = ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "body_limit", "invalid_json", "invalid_receipt", "other"];
+const controlPlaneStages = ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization",
+  "mcp_reauthorize", "mcp_active_runner", "mcp_permissions", "mcp_policy_readiness", "mcp_workspaces", "mcp_job_snapshot", "mcp_rpc_authorization", "mcp_registry_read", "mcp_registry_post", "other"];
+const controlPlaneOutcomes = ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "body_limit", "fragment_limit", "invalid_json", "invalid_receipt", "other"];
 const controlPlaneReasons = [...runtimeSignatures.keys(), "unknown"];
 const proxyMethods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 const proxyAttempts = (method, attempts) => proxyMethods.includes(method) && Number.isInteger(attempts)
@@ -214,15 +215,15 @@ export function jobCompletionDiagnostic(text) {
 
 function workerEvent(line) {
   const text = clean(line).trim();
-  const match = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|\u25b2 \[WARNING\] )?RUNMESH_MCP_HANDLER_ERROR kind=([a-z_]+) stage=([a-z_]+) reason=([a-z_]+)$/u.exec(text);
+  const match = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|\u25b2 \[WARNING\] |[\u2718X] \[ERROR\] )?RUNMESH_MCP_HANDLER_ERROR kind=([a-z_]+) stage=([a-z_]+) reason=([a-z_]+)$/u.exec(text);
   if (match && errorKinds.includes(match[1]) && stages.includes(match[2]) && reasons.includes(match[3]))
     return { event: "mcp_handler_error", kind: match[1], stage: match[2], reason: match[3] };
-  const control = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] )?RUNMESH_CONTROL_PLANE_FAILURE stage=([a-z_]+) outcome=([a-z_]+) kind=([a-z_]+) reason=([a-z_]+) status=(none|[1-5]\d{2})$/u.exec(text);
+  const control = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] |X \[ERROR\] )?RUNMESH_CONTROL_PLANE_FAILURE stage=([a-z_]+) outcome=([a-z_]+) kind=([a-z_]+) reason=([a-z_]+) status=(none|[1-5]\d{2})$/u.exec(text);
   if (control) return safeWorkerEvent({ event: "control_plane_failure", stage: control[1], outcome: control[2], kind: control[3], reason: control[4],
     status: control[5] === "none" ? null : Number(control[5]) });
   // Runtime failures can bypass the MCP handler entirely. Match complete fixed
   // messages, including the pinned Wrangler error prefix, never arbitrary logs.
-  const runtime = text.replace(/^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] )/u, "").replace(/^Error: /u, "");
+  const runtime = text.replace(/^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] |X \[ERROR\] )/u, "").replace(/^Error: /u, "");
   for (const [signature, message] of runtimeSignatures) {
     if (runtime === message) return { event: "runtime_log", signature };
   }

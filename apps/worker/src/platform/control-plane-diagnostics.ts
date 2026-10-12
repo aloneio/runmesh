@@ -1,5 +1,6 @@
-const stages = ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization", "other"] as const;
-const outcomes = ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "body_limit", "invalid_json", "invalid_receipt", "other"] as const;
+const stages = ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization",
+  "mcp_reauthorize", "mcp_active_runner", "mcp_permissions", "mcp_policy_readiness", "mcp_workspaces", "mcp_job_snapshot", "mcp_rpc_authorization", "mcp_registry_read", "mcp_registry_post", "other"] as const;
+const outcomes = ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "fragment_limit", "body_limit", "invalid_json", "invalid_receipt", "other"] as const;
 export type ControlPlaneFailureStage = typeof stages[number];
 export type ControlPlaneFailureOutcome = typeof outcomes[number];
 

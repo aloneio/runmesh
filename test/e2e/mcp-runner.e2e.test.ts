@@ -13,7 +13,7 @@ import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
 import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpFixtureFailureDiagnostic, mcpFixtureProgressDiagnostic, mcpHttpFailure, mcpLauncherDiagnostic, mcpLoadProgressDiagnostic, mcpToolResultDiagnostic, runMcpFixtureWithCleanup } from "../../scripts/mcp-diagnostics.mjs";
 import { spawnWorkerFixture, stopFixtureProcess, waitForWorker } from "../../scripts/worker-fixture.mjs";
-import { createTestHttpScope } from "../../scripts/test-http-scope.mjs";
+import { createTestHttpScope, runBoundedConcurrentLoad } from "../../scripts/test-http-scope.mjs";
 import WebSocket from "ws";
 import { decodeWireFrame, encodeWireFrame, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 
@@ -573,32 +573,25 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     ];
     phase = "mixed_requests";
     const loadStarted = performance.now();
-    let stopped = false, firstFailure: unknown;
-    await Promise.allSettled(Array.from({ length: concurrency }, async () => {
-      try {
-        while (!stopped && next < 128) {
-          const operation = operations[next++ % operations.length]!;
-          const start = performance.now();
-          let boundary: "headers" | "body" | undefined;
-          const observe: McpObservation = state => {
-            if (state === "failure") { firstFailureProgress ??= progress(); return; }
-            if (boundary !== undefined) pending[boundary]--;
-            boundary = state === "complete" ? undefined : state;
-            if (boundary !== undefined) pending[boundary]++;
-          };
-          const result = await mcpTool(operation.name, operation.args, clientA, observe);
-          latencies.push(performance.now() - start);
-          expect(result.isError, mcpToolResultDiagnostic("mixed_load", result)).not.toBe(true);
-          operation.check(result); completed++;
-        }
-      } catch (error) {
-        if (!stopped) { firstFailure = error; firstFailureProgress ??= progress(); }
-        stopped = true;
-      }
-    }));
-    // Preserve the first failure and settle admitted requests before the next
-    // case. The enclosing HTTP scope still aborts work at the test deadline.
-    if (stopped) throw firstFailure;
+    await runBoundedConcurrentLoad({ count: 128, concurrency,
+      onFirstFailure: () => { firstFailureProgress ??= progress(); },
+      run: async (index: number, signal: AbortSignal) => {
+        next = index + 1;
+        const operation = operations[index % operations.length]!;
+        const start = performance.now();
+        let boundary: "headers" | "body" | undefined;
+        const observe: McpObservation = state => {
+          if (state === "failure") { firstFailureProgress ??= progress(); return; }
+          if (boundary !== undefined) pending[boundary]--;
+          boundary = state === "complete" ? undefined : state;
+          if (boundary !== undefined) pending[boundary]++;
+        };
+        const result = await mcpTool(operation.name, operation.args, clientA, observe, signal);
+        latencies.push(performance.now() - start);
+        expect(result.isError, mcpToolResultDiagnostic("mixed_load", result)).not.toBe(true);
+        operation.check(result); completed++;
+      },
+    });
     latencies.sort((a, b) => a - b);
     expect(completed).toBe(128);
     console.log("RUNMESH_MCP_LOAD=" + JSON.stringify({ fixture: "local_worker_runner", concurrency,
@@ -1178,20 +1171,21 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }, 10_000, () => diagnostic("timeout"));
   }
 
-  async function mcpTool(name: string, args: Record<string, unknown>, client = clientA, observe?: McpObservation): Promise<ToolResult> {
-    const message = await mcpMessage(name, args, client, observe);
+  async function mcpTool(name: string, args: Record<string, unknown>, client = clientA, observe?: McpObservation, signal?: AbortSignal): Promise<ToolResult> {
+    const message = await mcpMessage(name, args, client, observe, signal);
     if (message.result?.isError === true) console.error(`E2E MCP ${name}:`, JSON.stringify(message.result.structuredContent));
     if (message.error) throw new Error(message.error.message ?? "MCP JSON-RPC error");
     return message.result ?? {};
   }
 
-  async function mcpMessage(name: string, args: Record<string, unknown>, client = clientA, observe?: McpObservation): Promise<JsonRpc> {
+  async function mcpMessage(name: string, args: Record<string, unknown>, client = clientA, observe?: McpObservation, signal?: AbortSignal): Promise<JsonRpc> {
     if (client === undefined) throw new Error("MCP client setup did not complete");
     const id = requestId++;
     observe?.("headers");
     try {
       const response = await fetch(client.endpoint, {
         method: "POST",
+        ...(signal === undefined ? {} : { signal }),
         headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
         body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
       });

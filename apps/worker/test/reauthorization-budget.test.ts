@@ -70,3 +70,58 @@ it.each(["data", "empty", "eof"])("AR02 rechecks its deadline after reading %s, 
     expect(await reauthorizePrincipal(async () => new Response(stream), identity, 10)).toEqual({ state: "unavailable" });
   } finally { now.mockRestore(); }
 });
+
+it.each(["fetch", "body"] as const)("AR02 records a fixed %s runtime exception without its private context", async phase => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const error = new Error("Network connection lost."); error.stack = "private-stack";
+  const fetch = vi.fn(async () => {
+    if (phase === "fetch") throw error;
+    return new Response(new ReadableStream({ start(controller) { controller.error(error); } }));
+  });
+  try {
+    expect(await reauthorizePrincipal(fetch, identity)).toEqual({ state: "unavailable" });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(`RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=exception kind=error reason=network_connection_lost status=${phase === "fetch" ? "none" : "200"}`);
+  } finally { warn.mockRestore(); }
+});
+
+it("AR02 retains the first deadline diagnosis when its cancelled transport later rejects", async () => {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  let reject!: (error: Error) => void, signal: AbortSignal | undefined;
+  const pending = new Promise<Response>((_resolve, rejectResponse) => { reject = rejectResponse; });
+  const fetch = vi.fn((value: AbortSignal) => { signal = value; return pending; });
+  const result = reauthorizePrincipal(fetch, identity);
+  try {
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(await result).toEqual({ state: "unavailable" }); expect(signal?.aborted).toBe(true);
+    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=deadline kind=other reason=unknown status=none");
+    reject(new Error("Network connection lost.")); await vi.advanceTimersByTimeAsync(0);
+    expect(warn).toHaveBeenCalledOnce(); expect(fetch).toHaveBeenCalledOnce();
+  } finally { reject(new Error("synthetic cleanup")); await result; warn.mockRestore(); vi.useRealTimers(); }
+});
+
+it("AR02 distinguishes failed status and malformed identity while leaving authoritative decisions quiet", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    expect(await reauthorizePrincipal(async () => new Response("private-status-body", { status: 503 }), identity)).toEqual({ state: "unavailable" });
+    expect(warn).toHaveBeenLastCalledWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=unexpected_status kind=other reason=unknown status=503");
+    expect(await reauthorizePrincipal(async () => Response.json({ private: "private-identity" }), identity)).toEqual({ state: "malformed" });
+    expect(warn).toHaveBeenLastCalledWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=invalid_receipt kind=other reason=unknown status=200");
+    for (const status of [401, 403, 404]) expect(await reauthorizePrincipal(async () => new Response(null, { status }), identity)).toEqual({ state: "denied" });
+    expect(await reauthorizePrincipal(async () => allowed(), identity)).toMatchObject({ state: "allowed" });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
+  } finally { warn.mockRestore(); }
+});
+
+it("AR02 identifies its existing total-fragment bound separately from byte overflow", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined), cancel = vi.fn();
+  try {
+    expect(await reauthorizePrincipal(async () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array()); }, cancel,
+    })), identity)).toEqual({ state: "malformed" });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=fragment_limit kind=other reason=unknown status=200");
+  } finally { warn.mockRestore(); }
+});
