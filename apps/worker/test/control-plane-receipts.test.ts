@@ -58,6 +58,53 @@ it("hashes edge sources consistently and omits raw addresses from Registry reque
   expect(payloads[1]).toMatchObject({ kind: "login", success: true });
 });
 
+it("completes a successful authentication record without aborting its transport", async () => {
+  let signal: AbortSignal | undefined;
+  const fetch = vi.fn((request: Request) => {
+    signal = request.signal;
+    expect(new URL(request.url).pathname).toBe("/auth/throttle/record");
+    return new Response(null, { status: 204 });
+  });
+  await authThrottlePorts(environment(fetch), null).record("setup", true);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(signal?.aborted).toBe(false);
+});
+
+it.each([200, 403, 503])("releases an unexpected authentication record response at HTTP %s", async status => {
+  let signal: AbortSignal | undefined;
+  const cancel = vi.fn(), fetch = vi.fn((request: Request) => {
+    signal = request.signal;
+    return new Response(new ReadableStream({ cancel }), { status });
+  });
+  await authThrottlePorts(environment(fetch), null).record("setup", true);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(signal?.aborted).toBe(true);
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+it("bounds an authentication record even when its transport ignores cancellation", async () => {
+  vi.useFakeTimers();
+  let entered!: () => void, release!: (response: Response) => void, signal: AbortSignal | undefined;
+  const requested = new Promise<void>(resolve => { entered = resolve; });
+  const pending = new Promise<Response>(resolve => { release = resolve; });
+  const fetch = vi.fn((request: Request) => { signal = request.signal; entered(); return pending; });
+  let settled = false;
+  const operation = authThrottlePorts(environment(fetch), null).record("setup", true).then(() => { settled = true; });
+  try {
+    await requested;
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(settled).toBe(true);
+    await operation;
+    expect(signal?.aborted).toBe(true);
+    release(new Response(null, { status: 204 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal?.aborted).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+  } finally { release(new Response(null, { status: 204 })); await operation; vi.useRealTimers(); }
+});
+
 const adminClient = { client_id: "client-1", label: "Retained client", scopes: ["coding:read"], revoked_at_ms: null, last_used_at_ms: null, active_runner_id: null };
 const adminRunner = { runner_id: "runner-1", display_name: "Retained runner", state: "online", last_heartbeat_ms: null, configured_execution_mode: "dedicated_user", public_info: null };
 
@@ -257,4 +304,35 @@ it("keeps completed authorization receipts free from failure diagnostics", async
   const observer = vi.fn();
   expect(await boundedJsonReceipt(async () => Response.json({ ok: true }), [200, 403, 409], 5000, 16384, undefined, observer)).toEqual({ status: 200, value: { ok: true } });
   expect(observer).not.toHaveBeenCalled();
+});
+
+it.each([true, false])("requires explicit acceptance before completing a 204 receipt (%s)", async accepted => {
+  let signal: AbortSignal | undefined;
+  const observer = vi.fn();
+  const receipt = await boundedJsonReceipt(async input => {
+    signal = input;
+    return new Response(null, { status: 204 });
+  }, accepted ? [204] : [200], 5000, 16384, undefined, observer);
+  expect(receipt).toEqual({ status: 204 });
+  expect(signal?.aborted).toBe(!accepted);
+  if (accepted) expect(observer).not.toHaveBeenCalled();
+  else expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "unexpected_status", status: 204, phase: "fetch" });
+});
+
+it.each(["deadline", "parent_abort"] as const)("rejects a 204 receipt after %s", async outcome => {
+  let elapsed = 0, signal: AbortSignal | undefined;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const parent = new AbortController(), observer = vi.fn();
+  try {
+    const receipt = await boundedJsonReceipt(async input => {
+      signal = input;
+      if (outcome === "deadline") elapsed = 5000;
+      else parent.abort();
+      return new Response(null, { status: 204 });
+    }, [204], 5000, 16384, parent.signal, observer);
+    expect(receipt).toBeUndefined();
+    expect(signal?.aborted).toBe(true);
+    expect(observer).toHaveBeenCalledOnce();
+    expect(observer.mock.calls[0]?.[0]).toMatchObject({ outcome, phase: "fetch" });
+  } finally { clock.mockRestore(); }
 });

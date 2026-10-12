@@ -880,3 +880,62 @@ Windows x64、Node 22.23.2 的 `source_transport` 于 14:10:08.792Z 开始，外
 | `.audit/transport-followup-20261012/source_transport.log` | `842b8eeaafd21567cb408e26f497116eb4d5b4e419e96610986ca02422733888` |
 
 本轮建立并修复了可验证的测试隔离、恢复顺序和进程等待清理缺陷，去除了注册入口的无关依赖初始化与在线预检的重复往返。此前默认 Worker 503、单运行时超时、注册准备失败和 `a455499` 托管 Windows 首次负载超时各自保留原始证据；本次本机通过不将这些不同现象合并为一个已证明的根因。后续以新干净候选的两平台完整托管 CI 验收，正式版本签名、受保护 main 提升和生产激活按对应门禁另行记录。当前追加的是完整测试结束后的报告文字，其新文件摘要不回写到原冻结计划。
+
+## `73d7309` 托管验收与认证回执修复
+
+候选 `73d7309c72d27b17c221f574aa1f2b7fb4e2e1c1` 的树为 `c1fe3b231b32e43f017c5c523d1333d6fdddb08c`。GitHub Push CI [38262421966](https://github.com/aloneio/runmesh/actions/runs/38262421966) 首次执行 8/8 job 成功。PR CI [38262430118](https://github.com/aloneio/runmesh/actions/runs/38262430118) 首次执行 6 个实质 job 成功，Windows job 与汇总 job 失败。PR 实际执行的合成提交为 `4b3b1e48637dfd30ac2d1b35b32bfa4568e2dc19`，其树与候选相同；两个执行身份分别保留。源码策略检查通过。失败的 PR 门禁继续阻止正式提升，没有对原 SHA 重跑 CI。
+
+两次 CI 各 8 个 job 日志及 verify、Windows、browser 工件均已下载，校验 provider ZIP 摘要、展开后完整文件集合与逐文件摘要；归档摘要均为 `archive_state=complete`。证据目录为 `.audit/73d7309-ci/`，原始 run/jobs 响应和下载收据采用独立文件保存。完整归档表示证据完整，不表示失败检查已经通过。
+
+Push Windows 源码 E2E 为 41/41 通过、0 跳过，transport 耗时 114,280 ms。四档混合负载均完成 128/128 请求，各档 read、workspace_list、job_get、job_logs 分别为 32/32；并发 1/4/8/16 的耗时分别为 37,439/11,164/7,465/6,218 ms。两次 Linux verify job 均通过其完整 Worker、源码 E2E、安装包 E2E 与其余门禁。
+
+PR Windows transport 在 21,969 ms 结束，主测试组在 `test/e2e/mcp-runner.e2e.test.ts:1183` 的首次 `POST /setup` 状态断言失败。前一个 setup 页面 GET 已返回 200 并完成正文读取；随后 POST 已取得 Response，状态不等于 303，但旧投影没有保留实际状态。该失败是 suite 准备错误，38 项主测试跳过，混合负载尚未执行；独立 SQLite session 组仍执行了 3 项。安全事件记录了两次初始 native spawn 和一次 POST proxy connection lost，launcher 在 teardown 前仍无退出状态。此记录与此前 Enrollment CLI 15 秒退出等待失败分别保留。
+
+多角度静态审查确认：根 Wrangler `4.149.0` 实际解析到自身嵌套 Miniflare `5.20261006.1-alpha` 和 workerd `1.20261006.1`；单元测试池的另一组依赖不参与源码 E2E。正常 Miniflare 配置更新会 dispose 并重启 native 进程。构建 provenance 与自定义构建在夹具启动前完成，没有找到 setup 期间写入监视目录的路径。PBKDF2 的 Promise 属于当前调用，HMAC 缓存保存已完成的 CryptoKey。当前记录尚未建立这次代理断连的单一根因。
+
+### 已证实的状态回执生命周期缺陷
+
+认证限流 `/auth/throttle/record` 的契约为无正文 204，调用者却使用只接受 200 JSON 的读取入口；正常 204 因此进入异常完成分支，随后中止已取得完成回执的请求。修复改为显式接受 204，并在通用有界读取器确认状态、正文为空、长度、父取消和期限后正常完成。失败和迟到响应继续释放正文并取消传输，5 秒预算保持不变。
+
+定向 Worker 验证 58/58 通过（两个文件，7.09 秒），独立 TypeScript 检查通过。新增 9 项覆盖正常完成后信号、异常状态正文释放、忽略取消的上游、迟到回执及父请求中止。日志为 `.audit/73d7309-ci/worker-status-receipts.log`，私有 reporter 已保留到根私有目录 `.audit/73d7309-ci/worker-status-receipts-private.json`。
+
+独立内存对照直接读取原提交与修复源码，分别使用其真实调用形态：原调用取得 204 后发生 1 次 abort，修复后取得相同 204 且 abort 为 0，两侧均只发起 1 次调用并保留原 5 秒期限。收据 `.audit/73d7309-ci/receipt-before-after.json` 保存源码摘要及结果。该探针只验证已完成回执的取消行为，不冒充托管断连复现；早先两次探针构造错误（TypeScript 7 编译 API、旧调用形态）也分别保存。
+
+### 失败证据补全
+
+setup/login 的页面和提交各自接入既有有界安全诊断，失败时记录固定阶段、HTTP 状态、内容类型和已知运行时签名；正文、cookie、凭证及自由文本不进入公共工件。Wrangler 的两种固定 reload 日志采用完整白名单匹配，按顺序保留前 16 个转换，与 crash/native 事件分别限额。原断言、业务期限和请求次数保持原值。
+
+相关定向 Node 22 测试 15/15 通过，耗时 708.5444 ms。首轮新增测试的大小写样本构造错误及修正后的验证均已保留，见 `.audit/73d7309-ci/setup-reload-diagnostics-verification.json`。诊断覆盖的增加用于缩小后续失败的位置，不作为根因已修复的证据。
+
+### 相邻响应所有权检查
+
+沿状态型回执调用链继续检查并修复：setup 非 204 的 Registry 响应先释放正文再记录失败；login 创建 session 的 409 响应统一经过清理分支；开发版本缓存写入只在成功 204 后正常完成，其余结果保留原 5 秒单次写入与取消规则；Runner enrollment mutation 的释放明确接受 204，409/503 的诊断白名单保持原样。凭证、Cookie、回滚和最终授权状态没有扩大。另一 agent 独立检查五个源文件和四个测试文件，未发现阻断项。
+
+Node 22 的六个关联 Worker 文件串行执行 287/287 通过，0 跳过，70.39 秒；其中包含先前 58 项，分别列出结果而不累计为独立总数。集合为 dev-runner-distribution 168、enrollment-fence-recovery 29、setup-hardening 10、control-plane-receipts 50、runner-action-responses 22、http-observation-cost 8。Worker 独立类型检查 2.49 秒通过，根项目 typecheck 也通过。新增认证清理测试以实际 HTTP 完成和仍待释放的清理门闩验证行为，不通过推进虚拟时钟推断密码派生已经结束。证据为 `.audit/73d7309-ci/worker-status-lifecycle.log` 及同名前缀的私有 JSON、typecheck 日志。
+
+继续沿注册调用链确认并修复了两个异常回执的正文所有权遗漏：fence 失败返回前释放响应，取消 mutation 的结果在状态判定前释放响应。两处都采用非阻塞取消，状态、Cookie、凭证提交和回滚次序保持原样。既有 enrollment-fence-recovery 文件增加 7 个内存回执场景，最终单文件 36/36 通过、0 跳过、30.19 秒；既有 29 项与前述集合重叠，单独记录。该补丁通过另一 agent 的独立复核，证据为 `.audit/73d7309-ci/worker-enrollment-receipts.log`、同名前缀私有 JSON 和 `-hashes.json`。
+
+### 健康探测完整完成后交接夹具
+
+原 `waitForWorker` 收到成功健康响应头后直接取消正文，随后又中止整次探测。固定 Node 22.23.2 内置 Undici 6.28.0 的实现确认，未完成正文的取消会进入 fetch abort 与连接终止路径；若传输已经完成，不能推断每次调用都会关闭物理连接。该行为让夹具在尚未观察完整健康响应时宣布就绪，也造成正常准备路径的主动取消。
+
+修复在原单一准备期限内，完整读取成功健康正文至 EOF；读取上限 64 KiB，连续空 chunk 上限 64，并在循环检查单调时钟。成功后释放 reader、移除监听器并清理定时器，保留未中止的请求信号。非成功响应继续立即非阻塞释放正文并按原 100 ms 间隔重试；超时、进程退出、诊断函数抛错及迟到响应均保留原失败并有界清理。未更改实际 Worker 的 60 秒准备期限、90 秒 suite 准备期限和业务测试预算。
+
+另一 agent 独立复核期间指出并修正了初稿中非成功开放正文会阻碍重试的回归；主审补齐了迟到响应正文所有权和单调时钟边界。最终新增 10 项测试，加上既有真实 IPC 进程启动用例，Node 22.23.2 单次定向执行 11/11 通过、0 跳过，3,031.7892 ms。证据为 `.audit/73d7309-ci/fixture-health-targeted-first.log` 及 `fixture-health-targeted-first-source.json`。这是可验证的夹具生命周期修复；是否解释此前代理 POST 断连仍须与后续运行证据区分。
+
+### 本轮完整 Worker/Runner 复验（2026-10-12T15:30Z）
+
+冻结计划 `.audit/setup-repair-20261012/plan.json` 于 15:27:38.027Z 写入，SHA256 `55aaf77dd89d36bbdf05aae8126ecd520e04023f7caf5798c6a9302d97754df7`。来源为 `73d7309` 加本轮修改，计划保存全部修改文件和配置摘要，执行前后指纹核对一致。原 41 项清单、1/4/8/16 并发、512 请求、30 秒业务测试、60 秒负载和 300 秒内部 transport 期限保持原值；断线场景仍为原 200 ms、单次请求。
+
+Windows x64、Node 22.23.2 的单次完整源码 E2E 于 15:27:39.654Z 开始，41/41 通过，0 失败、0 跳过，外层 193,640 ms、transport 门禁 191,806 ms。每档 read、workspace_list、job_get、job_logs 均实际完成 32/32 请求、0 失败，合计 512/512。
+
+| 并发 | 完成请求 | 混合负载 elapsed ms |
+| --- | --- | --- |
+| 1 | 128/128 | 12,232 |
+| 4 | 128/128 | 8,906 |
+| 8 | 128/128 | 7,587 |
+| 16 | 128/128 | 6,199 |
+
+本次日志保留 212 条安全事件，未出现代理断连或测试失败事件。摘要 SHA256 为 `4819b3829e9e88ae8224b5b05ae59cb53ee911c3592f70508582d1155a9e8e73`，完整日志 SHA256 为 `045389a2315b0556a3ec52e8faedfbd6d82e0983c53635c052cb20f5a939a6d0`；文件分别为该目录的 `source_transport-summary.json` 和 `source_transport.log`。类型、文档、格式、架构和 whitespace 检查通过；本段在测试完成后追加，不回写冻结计划的源文件摘要。
+
+用户文档与四份发布激活草稿另经只读复核，版本能力、中英文说明和历史条目保持一致；实际签名发布完成后再更新正式版本选择和已核验的发布证据。本轮仅在工程检查书保存故障调查、用例和计数。

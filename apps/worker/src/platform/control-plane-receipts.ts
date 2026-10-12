@@ -42,7 +42,7 @@ export function authThrottlePorts(env: WorkerEnv, edgeAddress: string | null): A
     },
     record: async (kind, success) => {
       const payload = JSON.stringify({ kind, source_hash: await sourceHash(), success });
-      await boundedJsonResponse(signal => registryRequest(env, "/auth/throttle/record", "POST", payload, signal));
+      await boundedJsonReceipt(signal => registryRequest(env, "/auth/throttle/record", "POST", payload, signal), [204]);
     },
   };
 }

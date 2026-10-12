@@ -608,6 +608,43 @@ describe("development Runner distribution", () => {
 
 describe("explicit development release runtime", () => {
 
+  it.each([204, 200, 409, 503])("completes Registry cache writes only at HTTP %s without aborting a successful receipt", async status => {
+    const cancel = vi.fn();
+    const registryFetch = vi.fn((_request: Request) => new Response(status === 204 ? null : new ReadableStream({ cancel }), { status }));
+    const cache = registryDevelopmentReleaseCache({ ...env, REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: registryFetch }) } } as never);
+    const operation = cache.put(new Request("https://cache.test/verified"), Response.json({ schema_version: 1 }));
+    if (status === 204) await expect(operation).resolves.toBeUndefined();
+    else await expect(operation).rejects.toThrow("development release registry cache write failed");
+    expect(registryFetch).toHaveBeenCalledOnce();
+    expect(registryFetch.mock.calls[0]?.[0].signal.aborted).toBe(status !== 204);
+    expect(cancel).toHaveBeenCalledTimes(status === 204 ? 0 : 1);
+  });
+
+  it.each([204, 503])("keeps a timed-out Registry cache write rejected after late HTTP %s", async status => {
+    vi.useFakeTimers();
+    let finish!: (response: Response) => void, entered!: () => void;
+    const requested = new Promise<void>(resolve => { entered = resolve; });
+    const cancel = vi.fn();
+    const registryFetch = vi.fn((_request: Request) => { entered(); return new Promise<Response>(resolve => { finish = resolve; }); });
+    const cache = registryDevelopmentReleaseCache({ ...env, REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: registryFetch }) } } as never);
+    const outcomes: string[] = [];
+    const operation = cache.put(new Request("https://cache.test/verified"), Response.json({ schema_version: 1 }))
+      .then(() => { outcomes.push("completed"); }, error => { outcomes.push(error.message); });
+    try {
+      await requested;
+      await vi.advanceTimersByTimeAsync(5000);
+      await operation;
+      expect(outcomes).toEqual(["development release registry cache write timed out"]);
+      expect(registryFetch.mock.calls[0]?.[0].signal.aborted).toBe(true);
+      finish(new Response(status === 204 ? null : new ReadableStream({ cancel }), { status }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(outcomes).toEqual(["development release registry cache write timed out"]);
+      expect(cancel).toHaveBeenCalledTimes(status === 204 ? 0 : 1);
+      expect(registryFetch).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { finish(new Response(null, { status: 204 })); await operation; }
+  });
+
   it.each(["read headers", "read body", "write headers"])("bounds Registry cache %s without blocking release discovery", async phase => {
     vi.useFakeTimers();
     let finish!: (response: Response) => void, finishBody!: () => void;

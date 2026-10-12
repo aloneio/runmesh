@@ -18,16 +18,18 @@ function record(value: unknown): value is Record<string, unknown> {
 async function persistReleaseCache(env: WorkerEnv, value: Record<string, unknown>): Promise<void> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let completed = false;
   const write = async (): Promise<void> => {
     const response = await registryRequest(env, VERIFIED_DEV_RELEASE_PATH, "POST", JSON.stringify(value), controller.signal);
     void response.body?.cancel().catch(() => undefined);
     if (controller.signal.aborted || response.status !== 204) throw new Error("development release registry cache write failed");
+    completed = true;
   };
   try {
     await Promise.race([write(), new Promise<never>((_, reject) => {
       timer = setTimeout(() => { controller.abort(); reject(new Error("development release registry cache write timed out")); }, REGISTRY_CACHE_TIMEOUT_MS);
     })]);
-  } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
+  } finally { if (timer !== undefined) clearTimeout(timer); if (!completed) controller.abort(); }
 }
 
 /** HTTP composition adapter for the globally persisted descriptor that has

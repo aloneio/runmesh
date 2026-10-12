@@ -79,6 +79,7 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
     await authThrottleRecord(throttlePorts, "setup", true);
     return redirect("/", [clearCookie(SETUP_CSRF_COOKIE)]);
   }
+  void response.body?.cancel().catch(() => undefined);
   await authThrottleRecord(throttlePorts, "setup", false);
   if (response.status === 409) return adminError(409, "This instance is already initialized.", [clearCookie(SETUP_CSRF_COOKIE)]);
   return adminError(503, "Setup could not be completed. Try again.");
@@ -106,11 +107,11 @@ async function submitLogin(request: Request, env: WorkerEnv): Promise<Response> 
   const sessionResponse = await registryPost(env, "/auth/sessions", {
     session_hash: await sha256Hex(rawSession), csrf_hash: await sha256Hex(rawCsrf), expires_at_ms: Date.now() + ADMIN_SESSION_TTL_MS, expected_session_version: sessionVersion,
   });
-  if (sessionResponse.status === 409) return adminError(403, "Authentication changed. Sign in again.", [clearCookie(LOGIN_CSRF_COOKIE)]);
   // The Registry commits session creation with 204. An accepted or otherwise
   // unexpected receipt must not issue cookies for an unconfirmed session.
   if (sessionResponse.status !== 204) {
     void sessionResponse.body?.cancel().catch(() => undefined);
+    if (sessionResponse.status === 409) return adminError(403, "Authentication changed. Sign in again.", [clearCookie(LOGIN_CSRF_COOKIE)]);
     return adminError(503, "Login could not be completed. Try again.");
   }
   return redirect("/admin", [sessionCookie(rawSession), csrfCookie(rawCsrf), clearCookie(LOGIN_CSRF_COOKIE)]);

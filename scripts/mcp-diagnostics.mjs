@@ -6,7 +6,7 @@ export { mcpServerTiming, mcpLoadTimingDiagnostic, mcpWorkerSnapshotDiagnostic }
 // this boundary; no response text, request arguments, IDs or log lines escape.
 const contentTypes = ["json", "html", "text", "sse", "other", "absent"];
 const bodyKinds = ["json_rpc_error", "empty", "non_json", "invalid_json", "not_rpc_error", "oversized", "read_timeout", "read_error"];
-const adminStages = ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "recording_disable", "recording_enable", "history_settings", "history_restore", "other"];
+const adminStages = ["setup_page", "setup_submit", "login_page", "login_submit", "runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "recording_disable", "recording_enable", "history_settings", "history_restore", "other"];
 const adminBodyKinds = ["present", "empty", "oversized", "read_timeout", "read_error"];
 const phases = ["read_initial", "read_continuation", "runner_select", "shell", "edit", "job_get", "job_logs", "job_cancel", "other"];
 const runtimeSignatures = new Map([
@@ -20,6 +20,10 @@ const runtimeLifecycleMessages = new Map([
   ["restart_failed", "The Workers runtime failed to restart after an unexpected crash."],
   ["restart_callback_failed", "The Workers runtime restarted, but the runtime restart callback failed."],
   ["access_violation", "There was an access violation in the runtime."],
+]);
+const runtimeReloadMessages = new Map([
+  ["reload_started", "\u2394 Reloading local server..."],
+  ["reload_ready", "\u2394 Local server updated and ready"],
 ]);
 const rpcCodes = [-32700, -32600, -32601, -32602, -32603, -32000, "other", "absent"];
 const rpcIds = ["matches", "null", "absent", "other"];
@@ -219,6 +223,11 @@ export function jobCompletionDiagnostic(text) {
 
 function workerEvent(line) {
   const text = clean(line).trim();
+  // Pinned Wrangler logs these complete lines around Miniflare.setOptions.
+  // Retain the controller's reload boundaries alongside native-process events.
+  for (const [reason, message] of runtimeReloadMessages) {
+    if (text === message) return { event: "runtime_lifecycle", reason };
+  }
   const processEvent = /^RUNMESH_E2E_RUNTIME_(?:PROCESS|OBSERVER)=(\{[^\r\n]{1,512}\})$/u.exec(text);
   if (processEvent) {
     try {
@@ -315,7 +324,7 @@ function safeWorkerEvent(value) {
   if (value.event === "runtime_lifecycle") {
     if (value.reason === "crash_restarting" && Number.isInteger(value.crash_count) && value.crash_count >= 1 && value.crash_count <= 9999)
       return { event: "runtime_lifecycle", reason: value.reason, crash_count: value.crash_count };
-    if (runtimeLifecycleMessages.has(value.reason)) return { event: "runtime_lifecycle", reason: value.reason };
+    if (runtimeLifecycleMessages.has(value.reason) || runtimeReloadMessages.has(value.reason)) return { event: "runtime_lifecycle", reason: value.reason };
   }
   if (value.event === "proxy_upstream_connection_lost" && proxyAttempts(value.method, value.attempts))
     return { event: "proxy_upstream_connection_lost", method: value.method, attempts: value.attempts };
@@ -433,10 +442,13 @@ function eventBudget() {
     // Independent bounds preserve direct native-process observations alongside
     // the existing 103 request, runtime-log, fixture and launcher events.
     const timingKey = mcpTimingEventBudgetKey(event);
-    const key = timingKey ?? (event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
+    const key = timingKey ?? (event.event === "runtime_lifecycle" && runtimeReloadMessages.has(event.reason) ? "runtime_reload"
+      : event.event === "admin_http" ? `admin:${event.stage}` : event.event === "fixture_progress" ? `progress:${event.fixture}`
       : event.event === "load_progress" ? `load:${event.concurrency}`
       : event.event === "fixture_failure" ? `${event.fixture}:${event.phase === "primary" ? "primary" : "cleanup"}` : event.event);
-    const limit = timingKey !== undefined || event.event === "request_failure" || event.event === "test_failure" ? 1 : event.event === "runtime_process" ? 64 : event.event === "runtime_observer" ? 8
+    // Preserve the first sixteen reload transitions in arrival order, with a
+    // separate allowance so reload chatter cannot displace crash evidence.
+    const limit = key === "runtime_reload" ? 16 : timingKey !== undefined || event.event === "request_failure" || event.event === "test_failure" ? 1 : event.event === "runtime_process" ? 64 : event.event === "runtime_observer" ? 8
       : event.event === "admin_http" || event.event === "fixture_progress" || event.event === "load_progress" ? 1
       : event.event === "mcp_handler_error" || event.event === "control_plane_failure" ? 16 : event.event === "launcher_snapshot" ? 4
       : event.event === "fixture_failure" && event.phase === "primary" ? 1 : 8;

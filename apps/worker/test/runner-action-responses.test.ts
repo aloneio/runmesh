@@ -3,8 +3,40 @@ import { expect, it, vi } from "vitest";
 import { handleBrowserAdmin } from "../src/http/admin.js";
 import { handleBrowserRunnerAction } from "../src/http/runner-actions.js";
 import { deleteRunnerFromControlPlane } from "../src/http/runner-deletion.js";
+import { regenerateEnrollmentFromControlPlane } from "../src/http/runner-administration.js";
 import { ADMIN_CSRF_COOKIE, ADMIN_SESSION_COOKIE } from "../src/http/constants.js";
 import { sha256Hex } from "../src/security.js";
+
+it.each([
+  [204, undefined, undefined],
+  [409, "mutation_state_changed", "mutation_state_changed"],
+  [503, "registry_unavailable", "registry_unavailable"],
+  [409, "synthetic_private_diagnostic", "cleanup_unavailable"],
+] as const)("completes enrollment fence release receipts at HTTP %s (%s)", async (status, code, diagnostic) => {
+  const paths: string[] = [], aborted = vi.spyOn(AbortController.prototype, "abort");
+  const localEnv = { ...env,
+    REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: async (request: Request) => {
+      const path = new URL(request.url).pathname; paths.push(path);
+      if (path.endsWith("/execution-state")) return Response.json({ runner: { runner_id: "r", configured_execution_mode: "dedicated_user" }, lifecycle_id: "lifecycle" });
+      const input = await request.json() as Record<string, unknown>, now = Date.now();
+      return Response.json({ runner_id: "r", enrollment_id: input.enrollment_id, created_at_ms: now, not_before_ms: now, expires_at_ms: now + 60_000 });
+    } }) },
+    RUNNER: { idFromName: () => "runner", get: () => ({ fetch: (request: Request) => {
+      const path = new URL(request.url).pathname; paths.push(path);
+      return path === "/begin-policy-mutation" || status === 204 ? new Response(null, { status: 204 })
+        : Response.json({ error: { code, message: "synthetic private detail" } }, { status });
+    } }) },
+  } as unknown as typeof env;
+  try {
+    const result = await regenerateEnrollmentFromControlPlane(localEnv, "r", { runner: { runner_id: "r" }, configuredMode: "dedicated_user", lifecycleId: "lifecycle" },
+      { selection: { mode: "dedicated_user", confirmed: false }, ttlMs: undefined, window: undefined });
+    expect(result).toMatchObject(status === 204 ? { state: "completed", enrollment: { ok: true } }
+      : { state: "failed", reason: "cleanup", diagnostic });
+    expect(paths).toEqual(["/begin-policy-mutation", "/runners/r/execution-state", "/runners/r/enrollments", "/cancel-policy-mutation"]);
+    expect(aborted).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("synthetic private");
+  } finally { aborted.mockRestore(); }
+});
 
 // This suite owns response disposal; release authenticity is exercised by the release and update-admin suites.
 vi.mock("../src/distribution/exact-release.js", () => ({ resolveExactRunnerRelease: vi.fn(async (version: string) => ({

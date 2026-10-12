@@ -40,7 +40,12 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
       if (!acceptedStatuses.includes(response.status)) { report("unexpected_status"); void response.body?.cancel().catch(() => undefined); return { status: response.status }; }
       const length = response.headers.get("content-length");
       if (length !== null && (!/^\d+$/u.test(length) || Number(length) > maxBytes)) { report("length_limit"); void response.body?.cancel().catch(() => undefined); return undefined; }
-      if (response.body === null) { report("empty_body"); return undefined; }
+      if (response.body === null) {
+        // An explicitly accepted 204 completes at its headers. Aborting after
+        // that receipt would cancel an already completed status-only request.
+        if (response.status === 204) { completed = true; return { status: response.status }; }
+        report("empty_body"); return undefined;
+      }
       phase = "body_read";
       reader = response.body.getReader();
       // The wire limit is an admission bound, not a per-response allocation.

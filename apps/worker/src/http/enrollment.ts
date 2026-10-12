@@ -48,9 +48,12 @@ export async function handleRunnerEnrollment(request: Request, env: WorkerEnv): 
   const mutationId = `credential-enrolled-${crypto.randomUUID()}`;
   let fenced: Response;
   try { fenced = await fenceRunnerTransport(env, runnerId, mutationId); } catch { return enrollmentUnavailable(); }
-  if (!fenced.ok) return fenced.status === 409
-    ? new Response("Runner credential mutation is already in progress", { status: 409, headers: credentialHeaders("text/plain; charset=utf-8") })
-    : enrollmentUnavailable();
+  if (!fenced.ok) {
+    void fenced.body?.cancel().catch(() => undefined);
+    return fenced.status === 409
+      ? new Response("Runner credential mutation is already in progress", { status: 409, headers: credentialHeaders("text/plain; charset=utf-8") })
+      : enrollmentUnavailable();
+  }
 
   const token = generateRunnerToken();
   let response: Response;
@@ -75,6 +78,7 @@ export async function handleRunnerEnrollment(request: Request, env: WorkerEnv): 
     }
     try {
       const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+      void cancelled.body?.cancel().catch(() => undefined);
       if (!cancelled.ok) return enrollmentUnavailable();
     } catch { return enrollmentUnavailable(); }
     return [400, 401, 403, 404, 409].includes(response.status) ? enrollmentError() : enrollmentUnavailable();

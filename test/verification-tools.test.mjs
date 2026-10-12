@@ -534,7 +534,7 @@ test("browser navigation diagnostics retain only complete fixed condition marker
     assert.equal(browserErrorDiagnostic({ message }).navigation_state, undefined);
 });
 
-const adminStages = ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "recording_disable", "recording_enable", "history_settings", "history_restore"];
+const adminStages = ["setup_page", "setup_submit", "login_page", "login_submit", "runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "recording_disable", "recording_enable", "history_settings", "history_restore"];
 test("admin setup response diagnostics retain fixed stages and runtime signatures through CI evidence without response content", async t => {
   // These in-memory fixtures test content classification. Deadline behavior is
   // covered separately so host scheduling cannot change the expected content.
@@ -1100,6 +1100,54 @@ test("runtime lifecycle diagnostics reject unknown formats and reconstruct only 
     assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, ...patch })), []);
   assert.deepEqual(mcpWorkerFailureEvidence(marker({ event: "runtime_lifecycle", reason: "access_violation", crash_count: "private", cause: "private" })),
     [{ event: "runtime_lifecycle", reason: "access_violation" }]);
+});
+
+test("fixed runtime reload messages retain ordered repeated transitions through fragmented output", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  const lines = "\u001b[2m\u2394 Reloading local server...\u001b[22m\r\n"
+    + "\u2394 Local server updated and ready\nprivate-runtime-detail\n"
+    + "\u2394 Reloading local server...\n[wrangler:error] There was an access violation in the runtime.\n"
+    + "\u2394 Local server updated and ready\n";
+  for (let offset = 0; offset < lines.length; offset += 5) forward(lines.slice(offset, offset + 5));
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), [
+    { event: "runtime_lifecycle", reason: "reload_started" },
+    { event: "runtime_lifecycle", reason: "reload_ready" },
+    { event: "runtime_lifecycle", reason: "reload_started" },
+    { event: "runtime_lifecycle", reason: "access_violation" },
+    { event: "runtime_lifecycle", reason: "reload_ready" },
+  ]);
+  assert.doesNotMatch(emitted.join(""), /private|Reloading|local server|wrangler|violation in/u);
+});
+
+test("fixed runtime reload diagnostics reject extra text and unknown formats", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  for (const message of ["\u2394 Reloading local server...", "\u2394 Local server updated and ready"]) {
+    for (const line of ["private " + message, message + " private", "Error: " + message, "[wrangler:info] " + message,
+      message.replace("\u2394 ", ""), message.replace(/local/iu, "private"), message + "."])
+      forward(line + "\n");
+  }
+  forward("\u2394 Reloading local server..");
+  assert.deepEqual(emitted, []);
+  const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  for (const reason of ["reload_started", "reload_ready"]) {
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ event: "runtime_lifecycle", reason, path: "private-path", cause: "private-cause", generation: 19 })),
+      [{ event: "runtime_lifecycle", reason }]);
+  }
+  for (const reason of ["reload", "reloading", "reload_started private", ["reload_ready"], null])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ event: "runtime_lifecycle", reason })), []);
+});
+
+test("fixed runtime reload evidence caps transitions without displacing crash, setup or launcher events", async () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  for (let index = 0; index < 40; index++) forward("\u2394 Reloading local server...\n\u2394 Local server updated and ready\n");
+  for (let index = 0; index < 40; index++) forward("[wrangler:error] There was an access violation in the runtime.\n");
+  const setup = await adminSetupHttpDiagnostic(new Response(null, { status: 500 }), "setup_submit");
+  const launcher = mcpLauncherDiagnostic({ reason: "setup_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false });
+  const observed = mcpWorkerFailureEvidence(emitted.join("").repeat(3) + setup + launcher);
+  assert.deepEqual(observed.slice(0, 16), Array.from({ length: 16 }, (_, index) => ({ event: "runtime_lifecycle", reason: index % 2 ? "reload_ready" : "reload_started" })));
+  assert.deepEqual(observed.slice(16, 24), Array.from({ length: 8 }, () => ({ event: "runtime_lifecycle", reason: "access_violation" })));
+  assert.deepEqual(observed.slice(24), [{ event: "admin_http", stage: "setup_submit", status: 500, content_type: "absent", body_kind: "empty" },
+    { event: "launcher_snapshot", reason: "setup_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false }]);
 });
 
 test("native runtime process events preserve exits independently of launcher liveness", () => {
