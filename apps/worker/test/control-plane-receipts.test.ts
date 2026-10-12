@@ -167,7 +167,7 @@ it.each(["headers", "body"] as const)("retains populated Admin data when optiona
     expect(signal?.aborted).toBe(true);
     expect(calls.sort()).toEqual(["/auth/clients", "/runners", "/status/features"].sort());
     if (phase === "headers") { release(new Response(body)); await vi.advanceTimersByTimeAsync(0); }
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledTimes(phase === "body" ? 1 : 0);
   } finally {
     if (phase === "headers") release(new Response(null, { status: 503 }));
     if (!cancel.mock.calls.length) stream.close();
