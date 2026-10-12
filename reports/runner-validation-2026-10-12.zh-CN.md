@@ -246,6 +246,18 @@ B 的六文件工具验证为 417 通过、14 条件跳过、0 失败；本机�
 
 该次日志的 214 条事件包含 native index 1 在 observer elapsed 104,916 ms 以 code 1 退出及一次 `crash_restarting`，未记录后续 spawn。现有时间锚点不足以确认其与收尾的关系；完整测试通过与生命周期观察分别保留。本机计划执行一次后结束，未追加轮次，也不据此认定托管失败消失。
 
+## `a455499` 最后一轮托管验证
+
+诊断提交 `a4554990080830b9d4086fe838b53e857e3fca3c`、树 `fb8b243172d6700356df4b9595178d39a59dd93d` 的 [push CI 38247797192](https://github.com/aloneio/runmesh/actions/runs/38247797192) 为 8/8 jobs 成功；Windows 源码 transport 41/41、0 跳过，122,529 ms，四档共 512 请求完成，212 条安全事件没有记录 native exit、restart、控制面失败或代理连接丢失。
+
+同轮 [PR CI 38247804514](https://github.com/aloneio/runmesh/actions/runs/38247804514) 的 Windows transport 触及原有 300,000 ms wrapper 上限，门禁耗时 301,377 ms、`timed_out`；verify-all 随之失败，其余 6 jobs 成功。PR 实际合成提交 `17a16ea4ff1dc95c99902a60fcab3a298c89e065` 与候选同树。两路 Linux verify 各 26 门禁通过，源码及安装包 transport 各 41/41、0 跳过，浏览器检查通过。各运行均为原 attempt 1，未追加跑次。
+
+PR 未生成最终 reporter，因此没有最终测试计数或 test 38 实际码。并发 1/4/8/16 的首错 started/completed 为 127/126、104/100、78/70、89/73，对应 elapsed 为 60,021、60,005、23,461、16,199 ms。512 是计划数；这些首错快照也不等于收尾完成数。完整日志保存 296 条安全事件，工件按既有边界保留 199 条并明确省略 97 条。8 条代理 POST connection-lost 达到该类记录上限。快照由失败回调采集；测试超时路径没有等待底层负载汇合完成，也没有对应完成标记。缺少与首错请求的关联标识，EOF 不代表业务成功，active 项也不能据此认定为首错或死锁。
+
+最终总归档 `.audit/a455499-ci/safe-summary.json` 的 SHA256 为 `4a149e9dad188b3be4504f0154f4d3e2e5a6261ea2710d354499c3e6bf33d303`；Windows 失败摘要 SHA256 为 `e913c4ade4e7cfb437089db7772b676ee54c89f5883c69d24ca9bb536d2385f5`。测试正常回收路径的独立静态复核没有找到可证明的持续进程遗留，报告 SHA256 为 `fea96e52a952087cad19564776c9e13d607f565a73eb488b29fd488cf0ee9f27`。细分进度、快照语义、源码身份和生产只读观察见[项目检查书](project-audit-2026-10-12.zh-CN.md)末节。
+
+开发 run 321 的 cadence 成功但 `due=false`，后续发布步骤跳过且零工件；原 `v0.1.8-dev.63` 仍是独立开发预发布。正式发布继续受 Windows 压力门禁阻塞，当前生产健康检查通过、稳定分发保持 0.1.7，0.1.8 正式发布与激活未执行。最后的报告编辑仅补充工程记录，不改变上述已验证源码身份。
+
 ## 证据边界
 
 本轮负载使用隔离临时目录、真实 Node/Git 子进程与文件系统 API，不连接生产服务，也不操作系统级 Runner 注册。驱动器使用显式的本机 Git 路径作为测试注入。升级协调器、服务回滚和跨平台服务适配器由项目完整测试及 CI 矩阵覆盖；原生 Linux/macOS 服务行为需由对应平台执行证据确认。Worker→Runner 网络链路和浏览器验证另行记录。

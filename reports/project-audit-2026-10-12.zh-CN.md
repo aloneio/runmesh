@@ -3,7 +3,7 @@
 检查日期：2026-10-12（Asia/Shanghai）
 
 检查基线：`dev`，`115ba45`
-阶段：工具链候选 `bc31153` 的 push、PR CI 全部成功；随后仅调整四份文档的 `6a849a2`，PR CI 全部成功，push Windows 断线恢复断言及汇总失败。四档混合负载均完成。开发预发布 `v0.1.8-dev.63` 已发布并独立验证，正式版保持 0.1.7；0.1.8 的正式发布与生产激活保持待验收状态。
+阶段：12 项检查发现已完成对应修正，用户文档已整理。最新诊断提交 `a455499` 的 push CI 全部成功，PR CI 的 Windows 压力验证触及既有 300 秒上限，汇总检查随之失败。正式发布仍受该门禁阻塞，0.1.8 尚未正式发布或激活。线上健康检查通过，稳定分发保持 0.1.7；已验证的开发预发布为 `v0.1.8-dev.63`。
 
 ## 范围与方法
 
@@ -711,3 +711,47 @@ push Windows 的 transport 门禁耗时 129,897 ms，工件报告 1 项失败、
 [开发预发布 v0.1.8-dev.63](https://github.com/aloneio/runmesh/releases/tag/v0.1.8-dev.63) 为公开、immutable 的 prerelease；独立读取 annotated tag 确认绑定 `6a849a2` 与对应源码树，并验证九个公开资产的摘要、manifest Ed25519 签名及 SHA256SUMS。开发预发布的通过结果与独立 push CI 的失败分别保留。
 
 0.1.8 正式签名发布和生产激活尚未执行。当前候选的完整验证仍有阻塞，因此没有提升受保护 main、改写发行状态或套用待发布文档。后续需要先取得失败请求的完整安全分类并完成有依据的修复，再按项目流程验证精确候选、双端 main、正式资产和线上激活。所有历史失败继续保留；用户 docs 维持当前使用说明，调查事实集中存放于 reports。
+
+## `a455499` 诊断提交的完整托管验证
+
+诊断及上述工程记录已提交到 GitHub `dev`：`a4554990080830b9d4086fe838b53e857e3fca3c`，树 `fb8b243172d6700356df4b9595178d39a59dd93d`。应用代码与依赖保持 `6a849a2` 的值；改动限于三个诊断/测试文件和两份工程报告。类型、docs、格式、runbooks 与空白检查通过。该提交按计划执行一轮原 attempt 1 的 push/PR CI，没有重跑或取消任一路完整 CI。
+
+| 独立运行 | 最终结果 |
+| --- | --- |
+| [push CI 38247797192](https://github.com/aloneio/runmesh/actions/runs/38247797192) | 8/8 jobs 成功。Windows transport 41/41、0 跳过，门禁 122,529 ms；四档共 512 请求全部完成。 |
+| [PR CI 38247804514](https://github.com/aloneio/runmesh/actions/runs/38247804514) | Windows transport `timed_out`、verify-all 失败，其余 6 jobs 成功。实际合成提交 `17a16ea4ff1dc95c99902a60fcab3a298c89e065`，树与候选一致。 |
+| 两路 Linux verify 与浏览器 | 各自 26 个 verify 门禁通过；源码/安装包 transport 各 41/41、0 跳过，浏览器及 guided product 检查通过。 |
+| 两路 source policy | 原同步及描述编辑触发的检查分别成功。 |
+| 开发节奏检查 38247797671 | run 321，`due=false`，remaining=4；cadence 成功，其余四项 skipped，工件为 0，本轮未发布新包。 |
+
+push Windows 的四档 mixed elapsed 为 15,007 / 10,853 / 7,083 / 4,951 ms，完整日志保存 212 条安全事件；未记录 native exit、restart、控制面失败或代理连接丢失。它与 PR 的失败分别计量。
+
+PR Windows 的门禁记录为 301,377 ms：原有 300,000 ms wrapper 到期后终止测试进程，`report_available=false`，因此没有最终通过/失败/跳过计数，也没有 test 38 的实际错误码。不能把四档计划的 512 请求写成已完成。首错前的原始负载进度如下；这些快照不等于收尾后的完成数。
+
+| 并发 | first-failure operation | started / completed | 首错时 elapsed | pending headers / body |
+| --- | --- | --- | --- | --- |
+| 1 | job_get | 127 / 126 | 60,021 ms | 1 / 0 |
+| 4 | read | 104 / 100 | 60,005 ms | 4 / 0 |
+| 8 | workspace_list | 78 / 70 | 23,461 ms | 7 / 1 |
+| 16 | job_get | 89 / 73 | 16,199 ms | 15 / 1 |
+
+完整 job log 保存 296 条安全事件；工件受既有大小边界保留其中 199 条，明确标记省略 97 条，二者保留顺序及字段投影已逐项核对。记录有 8 条代理 POST connection-lost 事件，达到该类固定上限；没有控制面失败事件。由于最终 reporter 未生成，具体首错的 HTTP/结构化结果分类仍缺失，不能用代理事件替代某次请求的实际返回值。
+
+四档失败回调快照均取得响应：并发 1 的 entered/finished 为 208/208、active 为空；并发 4 为 314/312，active 是 `job_get` 的 action（676 ms）和 identity/fetch（1 ms）；并发 8 为 393/391，active 的 `job_logs` 与 `job_get` 均处于 action、各 985 ms；并发 16 为 475/475、active 为空。各档 recent 16 条均为 EOF。快照由失败回调采集；测试超时路径没有等待底层负载的汇合完成，也没有对应完成标记。缺少与首错请求的关联标识，EOF 不代表业务成功，active 项也不能据此认定为首错或死锁。
+
+限定范围的独立静态复核检查了 Windows native job 的前置测试及进程回收，没有找到可证明的正常成功路径持久 subprocess/workerd 遗留。该结论不是动态泄漏证明，也不覆盖全部第三方内部行为；`inherited_pipe` 夹具的清理只发出 kill 而未等待退出，作为保证弱点记录，没有证据证明其跨后续步骤存活。没有据此修改生产逻辑或预算。
+
+| 最终证据 | SHA256 |
+| --- | --- |
+| `.audit/a455499-ci/safe-summary.json` | `4a149e9dad188b3be4504f0154f4d3e2e5a6261ea2710d354499c3e6bf33d303` |
+| `.audit/a455499-ci/pr-windows-failure-summary.json` | `e913c4ade4e7cfb437089db7772b676ee54c89f5883c69d24ca9bb536d2385f5` |
+| `.audit/a455499-ci/dev-prerelease-summary.json` | `dc9a3d2f8fb3c4bbd9c9787cbb89c5928fe739d993b2ad7a3519394d8ec7a233` |
+| `.audit/a455499-ci/pre-transport-resource-review.zh-CN.md` | `fea96e52a952087cad19564776c9e13d607f565a73eb488b29fd488cf0ee9f27` |
+
+### 本轮终审状态
+
+本轮工程修正、用户文档整理、检查书及各阶段验证记录已经落地；正式发布条件尚未满足。确定的阻塞是 Windows 真实网络压力门禁未通过，根因尚未建立。保留原有期限、请求数、断言、分支保护和完整失败记录，未以通过的 push 结果覆盖 PR 超时，也未继续追加跑次。
+
+2026-10-12T12:21:32Z 对生产环境的只读核验确认：`/health` 的 `ok=true`，部署为 `main`、`a18f3c015740458cfc90ce9b6c1626580937e6b9`、干净来源且 provider 身份匹配；测试模式关闭。`/runner/releases/stable` 的 current/latest 均为 0.1.7、`distributable=true`。原始观察 `.audit/production-status-20261012.json` 的 SHA256 为 `6fbabf8b848d109f2eb093a75328fdb2a99502746ca03cf519a8f6a554bc10a9`。
+
+两端受保护 main 保持原提交，GitHub dev 为 `a455499`，GitLab dev 保持 `0274535`。PR 118 与 MR 59 保持未合并状态。0.1.8 正式资产、发行状态更新及生产激活没有执行；四份发布后用户文档草稿保留为未应用状态。本节是测试结束后的工程记录，所列 CI 源码身份固定为 `a455499`，不把后续报告编辑冒充已执行的代码验证。
