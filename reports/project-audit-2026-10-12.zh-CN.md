@@ -2,8 +2,11 @@
 
 检查日期：2026-10-12 至 2026-10-13（Asia/Shanghai）
 
-检查基线：`dev`，`115ba45`
-阶段：12 项检查发现及后续回执、夹具生命周期问题已完成对应修正，用户文档已整理。候选 `a259abd` 的原生 HTTP 入口在本机源码与安装包单次验证中各通过 41/41 项测试和 512/512 次压力请求，但随后 push、PR 两次 Windows CI 均出现传输失败，各记录 2 项失败。现有证据定位到客户端响应头接收与控制面 200 正文读取截止，底层原因仍需连接证据确认。现已补齐被动诊断，并完成两个本机完整链路的复验，接续新候选的托管 Windows 验证。完整失败与验证证据见末节。0.1.8 尚未正式发布或激活，最近一次线上健康检查通过，稳定分发保持 0.1.7。
+初始检查基线：`dev`，`115ba45`。
+正式发布源码：`e4656476f2b7ad8f1f873c1362ef0262404c0a45`，tree `3db3b8127fbf0a3ba910e3891662309efe4e3b39`。
+阶段：[0.1.8 已公开发布](https://github.com/aloneio/runmesh/releases/tag/v0.1.8)，原始十二项发现及后续修正的验证记录保留。发布提交的 push、PR、main 与 release 工作流均完成首轮验收，九项公开资产独立校验通过，公开安装包在本机 Windows 单次验证中通过 41/41 项测试和 512/512 次压力请求。后续激活提交 `ef72e2a` 的 PR Windows 单元测试暴露版本暂存目录重命名的 `EPERM`，生产激活停止推进，线上保留 0.1.7。正在以 0.1.9 候选修正目录提交与运行时探测的顺序，完整记录见末节。
+
+本检查书按提交和执行阶段保留历史判断。`a259abd` 的 push、PR 两次 Windows CI 各 2 项失败及其原始证据完整保留，底层根因仍未归属；后续被动诊断和成功执行分别记录。最新发布证据、公开包验收及归属边界见末节，早期候选的发布阻塞结论描述当时状态。
 
 ## 范围与方法
 
@@ -23,10 +26,11 @@
 | A06 | P2 | 网络负载首错后的主动停止、在途请求取消与汇合需要完整绑定；失败工件曾遗漏负载进度、内部运行时生命周期和控制面失败阶段，Windows ASCII 日志前缀也未被识别。已有测试 HTTP 作用域会在结束时取消请求，因此该缺口本身不能解释首次 Windows 故障。 | 已实现首错快照、停止领取、主动取消与请求汇合，13/13 项定向回归通过；前置控制面 217/217、日志诊断 17/17 项定向回归及架构、类型检查通过。`130c834` 已取得授权路径 deadline 与负载首错事件，完整结果见下文。 |
 | A07 | P1 | Registry 在每次受保护 RPC 的例行维护中扫描全部 Runner 记录，查询读取量随 Runner 数量增长，增加授权请求路径的开销。位置：`apps/worker/src/registry/lifecycle.ts`、`apps/worker/src/registry/schema.ts`。 | 已加入部分表达式索引并使用等价 `MIN` 查询，保留维护写预算、nonce 与权限约束；33/33 项定向验证通过。1,000 条记录时 `rowsRead` 从至少 1,000 降至最多 2。`5984ae8` 的完整 Worker 验证发现 heartbeat 与 session_begin 的索引计量写入由 1 增至 2，其余对应调用、读取、顺序及回执保持一致；精确成本断言按该取舍更新后复验。 |
 | A08 | P1 | Workspace、补丁及分页读取使用 JavaScript `number` 表示系统文件标识，较大的 inode 会丢失整数精度，影响身份一致性比较；同类表示也用于 Jobs、Context、配置、元数据、Git 与验证证据读取链路。共享位置：`apps/runner/src/file-identity.ts`；证据读取位置：`scripts/evidence-io.mjs`。 | 已改为完整整数身份；Workspace/补丁/分页集合 95 通过、3 跳过，Jobs/Context 的 8 文件 139 通过、1 跳过，配置/元数据/Git 等 8 文件合计 97 通过、64 跳过，证据读取 10/10 通过。本机 Windows 完整 Runner 1,494 通过、142 平台跳过、0 失败；package-verification/verification-tools 两文件完整验证通过。各定向集合与完整套件分别记录，尚无证据将该独立防御修复认定为 Windows 网络首错原因。 |
-| A09 | P2 | Windows 暂存运行时退出后的短暂文件占用会影响暂存提交与清理；测试清理错误还可能覆盖阶段原错。位置：`apps/runner/src/updates/release-stager.ts`、`apps/runner/test/release-stager.test.ts`。 | 私有暂存提交和清理使用有限重试，取消保留调用方原因，双重失败保留主错及清理错。39/39 项定向验证通过；新候选仍需完整安装升级验收。 |
+| A09 | P2 | Windows 版本探针退出后，包含刚执行运行时的目录重命名曾返回 `EPERM`；原始日志没有记录锁持有者。测试清理错误还可能覆盖阶段原错。位置：`apps/runner/src/updates/release-stager.ts`、`apps/runner/test/release-stager.test.ts`。 | 早期有限重试修正通过 39/39 项定向验证，但 `ef72e2a` 的 PR CI 再次失败。0.1.9 调整为先放置最终目录、后执行探针，保持原重试及探针预算；与协调器共 142/142 项定向验证通过，完整验收按新源码另行记录。 |
 | A10 | P2 | 两处原生测试的提前失败路径未完整回收测试进程：Runtime 的失败终止夹具仅在主路径停止子进程；Windows 锁夹具在持有者未就绪时无法解除维护子进程等待。位置：`apps/runner/test/runtime.test.ts`、`apps/runner/test/update-launchers.test.ts`。 | 测试持有的进程在收尾时独立停止并等待 `close`；维护夹具具有独立停止信号和自身截止。两文件 118 通过、4 跳过，包含 stop/deadline 故障分支。该发现限于测试提前失败路径，不能解释单元测试全通过后的网络失败。 |
 | A11 | P2 | 补丁回滚测试在操作原错发生后仍断言 `external` 已创建，可能以 `undefined` 断言覆盖真正的首个异常。位置：`apps/runner/test/patch-persistence-failures.test.ts`。 | 已保留操作原错，28/28 项定向诊断验证通过；在新候选 Windows 完整测试中继续复验回滚行为。该项属于证据完整性修复。 |
 | A12 | P2 | MCP 再授权在完整读取有效 200 收据后仍取消 reader 并触发 AbortSignal，使正常完成与失败清理采用同一取消路径。位置：`apps/worker/src/mcp/reauthorization.ts`。 | 完整有效收据（允许及有效主体不匹配的拒绝）释放读取锁并清除计时器；失败、超时、未读正文和迟到回执继续取消。45/45 项定向测试通过，独立复核通过；该资源生命周期修正与 Windows 网络故障的关系另行验证。 |
+| A13 | P1 | 已有独立管理器在普通 Runner 版本切换后继续运行原管理器包，当前安装流程复用它；因此仅发布新 Runner 包不能将版本暂存修正送达已有管理器。位置：`apps/runner/src/updates/manager-install.ts`。 | 增加显式 `manager-refresh`，以独立验签的同版本维护包替换管理器程序，保留私有运行时、身份、操作记录、配置和 Runner。刷新取得安装锁、确认本地活动操作记录完全不存在后进行，并具备中断恢复与失败回滚。实现与验证记录见后续专节。 |
 
 ## 验证矩阵
 
@@ -1213,3 +1217,172 @@ PR119 的独立 `main-source-policy` run `38279812282` attempt1 成功，job `11
 | summary SHA256 | `5ae3442c33468df8b59a6933135efd0c00aa8dbb95aa1490016b7931cd8c3ff4` | `82c3a1fff68b3193f2eb8e01ea1e1e96500ee361704bc5641a3931a428f4e376` |
 
 每个并发档位的四种操作均完成 32/32 次，失败数为 0。两条路径分别保留 6、5 个归档文件，其大小、摘要、日志负载行与 211 条安全事件已独立复核；事件仅涵盖已记录的运行时观察、进程启动与负载指标，没有保留失败或 reload 事件，不据此声称所有生命周期均已观察。安装包报告记录本地测试 tarball 为 1,217,455 bytes，SHA256 `7040077f3e3bbb55978a3efc7c979e40e3dce4d403bf687c464e88d1092e025b`，`signed=false`、`published=false`。这些本机结果验证诊断补充后的功能覆盖；托管 Windows 的底层故障仍按新提交的独立 CI 证据定位。
+
+## `e465647` 首轮验收与 0.1.8 正式发布
+
+记录日期：2026-10-13（Asia/Shanghai）。以下结果均来自已经完成的执行及其独立归档核验。发布源码为 `e4656476f2b7ad8f1f873c1362ef0262404c0a45`，直接父提交为 `a259abddfb8a5d6e0dc293c60040f2e0edb5882d`，源码树为 `3db3b8127fbf0a3ba910e3891662309efe4e3b39`。各次执行沿用既定入口、并发档位、请求数量与预算，按独立事件分别记录。
+
+### 候选、受保护 main 与发布工作流
+
+| 阶段 | GitHub run / attempt | 实际执行提交 | 作业 / 关卡结果 |
+| --- | --- | --- | --- |
+| push / dev | [38286664298](https://github.com/aloneio/runmesh/actions/runs/38286664298) / 1 | `e4656476f2b7ad8f1f873c1362ef0262404c0a45` | 8/8 作业成功，28/28 关卡通过 |
+| PR119 / dev → main | [38286668446](https://github.com/aloneio/runmesh/actions/runs/38286668446) / 1 | `6583828918114a36f41ddc04dae7896439f0d121` | 8/8 作业成功，28/28 关卡通过 |
+| push / main | [38288877911](https://github.com/aloneio/runmesh/actions/runs/38288877911) / 1 | `e4656476f2b7ad8f1f873c1362ef0262404c0a45` | 8/8 作业成功，28/28 关卡通过 |
+| 正式发布 / main | [38291058364](https://github.com/aloneio/runmesh/actions/runs/38291058364) / 1 | `e4656476f2b7ad8f1f873c1362ef0262404c0a45` | 10/10 作业成功，复用 CI 的 28/28 关卡通过 |
+
+PR119 的实际合成提交按顺序以 `04d50baadc774abc328d065cfe4fdde3c7370382`、`e4656476f2b7ad8f1f873c1362ef0262404c0a45` 为父提交，tree 与发布源码一致。push、PR、main 各七个实际 checkout 作业的日志与对应执行身份吻合；每轮关卡报告的 commit、tree、clean 状态分别与自身运行一致。独立来源策略 [38286668497](https://github.com/aloneio/runmesh/actions/runs/38286668497) attempt 1、job `114936575419` 成功，回执为 `main-from-dev-v1`、`allowed=true`、PR119。
+
+GitHub main 在 `2026-10-12T18:08:12Z` 的提升记录之后执行上述精确提交 push CI。GitLab 同源 main 验收由正常发布工作流的 provider 门禁确认：发布 job `114954733405` 在 `2026-10-12T18:44:29.8729849Z` 记录 `observed_provider_ci`、commit=e465647、branch=main，GitHub run `38288877911` attempt 1 和 GitLab project `85844627` / pipeline `2939775389` 均为 `passed`。该门禁输出先于签名步骤，原始日志独立保存。
+
+每轮 28 项关卡包含 verify 的 26 项以及 Windows transport、browser 各 1 项。各轮 Linux 源码传输和已打包 Runner 传输分别通过 41/41，browser 通过 5/5，这些测试的 failed / skipped / todo 均为 0。其他测试层按其原始日志保留平台跳过计数，重复执行的覆盖不相加为唯一测试总数。
+
+| Windows 执行 | transport 通过 / 总数 | 混合请求完成 / 总数 | gate 耗时 ms | c1 / c4 / c8 / c16 的 p95 ms |
+| --- | ---: | ---: | ---: | --- |
+| push / dev | 41/41 | 512/512 | 128820 | 498 / 1761 / 1619 / 1827 |
+| PR119 | 41/41 | 512/512 | 161487 | 701 / 1930 / 1134 / 1656 |
+| push / main | 41/41 | 512/512 | 75497 | 213 / 478 / 602 / 855 |
+| release 复用 CI | 41/41 | 512/512 | 84676 | 175 / 469 / 636 / 908 |
+
+四轮 Windows transport 均为 failed / skipped / todo=0。每档 128 次请求包含 `read`、`workspace_list`、`job_get`、`job_logs` 各 32 次；p95 是客户端请求延迟，gate 耗时覆盖整套验证。main 的 Linux 源码、安装包、browser gate 耗时分别为 33442、35402、115668 ms；release 的对应耗时为 31636、34203、136333 ms。
+
+push、PR、main 每轮八份日志和三份 CI ZIP 均完整归档，ZIP provider digest、展开文件集合、字节数和哈希已核对。release 的十份日志、三份 CI ZIP、63 个展开文件及原始 run/jobs/终态快照共 79 项文件指纹也逐项吻合。全部关卡报告仍保留 `ci_gate_execution`、`self_reported` 证据属性。
+
+### 正式资产与公开独立校验
+
+[Runmesh v0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) 的 Release ID 为 `410904870`，GitHub 原始元数据记录于 `2026-10-12T18:44:39Z` 公开发布，`draft=false`、`prerelease=false`、`immutable=true`。工作流始于 `18:27:44Z`，终态更新时间为 `18:44:44Z`，结果为 success。annotated tag `v0.1.8` 的对象为 `b12f17556ea4b0b1525acb2193c0b1808cc6c3cb`，创建者为 `aloneio <git@aloneio.aleeas.com>`，指向发布提交 e465647；原始 Git data commit 响应确认 tree3db3b812。
+
+发布 job 先对最终 `release/assets/runmesh-runner-0.1.8.tgz` 执行 `scripts/test-packed-runner.mjs`，于 `18:44:04.6812909Z` 输出 `EXACT_PACKAGED_RUNNER_E2E_OK 0.1.8`。该正式包在 Linux 完成 41/41 项测试、512/512 次混合请求，failed / skipped / todo 均为 0；四档 p95 为 34、128、180、357 ms。随后 22 项安全回归、11 个测试文件通过，`security_readiness=verified` 绑定同一发布提交。打包后的 tracked 源码一致性检查、双平台 main 门禁、签名、draft 回读校验、公开发布、immutable 检查和公开回读校验按工作流顺序完成。
+
+公开下载于 `18:45:58.0896940Z` 开始、`18:46:14.3407564Z` 完成，保留四份原始 provider JSON、九项资产及 13 次初始资源 GET 的 URL、时间、字节数与 SHA256。资产从官方公开 URL 无授权头下载；永久文件使用 CreateNew，helper 的四份原始暂存响应再经逐字节复制校验进入永久归档。13 个请求目标与四份暂存的 17 项指纹已复核。
+
+独立离线验签收据于 `18:47:21.626Z` 记录 `state=verified`。校验覆盖版本、release/tag/source/tree、官方 URL、资产 ID/大小/digest、严格九项资产集合与 Ed25519 签名。签名直接覆盖 `manifest.json`，key ID 为 `runmesh-preview-2026-01`；清单中的大小和 SHA256 将 Runner 包绑定到已认证清单。源码中的 trust keyring、LICENSE、NOTICE、THIRD_PARTY_NOTICES.md 与公开字节一致，SHA256SUMS 精确覆盖其余八项资产。
+
+| 正式资产身份 | 核验值 |
+| --- | --- |
+| manifest SHA256 | `88eda689c8ce877f4c66ef464e1c465047855444fdd7e2aa79060bc3aba98408` |
+| Runner 资产 / GitHub Asset ID | `runmesh-runner-0.1.8.tgz` / `634654776` |
+| Runner 字节数 / SHA256 | 1217457 / `33f1a65af0fae61a295d78c53fddace867363cffe2488d72c53c378fb7e9ff7b` |
+| 签名 CI artifact | `11766697573`，ZIP 1223415 字节 |
+| 签名 CI ZIP SHA256 | `0213bac6e748e5dede7a1241f10f8f1688ccaf485bb52ca668e55a93e79eabde` |
+
+九项官方资产为 LICENSE、NOTICE、SHA256SUMS、THIRD_PARTY_NOTICES.md、manifest.json、manifest.sig、manifest.signature.json、runmesh-runner-0.1.8.tgz、trust-keyring.json。签名 CI ZIP 内九项条目、对应展开文件和九项公开下载资产的大小及 SHA256 逐项一致。清单的 `published_at=2026-10-12T17:47:39Z` 按工作流取自源码提交时间，实际公开时间采用 GitHub release 的 `18:44:39Z`。
+
+### 公开安装包的本机 Windows 单次验收
+
+公开下载的同一 tarball 经过离线安装，以既有 `scripts/test-packed-runner.mjs` 入口在 Windows x64、Node 22.23.2、npm 10.9.3 下执行一次完整验证。执行窗口为 `2026-10-12T18:47:56.012Z` 至 `18:50:02.723Z`，外层驱动耗时 126711 ms，exit_code=0、attempt=1、`problems=[]`。实际公开包直接作为输入，源码 commit/tree/clean 和四项输入指纹在执行前后保持一致。
+
+原始 Vitest 报告为 1 文件、41/41 通过、failed / skipped / todo=0，封存报告与工作副本逐字节一致；`EXACT_PACKAGED_RUNNER_E2E_OK 0.1.8` 出现一次。41 项覆盖安装后读取、权限、分页、文件变更、命令与队列、Context、服务发现、Git、离线快照、会话替换和正常关闭等路径。
+
+| 并发 | 完成请求 | 失败 | p50 ms | p95 ms | 混合阶段耗时 ms |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 128 | 0 | 75 | 107 | 8998 |
+| 4 | 128 | 0 | 193 | 577 | 7474 |
+| 8 | 128 | 0 | 343 | 549 | 5690 |
+| 16 | 128 | 0 | 579 | 1947 | 6132 |
+
+独立复核从封存日志重新提取 16 条 load_timing 与 192 条 load_metric。四类操作和四档并发的全部组合各有一条完成记录，均为 started=32、completed=32、failed=0；完成数在响应解析、错误检查与操作结果断言通过后累加，合计 512/512。测试用例数与压力请求数分别报告。八项封存文件、四项执行输入的字节数和哈希均与收据匹配。外层预算保持 420000 ms、既有 E2E 入口预算保持 300000 ms，每输出流 8388608 字节；该次没有超时覆盖，signal 与 termination_reason 均为 null。
+
+### 历史 Windows 失败的归属边界
+
+Runner 与 Worker 的补充复核没有建立由现有代码和历史归档共同证明的新产品缺陷，`a259abd` 的 Windows 传输失败底层原因仍未归属。被动诊断、后续通过及公开包验收各自保留证据，不据其倒推历史故障已经根治。
+
+一次 Windows 自有进程探针在直接父进程 exit 7 后未观察到仍存活的子孙进程；前置测试中的继承输出管道用例已有精确 PID 清理或 80 ms 自然退出路径。该观察支持保留当前生命周期实现，其覆盖限于已测试拓扑。历史 PR c8 的两次 workspace_list 客户端响应头等待为 24.345–24.380 秒，Worker header 的 server_total 为 295–308 ms。固定 native workerd 的该时钟读取宿主墙钟毫秒，客户端使用 Node 单调时钟；差值仅说明未被测得的 Worker begin→header 区间解释，不能据此指定客户端、系统、运行时调度或某一传输组件负责。
+
+历史授权 deadline 缺少请求级关联，5 秒预算包含签名、fetch 与正文读取。SSE 首个非空块可能是 keepalive；客户端请求汇合、SDK close 和 HTTP trace 完成也不代表内部 handler 或 RunnerDO 工作全部排空。当前材料没有形成请求级因果关联或应用等待环；本轮保持请求数量、预算及生产取消语义。完整归属记录与失败原字节保存在下列索引中。
+
+### 发布证据索引与后续验收
+
+以下为私有归档索引，路径相对于仓库根目录；各摘要继续索引原始 run/jobs、完整日志、ZIP 及展开文件清单。公开工作流链接见本节运行表。
+
+| 归档文件 | SHA256 |
+| --- | --- |
+| `.audit/e465647-ci/push-summary-20261012T1803024854476Z.json` | `9f0c2ac07e13d00c69b59c8fb7b3637ff0886280f71a1a10d08375514a324026` |
+| `.audit/e465647-ci/pr-summary-20261012T1803458882658Z.json` | `db70b0d7d289961d6884a36fda170c42569caab8419eeede4b0385cd4a36dd8e` |
+| `.audit/e465647-ci/pr-source-artifact-verification-20261012T180457493Z.json` | `e9448a3e400ba57f41024a2b8376f021015e4b75161ebc5247fb5be420361903` |
+| `.audit/e465647-ci/policy-summary-20261012T1751337041914Z.json` | `5a53f8468363c33a43b8929310010323000f4f25088101e5a3d705de1cb11acd` |
+| `.audit/e465647-ci/main-summary-20261012T1819257640675Z.json` | `b35458c3a2c1d3c6331ecafc5567f666d427e555c3a684634fb8995141263e01` |
+| `.audit/release-0.1.8/release-summary-20261012T1847221248039Z.json` | `63b99db3b32f1bfde5e1ff474e761ff15ae2c1fea45a78962e9cc259f9271b75` |
+| `.audit/release-0.1.8/release-job-114954733405.log` | `62f314bdd913dd44bba84a0eb80eaaab89f446b644a84a0edf41448f93addc9c` |
+| `.audit/release-0.1.8/public-metadata/download-provenance.json` | `286ae332c77a8e9e872bf46a9a2f07a685bc5857389bda234ca96978b6286d71` |
+| `.audit/release-0.1.8/public-metadata/independent-verification.json` | `52e3764a973f900a9583bfbcc1a5c81e798693516070bac1fe60a83d953e4a0f` |
+| `.audit/release-0.1.8/signed-ci-public-comparison.json` | `35d7451b109947129467bc0c952a93c9c2f1fbedcb529ad0cef079eff8d27476` |
+| `.audit/release-0.1.8/public-package-windows/receipt.json` | `4ce54e3d6408517a3d00e1cdb71f7f72fc97addfe2b7d03570bdb987fe8ff8e8` |
+| `.audit/e465647-ci/success-appendix-draft.md` | `f0909f99eed573de72aaa5b2bc085da29a466fe8fd63a1ddbe0d72a161106771` |
+| `.audit/e465647-ci/main-appendix-draft.md` | `9938a268f8b32b9f1b3f4a8314a1c67d6f63f25b24eb81bde57c0f4425ed36dd` |
+| `.audit/release-0.1.8/publication-appendix-draft.md` | `be3dccdfa4ca347c916bad215504db806ea52cbb40fe749a9df35d7579bde8e5` |
+| `.audit/release-0.1.8/windows-public-appendix-draft.md` | `3ccb67fb8f169a032b94b86881d7f15a882c77426232f243e9a8128f86908c94` |
+| `.audit/e465647-ci/runner-root-cause-followup.md` | `88020c96279178f454a169a10969c706e0ccfab8db48dcb96706aacff90bf324` |
+| `.audit/e465647-ci/worker-root-cause-followup.md` | `f21b118c1b3b91b14599bace867c585c5e4f49fbad2827c7bf36268ae179ceb9` |
+
+本节确认 0.1.8 正式发布、公开资产独立校验和公开安装包的上述 Windows 验收。后续激活按受保护分支流程提交真实 publication commit 与 manifest hash，部署后以实际生产健康和稳定分发响应独立验收；不可变发布提交持续保留 `e4656476f2b7ad8f1f873c1362ef0262404c0a45`。
+
+## `ef72e2a` 激活门禁与 Windows 版本目录修正
+
+激活候选 `ef72e2a82128854945c70be5728ceffba46db273`、tree `3dfb8159d0f74641a34ccc8afdca11e14c9f9307` 仅包含发行状态、生成激活值、用户文档和本检查书，共八个文件。原主目录的八个暂存文件及三个未跟踪目录保留。本机文档、发行契约、类型、格式和空白检查通过后，候选推送到 dev 并建立 [PR120](https://github.com/aloneio/runmesh/pull/120)。dev 推送返回绕过 PR 与两项状态检查的 provider 警告，原文完整归档；没有将该警告描述为受保护 main 验收。main 的管理员保护、来源策略和 verify-all 要求保持启用。
+
+| 原始执行 | 来源身份 | 结果 |
+| --- | --- | --- |
+| [push CI 38295144099](https://github.com/aloneio/runmesh/actions/runs/38295144099)，attempt 1 | `ef72e2a82128854945c70be5728ceffba46db273` / tree3dfb8159 | 8/8 jobs 成功，28/28 gates 通过；Windows transport 41/41、512/512 混合请求 |
+| [PR CI 38295152345](https://github.com/aloneio/runmesh/actions/runs/38295152345)，attempt 1 | 合成提交 `2c46ad93d269c2043371c76ae74a8fbd070ba169` / 同一 tree | Windows native 和汇总失败，其余六个 jobs 成功；27 gates 通过，Windows transport 为 not_run |
+| [来源策略 38295152342](https://github.com/aloneio/runmesh/actions/runs/38295152342)，attempt 1 | 同源 dev → main / PR120 | `main-source-policy` 成功 |
+
+PR Windows job `114964335473` 的 Runner 单元测试记录 1,500 通过、1 失败、142 跳过，共 1,643 项。唯一失败为 `release-stager.test.ts` 的首个签名旧版本安装用例：新复制的运行时完成版本探测后，`commitStagingDirectory` 对其父目录执行 `.staging` → 最终目录的 rename 返回 `EPERM`。失败发生在既有六次尝试、五次 50 ms 等待耗尽后；单元步骤之后的 Windows transport 没有执行。push Windows 的独立成功记录保留：transport gate 129579 ms，并发 1/4/8/16 各 128 请求、零失败，p95 分别为 509/565/714/1025 ms。成功记录不覆盖 PR 的失败。
+
+两路八份作业日志、三份 CI ZIP 及其展开文件已完整归档。PR 的原始失败日志提前封存，63743 bytes、SHA256 `3763c85180890c1af61f186790dfb2c2a57692fb63271be7526541dea41d416e`。push 汇总 `.audit/ef72e2a-ci/push-summary-20261012T1917121729312Z.json` 的 SHA256 为 `a328afe2784dc13fcd9a2cf0e69286047ada027153194933ba52f9a9c7610796`；PR 汇总 `.audit/ef72e2a-ci/pr-summary-20261012T1913525074471Z.json` 的 SHA256 为 `6de55fb2b2fe20374ba7b9583bc564fa34a06f9c80f2fd0f6301f7641013c19b`。本候选未提升 main、未推送 GitLab dev、未部署生产，也未重跑原工作流。
+
+独立代码复核确认：首个失败夹具在内存中构建压缩包与响应，目标脚本仅输出版本；文件级测试在 Windows 串行执行。产品已在成功、失败和取消路径等待版本探针 `close`，因此当前证据不支持“遗漏等待子进程退出”的解释。日志未记录锁持有者，不能将 `EPERM` 归因于特定扫描器或残留进程。确定的设计依赖是：运行刚复制的 Windows 可执行文件后，仍必须立即重命名包含它的目录。
+
+0.1.9 候选将完整版本树先放到唯一最终路径，再用该路径下的私有运行时与目标 bundle 执行原版本探针，成功后写入发行回执并返回。成功 rename 后立即更新自有目录变量，失败和取消清理实际自有目录，保留操作原错与清理错。探针的 15000 ms、65536 字节、关闭等待、强制终止语义及目录提交的五次 50 ms 等待均保持原值。
+
+协调器只有收到 stage 的成功结果并核对版本、摘要后，才持久化 next 并进入 draining/switching。安装指针仅解析明确传入的目录与 current；它不扫描 versions，也不以发行回执作为授权凭据。目录放置后、探针完成前的崩溃可能留下未选中的私有目录，与原暂存孤儿同属清理范围；已有 claimed 记录恢复为失败，不自动激活该目录。对应测试分别验证实际探针路径、错误版本、非零退出、取消、清理双错，以及 stage 挂起或拒绝期间保持原安装。
+
+该修正改变已经发布的 Runner 产品字节，因此使用新的 0.1.9 版本与候选发布状态，0.1.8 的不可变标签、清单和安装包保留。后续验收按新源码身份记录。
+
+### 目录顺序修正的定向验证
+
+在固定 Node 22.23.2、npm 10.9.3 的本机 Windows 环境中，单次执行 `release-stager.test.ts` 与 `update-coordinator.test.ts`，共 142/142 项通过（43 + 99），失败、跳过及 todo 均为 0，Vitest 耗时 18.89 秒。该结果绑定 `ef72e2a` 基础上的修改工作树，三项直接源码与测试文件在执行前后字节一致；不将尚未提交的工作树标为干净提交。
+
+| 已测文件 | SHA256 |
+| --- | --- |
+| `apps/runner/src/updates/release-stager.ts` | `f71835d0aa6180a49c77f4c3438fabac64bd5b63860b875d1642bad5f78e8993` |
+| `apps/runner/test/release-stager.test.ts` | `6cd376125560dba8ebda24e5032211d5806e0fcadb4a9fa429dd025c2a3c8045` |
+| `apps/runner/test/update-coordinator.test.ts` | `8904f2f4f3bc9a4176e28c5817681a06fe75cb8a498cbfceaa0d80d6c235a5e1` |
+
+收据为 `.audit/stager-0.1.9/targeted-receipt.json`。原始日志 SHA256 为 `9cb058736907327208f10982fde29d3f8eb48e8f075e4032d67d9c435119f8eb`；原始 Vitest JSON 为 50382 字节，SHA256 为 `b9022d97c424e87cb7508a90c55ced693b634c92c2edb944d61aba9d4d2f054b`。Vitest 按 Runner 配置根目录写出的报告与私有归档副本逐字节一致。
+
+### 已有独立管理器的修复送达路径
+
+升级链路复核发现 A13：管理器安装逻辑保留已存在的独立程序，普通 Runner 版本切换只替换所选 Runner。此隔离保护了版本切换的控制进程，同时意味着已有管理器继续使用原版本的暂存器。为使 A09 的新实现送达已有安装，0.1.9 增加显式 `manager-refresh`，由管理员从独立校验的发行目录调用新维护入口。
+
+刷新目标固定为维护入口的编译版本；签名直接验证 `manifest.json`，清单中的包大小和摘要认证 tarball，再从中取得维护入口字节并核对当前执行入口。替换范围为 `manager/runmesh.cjs`，原 Node、manager ID、配置、历史记录、Runner 版本目录与 current 均保留。刷新与版本切换共用安装锁；本地 `active-operation.json` 即使已进入终态也需先由原管理器完成上报与收尾。中断恢复依据持久化记录和新旧 bundle 摘要判定，恢复原启用及运行状态。对应实现、独立复核与测试结果随实际验收补充。
+
+实现同时核对磁盘服务定义与实际注册的 systemd、launchd 或 Task Scheduler 启动参数；Windows 任务按 COM `Principal.LogonType` 枚举核验，Linux 与 macOS 核对实际有效启动参数。原本停止、禁用、已注册但空闲，以及“禁用但仍有运行实例”的状态均按原状态恢复；启动和停止过渡在固定截止时间内观察，不将队列或启动中的中间态当作稳定状态。租约在每次服务、文件和恢复记录变更前后复核；租约丢失时停止后续写入和启动。
+### 0.1.9 管理器刷新与版本提交回归
+
+固定 Windows Node 22.23.2、npm 10.9.3，本地单次执行五个相关测试文件，共 240/240 项通过，失败、跳过及 todo 均为 0，耗时 28.50 秒。覆盖管理器刷新事务 45 项、原生平台状态 6 项、维护 CLI 47 项、版本目录提交 43 项和协调器 99 项；测试文件之间按 Runner 配置串行执行。源码树在执行前后保持一致，工作树状态为 dirty，未把该结果伪装成已提交源码。
+
+| 项目 | 结果与收据 |
+| --- | --- |
+| 统一定向回归 | `.audit/manager-refresh-0.1.9/final-targeted/receipt.json`；原始 Vitest JSON 80705 字节，SHA256 `adc8f0723112249da72a43c31c555035bd0bf91ddf70b477cbfaa396906e7985` |
+| 标准输出 | 1634 字节，SHA256 `aa95e8d98ef28375628672e982b2285a5798f4dec1ea7a0bec2b1cfabc808cd4` |
+| 输入源码指纹 | `b98fbf55892d2dd84d66c2ecb84343e5a678638ad4399c14caba0d3a274fe370`（收据中的文件集合摘要） |
+| 真实 Windows 刷盘补充 | 只读句柄 `fsync` 返回 `EPERM` 的观察保留在 `.audit/manager-refresh-0.1.9/windows-readonly-fsync.json`；读写句柄 `fsync` 成功且内容未变，见 `windows-readwrite-fsync.json`。实现已采用 Windows 读写句柄，并由真实临时文件回归覆盖。 |
+
+回归矩阵包括错误签名、摘要、归档条目、入口字节和 Node 版本下限在原生变更前拒绝；已有安装锁忙碌、所有活动阶段记录（包括终态记录）、安装身份或状态目录链接、服务实际定义漂移均不停止服务。事务测试验证候选探针失败、替换失败、启动失败、租约丢失、恢复失败时保留双错和恢复文件；提交完成后清理失败不会回滚已验证的新管理器。原 Runner 选择、配置、身份、工作区和管理器私有运行时在各平台夹具中逐字节保留。
+
+随后对原生适配最后一轮恢复边界（已注册但空闲的 launchd、启动过渡、外部启动后恢复停止、Windows 排队任务及 COM 登录类型）与核心事务重新执行 51/51 项，失败、跳过及 todo 均为 0；该轮收据 `.audit/manager-refresh-0.1.9/native3/receipt.json`，Vitest JSON SHA256 为 `c85644e02256968b066d03c223766f7fefc74380ae31f56b9f29275d79729414`。前述 240 项收据仍保留，作为全范围基线；51 项复验覆盖其后 native 状态修正。
+
+### 0.1.9 候选完整 Runner 与安装包压力回归
+
+在固定 Windows Node 22.23.2 环境中，完整 Runner 回归覆盖 74 个测试文件，1,588 项通过、142 项按平台跳过、0 项失败，执行耗时 407.80 秒。管理器刷新专项随后独立复验 52/52 项通过；两类结果分别计数，不将专项用例重复计入完整 Runner 总数。
+
+同一候选的打包安装包 E2E 使用实际生成 tarball，41/41 项通过，失败、跳过及 todo 均为 0；并发 1、4、8、16 各完成 128 次请求，共 512/512。四档请求 p95 分别为 84、236、324、511 ms。安装包大小为 1,249,156 bytes，SHA256 为 `c7fc2d97ceb550738e303e129ae18544f19574e609d895f8093d674045dc255c`；完整收据为 `.verification/package-e2e.json`，其中明确记录来源提交 `ef72e2a82128854945c70be5728ceffba46db273`、dirty 工作树、Node `v22.23.2` 及未签名未发布状态。
+
+本机门禁在该候选上重新通过：文档与项目事实、格式、架构、版本、验证清单、测试收集、类型检查、构建和 pack smoke 均成功。文档面向使用者描述升级、管理器刷新与恢复步骤；内部测试身份、失败原文和根因取证继续留在本检查书及 `.audit/` 归档中。
+
+### 历史 Windows 传输故障的当前根因边界
+
+对 `a259abd` 的 push/PR 原始工件、Runner、Worker、native launcher 与新诊断记录的交叉复核，将共同可证明的边界收窄到 Windows socket 到 native listener/dispatch 之前：客户端存在等待响应头的请求，而 Worker 内部快照已接近排空，且没有观察到 launcher 在 teardown 前退出或重载。现有材料没有请求级 socket cause、连接复用/空闲状态与 native ingress 首包之间的关联，因此不能把故障归因于某个 TCP、keepalive、客户端、系统调度或单一传输组件。
+
+当前候选已补充被动诊断并完成源码、安装包及 512 请求压力验证；这些结果证明诊断不改变功能路径，也没有复现历史失败。下一次托管 Windows 故障需要同时保留 Undici 的连接建立、发送、响应头、trailer/error cause、socket 复用/空闲/字节计数，以及 native listener 的首包和 dispatch ingress 时间，才能继续完成请求级归因。故障归属保持开放，不据通过结果宣称历史问题已经根治。

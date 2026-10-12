@@ -22,7 +22,9 @@ export async function checkPackedMaintenance(packageRoot, version) {
     assert.equal(reported.stderr, "");
     const help = await run(["--help"]);
     assert.ok(help.stdout.includes("Runmesh maintenance") && help.stdout.includes("maintenance-agent"), "packaged maintenance entry did not load independently");
+    assert.ok(help.stdout.includes("manager-refresh --profile <existing-profile> --install-root <root> --release-dir <signed-assets> [--user] [--json]"), "packaged maintenance help must include the explicit manager refresh contract");
     assert.equal(help.stderr, "");
+    await assert.rejects(run(["manager-refresh"]), error => error.code === 1 && error.stdout === "" && error.stderr.trim() === "Runmesh maintenance command failed: --profile is required", "manager refresh must report missing arguments before touching the host installation");
     await assert.rejects(run(["maintenance-agent"]), error => error.code === 1 && error.stdout === "" && error.stderr.trim() === "--profilePath is required", "maintenance must report its argument failure once before loading the host installation");
     await assert.rejects(run(["start"]), error => error.code === 1 && /Runmesh maintenance/u.test(error.stderr) && !/selected Runner cannot start|Cannot find module/u.test(error.stderr), "maintenance must reject ordinary Runner commands without loading them");
   } finally {

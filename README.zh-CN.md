@@ -92,7 +92,7 @@ MCP 地址本身就是凭据，在创建或轮换时显示。请妥善保存，�
 
 当前正式版本和安装可用情况见[发行状态](docs/release-readiness.zh-CN.md)，版本变化与升级指引见[版本说明](docs/release-notes.zh-CN.md)。开发环境使用单独验证的预发布渠道。
 
-升级分为三步：部署 Worker、安装目标 Runner 包、刷新 MCP 客户端工具目录。完成后按[升级指南](docs/upgrading.zh-CN.md)验证一个代表性任务。
+升级时先部署 Worker，按版本说明完成所需的独立版本管理器更新，再安装目标 Runner 包并刷新 MCP 客户端工具目录。按[升级指南](docs/upgrading.zh-CN.md)操作，完成后验证一个代表性任务。
 
 新实例使用自己的账号资源。更新已有 v2 实例时，保留 Worker、现用命名空间、D1 绑定、密钥和已注册 Runner。上线前验证账号配额、服务启停、日志脱敏及实际使用的 MCP 客户端。
 

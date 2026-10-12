@@ -376,6 +376,31 @@ describe("independent update coordinator", () => {
     expect(test.operation().error_code).toBe("verification_failed"); expect(test.events).not.toContain("stop");
   });
 
+  it("keeps the current installation selected while staging is pending and after verification fails", async () => {
+    const test = fixture(), snapshots: UpdateJournalRecord[] = [];
+    let enteredStage!: () => void, releaseStage!: () => void;
+    const entered = new Promise<void>(resolve => { enteredStage = resolve; });
+    const pending = new Promise<void>(resolve => { releaseStage = resolve; });
+    const running = new UpdateCoordinator({ ...test.options,
+      journal: { ...test.options.journal, save: async value => {
+        snapshots.push(structuredClone(value)); await test.options.journal.save(value);
+      } },
+      stage: async () => { enteredStage(); await pending; throw new Error("version probe rejected"); },
+    }).runOnce();
+    try {
+      await Promise.race([entered, running.then(() => { throw new Error("Coordinator finished before staging began."); })]);
+      expect(test.active()).toMatchObject({ phase: "claimed", previous: { version: "0.1.7", directory: "/managed/versions/old" } });
+      expect(test.active()).not.toHaveProperty("next");
+      expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("switch");
+      releaseStage(); await running;
+      expect(test.operation()).toMatchObject({ state: "failed", error_code: "verification_failed" });
+      expect(test.active()).toBeUndefined();
+      expect(snapshots.map(value => value.phase)).toEqual(["preparing", "claimed", "failed"]);
+      for (const value of snapshots) expect(value).not.toHaveProperty("next");
+      expect(test.events).not.toContain("stop"); expect(test.events).not.toContain("switch");
+    } finally { releaseStage(); await running; }
+  });
+
   it("stages and verifies the authenticated claimed target instead of the earlier offer", async () => {
     const test = fixture(); const claim = test.options.cloud.claim;
     await new UpdateCoordinator({ ...test.options, cloud: { ...test.options.cloud, claim: async owner => {

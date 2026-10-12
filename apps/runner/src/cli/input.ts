@@ -7,6 +7,23 @@ import { serviceProfilePath } from "../service.js";
 
 export function parseProductArgs(argv: readonly string[]): ParsedCommand {
   const command = argv[0] ?? ""; const values: Record<string, string | boolean | string[]> = {}; const passthrough: string[] = [];
+  if (command === "manager-refresh") {
+    const options = new Map([["--profile", "profilePath"], ["--install-root", "installRoot"], ["--release-dir", "releaseDirectory"]]);
+    for (let index = 1; index < argv.length; index += 1) {
+      const arg = argv[index]!;
+      if (arg === "--json" || arg === "--user") {
+        const key = arg.slice(2);
+        if (Object.hasOwn(values, key)) throw new Error(`duplicate option: ${arg}`);
+        values[key] = true; continue;
+      }
+      const key = options.get(arg), value = argv[index + 1];
+      if (key === undefined || value === undefined || value.length === 0 || value.startsWith("-")) throw new Error(`unknown or incomplete option: ${arg}`);
+      if (Object.hasOwn(values, key)) throw new Error(`duplicate option: ${arg}`);
+      values[key] = value; index += 1;
+    }
+    for (const [option, key] of options) if (values[key] === undefined) throw new Error(`${option} is required`);
+    return { command, json: values.json === true, values, passthrough };
+  }
   if (command === "start") {
     const rest = argv.slice(1);
     for (let index = 0; index < rest.length; index += 1) {

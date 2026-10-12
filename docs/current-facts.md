@@ -8,7 +8,7 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
 {
   "schema_version": 1,
   "evidence": "source_checkout_only",
-  "product_version": "0.1.8",
+  "product_version": "0.1.9",
   "protocol": {
     "minimum": 2,
     "current": 2
@@ -246,7 +246,7 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
     "HISTORY_DB"
   ],
   "reviewed_release_record": {
-    "version": "0.1.8",
+    "version": "0.1.9",
     "state": "candidate"
   },
   "observations": {

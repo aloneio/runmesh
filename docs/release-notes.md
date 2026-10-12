@@ -2,9 +2,17 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.8 — release candidate
+## 0.1.9 — release validation
 
-Runmesh 0.1.8 brings the following changes from dev. Use the [release status](release-readiness.md) to choose a published package, or the [development Runner channel](dev-runner-prereleases.md) to evaluate the candidate.
+The 0.1.9 version manager improves Windows Runner version switches by validating the new runtime in its final version directory before switching the active installation. Upgrades and returns to an earlier release preserve existing configuration.
+
+Existing installations receive the manager update through [`manager-refresh`](upgrading.md#update-an-installed-version-manager), using the maintenance program from an independently verified signed package. Refresh the manager first, then choose the Runner version in the control panel. This keeps the manager identity and state, installed Node runtime, Runner profile, workspaces and original service enablement. New installations and first manager setup use the manager included in their selected package.
+
+See [release status](release-readiness.md) for current installation options and [Runner versions](runner-versions.md) for version-management steps.
+
+## 0.1.8 — published stable release
+
+[Runmesh 0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) is available with a signed portable Runner package. See [release status](release-readiness.md) for installation options and the [upgrade guide](upgrading.md) to update an existing installation.
 
 - **Remote Runner version management.** Choose a signed release from the control panel, including an earlier version. Managed installations use an independent version manager that preserves the Runner's configuration, waits for local tasks, and checks reconnection. A local journal supports interrupted-change recovery; a failed switch triggers an attempt to restore the previous package. See [Runner versions](runner-versions.md) for installation requirements and recovery guidance.
 - **MCP connection checks and tool search.** Inspect a connection's status and declared capabilities, import supported remote entries from MCP Registry `server.json` files, and use `remote_search` to find published tools across enabled services. See [connecting an MCP](central-remote-mcp.md).

@@ -75,8 +75,8 @@ async function validateInstallRoot(path: string): Promise<string> {
 }
 
 async function commitStagingDirectory(source: string, destination: string, signal?: AbortSignal): Promise<void> {
-  // The version probe has closed, but Windows can briefly retain an image or
-  // scanner handle. Only this private staging rename receives five 50 ms waits.
+  // Only this private staging rename receives five 50 ms waits for transient
+  // Windows sharing failures; other failures retain their original result.
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
     try { await rename(source, destination); return; }
@@ -129,8 +129,10 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
   const versionDirectory = join(versions, `${target.version}-${context.operationId}-${randomUUID().slice(0, 8)}`);
   const temporary = `${versionDirectory}.staging`;
   await mkdir(temporary, { mode: 0o755 });
+  let ownedDirectory = temporary;
   try {
-    const packageRoot = process.platform === "win32" ? join(temporary, "node_modules", "@aloneio", "runmesh-runner") : join(temporary, "lib", "node_modules", "@aloneio", "runmesh-runner");
+    const packageParts = process.platform === "win32" ? ["node_modules", "@aloneio", "runmesh-runner"] : ["lib", "node_modules", "@aloneio", "runmesh-runner"];
+    const packageRoot = join(temporary, ...packageParts);
     for (const file of files) {
       context.signal?.throwIfAborted();
       const destination = join(packageRoot, ...file.path.split("/"));
@@ -157,7 +159,15 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
       await writeFile(join(temporary, "bin", "runmesh-runner"), wrapper, { flag: "wx", mode: 0o755 });
     }
     context.signal?.throwIfAborted();
-    const probing = promisify(execFile)(runtime, [join(packageRoot, "dist", "runmesh.cjs"), "--version"], { timeout: 15000, maxBuffer: 65536, windowsHide: true, killSignal: "SIGKILL", ...(context.signal === undefined ? {} : { signal: context.signal }) });
+    // Place the complete tree before executing its private runtime. Windows
+    // need not rename a directory containing an executable that just ran.
+    // The coordinator receives this path only after verification succeeds.
+    await commitStagingDirectory(temporary, versionDirectory, context.signal);
+    ownedDirectory = versionDirectory;
+    context.signal?.throwIfAborted();
+    const installedRuntime = join(versionDirectory, "runtime", process.platform === "win32" ? "node.exe" : "node");
+    const installedBundle = join(versionDirectory, ...packageParts, "dist", "runmesh.cjs");
+    const probing = promisify(execFile)(installedRuntime, [installedBundle, "--version"], { timeout: 15000, maxBuffer: 65536, windowsHide: true, killSignal: "SIGKILL", ...(context.signal === undefined ? {} : { signal: context.signal }) });
     // execFile rejects on abort before the process exits. Keep its runtime in
     // place until close, especially while Windows still holds the executable.
     // This isolated version probe has no work to drain; force termination also
@@ -172,13 +182,12 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
     }).finally(() => closed);
     context.signal?.throwIfAborted();
     if (probe.stdout.trim() !== target.version) throw new Error("Runner package reported a different version.");
-    await writeFile(join(temporary, ".runmesh-release.json"), JSON.stringify({ version: target.version, manifest_sha256: manifestSha256, artifact_sha256: artifact.sha256 }), { flag: "wx", mode: 0o644 });
+    await writeFile(join(versionDirectory, ".runmesh-release.json"), JSON.stringify({ version: target.version, manifest_sha256: manifestSha256, artifact_sha256: artifact.sha256 }), { flag: "wx", mode: 0o644 });
     context.signal?.throwIfAborted();
-    await commitStagingDirectory(temporary, versionDirectory, context.signal);
     return { version: target.version, versionDirectory, manifestSha256, artifactSha256: artifact.sha256 };
   } catch (error) {
-    try { await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
-    catch (cleanupError) { throw new AggregateError([error, cleanupError], "Runner release staging and temporary installation cleanup failed.", { cause: error }); }
+    try { await rm(ownedDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], "Runner release staging and owned installation cleanup failed.", { cause: error }); }
     throw error;
   }
 }
