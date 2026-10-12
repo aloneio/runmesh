@@ -43,7 +43,7 @@ function registryDiagnosticStage(path: string, method: "GET" | "POST"): ControlP
 function reportRegistryFailure(stage: ControlPlaneFailureStage, failure: BoundedJsonFailure): void {
   // A missing record retains its normal not_found result, not an outage event.
   if (failure.outcome === "unexpected_status" && failure.status === 404) return;
-  reportControlPlaneFailure(stage, failure.outcome, failure.error, failure.status);
+  reportControlPlaneFailure(stage, failure.outcome, failure.error, failure.status, failure.phase);
 }
 
 export async function callRunner(env: McpRequestEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string, workspaceBoundJob = false): Promise<ToolCall> {

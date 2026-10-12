@@ -1,6 +1,6 @@
 import { isSafeIdentifier } from "../security.js";
 import { parseClientIdentity, parseNativeScopes, type CodingScope } from "../contracts/identity.js";
-import { reportControlPlaneFailure, type ControlPlaneFailureOutcome } from "../platform/control-plane-diagnostics.js";
+import { reportControlPlaneFailure, type ControlPlaneFailureOutcome, type ControlPlaneFailurePhase } from "../platform/control-plane-diagnostics.js";
 
 export type ReauthorizationDecision =
   | { readonly state: "allowed"; readonly scopes: readonly CodingScope[] }
@@ -38,10 +38,11 @@ export async function reauthorizePrincipal(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let reported = false, responseStatus: number | undefined;
+  let phase: ControlPlaneFailurePhase = "fetch";
   const report = (outcome: ControlPlaneFailureOutcome, error?: unknown): void => {
     if (reported) return;
     reported = true;
-    reportControlPlaneFailure("mcp_reauthorize", outcome, error, responseStatus);
+    reportControlPlaneFailure("mcp_reauthorize", outcome, error, responseStatus, phase);
   };
   const observe = async (): Promise<ReauthorizationDecision> => {
     try {
@@ -51,6 +52,7 @@ export async function reauthorizePrincipal(
       if ([401, 403, 404].includes(response.status)) { void response.body?.cancel().catch(() => undefined); return { state: "denied" }; }
       if (response.status !== 200) { report("unexpected_status"); void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
       if (response.body === null) { report("empty_body"); return { state: "malformed" }; }
+      phase = "body_read";
       reader = response.body.getReader();
       const chunks: Uint8Array[] = []; let size = 0;
       for (let reads = 0; ; reads++) {
@@ -68,6 +70,7 @@ export async function reauthorizePrincipal(
       const bytes = new Uint8Array(size); let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
       try {
+        phase = "json_parse";
         const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
         if (expired()) { report("deadline"); return { state: "unavailable" }; }
         const projected = projectReauthorization(value, expected);

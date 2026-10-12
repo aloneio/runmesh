@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -322,4 +324,66 @@ test("evidence reader accepts exact UTF-8 byte limits and rejects invalid bounds
   await assert.rejects(readBoundedEvidenceFile(directory));
   await writeFile(file, "");
   await assert.rejects(readBoundedEvidenceFile(file));
+});
+
+function evidenceMetadataFixture(t, { pathMetadata = {}, openedMetadata = {}, finalMetadata = {} } = {}) {
+  const bytes = Buffer.from('{"message":"检查"}');
+  const initial = { dev: 9_007_199_254_740_992n, ino: 9_007_199_254_740_992n, size: BigInt(bytes.byteLength),
+    mtimeNs: 1_700_000_000_123_456_789n, ctimeNs: 1_700_000_000_123_456_789n };
+  const counts = { opened: 0, read: 0, closed: 0 }; let position = 0, observations = 0;
+  const metadata = (extra, options) => {
+    const value = { ...initial, ...extra }, bigint = options?.bigint === true;
+    return { ...Object.fromEntries(Object.entries(value).map(([key, field]) => [key, bigint ? field : Number(field)])),
+      mtimeMs: bigint ? value.mtimeNs / 1_000_000n : Number(value.mtimeNs) / 1_000_000,
+      ctimeMs: bigint ? value.ctimeNs / 1_000_000n : Number(value.ctimeNs) / 1_000_000,
+      isFile: () => true, isSymbolicLink: () => false };
+  };
+  t.mock.method(fsPromises, "lstat", async (_path, options) => metadata(pathMetadata, options));
+  t.mock.method(fsPromises, "open", async () => {
+    counts.opened++;
+    return {
+      stat: async options => metadata(observations++ === 0 ? openedMetadata : finalMetadata, options),
+      read: async (buffer, offset, length) => {
+        counts.read++;
+        const bytesRead = bytes.copy(buffer, offset, position, position + length); position += bytesRead;
+        return { bytesRead };
+      },
+      close: async () => { counts.closed++; },
+    };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  return { bytes, initial, counts };
+}
+
+test("evidence reader preserves stable exact identities and JSON output", async t => {
+  const f = evidenceMetadataFixture(t);
+  assert.deepEqual(await readEvidenceJson("metadata-fixture", f.bytes.byteLength), { message: "检查" });
+  assert.deepEqual(f.counts, { opened: 1, read: 2, closed: 1 });
+});
+
+for (const field of ["ino", "dev"]) for (const stage of ["openedMetadata", "finalMetadata"]) {
+  test(`evidence reader distinguishes exact ${field} metadata at ${stage}`, async t => {
+    const first = 9_007_199_254_740_992n, second = first + 1n;
+    assert.equal(Number(first), Number(second));
+    const f = evidenceMetadataFixture(t, { [stage]: { [field]: second } });
+    await assert.rejects(readBoundedEvidenceFile("metadata-fixture", f.bytes.byteLength), /invalid_or_changed_evidence_file/u);
+    assert.equal(f.counts.opened, 1); assert.equal(f.counts.closed, 1);
+    assert.equal(f.counts.read, stage === "openedMetadata" ? 0 : 2);
+  });
+}
+
+for (const field of ["mtimeNs", "ctimeNs"]) test(`evidence reader preserves exact ${field} observations`, async t => {
+  const first = 1_700_000_000_123_456_789n, second = first + 1n;
+  assert.equal(Number(first) / 1_000_000, Number(second) / 1_000_000);
+  const f = evidenceMetadataFixture(t, { finalMetadata: { [field]: second } });
+  await assert.rejects(readBoundedEvidenceFile("metadata-fixture", f.bytes.byteLength), /invalid_or_changed_evidence_file/u);
+  assert.deepEqual(f.counts, { opened: 1, read: 2, closed: 1 });
+});
+
+for (const stage of ["pathMetadata", "openedMetadata"]) test(`evidence reader bounds bigint size before reading ${stage}`, async t => {
+  const f = evidenceMetadataFixture(t, { [stage]: { size: 2n ** 63n } });
+  await assert.rejects(readBoundedEvidenceFile("metadata-fixture", f.bytes.byteLength), /invalid_or_changed_evidence_file/u);
+  const opened = stage === "pathMetadata" ? 0 : 1;
+  assert.deepEqual(f.counts, { opened, read: 0, closed: opened });
 });

@@ -13,8 +13,11 @@ export interface PathSnapshot {
   readonly rootCanonicalPath?: string;
   readonly rootDevice?: number;
   readonly rootInode?: number;
+  readonly rootIdentityKey?: string;
   readonly device: number;
   readonly inode: number;
+  /** Full native identity. Legacy numeric identities are accepted only when safe. */
+  readonly identityKey?: string;
   readonly type: "file" | "directory" | "other";
   readonly size: number;
   readonly modifiedAtMs: number;

@@ -11,6 +11,7 @@ import type { UpdateJournal, UpdateJournalRecord, UpdatePreparation } from "../s
 import { isJobStatus } from "../src/jobs/records.js";
 import { MAINTENANCE_JOB_STATES } from "../src/maintenance-contract.js";
 import { atomicJson } from "../src/jobs/storage.js";
+import { exactFileStats } from "../src/file-identity.js";
 
 const journalFault = vi.hoisted(() => ({ directory: "", stage: undefined as "open" | "writeFile" | "sync" | "close" | undefined, unlinked: [] as string[] }));
 vi.mock("node:fs/promises", async importOriginal => {
@@ -45,20 +46,20 @@ describe("stable maintenance metadata reader", () => {
   it("reads an admitted file at the caller's exact byte limit", async () => {
     const path = join(await temporary(), "metadata.json"); const content = JSON.stringify({ value: "任务" });
     await writeFile(path, content);
-    const expected = await lstat(path);
+    const expected = exactFileStats(await lstat(path, { bigint: true }));
     await expect(readMetadataJson(path, expected, { maxBytes: Buffer.byteLength(content), errorCode: "local_state_invalid" })).resolves.toEqual({ value: "任务" });
     await expect(readMetadataJson(path, expected, { maxBytes: Buffer.byteLength(content) - 1, errorCode: "local_state_invalid" })).rejects.toThrow("local_state_invalid");
   });
   it.each(["local_state_invalid", "invalid_installation"] as const)("rejects a same-size replacement with the caller's %s result", async errorCode => {
     const root = await temporary(), path = join(root, "metadata.json");
-    await writeFile(path, '{"value":1}'); const expected = await lstat(path);
+    await writeFile(path, '{"value":1}'); const expected = exactFileStats(await lstat(path, { bigint: true }));
     await rename(path, join(root, "admitted.json")); await writeFile(path, '{"value":2}');
     await expect(readMetadataJson(path, expected, { maxBytes: 1024, errorCode })).rejects.toThrow(errorCode);
     expect(await readFile(path, "utf8")).toBe('{"value":2}');
   });
   it.each(['{"value":12}', '{}'])("rejects size changes after admission (%s)", async replacement => {
     const path = join(await temporary(), "metadata.json");
-    await writeFile(path, '{"value":1}'); const expected = await lstat(path); await writeFile(path, replacement);
+    await writeFile(path, '{"value":1}'); const expected = exactFileStats(await lstat(path, { bigint: true })); await writeFile(path, replacement);
     await expect(readMetadataJson(path, expected, { maxBytes: 1024, errorCode: "local_state_invalid" })).rejects.toThrow("local_state_invalid");
   });
   it("keeps missing manager state distinct from empty or malformed state", async () => {

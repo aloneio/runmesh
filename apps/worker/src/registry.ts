@@ -9,7 +9,7 @@ import { createIdentityRoutes } from "./registry/routes/identity.js";
 import type { RegistryRoute } from "./registry/routes/request.js";
 import { RegistryFeatureHealthStore } from "./registry/feature-health.js";
 import { historyCleanupDue, nextHistoryCleanupDeadline, nextMaintenanceDeadline } from "./registry/maintenance-plan.js";
-import { createCoreRegistrySchema, registrySchemaIsCurrent, hasPersistedRegistrySchema, ensureJobHistorySettings } from "./registry/schema.js";
+import { createCoreRegistrySchema, registrySchemaIsCurrent, hasPersistedRegistrySchema, ensureJobHistorySettings, ensureRunnerMaintenanceIndex } from "./registry/schema.js";
 import type { RunnerConnectionState } from "./contracts/runner-selection.js";
 import { RUNNER_PRESENCE_TIMEOUT_MS } from "./contracts/runner-selection.js";
 import type { PolicyReadiness } from "./contracts/runner-selection.js";
@@ -266,6 +266,8 @@ export class RegistryDO {
           }
           createCoreRegistrySchema(this.ctx.storage.sql);
         }
+        try { this.ctx.storage.transactionSync(() => ensureRunnerMaintenanceIndex(this.ctx.storage.sql)); }
+        catch { /* The same deadline query works without this optional index; retry on reconstruction. */ }
         this.loadFeatureHealth();
         this.ctx.storage.transactionSync(() => ensureRunnerUpdatesSchema(this.ctx.storage.sql));
         // No legacy audit body is exposed, even if optional cleanup hits a quota.
@@ -342,8 +344,10 @@ export class RegistryDO {
         const current = await this.ctx.storage.getAlarm();
         if (current !== null && current <= nowMs + RUNNER_PRESENCE_TIMEOUT_MS) return;
       }
+      // Keep the constant outside MIN so SQLite can read the first entry in
+      // the online-heartbeat index instead of visiting every Runner.
       const nextStale = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
-        "SELECT MIN(COALESCE(last_heartbeat_ms, 0) + ?) AS next_ms FROM runners WHERE state = 'online'", RUNNER_PRESENCE_TIMEOUT_MS,
+        "SELECT MIN(COALESCE(last_heartbeat_ms, 0)) + ? AS next_ms FROM runners WHERE state = 'online'", RUNNER_PRESENCE_TIMEOUT_MS,
       ).toArray()[0]?.next_ms;
       const nextAudit = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
         "SELECT MIN(completed_at_ms) + ? AS next_ms FROM mcp_calls", MCP_AUDIT_RETENTION_MS,

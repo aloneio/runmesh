@@ -6,6 +6,7 @@ import { RunnerPolicySchema, policyWithoutChecksum, runnerPolicyChecksum } from 
 import { defaultRunnerStateDir } from "./state-path.js";
 import type { RunnerPolicy } from "./protocol-types.js";
 import type { PolicyStoreIdentity } from "./connection/ports.js";
+import { exactFileStats, sameFileIdentity } from "./file-identity.js";
 
 // RunnerPolicySchema bounds every field well below this limit.  The explicit
 // ceiling protects startup/activation from a tampered or concurrently grown
@@ -218,15 +219,15 @@ async function assertStateDirectory(path: string): Promise<void> {
 }
 
 async function readPrivateFile(path: string): Promise<string> {
-  const info = await lstat(path);
+  const info = exactFileStats(await lstat(path, { bigint: true }));
   if (info.isSymbolicLink() || !info.isFile()) throw new Error("active policy is not a regular file");
   if (info.size > MAX_POLICY_BYTES) throw new Error(`active policy exceeds ${MAX_POLICY_BYTES} bytes`);
   if (process.platform !== "win32" && (info.mode & 0o077) !== 0) throw new Error("active policy file is not private");
   // lstat cannot prevent a FIFO replacement between validation and open.
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) throw new Error("active policy changed while being opened");
+    const opened = exactFileStats(await handle.stat({ bigint: true }));
+    if (!opened.isFile() || !sameFileIdentity(opened, info)) throw new Error("active policy changed while being opened");
     if (opened.size > MAX_POLICY_BYTES) throw new Error(`active policy exceeds ${MAX_POLICY_BYTES} bytes`);
     if (process.platform !== "win32" && (opened.mode & 0o077) !== 0) throw new Error("active policy file is not private");
     const buffer = Buffer.alloc(opened.size + 1);
@@ -238,8 +239,8 @@ async function readPrivateFile(path: string): Promise<string> {
     }
     // Re-stat the same descriptor so a concurrent append/truncate cannot be
     // silently accepted as a partially mixed policy snapshot.
-    const final = await handle.stat();
-    if (!final.isFile() || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size || offset !== opened.size) {
+    const final = exactFileStats(await handle.stat({ bigint: true }));
+    if (!final.isFile() || !sameFileIdentity(final, opened) || final.size !== opened.size || offset !== opened.size) {
       throw new Error("active policy changed while being read");
     }
     if (offset > MAX_POLICY_BYTES) throw new Error(`active policy exceeds ${MAX_POLICY_BYTES} bytes`);

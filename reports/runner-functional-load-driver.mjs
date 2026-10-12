@@ -113,6 +113,7 @@ const metrics = Object.fromEntries(Object.entries(observations).map(([kind, dura
 const report = { scope: 'isolated local Runner APIs with native Node/Git/filesystem; no network or system services', platform: process.platform, node: process.version,
   started_at_utc: new Date(Date.now() - (performance.now() - started)).toISOString(), elapsed_ms: Math.round(performance.now() - started), max_concurrent_jobs: 3, queued_peak: 15,
   parent_peak_rss_bytes: peakRss, rss_scope: 'load driver only; child process memory excluded', metrics, budget_observations: budgetObservations, success: failure === undefined, ...(failure === undefined ? {} : { failure }) };
-await writeFile(new URL('../reports/runner-functional-load-2026-10-12.json', import.meta.url), JSON.stringify(report, null, 2) + '\n');
+const reportPath = process.argv[2] === undefined ? new URL('../reports/runner-functional-load-2026-10-12.json', import.meta.url) : resolve(process.argv[2]);
+await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify(report));
 if (failure !== undefined) process.exitCode = 1;

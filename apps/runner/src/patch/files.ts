@@ -3,7 +3,7 @@ import type { FileVersion } from "./contracts.js";
 import { basename } from "node:path";
 import { conflict } from "./values.js";
 import { constants } from "node:fs";
-import type { Stats } from "node:fs";
+import { exactFileStats, sameSnapshotFileIdentity, type ExactFileStats } from "../file-identity.js";
 import { dirname } from "node:path";
 import { hash } from "./values.js";
 import type { InstallState } from "./contracts.js";
@@ -74,7 +74,7 @@ async function readRegularFileCapped(
 ): Promise<{ readonly bytes: Buffer; readonly mode: number; readonly size: number; readonly version: FileVersion; readonly targetSnapshot?: PathSnapshot }> {
   const handle = await openNoFollow(path);
   try {
-    const info = await handle.stat();
+    const info = exactFileStats(await handle.stat({ bigint: true }));
     if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
     let targetSnapshot = targetBoundary?.snapshot;
     if (policy !== undefined && targetResolved !== undefined) {
@@ -87,7 +87,7 @@ async function readRegularFileCapped(
       }
       targetSnapshot = currentTarget;
     }
-    if (targetSnapshot !== undefined && (info.dev !== targetSnapshot.device || info.ino !== targetSnapshot.inode)) {
+    if (targetSnapshot !== undefined && !sameSnapshotFileIdentity({ device: info.dev, inode: info.ino, identityKey: info.identityKey }, targetSnapshot)) {
       throw new RpcRuntimeError("path_changed", `file changed while it was opened: ${relativePath}`);
     }
     if (!info.isFile()) throw new RpcRuntimeError("invalid_path", `path is not a regular file: ${relativePath}`);
@@ -167,10 +167,12 @@ function sameParentBoundary(left: ParentBoundary | undefined, right: ParentBound
 
 function sameSnapshotIdentity(left: PathSnapshot, right: PathSnapshot): boolean {
   return sameCanonicalPath(left.canonicalPath, right.canonicalPath)
-    && left.device === right.device && left.inode === right.inode
+    && sameSnapshotFileIdentity(left, right)
     && (left.rootCanonicalPath === undefined || right.rootCanonicalPath === undefined || sameCanonicalPath(left.rootCanonicalPath, right.rootCanonicalPath))
-    && (left.rootDevice === undefined || right.rootDevice === undefined || left.rootDevice === right.rootDevice)
-    && (left.rootInode === undefined || right.rootInode === undefined || left.rootInode === right.rootInode);
+    && ((left.rootDevice === undefined && left.rootInode === undefined && left.rootIdentityKey === undefined
+      && right.rootDevice === undefined && right.rootInode === undefined && right.rootIdentityKey === undefined)
+      || sameSnapshotFileIdentity({ device: left.rootDevice!, inode: left.rootInode!, identityKey: left.rootIdentityKey },
+        { device: right.rootDevice!, inode: right.rootInode!, identityKey: right.rootIdentityKey }));
 }
 
 function sameCanonicalPath(left: string, right: string): boolean {
@@ -196,7 +198,7 @@ export async function writeTemporary(target: string, bytes: Buffer, mode: number
       await handle.sync();
       // Installation hard-links this same inode. Observe it while the staging
       // descriptor owns it, before the public destination can be replaced.
-      version = fileVersion(await handle.stat());
+      version = fileVersion(exactFileStats(await handle.stat({ bigint: true })));
     } finally {
       await handle.close();
     }
@@ -309,8 +311,8 @@ export async function rollback(states: readonly InstallState[], policy?: PathPol
   return failures;
 }
 
-function fileVersion(info: Stats): FileVersion {
-  return { device: info.dev, inode: info.ino, size: info.size, mode: info.mode & 0o7777, modifiedAtMs: info.mtimeMs };
+function fileVersion(info: ExactFileStats): FileVersion {
+  return { device: info.dev, inode: info.ino, identityKey: info.identityKey, size: info.size, mode: info.mode & 0o7777, modifiedAtMs: info.mtimeMs };
 }
 
 function sameInstalledFile(state: InstallState, current: Baseline): boolean {
@@ -318,7 +320,7 @@ function sameInstalledFile(state: InstallState, current: Baseline): boolean {
   const observed = current.fileVersion;
   return state.installed && current.exists && current.hash === state.installedHash
     && expected !== undefined && observed !== undefined
-    && observed.device === expected.device && observed.inode === expected.inode
+    && sameSnapshotFileIdentity(observed, expected)
     && observed.size === expected.size && observed.mode === expected.mode && observed.modifiedAtMs === expected.modifiedAtMs;
 }
 

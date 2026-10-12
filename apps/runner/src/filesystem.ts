@@ -11,6 +11,7 @@ import { RpcRuntimeError } from "./errors.js";
 import type { WorkspaceConfig } from "./config.js";
 import { utf8ForwardBoundary, utf8SafePrefixLength } from "./utf8-pagination.js";
 import { compilePathGlob, type PathGlob } from "./filesystem/glob.js";
+import { exactFileStats, sameSnapshotFileIdentity, snapshotIdentityKey, type ExactFileStats } from "./file-identity.js";
 
 const MAX_READ_BYTES = 256 * 1024;
 const MAX_SEARCH_RESULTS = 1_000;
@@ -61,11 +62,11 @@ export class FilesystemService {
     }
     const handle = await openNoFollow(path, true);
     try {
-      const info = await handle.stat();
+      const info = exactFileStats(await handle.stat({ bigint: true }));
       await this.policy.verifySnapshot(resolved, snapshot);
       if (!info.isFile() || !sameIdentity(info, snapshot)) throw symlinkEscape();
       const utf8 = await readSample(handle, info.size);
-      const after = await handle.stat();
+      const after = exactFileStats(await handle.stat({ bigint: true }));
       await this.policy.verifySnapshot(resolved, snapshot);
       if (!sameIdentity(after, snapshot) || fileObservation(after) !== fileObservation(info)) {
         throw new RpcRuntimeError("file_changed", "The file changed while its metadata was being read; request it again");
@@ -88,10 +89,11 @@ export class FilesystemService {
     // for current path/OS/policy authorization. Buffers are process-local.
     const handle = await openNoFollow(path, true);
     try {
-      const info = await handle.stat();
+      const info = exactFileStats(await handle.stat({ bigint: true }));
       await this.policy.verifySnapshot(resolved, snapshot);
       if (!info.isFile() || !sameIdentity(info, snapshot)) throw symlinkEscape();
-      const scope = JSON.stringify([this.cursorOwner, workspace.workspaceId, path, snapshot.rootDevice, snapshot.rootInode, this.policy.generation]);
+      const scope = JSON.stringify([this.cursorOwner, workspace.workspaceId, path,
+        snapshotIdentityKey({ device: snapshot.rootDevice!, inode: snapshot.rootInode!, identityKey: snapshot.rootIdentityKey }), this.policy.generation]);
       let entry = cursor.id === undefined ? undefined : fileSnapshots.get(cursor.id, scope);
       if (entry !== undefined && entry.value.observation !== fileObservation(info)) {
         fileSnapshots.delete(entry.id); throw new RpcRuntimeError("file_changed", "The file no longer matches this snapshot; start a fresh read");
@@ -106,7 +108,7 @@ export class FilesystemService {
       const probe = entry === undefined ? await readPageBytes(handle, probeStart, Math.min(7, info.size - probeStart), "file_changed") : entry.value.data.subarray(probeStart, probeStart + 7);
       const start = probeStart + utf8ForwardBoundary(probe, rawStart - probeStart);
       const actual = entry === undefined ? await readPageBytes(handle, start, Math.min(info.size - start, requested + 3), "file_changed") : entry.value.data.subarray(start, start + requested + 3);
-      const after = await handle.stat();
+      const after = exactFileStats(await handle.stat({ bigint: true }));
       await this.policy.verifySnapshot(resolved, snapshot);
       if (!sameIdentity(after, snapshot) || fileObservation(after) !== fileObservation(info)) {
         if (entry !== undefined) fileSnapshots.delete(entry.id);
@@ -352,7 +354,7 @@ async function readDirectoryThroughHandle(
   let directory: Awaited<ReturnType<typeof opendir>> | undefined;
   try {
     if (anchor !== undefined) {
-      const info = await anchor.stat();
+      const info = exactFileStats(await anchor.stat({ bigint: true }));
       if (!info.isDirectory() || !sameIdentity(info, snapshot)) throw symlinkEscape();
       await policy.verifySnapshot(resolved, snapshot);
     }
@@ -379,7 +381,7 @@ async function readUtf8FileSecure(
 ): Promise<{ readonly content: string; readonly size: number }> {
   const handle = await openNoFollow(resolved.path, true);
   try {
-    const info = await handle.stat();
+    const info = exactFileStats(await handle.stat({ bigint: true }));
     await policy.verifySnapshot(resolved, snapshot);
     if (!info.isFile() || !sameIdentity(info, snapshot) || info.size > MAX_SEARCH_FILE_BYTES) throw new Error("file is not a bounded regular file");
     if (info.size > MAX_SEARCH_TOTAL_BYTES - budget.bytes) {
@@ -402,7 +404,7 @@ async function readUtf8FileSecure(
     // observation, not a prefix or bytes spliced across concurrent writes.
     // Reuse the same descriptor and policy checks as ordinary file reads;
     // the caller skips an unstable file while retaining its I/O budget cost.
-    const after = await handle.stat();
+    const after = exactFileStats(await handle.stat({ bigint: true }));
     await policy.verifySnapshot(resolved, snapshot);
     if (offset !== data.byteLength || !sameIdentity(after, snapshot) || fileObservation(after) !== fileObservation(info)) {
       throw new RpcRuntimeError("file_changed", "The file changed while it was being searched");
@@ -513,7 +515,9 @@ function truncateSearch(budget: SearchBudget, reason: SearchTruncatedReason): vo
 }
 
 function addSearchSnapshotPart(budget: SearchBudget, path: string, snapshot: PathSnapshot, purpose: "entry" | "ignore" = "entry"): void {
-  xorDigest(budget.snapshotXor, createHash("sha256").update(`${purpose}\0${path}\0${snapshot.type}\0${snapshot.device}\0${snapshot.inode}\0${snapshot.size}\0${snapshot.modifiedAtMs}`).digest());
+  const identity = snapshotIdentityKey(snapshot);
+  if (identity === undefined) throw new PathPolicyError("path_changed", "file identity is not exact");
+  xorDigest(budget.snapshotXor, createHash("sha256").update(`${purpose}\0${path}\0${snapshot.type}\0${identity}\0${snapshot.size}\0${snapshot.modifiedAtMs}`).digest());
 }
 
 function addSearchContentPart(budget: SearchBudget, path: string, content: string, purpose: "entry" | "ignore" = "entry"): void {
@@ -581,8 +585,8 @@ async function openNoFollow(path: string, nonBlocking = false): Promise<Awaited<
 }
 
 function symlinkEscape(): PathPolicyError { return new PathPolicyError("symlink_escape", "symlink paths are not allowed"); }
-function sameIdentity(info: { readonly dev: number; readonly ino: number }, snapshot: PathSnapshot): boolean {
-  return info.dev === snapshot.device && info.ino === snapshot.inode;
+function sameIdentity(info: ExactFileStats, snapshot: PathSnapshot): boolean {
+  return sameSnapshotFileIdentity({ device: info.dev, inode: info.ino, identityKey: info.identityKey }, snapshot);
 }
 
 function object(value: unknown): Record<string, unknown> {

@@ -6,6 +6,7 @@ import { RunnerUpdateOperationSchema } from "@aloneio/runmesh-protocol";
 import { isExactUpdateVersion, isLocalUpdatePhase, UPDATE_ERRORS, UPDATE_IDENTIFIER, UpdateFailure } from "./contracts.js";
 import type { UpdateJournalRecord, UpdateJournalPort, UpdatePreparation } from "./contracts.js";
 import { readMetadataJson } from "./metadata-file.js";
+import { exactFileStats } from "../file-identity.js";
 
 const absent = (error: unknown): boolean => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -18,7 +19,7 @@ export async function assertManagerDirectory(path: string, create = false): Prom
 
 export async function readManagerJson(path: string): Promise<unknown | undefined> {
   let info;
-  try { info = await lstat(path); } catch (error) { if (absent(error)) return undefined; throw error; }
+  try { info = exactFileStats(await lstat(path, { bigint: true })); } catch (error) { if (absent(error)) return undefined; throw error; }
   if (process.platform !== "win32" && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.())) throw new UpdateFailure("local_state_invalid");
   return readMetadataJson(path, info, { maxBytes: 64 * 1024, errorCode: "local_state_invalid" });
 }

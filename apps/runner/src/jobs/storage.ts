@@ -5,6 +5,7 @@ import { dirname, join, parse, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { JobFilePort } from "./ports.js";
 import { MAX_MAINTENANCE_METADATA_BYTES } from "../maintenance-contract.js";
+import { exactFileStats, sameFileIdentity } from "../file-identity.js";
 
 // Recovery metadata is generated from bounded command/identity fields, but a
 // corrupted or attacker-created file must not make startup allocate without a
@@ -89,9 +90,9 @@ export async function openJobLog(path: string, mode: "read" | "append"): Promise
   try {
     // lstat cannot prevent a regular-to-special-file swap before open. Do not
     // hand a pipe/device descriptor to either the log reader or the writer.
-    const opened = await handle.stat();
-    const current = await lstat(path);
-    if (!opened.isFile() || !current.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
+    const opened = await handle.stat({ bigint: true });
+    const current = await lstat(path, { bigint: true });
+    if (!opened.isFile() || !current.isFile() || current.isSymbolicLink() || !sameFileIdentity(opened, current)) {
       throw pathError("state file changed or is not a regular file", "ENOTDIR");
     }
     return handle;
@@ -139,11 +140,11 @@ export async function atomicJson(path: string, value: unknown): Promise<void> {
 
 export async function readJson<T>(path: string): Promise<T> {
   await assertRegularDirectory(dirname(path));
-  const before = await lstat(path);
+  const before = exactFileStats(await lstat(path, { bigint: true }));
   if (!before.isFile() || before.isSymbolicLink()) throw pathError("state file is not a regular file", "ENOTDIR");
   const handle = await open(path, constants.O_RDONLY | NOFOLLOW | (constants.O_NONBLOCK ?? 0));
   try {
-    const info = await handle.stat();
+    const info = exactFileStats(await handle.stat({ bigint: true }));
     if (!info.isFile() || info.size > MAX_METADATA_BYTES) throw metadataTooLarge(path);
     if (!sameMetadataStamp(before, info)) throw new Error("job metadata changed before reading");
     const chunks: Buffer[] = [];
@@ -163,8 +164,8 @@ export async function readJson<T>(path: string): Promise<T> {
     // Equal-size in-place writes can splice distinct JSON records just as a
     // truncate/append can. Bind the full observation and the final pathname,
     // so recovery rejects a snapshot when these observations detect a change.
-    const final = await handle.stat();
-    const current = await lstat(path);
+    const final = exactFileStats(await handle.stat({ bigint: true }));
+    const current = exactFileStats(await lstat(path, { bigint: true }));
     if (!final.isFile() || !current.isFile() || current.isSymbolicLink()
       || !sameMetadataStamp(info, final) || !sameMetadataStamp(info, current) || total !== info.size) {
       throw new Error("job metadata changed while being read");
@@ -175,7 +176,7 @@ export async function readJson<T>(path: string): Promise<T> {
 }
 
 function sameMetadataStamp(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino && left.size === right.size
+  return sameFileIdentity(left, right) && left.size === right.size
     && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 

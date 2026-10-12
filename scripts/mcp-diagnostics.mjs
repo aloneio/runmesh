@@ -218,9 +218,9 @@ function workerEvent(line) {
   const match = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|\u25b2 \[WARNING\] |[\u2718X] \[ERROR\] )?RUNMESH_MCP_HANDLER_ERROR kind=([a-z_]+) stage=([a-z_]+) reason=([a-z_]+)$/u.exec(text);
   if (match && errorKinds.includes(match[1]) && stages.includes(match[2]) && reasons.includes(match[3]))
     return { event: "mcp_handler_error", kind: match[1], stage: match[2], reason: match[3] };
-  const control = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] |X \[ERROR\] )?RUNMESH_CONTROL_PLANE_FAILURE stage=([a-z_]+) outcome=([a-z_]+) kind=([a-z_]+) reason=([a-z_]+) status=(none|[1-5]\d{2})$/u.exec(text);
+  const control = /^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] |X \[ERROR\] )?RUNMESH_CONTROL_PLANE_FAILURE stage=([a-z_]+) outcome=([a-z_]+) kind=([a-z_]+) reason=([a-z_]+) status=(none|[1-5]\d{2})(?: phase=([a-z_]+))?$/u.exec(text);
   if (control) return safeWorkerEvent({ event: "control_plane_failure", stage: control[1], outcome: control[2], kind: control[3], reason: control[4],
-    status: control[5] === "none" ? null : Number(control[5]) });
+    status: control[5] === "none" ? null : Number(control[5]), ...(control[6] === undefined ? {} : { phase: control[6] }) });
   // Runtime failures can bypass the MCP handler entirely. Match complete fixed
   // messages, including the pinned Wrangler error prefix, never arbitrary logs.
   const runtime = text.replace(/^(?:\[(?:WARN|WARNING|ERROR)\]\s*|[\u25b2\u2718] \[(?:WARNING|ERROR)\] |X \[ERROR\] )/u, "").replace(/^Error: /u, "");
@@ -269,8 +269,10 @@ function safeWorkerEvent(value) {
     return { event: "mcp_handler_error", kind: value.kind, stage: value.stage, reason: value.reason };
   if (value.event === "control_plane_failure" && controlPlaneStages.includes(value.stage) && controlPlaneOutcomes.includes(value.outcome)
     && errorKinds.includes(value.kind) && controlPlaneReasons.includes(value.reason)
+    && (value.phase === undefined || ["fetch", "body_read", "json_parse", "other"].includes(value.phase))
     && (value.status === null || (Number.isInteger(value.status) && value.status >= 100 && value.status <= 599)))
-    return { event: "control_plane_failure", stage: value.stage, outcome: value.outcome, kind: value.kind, reason: value.reason, status: value.status };
+    return { event: "control_plane_failure", stage: value.stage, outcome: value.outcome, kind: value.kind, reason: value.reason, status: value.status,
+      ...(value.phase === undefined ? {} : { phase: value.phase }) };
   if (value.event === "runtime_log" && runtimeSignatures.has(value.signature)) return { event: "runtime_log", signature: value.signature };
   if (value.event === "runtime_lifecycle") {
     if (value.reason === "crash_restarting" && Number.isInteger(value.crash_count) && value.crash_count >= 1 && value.crash_count <= 9999)

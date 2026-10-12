@@ -363,7 +363,9 @@ export class RegistryLifecycle {
         updateStatus(prior.update_channel ?? "stable", prior.desired_runner_version ?? undefined, prior.latest_runner_version ?? undefined, { ...prior, current_runner_version: metadata.runner_version, protocol_compatibility: compatibility }),
         nowMs, nowMs, runnerId, credentialVersion, prior.connection_epoch, lifecycleId,
       );
-      return changed.rowsWritten === 1 ? nextEpoch : undefined;
+      // The primary-key predicate matches at most one Runner; rowsWritten
+      // also includes maintenance-index entries changed by this transition.
+      return changed.rowsWritten > 0 ? nextEpoch : undefined;
     });
   }
 
@@ -382,7 +384,7 @@ export class RegistryLifecycle {
     // current session from a stale transport identity.
     // Storage exceptions propagate to the HTTP boundary as 503, never false.
     const updated = this.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ? AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId, nowMs);
-    if (updated.rowsWritten === 1) return true;
+    if (updated.rowsWritten > 0) return true;
     const current = this.storage.sql.exec<Pick<RunnerRow, "connection_epoch" | "credential_version" | "state" | "lifecycle_id" | "session_id" | "last_heartbeat_ms">>("SELECT connection_epoch, credential_version, state, lifecycle_id, session_id, last_heartbeat_ms FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
     return current?.connection_epoch === epoch && current.credential_version === credentialVersion && current.state === "online"
       && current.lifecycle_id === lifecycleId && current.session_id === sessionId && current.last_heartbeat_ms !== null && current.last_heartbeat_ms >= nowMs;
@@ -404,8 +406,8 @@ export class RegistryLifecycle {
       }
       const result = this.storage.sql.exec(`UPDATE runners SET credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
         token_verifier = '', state = 'offline', session_id = NULL, last_heartbeat_ms = NULL, updated_at_ms = ? WHERE runner_id = ?`, nowMs, runnerId);
-      if (result.rowsWritten === 1) this.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
-      return result.rowsWritten === 1;
+      if (result.rowsWritten > 0) this.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
+      return result.rowsWritten > 0;
     });
   }
 

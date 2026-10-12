@@ -589,7 +589,7 @@ export class RunnerDO {
           ...(reportingLaunch ? { include_job_recording: true } : {}),
         }) });
         return authorized;
-      }, [200, 403, 409], 5000, 16384, undefined, failure => reportControlPlaneFailure("runner_mcp_authorization", failure.outcome, failure.error, failure.status));
+      }, [200, 403, 409], 5000, 16384, undefined, failure => reportControlPlaneFailure("runner_mcp_authorization", failure.outcome, failure.error, failure.status, failure.phase));
       const decision = receipt?.value;
       if (receipt === undefined || !isRecord(decision) || typeof decision.ok !== "boolean"
         || (receipt.status !== 200 && !((receipt.status === 403 || receipt.status === 409) && decision.ok === false))) {

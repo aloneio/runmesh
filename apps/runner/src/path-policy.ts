@@ -1,4 +1,5 @@
 import { captureRootIdentity, sameRootIdentity } from "./root-identity.js";
+import { exactFileStats, fileIdentityKey, sameSnapshotFileIdentity } from "./file-identity.js";
 import type { PathSnapshot, ResolvedPolicyPath } from "./path-contracts.js";
 export type { PathSnapshot } from "./path-contracts.js";
 import { lstat, realpath, stat } from "node:fs/promises";
@@ -101,10 +102,11 @@ export class PathPolicy {
     const canonicalRoot = await realpath(workspace.rootPath);
     const canonicalPath = await realpath(path);
     assertInside(canonicalRoot, canonicalPath);
-    const linkInfo = await lstat(path);
+    const linkInfo = await lstat(path, { bigint: true });
     if (linkInfo.isSymbolicLink()) throw new PathPolicyError("symlink_escape", "symlink paths are not allowed");
-    const info = await stat(path);
-    if (!sameIdentity(linkInfo, info)) throw new PathPolicyError("path_changed", "path changed during validation");
+    const rawInfo = await stat(path, { bigint: true });
+    const info = exactFileStats(rawInfo);
+    if (!sameIdentity(linkInfo, rawInfo)) throw new PathPolicyError("path_changed", "path changed during validation");
     const rootAfter = await checkedRoot(workspace.rootPath);
     const canonicalRootAfter = await realpath(workspace.rootPath);
     if (!sameIdentity(rootBefore, rootAfter) || !sameCanonical(canonicalRoot, canonicalRootAfter)) {
@@ -115,10 +117,12 @@ export class PathPolicy {
     return {
       canonicalPath,
       rootCanonicalPath: canonicalRoot,
-      rootDevice: rootBefore.dev,
-      rootInode: rootBefore.ino,
+      rootDevice: Number(rootBefore.dev),
+      rootInode: Number(rootBefore.ino),
+      rootIdentityKey: fileIdentityKey(rootBefore)!,
       device: info.dev,
       inode: info.ino,
+      identityKey: info.identityKey,
       type: info.isFile() ? "file" : info.isDirectory() ? "directory" : "other",
       size: info.size,
       modifiedAtMs: info.mtimeMs,
@@ -131,9 +135,10 @@ export class PathPolicy {
     this.assertCurrentWorkspace(resolved.workspace);
     if (!sameCanonical(current.canonicalPath, snapshot.canonicalPath)
       || (snapshot.rootCanonicalPath !== undefined && !sameCanonical(current.rootCanonicalPath ?? "", snapshot.rootCanonicalPath))
-      || (snapshot.rootDevice !== undefined && current.rootDevice !== snapshot.rootDevice)
-      || (snapshot.rootInode !== undefined && current.rootInode !== snapshot.rootInode)
-      || current.device !== snapshot.device || current.inode !== snapshot.inode) {
+      || ((snapshot.rootDevice !== undefined || snapshot.rootInode !== undefined || snapshot.rootIdentityKey !== undefined)
+        && !sameSnapshotFileIdentity({ device: current.rootDevice!, inode: current.rootInode!, identityKey: current.rootIdentityKey },
+          { device: snapshot.rootDevice!, inode: snapshot.rootInode!, identityKey: snapshot.rootIdentityKey }))
+      || !sameSnapshotFileIdentity(current, snapshot)) {
       throw new PathPolicyError("path_changed", "path changed during filesystem operation");
     }
   }
@@ -169,15 +174,15 @@ export class PathPolicy {
   }
 }
 
-async function checkedRoot(root: string): Promise<{ readonly dev: number; readonly ino: number }> {
-  const info = await lstat(root);
+async function checkedRoot(root: string): Promise<{ readonly dev: bigint; readonly ino: bigint }> {
+  const info = await lstat(root, { bigint: true });
   if (!info.isDirectory() || info.isSymbolicLink()) {
     throw new PathPolicyError("symlink_escape", "workspace root is no longer a regular directory");
   }
   return info;
 }
 
-function sameIdentity(left: { readonly dev: number; readonly ino: number }, right: { readonly dev: number; readonly ino: number }): boolean {
+function sameIdentity(left: { readonly dev: bigint; readonly ino: bigint }, right: { readonly dev: bigint; readonly ino: bigint }): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
 function sameCanonical(left: string, right: string): boolean {

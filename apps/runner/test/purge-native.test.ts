@@ -290,6 +290,19 @@ it("cleans the current native layout with injected OS adapters", async () => {
   for (const root of host.layout.directories) expect(host.entries.has(root)).toBe(false);
   expect(host.entries.has(host.layout.manifestPath)).toBe(false);
 });
+it.each(["exact", "unsafe-legacy", "distinct-device"] as const)("cleanup preserves exact metadata and device boundaries with %s identities", async kind => {
+  const host = memoryHost(), stat = host.io.stat, base = 9_007_199_254_740_992n;
+  host.io.stat = async path => {
+    const info = await stat(path); if (info === undefined) return undefined;
+    const device = kind === "distinct-device" && path === host.layout.installRoot ? base + 1n : base;
+    const inode = base + BigInt(info.ino);
+    return { ...info, dev: Number(device), ino: Number(inode), ...(kind === "unsafe-legacy" ? {} : { identityKey: `${device}:${inode}` }) };
+  };
+  const result = await purgeInstallation({ platform: host.platform, filesystem: host.io, executor: host.executor });
+  if (kind === "exact") { expect(result.failures).toEqual([]); expect(result.purged).toBe(true); }
+  else { expect(result.purged).toBe(false); expect(host.entries.has(host.layout.installRoot)).toBe(true); }
+  if (kind === "distinct-device") expect(result.failures).toContainEqual({ path: host.layout.installRoot, reason: "refusing to cross a filesystem boundary" });
+});
 it("does not stop an unrecognized native service when the manifest is missing", async () => {
   const host = memoryHost(false);
   policy(host, [parse(host.layout.installRoot).root]);
