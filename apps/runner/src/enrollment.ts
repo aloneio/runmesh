@@ -157,20 +157,27 @@ async function redeemEnrollment(options: EnrollmentOptions, store: ProfileStore,
 async function requestEnrollment(endpoint: string, body: string, request: typeof globalThis.fetch): Promise<unknown> {
   const controller = new AbortController();
   const timedOut = new EnrollmentOutcomeUnknownError(`enrollment timed out; ${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}`);
+  let abandoned = false;
   let timer!: ReturnType<typeof setTimeout>;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { controller.abort(timedOut); reject(timedOut); }, 30_000);
+    timer = setTimeout(() => { abandoned = true; controller.abort(timedOut); reject(timedOut); }, 30_000);
   });
   try {
     let response: Response;
     try {
-      response = await Promise.race([request(endpoint, {
+      const pending = request(endpoint, {
         method: "POST", redirect: "error", signal: controller.signal,
         headers: { "content-type": "application/json" }, body,
       }).then(value => {
-        if (controller.signal.aborted) { void value.body?.cancel().catch(() => undefined); throw timedOut; }
+        // A transport may ignore AbortSignal and resolve after this operation
+        // has timed out. The late response no longer belongs to this request;
+        // leave its body untouched and let the producer own its cleanup.
+        if (abandoned) return undefined;
+        if (controller.signal.aborted) throw timedOut;
         return value;
-      }), deadline]);
+      });
+      response = await Promise.race([pending, deadline]) as Response;
+      if (response === undefined) throw timedOut;
     } catch {
       if (controller.signal.aborted) throw timedOut;
       throw new EnrollmentOutcomeUnknownError(`enrollment request failed; ${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}`);
@@ -244,13 +251,19 @@ async function readCappedJson(response: Response, signal: AbortSignal): Promise<
   if (response.body === null) return undefined;
   const reader = response.body.getReader();
   const abort = () => { void reader.cancel().catch(() => undefined); };
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+  const release = (): void => { try { reader.releaseLock(); } catch { /* a read may still be pending */ } };
   signal.addEventListener("abort", abort, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     for (;;) {
       signal.throwIfAborted();
-      const next = await reader.read();
+      const read = reader.read();
+      pendingRead = read;
+      let next: ReadableStreamReadResult<Uint8Array>;
+      try { next = await read; }
+      finally { if (pendingRead === read) pendingRead = undefined; }
       signal.throwIfAborted();
       if (next.done) break;
       const chunk = next.value;
@@ -264,7 +277,9 @@ async function readCappedJson(response: Response, signal: AbortSignal): Promise<
     }
   } finally {
     signal.removeEventListener("abort", abort);
-    reader.releaseLock();
+    const read = pendingRead;
+    if (read !== undefined) void read.then(release, release);
+    else release();
   }
   const bytes = new Uint8Array(total);
   let offset = 0;

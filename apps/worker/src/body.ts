@@ -17,9 +17,16 @@ export async function readCappedBytes(request: Request, maxBytes: number, timeou
   try { reader = request.body.getReader(); } catch { return undefined; }
   const deadline = performance.now() + timeoutMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let stopped = false;
+  let stopped = false, cancelled = false;
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
   const expired = (): boolean => stopped || request.signal.aborted || performance.now() >= deadline;
-  const cancel = (): void => { stopped = true; cancelReader(reader); };
+  const release = (): void => { try { reader.releaseLock(); } catch { /* a read may still be pending */ } };
+  const cancel = (): void => {
+    stopped = true;
+    if (cancelled) return;
+    cancelled = true;
+    cancelReader(reader);
+  };
   let abort: () => void = cancel;
   const observe = async (): Promise<Uint8Array | undefined> => {
     // Grow one buffer instead of retaining arbitrarily many tiny chunk objects.
@@ -27,7 +34,11 @@ export async function readCappedBytes(request: Request, maxBytes: number, timeou
     try {
       for (;;) {
         if (expired()) return undefined;
-        const next = await reader.read();
+        const read = reader.read();
+        pendingRead = read;
+        let next: ReadableStreamReadResult<Uint8Array>;
+        try { next = await read; }
+        finally { if (pendingRead === read) pendingRead = undefined; }
         if (expired()) return undefined;
         if (next.done) return bytes.slice(0, size);
         if (!(next.value instanceof Uint8Array) || next.value.byteLength > maxBytes - size) return undefined;
@@ -55,7 +66,9 @@ export async function readCappedBytes(request: Request, maxBytes: number, timeou
     if (timer !== undefined) clearTimeout(timer);
     request.signal.removeEventListener("abort", abort);
     cancel();
-    try { reader.releaseLock(); } catch { /* pending read settles after cancellation */ }
+    const read = pendingRead;
+    if (read !== undefined) void read.then(release, release);
+    else release();
   }
 }
 

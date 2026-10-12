@@ -19,6 +19,30 @@ it("cancels an aborted request immediately without waiting for the upload deadli
   expect(await pending).toBeUndefined(); expect(cancel).toHaveBeenCalledOnce();
 });
 
+it("releases a reader after a pending read settles following timeout cancellation", async () => {
+  vi.useFakeTimers();
+  let finish!: (result: ReadableStreamReadResult<Uint8Array>) => void;
+  const pending = new Promise<ReadableStreamReadResult<Uint8Array>>(resolve => { finish = resolve; });
+  const requestValue = request(new ReadableStream<Uint8Array>());
+  const body = requestValue.body!;
+  const reader = body.getReader();
+  reader.releaseLock();
+  const read = vi.spyOn(reader, "read").mockReturnValue(pending);
+  const cancel = vi.spyOn(reader, "cancel").mockImplementation(() => new Promise<undefined>(() => undefined));
+  const release = vi.spyOn(reader, "releaseLock");
+  vi.spyOn(body, "getReader").mockReturnValue(reader);
+  try {
+    const result = readCappedBytes(requestValue, 1024, 10);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await result).toBeUndefined();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
+    finish({ done: true, value: undefined as never });
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    expect(read).toHaveBeenCalledOnce();
+  } finally { vi.useRealTimers(); }
+});
+
 it("bounds empty chunks even when microtasks prevent its timer from firing", async () => {
   let pulls = 0;
   const cancel = vi.fn();
