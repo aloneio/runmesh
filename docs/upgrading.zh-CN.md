@@ -19,6 +19,7 @@
 | 组件 | 更新步骤 |
 | --- | --- |
 | Worker | 部署经过审核的控制面代码 |
+| 版本管理器 | 按版本说明，使用已验签包更新独立管理程序，见[更新已安装的版本管理器](#更新已安装的版本管理器) |
 | Runner | 在控制台选择发行版，见[更换 Runner 版本](runner-versions.zh-CN.md) |
 | MCP 客户端 | Worker 更新后刷新缓存的工具定义 |
 
@@ -36,11 +37,85 @@
 
 1. **演练目标组合。** 验证签名发行物，在测试环境使用目标 Worker、Runner、服务账号和 MCP 客户端。
 2. **部署 Worker。** 通过现有生产 `main` 路径更新，保留资源绑定和密钥值。替换 `RUNNER_TOKEN_PEPPER` 会使已注册 Runner 凭据失效。
-3. **逐台更新 Runner。** 已配备版本管理器的受管安装使用[远程版本管理](runner-versions.zh-CN.md)。首次更新程序包或使用自定义部署时，按下文适用流程操作，保留配置、状态和上一份已验证包。
+3. **逐台更新 Runner。** 受管安装先完成版本说明要求的管理器更新，再通过[远程版本管理](runner-versions.zh-CN.md)选择 Runner 程序包。首次更新程序包或使用自定义部署时，按下文适用流程操作，保留配置、状态和上一份已验证包。
 4. **刷新客户端目录。** 在各 MCP 客户端重新加载 Runmesh 连接和工具定义。
 5. **完成验收后**恢复日常工作。
 
 [便携式安装示例](portable-runner-installation.md)用于首次安装。已有实例在包更新期间保留注册信息；凭据恢复和完整卸载分别按对应维护流程操作。
+
+## 更新已安装的版本管理器
+
+版本管理器拥有独立的程序和更新周期。更换 Runner 版本时，已安装的管理器继续保留。0.1.9 引入 `manager-refresh` 命令，用已验签发行包更新这个独立程序。已有管理器的计算机先完成本节更新，再在控制端选择目标 Runner 版本，即可使用 0.1.9 的 Windows 版本切换改进。新安装及首次启用管理器时，使用所选程序包自带的管理器。生产选包前先核对[发行状态](release-readiness.zh-CN.md)。
+
+先完成上文的维护准备，让当前 Runner 版本请求及其恢复处理结束，确认主机没有待完成的版本变更或本地任务。系统服务使用 root／管理员会话；用户级服务在所属账号下操作，并添加 `--user`。
+
+按[独立验证说明](portable-runner-installation.md#independently-verify-a-downloaded-package)，使用另行信任的源码副本校验发行包。在同一个发行资产目录保留官方 `manifest.json`、`manifest.sig`、`manifest.signature.json` 及 `runmesh-runner-<version>.tgz`。准备已验证的 Node 运行时，版本范围为 22.x 中的 22.23.2 及以上，或 24.x 中的 24.21.0 及以上。以下命令再次验签及核对包摘要，将签名压缩包解压到独立维护目录，并执行其中的 `package/dist/maintenance.cjs`。Node 程序与解压后的维护程序均须位于已安装的 `manager` 目录之外。保留维护目录和发行资产直至更新完成。
+
+### 在 Linux 或 macOS 更新管理器
+
+在同一个 root 会话中填写精确的已验签版本及三个绝对输入路径。标准系统安装根目录为 `/opt/runmesh`；Linux 配置为 `/etc/runmesh/profile.json`，macOS 配置为 `/Library/Application Support/Runmesh/profile.json`。
+
+```sh
+set -eu
+unset NODE_OPTIONS NODE_PATH
+umask 077
+VERSION='<verified-version-containing-manager-refresh>'
+DOWNLOAD='/absolute/path/to/release-assets'
+TRUSTED_CHECKOUT='/absolute/path/to/trusted-runmesh-checkout'
+NODE='/absolute/path/to/verified/node'
+ROOT=/opt/runmesh
+case "$(uname -s)" in
+  Linux) PROFILE=/etc/runmesh/profile.json ;;
+  Darwin) PROFILE='/Library/Application Support/Runmesh/profile.json' ;;
+  *) exit 1 ;;
+esac
+"$NODE" "$TRUSTED_CHECKOUT/scripts/release-verify.mjs" \
+  "$DOWNLOAD/manifest.json" "$DOWNLOAD/manifest.sig" "$DOWNLOAD/manifest.signature.json" \
+  "$TRUSTED_CHECKOUT/release/trust-keyring.json" runmesh-preview-2026-01 "$VERSION"
+STAGE=$(mktemp -d /opt/runmesh-maintenance.XXXXXX)
+tar -xzf "$DOWNLOAD/runmesh-runner-$VERSION.tgz" -C "$STAGE"
+MAINTENANCE="$STAGE/package/dist/maintenance.cjs"
+test -f "$MAINTENANCE"
+printf 'Keep this maintenance directory until completion: %s\n' "$STAGE"
+"$NODE" "$MAINTENANCE" manager-refresh \
+  --profile "$PROFILE" --install-root "$ROOT" --release-dir "$DOWNLOAD" --json
+```
+
+### 在 Windows 更新管理器
+
+使用管理员 PowerShell，填写精确的已验签版本和三个输入路径。示例在 `C:\Program Files` 下创建与标准安装并列的独立维护目录。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$env:NODE_OPTIONS = $null
+$env:NODE_PATH = $null
+$Version = '<verified-version-containing-manager-refresh>'
+$Download = 'C:\absolute\path\release-assets'
+$TrustedCheckout = 'C:\absolute\path\trusted-runmesh-checkout'
+$Node = 'C:\absolute\path\verified-node\node.exe'
+$Root = 'C:\Program Files\Runmesh'
+$RunnerProfile = 'C:\ProgramData\Runmesh\profile.json'
+& $Node (Join-Path $TrustedCheckout 'scripts\release-verify.mjs') `
+  (Join-Path $Download 'manifest.json') (Join-Path $Download 'manifest.sig') `
+  (Join-Path $Download 'manifest.signature.json') `
+  (Join-Path $TrustedCheckout 'release\trust-keyring.json') 'runmesh-preview-2026-01' $Version
+if ($LASTEXITCODE -ne 0) { throw '请核对发行包验证结果后再继续。' }
+$Stage = Join-Path 'C:\Program Files' ('Runmesh-Maintenance-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $Stage | Out-Null
+tar.exe -xzf (Join-Path $Download "runmesh-runner-$Version.tgz") -C $Stage
+if ($LASTEXITCODE -ne 0) { throw '请核对压缩包解压结果后再继续。' }
+$Maintenance = Join-Path $Stage 'package\dist\maintenance.cjs'
+if (-not (Test-Path -LiteralPath $Maintenance -PathType Leaf)) { throw '请选择包含维护程序的签名发行包。' }
+Write-Host "请保留此维护目录直至操作完成：$Stage"
+& $Node $Maintenance manager-refresh --profile $RunnerProfile --install-root $Root --release-dir $Download --json
+if ($LASTEXITCODE -ne 0) { throw '请核对更新结果，并按下文恢复指引操作。' }
+```
+
+**用户级服务**使用所属账号操作，沿用原配置与标准用户安装目录：Linux／macOS 为 `$HOME/.local/share/runmesh`，Windows 为 `$env:LOCALAPPDATA\Runmesh`。将已验证包解压到该账号拥有的独立目录，放在安装的 `manager` 目录之外，然后为相同的 `manager-refresh` 命令添加 `--user`。
+
+更新会保留已有 Node 运行时、管理器身份与状态、Runner 配置、工作区，以及管理器服务原来的运行和启用状态。命令成功后核对 JSON 结果：`action` 为 `manager-refresh`，`manager_version` 与已验签目标一致，`runner_unchanged` 为 `true`。`previous_manager_version` 记录原管理器版本；恢复原本运行中的管理器时，`restarted` 为 `true`。再核对管理器服务状态和 Runner 连接，继续选择目标 Runner 版本。原本停止或禁用的管理器继续保持原状态，准备接收请求时按原服务管理方式启动或启用。
+
+命令提示维护忙碌时，先完成当前操作，再次执行。更新中断后，保留同一份解压程序、发行资产和参数，重跑最后一条 `manager-refresh` 命令即可继续恢复。按输出中的恢复信息操作，并保留原安装和状态。更新与验收完成后，再按维护策略清理独立维护目录。
 
 ## 更新用户级服务
 

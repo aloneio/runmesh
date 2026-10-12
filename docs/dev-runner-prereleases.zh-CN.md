@@ -2,7 +2,7 @@
 
 [English](dev-runner-prereleases.md) · [升级指南](upgrading.zh-CN.md)
 
-在独立测试主机上使用开发版 Runner。安装前打开开发 Worker 的管理员页面，核对页面提供的版本。开发版下载使用已验证的预发布通道，当前生产版本见[发行状态](release-readiness.zh-CN.md)。
+在独立测试主机上使用开发版 Runner。安装前打开开发 Worker 的管理员页面，核对页面提供的版本。开发版下载使用已验证的预发布通道，已公开的正式包见[发行状态](release-readiness.zh-CN.md)。查看自己实例的 `/health` 可确认运行中的 Worker 版本，`/runner/releases/stable` 则显示该实例选用的正式 Runner 包。
 
 从开发面板复制安装命令，Runner 会注册到该开发 Worker；生产面板的命令使用正式发行物与生产地址。请分别在对应环境中安装。
 

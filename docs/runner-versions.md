@@ -4,7 +4,7 @@
 
 Open **Runners**, select a computer, and use **Runner version** to install the latest release for your environment or an exact published version. You can choose an older version using the same form.
 
-Remote version management requires a 0.1.8-series control plane and initial installation of the independent manager from a matching Runner package. Check [release status](release-readiness.md) for the current stable package and the [development channel](dev-runner-prereleases.md) for preview releases.
+Remote version management requires a compatible control plane running 0.1.8 or later and initial installation of the independent manager from a matching Runner package. Check [release status](release-readiness.md) for the current stable package and the [development channel](dev-runner-prereleases.md) for preview releases.
 
 ## Choose a version
 
@@ -29,6 +29,10 @@ Allow running tasks to finish before switching. Each wait for local work has a 1
 Signed Runner packages that include the version manager provide remote updates for standard managed installations. The [upgrade guide](upgrading.md) covers package selection and first setup. It runs separately from the selected Runner package, so choosing an older Runner leaves remote version management available.
 
 Changing the Runner version keeps the version manager already installed on that computer.
+
+To update that manager, use the separate [`manager-refresh` procedure](upgrading.md#update-an-installed-version-manager), introduced in 0.1.9. It runs the maintenance program from a verified signed package in a separate directory and preserves the manager's identity and state, installed Node runtime, Runner profile, workspaces and service enablement. For the Windows version-switch improvements in 0.1.9, refresh an existing manager before choosing the next Runner version in the control panel. First installations receive the manager included in their selected package.
+
+Finish any current version change or recovery before refreshing the manager. If maintenance is busy, complete that operation and repeat the command. An interrupted refresh resumes with the same verified package and command; the [upgrade guide](upgrading.md#update-an-installed-version-manager) includes platform paths and executable steps.
 
 Service commands such as `restart`, `install` and `uninstall` also use this independent manager after a version change. See [removing a Runner](runner-uninstall.md) for service removal and complete cleanup.
 

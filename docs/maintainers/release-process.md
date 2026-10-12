@@ -20,7 +20,7 @@ After completing [independent package verification](../portable-runner-installat
 
 ```json
 {
-  "version": "0.1.8",
+  "version": "0.1.9",
   "state": "released",
   "release_branch": "main",
   "release_commit": "<manifest commit_sha>",

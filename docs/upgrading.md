@@ -19,6 +19,7 @@ Plan these updates separately:
 | Component | Update action |
 | --- | --- |
 | Worker | Deploy the reviewed control-plane code |
+| Version manager | Refresh its independent program from a verified package when the release notes call for it; see [Update an installed version manager](#update-an-installed-version-manager) |
 | Runner | Choose a release in the control panel; see [Change a Runner version](runner-versions.md) |
 | MCP client | Refresh cached tool definitions after the Worker update |
 
@@ -36,11 +37,85 @@ Pause new submissions and finish or cancel queued/running Jobs before restarting
 
 1. **Rehearse the target combination.** Verify the signed release and exercise the Worker, Runner, service account and intended MCP client in a test environment.
 2. **Deploy the Worker.** Use the existing production `main` deployment path, preserving resource bindings and secret values. Replacing `RUNNER_TOKEN_PEPPER` invalidates enrolled Runner credentials.
-3. **Update each Runner.** Use [remote version management](runner-versions.md) for a managed installation with a version manager. For its first package update or a custom deployment, follow the applicable procedure below, keeping profile/state and the previous verified package available for recovery.
+3. **Update each Runner.** For a managed installation, first apply any version-manager update described in the release notes, then use [remote version management](runner-versions.md) to choose the Runner package. For its first package update or a custom deployment, follow the applicable procedure below, keeping profile/state and the previous verified package available for recovery.
 4. **Refresh the client catalog.** Reload the Runmesh connection and tool definitions in each MCP client.
 5. **Complete acceptance checks**, then resume ordinary workloads.
 
 Use the [portable installation examples](portable-runner-installation.md) for first installation. Existing installations keep their enrollment during package updates; credential recovery and complete removal have their own maintenance procedures.
+
+## Update an installed version manager
+
+The version manager has its own program and update cycle. Changing the Runner version keeps the installed manager. The `manager-refresh` command introduced in 0.1.9 updates that independent program from a verified signed package. For the Windows version-switch improvements in 0.1.9, refresh an existing manager first, then select the desired Runner version in the control panel. New installations and first manager setup receive the manager included in their selected package. Check [release status](release-readiness.md) before choosing the package for production.
+
+Complete the maintenance preparation above. Finish the current Runner version request, including any recovery, and wait until the host has no pending version change or local Jobs. Run the refresh in a root/administrator session for a system service, or in the owning account with `--user` for a user service.
+
+Follow [independent package verification](portable-runner-installation.md#independently-verify-a-downloaded-package) with a separately trusted source checkout. Keep the official `manifest.json`, `manifest.sig`, `manifest.signature.json` and `runmesh-runner-<version>.tgz` together in the release-assets directory. Use a verified Node runtime supporting 22.23.2+ within 22.x, or 24.21.0+ within 24.x. The commands below repeat signature and package verification, extract the signed archive into a separate maintenance directory, and run its `package/dist/maintenance.cjs`. Both the Node executable and the extracted maintenance program must be outside the installed `manager` directory. Keep the extraction directory and release assets until the refresh completes.
+
+### Refresh the manager on Linux or macOS
+
+In one root shell, set the exact verified version and the three absolute input paths. The standard system root is `/opt/runmesh`; the profile is `/etc/runmesh/profile.json` on Linux and `/Library/Application Support/Runmesh/profile.json` on macOS.
+
+```sh
+set -eu
+unset NODE_OPTIONS NODE_PATH
+umask 077
+VERSION='<verified-version-containing-manager-refresh>'
+DOWNLOAD='/absolute/path/to/release-assets'
+TRUSTED_CHECKOUT='/absolute/path/to/trusted-runmesh-checkout'
+NODE='/absolute/path/to/verified/node'
+ROOT=/opt/runmesh
+case "$(uname -s)" in
+  Linux) PROFILE=/etc/runmesh/profile.json ;;
+  Darwin) PROFILE='/Library/Application Support/Runmesh/profile.json' ;;
+  *) exit 1 ;;
+esac
+"$NODE" "$TRUSTED_CHECKOUT/scripts/release-verify.mjs" \
+  "$DOWNLOAD/manifest.json" "$DOWNLOAD/manifest.sig" "$DOWNLOAD/manifest.signature.json" \
+  "$TRUSTED_CHECKOUT/release/trust-keyring.json" runmesh-preview-2026-01 "$VERSION"
+STAGE=$(mktemp -d /opt/runmesh-maintenance.XXXXXX)
+tar -xzf "$DOWNLOAD/runmesh-runner-$VERSION.tgz" -C "$STAGE"
+MAINTENANCE="$STAGE/package/dist/maintenance.cjs"
+test -f "$MAINTENANCE"
+printf 'Keep this maintenance directory until completion: %s\n' "$STAGE"
+"$NODE" "$MAINTENANCE" manager-refresh \
+  --profile "$PROFILE" --install-root "$ROOT" --release-dir "$DOWNLOAD" --json
+```
+
+### Refresh the manager on Windows
+
+Use elevated PowerShell and set the exact verified version and three input paths. The separate maintenance directory below resides alongside the standard installation under `C:\Program Files`.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$env:NODE_OPTIONS = $null
+$env:NODE_PATH = $null
+$Version = '<verified-version-containing-manager-refresh>'
+$Download = 'C:\absolute\path\release-assets'
+$TrustedCheckout = 'C:\absolute\path\trusted-runmesh-checkout'
+$Node = 'C:\absolute\path\verified-node\node.exe'
+$Root = 'C:\Program Files\Runmesh'
+$RunnerProfile = 'C:\ProgramData\Runmesh\profile.json'
+& $Node (Join-Path $TrustedCheckout 'scripts\release-verify.mjs') `
+  (Join-Path $Download 'manifest.json') (Join-Path $Download 'manifest.sig') `
+  (Join-Path $Download 'manifest.signature.json') `
+  (Join-Path $TrustedCheckout 'release\trust-keyring.json') 'runmesh-preview-2026-01' $Version
+if ($LASTEXITCODE -ne 0) { throw 'Review the release verification result before continuing.' }
+$Stage = Join-Path 'C:\Program Files' ('Runmesh-Maintenance-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $Stage | Out-Null
+tar.exe -xzf (Join-Path $Download "runmesh-runner-$Version.tgz") -C $Stage
+if ($LASTEXITCODE -ne 0) { throw 'Review archive extraction before continuing.' }
+$Maintenance = Join-Path $Stage 'package\dist\maintenance.cjs'
+if (-not (Test-Path -LiteralPath $Maintenance -PathType Leaf)) { throw 'Select a signed package containing the maintenance program.' }
+Write-Host "Keep this maintenance directory until completion: $Stage"
+& $Node $Maintenance manager-refresh --profile $RunnerProfile --install-root $Root --release-dir $Download --json
+if ($LASTEXITCODE -ne 0) { throw 'Review the refresh result and the recovery guidance below.' }
+```
+
+For a **user service**, run in its owning account. Use the existing profile and standard user install root: `$HOME/.local/share/runmesh` on Linux/macOS or `$env:LOCALAPPDATA\Runmesh` on Windows. Extract the verified package into a separate directory owned by that account, outside the installation's `manager` directory, and add `--user` to the same `manager-refresh` invocation.
+
+The refresh preserves the installed Node runtime, manager identity and state, Runner profile, workspaces, and the manager service's original running and enablement states. On success, check the JSON result: `action` is `manager-refresh`, `manager_version` matches the verified target, and `runner_unchanged` is `true`. `previous_manager_version` records the previous manager version; `restarted` is `true` when the refresh restores a previously active manager. Confirm the manager's service state and the Runner connection, then continue with the desired Runner version change. A stopped or disabled manager retains that state; start or enable it through your normal service-management procedure when ready to receive requests.
+
+If the command reports that maintenance is busy, let the current operation finish before repeating it. After an interrupted refresh, keep the same extracted program, assets and arguments, and repeat the final `manager-refresh` command to resume. Retain the installation and its state while following any recovery details in the command output. Once the refresh and acceptance checks complete, remove the separate maintenance directory according to your maintenance policy.
 
 ## Update a user service
 
