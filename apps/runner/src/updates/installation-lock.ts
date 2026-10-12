@@ -4,6 +4,7 @@ import { constants, lstatSync, type Stats } from "node:fs";
 import { link, lstat, mkdir, open, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { trustedWindowsEnvironment, resolveTrustedWindowsTool, trustedWindowsRoot } from "../windows-tools.js";
+import { exactFileStats, sameFileIdentity } from "../file-identity.js";
 
 export interface InstallationLease { release(): Promise<void>; assertHeld(): void; }
 const code = (error: unknown): string | undefined => error !== null && typeof error === "object" && "code" in error ? String(error.code) : undefined;
@@ -24,22 +25,22 @@ async function removeGeneration(directory: string, marker: string): Promise<void
 /** The owner marker is renamed, never overwritten. Only the successful rename
  * may clear a dead generation, so competing recovery cannot unlink a new lock. */
 async function recoverFileLease(path: string): Promise<void> {
-  const info = await lstat(path).catch(error => missing(error) ? undefined : Promise.reject(error));
+  const info = await lstat(path, { bigint: true }).then(exactFileStats).catch(error => missing(error) ? undefined : Promise.reject(error));
   if (info === undefined || info.isDirectory()) return; // A hosted installer owns a directory lock.
   if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > 4096) throw new Error("Runner installation lock is invalid.");
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(error => missing(error) ? undefined : Promise.reject(error));
   if (handle === undefined) return;
   let raw: string;
   try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size !== info.size) throw new Error("Runner installation lock is invalid.");
+    const opened = exactFileStats(await handle.stat({ bigint: true }));
+    if (!opened.isFile() || !sameFileIdentity(opened, info) || opened.size !== info.size) throw new Error("Runner installation lock is invalid.");
     const bytes = Buffer.alloc(info.size + 1); let offset = 0;
     while (offset < bytes.length) { const read = await handle.read(bytes, offset, bytes.length - offset, null); if (read.bytesRead === 0) break; offset += read.bytesRead; }
-    const after = await handle.stat();
-    const current = await lstat(path).catch(error => missing(error) ? undefined : Promise.reject(error));
+    const after = exactFileStats(await handle.stat({ bigint: true }));
+    const current = await lstat(path, { bigint: true }).then(exactFileStats).catch(error => missing(error) ? undefined : Promise.reject(error));
     if (current === undefined) return;
     if (offset !== info.size || after.size !== info.size || after.mtimeMs !== opened.mtimeMs || current.isSymbolicLink()
-      || current.dev !== info.dev || current.ino !== info.ino) throw new Error("Runner installation lock is invalid.");
+      || !sameFileIdentity(current, info)) throw new Error("Runner installation lock is invalid.");
     raw = bytes.subarray(0, offset).toString("utf8");
   } finally { await handle.close(); }
   const value = JSON.parse(raw) as { schema_version?: unknown; generation?: unknown };
@@ -58,9 +59,9 @@ async function recoverFileLease(path: string): Promise<void> {
   try { await rename(join(directory, oldMarker), join(directory, marker)); }
   catch (error) { if (missing(error)) return; throw error; }
   try {
-    const lease = await lstat(join(directory, "lease.json"));
-    const shared = await lstat(path).catch(error => missing(error) ? undefined : Promise.reject(error));
-    if (shared !== undefined && shared.isFile() && !shared.isSymbolicLink() && shared.dev === lease.dev && shared.ino === lease.ino) {
+    const lease = exactFileStats(await lstat(join(directory, "lease.json"), { bigint: true }));
+    const shared = await lstat(path, { bigint: true }).then(exactFileStats).catch(error => missing(error) ? undefined : Promise.reject(error));
+    if (shared !== undefined && shared.isFile() && !shared.isSymbolicLink() && sameFileIdentity(shared, lease)) {
       await unlink(path); await syncDirectory(dirname(path));
     }
     await removeGeneration(directory, marker);
@@ -84,7 +85,7 @@ async function directoryLease(path: string): Promise<InstallationLease | undefin
     const handle = await open(leasePath, "wx", 0o600);
     try { await handle.writeFile(JSON.stringify({ schema_version: 1, generation })); await handle.sync(); } finally { await handle.close(); }
     await writeFile(ownerPath, "", { flag: "wx", mode: 0o600 }); await syncDirectory(directory);
-    leaseInfo = await lstat(leasePath);
+    leaseInfo = exactFileStats(await lstat(leasePath, { bigint: true }));
   } catch (error) {
     // This unpublished generation belongs to this attempt. Reclaim only its
     // known files and empty directory; never scan or remove another owner.
@@ -97,8 +98,8 @@ async function directoryLease(path: string): Promise<InstallationLease | undefin
   let held = true;
   const assertHeld = () => {
     if (!held) throw new Error("Runner installation lock was released.");
-    const current = lstatSync(path); const owner = lstatSync(ownerPath);
-    if (!current.isFile() || current.isSymbolicLink() || current.dev !== leaseInfo.dev || current.ino !== leaseInfo.ino || !owner.isFile() || owner.isSymbolicLink()) throw new Error("Runner installation lock owner changed.");
+    const current = exactFileStats(lstatSync(path, { bigint: true })); const owner = lstatSync(ownerPath);
+    if (!current.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, leaseInfo) || !owner.isFile() || owner.isSymbolicLink()) throw new Error("Runner installation lock owner changed.");
   };
   const lease: InstallationLease = { assertHeld, async release() {
     if (!held) return; assertHeld();

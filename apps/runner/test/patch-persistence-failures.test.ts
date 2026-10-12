@@ -29,30 +29,41 @@ async function fixture(options: ApplyPatchOptions = {}) {
 describe.sequential("public patch persistence failures", () => {
   it.each(["add", "update"].flatMap(kind => ["atomic-save", "same-content", "changed-content", "mode", "mtime", "unchanged"].map(writer => ({ kind, writer }))))("preserves $writer file ownership during $kind rollback", async ({ kind, writer }) => {
     let external: Awaited<ReturnType<typeof actual.lstat>> | undefined;
+    let externalIdentity: { dev: bigint; ino: bigint } | undefined;
     let externalText: string | undefined;
+    let writerFailure: { error: unknown } | undefined;
     const f = await fixture({ beforeInstall: async path => {
       if (path !== "second.txt") return;
-      const target = join(f.root, "target.txt");
-      const installed = await actual.lstat(target);
-      if (writer === "atomic-save") {
-        const replacement = join(f.root, "external-save.txt");
-        await actual.writeFile(replacement, "updated\n", { flag: "wx" });
-        await actual.rename(replacement, target);
-        expect((await actual.lstat(target)).ino).not.toBe(installed.ino);
-      } else if (writer === "same-content" || writer === "changed-content") {
-        await actual.writeFile(target, writer === "same-content" ? "updated\n" : "changed\n");
-        // Distinguish the real in-place write even on coarse timestamp hosts.
-        await actual.utimes(target, new Date(2000), new Date(2000));
-        expect((await actual.lstat(target)).ino).toBe(installed.ino);
-      } else if (writer === "mode") {
-        await actual.chmod(target, (installed.mode & 0o222) === 0 ? 0o666 : 0o444);
-        expect((await actual.lstat(target)).mode & 0o7777).not.toBe(installed.mode & 0o7777);
-      } else if (writer === "mtime") {
-        await actual.utimes(target, new Date(2000), new Date(2000));
-        expect((await actual.lstat(target)).mtimeMs).not.toBe(installed.mtimeMs);
+      try {
+        const target = join(f.root, "target.txt");
+        const installed = await actual.lstat(target);
+        const installedIdentity = await actual.lstat(target, { bigint: true });
+        if (writer === "atomic-save") {
+          const replacement = join(f.root, "external-save.txt");
+          await actual.writeFile(replacement, "updated\n", { flag: "wx" });
+          await actual.rename(replacement, target);
+          expect((await actual.lstat(target, { bigint: true })).ino).not.toBe(installedIdentity.ino);
+        } else if (writer === "same-content" || writer === "changed-content") {
+          await actual.writeFile(target, writer === "same-content" ? "updated\n" : "changed\n");
+          // Distinguish the real in-place write even on coarse timestamp hosts.
+          await actual.utimes(target, new Date(2000), new Date(2000));
+          expect((await actual.lstat(target, { bigint: true })).ino).toBe(installedIdentity.ino);
+        } else if (writer === "mode") {
+          await actual.chmod(target, (installed.mode & 0o222) === 0 ? 0o666 : 0o444);
+          expect((await actual.lstat(target)).mode & 0o7777).not.toBe(installed.mode & 0o7777);
+        } else if (writer === "mtime") {
+          await actual.utimes(target, new Date(2000), new Date(2000));
+          expect((await actual.lstat(target)).mtimeMs).not.toBe(installed.mtimeMs);
+        }
+        external = await actual.lstat(target);
+        externalIdentity = await actual.lstat(target, { bigint: true });
+        externalText = await actual.readFile(target, "utf8");
+      } catch (error) {
+        // PatchService wraps installation errors while rolling back. Keep a
+        // fixture I/O/assertion failure separate from the planned failure below.
+        writerFailure ??= { error };
+        throw error;
       }
-      external = await actual.lstat(target);
-      externalText = await actual.readFile(target, "utf8");
       throw new Error("second install failed");
     } });
     const target = join(f.root, "target.txt");
@@ -60,6 +71,9 @@ describe.sequential("public patch persistence failures", () => {
       if (kind === "update") await actual.writeFile(target, "original\n");
       const change = kind === "add" ? "*** Add File: target.txt\n+updated" : "*** Update File: target.txt\n@@\n-original\n+updated";
       const error = await f.service.apply({ workspace_id: "patch", patch: `*** Begin Patch\n${change}\n*** Add File: second.txt\n+second\n*** End Patch\n` }).catch(error => error);
+      if (writerFailure !== undefined) throw writerFailure.error;
+      // A failure before the hook must retain its own error and recovery data.
+      if (external === undefined) throw error;
       expect(external).toBeDefined();
       if (writer === "unchanged") {
         expect(error).toMatchObject({ code: "patch_install_failed" });
@@ -72,6 +86,8 @@ describe.sequential("public patch persistence failures", () => {
         const retained = await actual.lstat(target);
         expect({ dev: retained.dev, ino: retained.ino, mode: retained.mode, size: retained.size, mtime: retained.mtimeMs })
           .toEqual({ dev: external!.dev, ino: external!.ino, mode: external!.mode, size: external!.size, mtime: external!.mtimeMs });
+        const retainedIdentity = await actual.lstat(target, { bigint: true });
+        expect({ dev: retainedIdentity.dev, ino: retainedIdentity.ino }).toEqual({ dev: externalIdentity!.dev, ino: externalIdentity!.ino });
         if (kind === "update") {
           const recovery = error.details.recovery.find((entry: { backup_path?: string }) => entry.backup_path !== undefined);
           expect(recovery).toBeDefined();

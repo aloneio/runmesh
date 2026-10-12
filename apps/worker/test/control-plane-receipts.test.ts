@@ -171,8 +171,8 @@ it.each([
 it("keeps partial runtime matches and unexpected diagnostic fields private", () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   try {
-    reportControlPlaneFailure("private-stage" as never, "private-outcome" as never, new Error("Network connection lost. synthetic-private-value"), Number.NaN);
-    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=other outcome=other kind=error reason=unknown status=none");
+    reportControlPlaneFailure("private-stage" as never, "private-outcome" as never, new Error("Network connection lost. synthetic-private-value"), Number.NaN, "private-phase" as never);
+    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=other outcome=other kind=error reason=unknown status=none phase=other");
   } finally { warn.mockRestore(); }
 });
 
@@ -198,7 +198,7 @@ it("retains the first receipt deadline when a transport rejects after cancellati
     await vi.advanceTimersByTimeAsync(5001);
     expect(await operation).toBeUndefined();
     expect(signal?.aborted).toBe(true); expect(fetch).toHaveBeenCalledOnce();
-    expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "deadline" });
+    expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "deadline", phase: "fetch" });
     reject(new Error("Network connection lost."));
     await vi.advanceTimersByTimeAsync(0);
     expect(observer).toHaveBeenCalledOnce();
@@ -211,14 +211,14 @@ it("distinguishes parent cancellation from the receipt deadline", async () => {
   await Promise.resolve();
   parent.abort();
   expect(await operation).toBeUndefined();
-  expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "parent_abort", status: 200 });
+  expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "parent_abort", status: 200, phase: "body_read" });
   expect(cancel).toHaveBeenCalledOnce();
 });
 
 it("preserves an unexpected status and cancels its body when the diagnostic observer throws", async () => {
   const cancel = vi.fn(), observer = vi.fn(() => { throw new Error("synthetic observer failure"); });
   expect(await boundedJsonReceipt(async () => new Response(new ReadableStream({ cancel }), { status: 503 }), [200, 403, 409], 5000, 16384, undefined, observer)).toEqual({ status: 503 });
-  expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "unexpected_status", status: 503 });
+  expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "unexpected_status", status: 503, phase: "fetch" });
   expect(cancel).toHaveBeenCalledOnce();
 });
 
@@ -227,7 +227,30 @@ it.each(["stream", "json"] as const)("distinguishes %s receipt failure without a
   const response = source === "stream" ? new Response(new ReadableStream({ start(controller) { controller.error(error); } })) : new Response("{synthetic-private-value");
   expect(await boundedJsonReceipt(async () => response, [200], 5000, 16384, undefined, observer)).toBeUndefined();
   expect(observer).toHaveBeenCalledOnce();
-  expect(observer.mock.calls[0]?.[0]).toMatchObject({ outcome: source === "stream" ? "exception" : "invalid_json", status: 200 });
+  expect(observer.mock.calls[0]?.[0]).toMatchObject({ outcome: source === "stream" ? "exception" : "invalid_json", status: 200, phase: source === "stream" ? "body_read" : "json_parse" });
+});
+
+it.each(["fetch", "body_read", "json_parse"] as const)("identifies a 200 deadline reached during %s without extending its budget", async phase => {
+  let elapsed = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const observer = vi.fn(), body = JSON.stringify({ ok: true });
+  const parse = JSON.parse;
+  const parsed = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+    const value = parse(text, reviver);
+    if (phase === "json_parse" && text === body) elapsed = 5001;
+    return value;
+  });
+  const fetch = vi.fn(async () => {
+    if (phase === "fetch") elapsed = 5001;
+    return phase === "body_read" ? new Response(new ReadableStream({
+      pull(controller) { elapsed = 5001; controller.close(); },
+    }, { highWaterMark: 0 })) : new Response(body);
+  });
+  try {
+    expect(await boundedJsonReceipt(fetch, [200], 5000, 16384, undefined, observer)).toBeUndefined();
+    expect(observer).toHaveBeenCalledExactlyOnceWith({ outcome: "deadline", status: 200, phase });
+    expect(fetch).toHaveBeenCalledOnce();
+  } finally { parsed.mockRestore(); clock.mockRestore(); }
 });
 
 it("keeps completed authorization receipts free from failure diagnostics", async () => {

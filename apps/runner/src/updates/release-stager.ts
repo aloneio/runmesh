@@ -4,6 +4,7 @@ import { chmod, copyFile, lstat, mkdir, realpath, rename, rm, writeFile } from "
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import { runnerArchiveFiles } from "./release-archive.js";
 import { renderManagedLauncher } from "./launchers.js";
 import type { ReleaseTarget, VerifiedStagedRelease } from "./contracts.js";
@@ -71,6 +72,21 @@ async function validateInstallRoot(path: string): Promise<string> {
   if ((process.platform === "win32" ? canonical.toLowerCase() !== root.toLowerCase() : canonical !== root)) throw new Error("Runner installation root must be canonical.");
   await ensureDirectory(root);
   return root;
+}
+
+async function commitStagingDirectory(source: string, destination: string, signal?: AbortSignal): Promise<void> {
+  // The version probe has closed, but Windows can briefly retain an image or
+  // scanner handle. Only this private staging rename receives five 50 ms waits.
+  for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
+    try { await rename(source, destination); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (process.platform !== "win32" || attempt >= 5 || !["EBUSY", "EACCES", "EPERM"].includes(code ?? "")) throw error;
+      try { await delay(50, undefined, { signal }); }
+      catch (interrupted) { signal?.throwIfAborted(); throw interrupted; }
+    }
+  }
 }
 
 /** A fresh, immutable directory per operation preserves old binaries for rollback. */
@@ -158,10 +174,10 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
     if (probe.stdout.trim() !== target.version) throw new Error("Runner package reported a different version.");
     await writeFile(join(temporary, ".runmesh-release.json"), JSON.stringify({ version: target.version, manifest_sha256: manifestSha256, artifact_sha256: artifact.sha256 }), { flag: "wx", mode: 0o644 });
     context.signal?.throwIfAborted();
-    await rename(temporary, versionDirectory);
+    await commitStagingDirectory(temporary, versionDirectory, context.signal);
     return { version: target.version, versionDirectory, manifestSha256, artifactSha256: artifact.sha256 };
   } catch (error) {
-    try { await rm(temporary, { recursive: true, force: true }); }
+    try { await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], "Runner release staging and temporary installation cleanup failed.", { cause: error }); }
     throw error;
   }

@@ -24,12 +24,12 @@ export async function writeCiEvidenceFile(root, name, body) {
 
 const invalid = () => new Error("invalid_or_changed_evidence_file");
 function regular(info, limit) {
-  return info.isFile() && !info.isSymbolicLink() && Number.isSafeInteger(info.size)
-    && info.size > 0 && info.size <= limit;
+  return info.isFile() && !info.isSymbolicLink() && typeof info.size === "bigint"
+    && info.size > 0n && info.size <= BigInt(limit);
 }
 function sameFile(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size
-    && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+    && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }
 
 /** Read verification inputs through one regular-file descriptor. Limits apply
@@ -38,12 +38,15 @@ function sameFile(left, right) {
  * Metadata checks detect observed changes, not an atomic content snapshot. */
 export async function readBoundedEvidenceFile(path, limit = MAX_EVIDENCE_BYTES) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_EVIDENCE_BYTES) throw invalid();
-  const before = await lstat(path);
+  const before = await lstat(path, { bigint: true });
   if (!regular(before, limit)) throw invalid();
   const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
   try {
-    const initial = await handle.stat();
+    const initial = await handle.stat({ bigint: true });
     if (!regular(initial, limit) || !sameFile(before, initial)) throw invalid();
+    // The admitted size fits the byte budget; native identities and timestamps
+    // remain bigint so distinct filesystem observations retain their precision.
+    const expectedBytes = Number(initial.size);
     const chunks = [];
     let total = 0;
     for (;;) {
@@ -54,8 +57,8 @@ export async function readBoundedEvidenceFile(path, limit = MAX_EVIDENCE_BYTES) 
       if (total > limit) throw invalid();
       chunks.push(buffer.subarray(0, bytesRead));
     }
-    const after = await handle.stat();
-    if (!regular(after, limit) || !sameFile(initial, after) || total !== initial.size) throw invalid();
+    const after = await handle.stat({ bigint: true });
+    if (!regular(after, limit) || !sameFile(initial, after) || total !== expectedBytes) throw invalid();
     return Buffer.concat(chunks, total);
   } finally { await handle.close(); }
 }

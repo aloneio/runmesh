@@ -9,13 +9,24 @@ import { runnerArchiveFiles } from "../src/updates/release-archive.js";
 import { downloadRunnerReleaseAsset, stageRunnerRelease } from "../src/updates/release-stager.js";
 
 const cleanupFault = vi.hoisted(() => ({ error: undefined as Error | undefined }));
+const commitFault = vi.hoisted(() => ({ error: undefined as Error | undefined, remaining: 0, attempts: 0, onFailure: undefined as (() => void) | undefined }));
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const remove: typeof actual.rm = async (path, options) => {
     if (cleanupFault.error !== undefined && String(path).endsWith(".staging")) throw cleanupFault.error;
     return actual.rm(path, options);
   };
-  return { ...actual, rm: remove };
+  const rename: typeof actual.rename = async (source, destination) => {
+    if (String(source).endsWith(".staging")) {
+      commitFault.attempts++;
+      if (commitFault.error !== undefined && commitFault.remaining-- > 0) {
+        commitFault.onFailure?.();
+        throw commitFault.error;
+      }
+    }
+    return actual.rename(source, destination);
+  };
+  return { ...actual, rm: remove, rename };
 });
 
 function archive(entries: { name: string; value: string; type?: string }[]): Buffer {
@@ -51,21 +62,67 @@ function fixture(version = "0.1.6", policy: { protocolMin?: unknown; protocolMax
 }
 
 describe("Runner exact release staging", () => {
-  it("installs a signed older version beside the current installation and keeps state untouched", async () => {
+  it("installs a signed older version beside the current installation and keeps state untouched", async ({ onTestFinished }) => {
     const f = fixture(); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    // Test cleanup is a separate hook, so a locked executable cannot replace
+    // the staging failure that initiated cleanup.
+    onTestFinished(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await mkdir(join(root, "state"));
+    await writeFile(join(root, "profile.json"), "existing credentials\n");
+    await writeFile(join(root, "state", "job.json"), "existing job history\n");
+    const result = await stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+      { installRoot: root, operationId: "downgrade-1", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust });
+    expect(result).toMatchObject({ version: "0.1.6", artifactSha256: f.sha, manifestSha256: f.manifestSha });
+    expect((await readdir(root)).sort()).toEqual(["profile.json", "state", "versions"]);
+    expect(await readFile(join(root, "profile.json"), "utf8")).toBe("existing credentials\n");
+    expect(await readFile(join(root, "state", "job.json"), "utf8")).toBe("existing job history\n");
+    expect(JSON.parse(await readFile(join(result.versionDirectory, ".runmesh-release.json"), "utf8"))).toMatchObject({ version: "0.1.6" });
+    expect(f.calls).toHaveLength(4);
+  }, 30000);
+
+  it.each(["EBUSY", "EPERM", "EACCES"])("handles a transient %s at the private staging commit", async (code) => {
+    const f = fixture(), root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    const error = Object.assign(new Error("staging handle is busy"), { code });
+    commitFault.error = error; commitFault.remaining = 2; commitFault.attempts = 0;
     try {
-      await mkdir(join(root, "state"));
-      await writeFile(join(root, "profile.json"), "existing credentials\n");
-      await writeFile(join(root, "state", "job.json"), "existing job history\n");
-      const result = await stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
-        { installRoot: root, operationId: "downgrade-1", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust });
-      expect(result).toMatchObject({ version: "0.1.6", artifactSha256: f.sha, manifestSha256: f.manifestSha });
-      expect((await readdir(root)).sort()).toEqual(["profile.json", "state", "versions"]);
-      expect(await readFile(join(root, "profile.json"), "utf8")).toBe("existing credentials\n");
-      expect(await readFile(join(root, "state", "job.json"), "utf8")).toBe("existing job history\n");
-      expect(JSON.parse(await readFile(join(result.versionDirectory, ".runmesh-release.json"), "utf8"))).toMatchObject({ version: "0.1.6" });
-      expect(f.calls).toHaveLength(4);
-    } finally { await rm(root, { recursive: true, force: true }); }
+      const staging = stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "transient-commit", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust });
+      if (process.platform === "win32") {
+        const result = await staging;
+        expect(commitFault.attempts).toBe(3);
+        expect(await readdir(join(root, "versions"))).toEqual([result.versionDirectory.slice(join(root, "versions").length + 1)]);
+        expect(JSON.parse(await readFile(join(result.versionDirectory, ".runmesh-release.json"), "utf8"))).toMatchObject({ version: "0.1.6" });
+      } else {
+        await expect(staging).rejects.toBe(error);
+        expect(commitFault.attempts).toBe(1);
+        expect(await readdir(join(root, "versions"))).toEqual([]);
+      }
+    } finally { commitFault.error = undefined; await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+  }, 30000);
+
+  it.each(["EBUSY", "EIO"])("preserves a persistent %s and removes its uncommitted directory", async code => {
+    const f = fixture(), root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    const error = Object.assign(new Error("staging commit failed"), { code });
+    commitFault.error = error; commitFault.remaining = 100; commitFault.attempts = 0;
+    try {
+      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "failed-commit", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toBe(error);
+      expect(commitFault.attempts).toBe(process.platform === "win32" && code === "EBUSY" ? 6 : 1);
+      expect(await readdir(join(root, "versions"))).toEqual([]);
+    } finally { commitFault.error = undefined; await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+  }, 30000);
+
+  it("stops staging commit retries when maintenance is cancelled", async () => {
+    const f = fixture(), root = await mkdtemp(join(tmpdir(), "runmesh-stager-")), controller = new AbortController();
+    const reason = new Error("maintenance cancelled"), error = Object.assign(new Error("staging handle is busy"), { code: "EBUSY" });
+    commitFault.error = error; commitFault.remaining = 100; commitFault.attempts = 0;
+    commitFault.onFailure = () => controller.abort(reason);
+    try {
+      await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "cancelled-commit", runtimePath: process.execPath, fetch: f.fetchImpl, signal: controller.signal }, { trust: f.trust })).rejects.toBe(process.platform === "win32" ? reason : error);
+      expect(commitFault.attempts).toBe(1);
+      expect(await readdir(join(root, "versions"))).toEqual([]);
+    } finally { commitFault.error = undefined; commitFault.onFailure = undefined; await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 30000);
   it("rejects an asset changed after selection before extracting any files", async () => {
     const f = fixture(); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
@@ -184,7 +241,10 @@ describe("Runner exact release staging", () => {
     const result = staging.then(value => value, error => error);
     let probePid: number | undefined, deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      await vi.waitFor(async () => expect(await readFile(marker, "utf8")).toMatch(/^\d+$/u), { timeout: 5000 });
+      await Promise.race([
+        vi.waitFor(async () => expect(await readFile(marker, "utf8")).toMatch(/^\d+$/u), { timeout: 5000 }),
+        result.then(outcome => { throw outcome instanceof Error ? outcome : new Error("Version staging ended before the probe signaled readiness."); }),
+      ]);
       probePid = Number(await readFile(marker, "utf8"));
       controller.abort();
       const outcome = await Promise.race([result, new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("Version probe did not stop after cancellation.")), 2000); })]);

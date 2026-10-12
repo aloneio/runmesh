@@ -44,7 +44,7 @@ describe("fixed MCP Registry failure diagnostics", () => {
     try {
       expect(await registryCall(f.env, path)).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
       expect(f.registry).toHaveBeenCalledOnce(); expect(f.dispatch).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=" + stage + " outcome=exception kind=error reason=network_connection_lost status=none");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=" + stage + " outcome=exception kind=error reason=network_connection_lost status=none phase=fetch");
       expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
     } finally { warn.mockRestore(); }
   });
@@ -56,7 +56,7 @@ describe("fixed MCP Registry failure diagnostics", () => {
       const result = kind === "read" ? await registryCall(f.env, "/private-read") : await registryPostCall(f.env, "/private-post", {});
       expect(result).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: kind === "read" ? "not_started" : "unknown" } });
       expect(f.registry).toHaveBeenCalledOnce(); expect(f.dispatch).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_registry_" + kind + " outcome=unexpected_status kind=other reason=unknown status=503");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_registry_" + kind + " outcome=unexpected_status kind=other reason=unknown status=503 phase=fetch");
     } finally { warn.mockRestore(); }
   });
 
@@ -68,6 +68,29 @@ describe("fixed MCP Registry failure diagnostics", () => {
       expect(f.registry).toHaveBeenCalledOnce(); expect(f.dispatch).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_rpc_authorization outcome=invalid_receipt kind=other reason=unknown status=" + status);
     } finally { warn.mockRestore(); }
+  });
+
+  it.each(["fetch", "body_read", "json_parse"] as const)("forwards the 200 authorization deadline phase %s without dispatching", async phase => {
+    let elapsed = 0;
+    const f = fixture(), clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const body = JSON.stringify({ ok: true }), parse = JSON.parse;
+    const parsed = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      const value = parse(text, reviver);
+      if (phase === "json_parse" && text === body) elapsed = 5001;
+      return value;
+    });
+    f.registry.mockImplementation(async () => {
+      if (phase === "fetch") elapsed = 5001;
+      return phase === "body_read" ? new Response(new ReadableStream({
+        pull(controller) { elapsed = 5001; controller.close(); },
+      }, { highWaterMark: 0 })) : new Response(body);
+    });
+    try {
+      expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
+      expect(f.registry).toHaveBeenCalledOnce(); expect(f.dispatch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith(`RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_rpc_authorization outcome=deadline kind=other reason=unknown status=200 phase=${phase}`);
+    } finally { parsed.mockRestore(); warn.mockRestore(); clock.mockRestore(); }
   });
 
   it("leaves normal missing records, explicit denials, and completed receipts quiet", async () => {

@@ -9,6 +9,7 @@ import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
 import type { HostPlatform } from "./platform-types.js";
 import { acquireEnrollmentLock, type InstallationLease } from "./updates/installation-lock.js";
+import { exactFileStats, sameFileIdentity } from "./file-identity.js";
 
 /** The only supported persisted profile execution contract. */
 export type ProfileExecutionMode = ExecutionMode;
@@ -349,7 +350,7 @@ async function readPrivateProfile(path: string, platform: HostPlatform, enforceO
   // and open.
   if (ownershipRequired) assertRootOwnedDirectory(directory, "runner profile directory");
   if (platform !== "win32" && (directory.mode & 0o022) !== 0) throw new Error("runner profile directory is writable by group or others");
-  const before = await lstat(path);
+  const before = exactFileStats(await lstat(path, { bigint: true }));
   if (before.isSymbolicLink() || !before.isFile()) throw new Error("runner profile is not a regular file");
   if (ownershipRequired) assertRootOwnedFile(before);
   if (before.size > MAX_PROFILE_BYTES) throw new Error(`runner profile exceeds ${MAX_PROFILE_BYTES} bytes`);
@@ -360,8 +361,8 @@ async function readPrivateProfile(path: string, platform: HostPlatform, enforceO
   // concurrent FIFO replacement from waiting before that descriptor check.
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("runner profile changed while being opened");
+    const opened = exactFileStats(await handle.stat({ bigint: true }));
+    if (!opened.isFile() || !sameFileIdentity(opened, before)) throw new Error("runner profile changed while being opened");
     if (ownershipRequired) assertRootOwnedFile(opened);
     if (opened.size > MAX_PROFILE_BYTES) throw new Error(`runner profile exceeds ${MAX_PROFILE_BYTES} bytes`);
     if (platform !== "win32" && !canReadProfileMode(opened.mode & 0o777, opened.gid, opened.uid)) throw new Error("runner profile is not private");
@@ -377,8 +378,8 @@ async function readPrivateProfile(path: string, platform: HostPlatform, enforceO
     // Bind the complete read to one observed version. Equal-size in-place
     // writes can mix a former server URL with a replacement credential just
     // as growth/shrink can splice records; size and inode alone miss them.
-    const final = await handle.stat();
-    if (!final.isFile() || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size
+    const final = exactFileStats(await handle.stat({ bigint: true }));
+    if (!final.isFile() || !sameFileIdentity(final, opened) || final.size !== opened.size
       || final.mtimeMs !== opened.mtimeMs || final.ctimeMs !== opened.ctimeMs || offset !== opened.size) {
       throw new Error("runner profile changed while being read");
     }

@@ -8,6 +8,7 @@ import { isErrno, bounded, paramsObject } from "./values.js";
 import type { open } from "node:fs/promises";
 import type { JobRecord } from "./records.js";
 import type { JobLogFilePort, JobLogScope } from "./ports.js";
+import { exactFileStats, sameFileIdentity } from "../file-identity.js";
 
 // Reserve room for the MCP context/audit envelope, as filesystem pages do.
 // The transport ceiling remains 64 KiB; filling it locally would discard the
@@ -53,7 +54,7 @@ export class JobLogReader {
       throw new RpcRuntimeError("log_unavailable", "The requested log is unavailable; the Job execution result is unchanged", { reason });
     }
     try {
-      const info = await handle.stat();
+      const info = exactFileStats(await handle.stat({ bigint: true }));
       if (entry !== undefined) await verifyLogGeneration(handle, info, entry.value);
       if (cursor.offset !== undefined && cursor.offset > info.size) throw changedLog();
       const observation = cursor.bound ? await observeLog(handle, info) : undefined;
@@ -65,15 +66,15 @@ export class JobLogReader {
       // limit lands in its middle; the JSON response cap below remains absolute.
       const readLength = Math.min(info.size - offset, limit + 3);
       const data = await readPageBytes(handle, offset, readLength, "log_changed");
-      const after = await handle.stat();
-      const current = await this.files.lstat(this.scope.logPath(job.job_id, stream));
-      if (!current.isFile() || current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino || after.size < info.size || (after.size === info.size && (after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs))) throw new RpcRuntimeError("log_changed", "The log changed while this page was being read; request a fresh page");
+      const after = exactFileStats(await handle.stat({ bigint: true }));
+      const current = await this.files.lstat(this.scope.logPath(job.job_id, stream), { bigint: true });
+      if (!current.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, info) || after.size < info.size || (after.size === info.size && (after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs))) throw new RpcRuntimeError("log_changed", "The log changed while this page was being read; request a fresh page");
       if (entry !== undefined && observation !== undefined) {
         await verifyLogGeneration(handle, after, observation);
         // Keep the largest successfully observed watermark across concurrent
         // reads. Growth alone is not a new log generation.
         const live = logGenerations.get(entry.id, scope);
-        await verifyLogGeneration(handle, await handle.stat(), live.value);
+        await verifyLogGeneration(handle, exactFileStats(await handle.stat({ bigint: true })), live.value);
         if (observation.size > live.value.size) Object.assign(live.value, observation);
       }
       const tail = params.tail === true;
@@ -87,8 +88,8 @@ export class JobLogReader {
       // must not lose a character merely because an earlier read saw EOF.
       const page = logResult(job.job_id, stream, offset + used.start, info.size, data.subarray(used.start, used.end).toString("utf8"), offset + used.end, used.end - used.start < pageLength, job.output_truncated);
       if (entry === undefined) return page;
-      const finalPath = await this.files.lstat(this.scope.logPath(job.job_id, stream));
-      if (!finalPath.isFile() || finalPath.isSymbolicLink() || finalPath.dev !== info.dev || finalPath.ino !== info.ino) throw changedLog();
+      const finalPath = await this.files.lstat(this.scope.logPath(job.job_id, stream), { bigint: true });
+      if (!finalPath.isFile() || finalPath.isSymbolicLink() || !sameFileIdentity(finalPath, info)) throw changedLog();
       this.scope.assertGeneration(generation);
       logGenerations.get(entry.id, scope);
       return bindBytePage(page, entry, "log", entry.id);

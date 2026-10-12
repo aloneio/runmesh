@@ -3,6 +3,7 @@ import type { Stats } from "node:fs";
 import { isBoundCursor } from "@aloneio/runmesh-protocol";
 import { RpcRuntimeError } from "./errors.js";
 import { readPageBytes, type PositionedByteReader } from "./page-read.js";
+import { statIdentityKey } from "./file-identity.js";
 
 const TTL_MS = 5 * 60 * 1000;
 export const MAX_FILE_SNAPSHOT_BYTES = 1024 * 1024;
@@ -60,8 +61,10 @@ export function bindBytePage(page: Record<string, unknown>, entry: { id: string;
     next_cursor: page.page_state === "more" ? cursor : null, resume_cursor: cursor, cursor_expires_at_ms: entry.expiresAt };
 }
 
-export function fileObservation(info: Stats): string {
-  return JSON.stringify([info.dev, info.ino, info.birthtimeMs, info.size, info.mtimeMs, info.ctimeMs, info.mode, info.uid, info.gid]);
+export function fileObservation(info: Stats & { readonly identityKey?: string }): string {
+  const identity = statIdentityKey(info);
+  if (identity === undefined) throw new RpcRuntimeError("file_changed", "File identity could not be observed exactly");
+  return JSON.stringify([identity, info.birthtimeMs, info.size, info.mtimeMs, info.ctimeMs, info.mode, info.uid, info.gid]);
 }
 type FileSnapshot = { readonly data: Buffer; readonly hash: string; readonly observation: string };
 export const fileSnapshots = new CursorCache<FileSnapshot>(16, 8 * 1024 * 1024);
@@ -85,7 +88,11 @@ export async function captureFile(handle: PositionedByteReader, info: Stats): Pr
 type LogObservation = { readonly identity: string; readonly size: number; readonly mtime: number; readonly ctime: number; readonly prefix: string; readonly boundary: string };
 export const logGenerations = new CursorCache<LogObservation>(256, 256 * 1024);
 const ANCHOR_BYTES = 256;
-function logIdentity(info: Stats): string { return JSON.stringify([info.dev, info.ino, info.birthtimeMs, info.mode, info.uid, info.gid]); }
+function logIdentity(info: Stats & { readonly identityKey?: string }): string {
+  const identity = statIdentityKey(info);
+  if (identity === undefined) throw changedLog();
+  return JSON.stringify([identity, info.birthtimeMs, info.mode, info.uid, info.gid]);
+}
 async function logAnchors(handle: PositionedByteReader, size: number): Promise<{ prefix: string; boundary: string }> {
   const length = Math.min(size, ANCHOR_BYTES);
   const first = await readPageBytes(handle, 0, length, "log_changed");

@@ -889,10 +889,11 @@ test("runtime lifecycle diagnostics reject unknown formats and reconstruct only 
 test("control plane diagnostics preserve fixed failure boundaries across fragmented logs", () => {
   const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
   forward("\u001b[33m\u25b2 [WARNING]\u001b[0m RUNMESH_CONTROL_PLANE_FAILURE stage=runner_mcp_authorization outcome=unexpected_");
-  forward("status kind=other reason=unknown status=503\r\nprivate-token\n");
+  forward("status kind=other reason=unknown status=503 phase=fe");
+  forward("tch\r\nprivate-token\n");
   forward("RUNMESH_CONTROL_PLANE_FAILURE stage=registry_initialize outcome=exception kind=error reason=network_connection_lost status=none\n");
   assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), [
-    { event: "control_plane_failure", stage: "runner_mcp_authorization", outcome: "unexpected_status", kind: "other", reason: "unknown", status: 503 },
+    { event: "control_plane_failure", stage: "runner_mcp_authorization", outcome: "unexpected_status", kind: "other", reason: "unknown", status: 503, phase: "fetch" },
     { event: "control_plane_failure", stage: "registry_initialize", outcome: "exception", kind: "error", reason: "network_connection_lost", status: null },
   ]);
   assert.doesNotMatch(emitted.join(""), /private|WARNING|RUNMESH_CONTROL_PLANE_FAILURE/u);
@@ -903,7 +904,8 @@ test("control plane diagnostics validate each fixed field and discard unrelated 
   const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
   assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, url: "https://private-token", stack: "private-stack" })), [valid]);
   for (const patch of [{ stage: "private" }, { outcome: "private" }, { kind: "private" }, { reason: "private" },
-    { status: "none" }, { status: "503" }, { status: 99 }, { status: 600 }, { status: 200.5 }])
+    { status: "none" }, { status: "503" }, { status: 99 }, { status: 600 }, { status: 200.5 },
+    { phase: "private" }, { phase: "" }, { phase: 1 }, { phase: null }])
     assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, ...patch })), []);
   const fields = {
     stage: ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization",
@@ -911,6 +913,7 @@ test("control plane diagnostics validate each fixed field and discard unrelated 
     outcome: ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "body_limit", "fragment_limit", "invalid_json", "invalid_receipt", "other"],
     kind: ["type_error", "range_error", "syntax_error", "abort_error", "error", "other"],
     reason: ["network_connection_lost", "cross_request_io", "cross_request_promise", "hung_request", "locked_reader", "unknown"], status: [null, 100, 599],
+    phase: ["fetch", "body_read", "json_parse", "other"],
   };
   for (const [field, values] of Object.entries(fields)) for (const value of values)
     assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, [field]: value })), [{ ...valid, [field]: value }]);
@@ -918,9 +921,22 @@ test("control plane diagnostics validate each fixed field and discard unrelated 
   const emitted = [], forward = createMcpWorkerDiagnosticForwarder(value => emitted.push(value));
   for (const invalid of ["private " + line, "[PRIVATE] " + line, line + " private-token", line.replace("status=none", "status=600"),
     line.replace("outcome=exception", "outcome=private"), line.replace("stage=runner_registry_fetch", "stage=private"),
-    line.replace("kind=error", "kind=private"), line.replace("reason=network_connection_lost", "reason=private"), "x".repeat(1025)])
+    line.replace("kind=error", "kind=private"), line.replace("reason=network_connection_lost", "reason=private"),
+    ...["private", "", "1", "null", "fetch private-token", "fetch phase=body_read", "fetch_private", "private_fetch"].map(phase => line + " phase=" + phase),
+    "private " + line + " phase=fetch", "x".repeat(1025)])
     forward(invalid + "\n");
   assert.deepEqual(emitted, []);
+});
+
+test("control plane diagnostic phases share the existing sixteen-event budget", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(value => emitted.push(value));
+  const phases = ["fetch", "body_read", "json_parse", "other"];
+  for (let index = 0; index < 30; index++)
+    forward("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_rpc_authorization outcome=deadline kind=other reason=unknown status=200 phase=" + phases[index % phases.length] + "\n");
+  const expected = Array.from({ length: 16 }, (_, index) => ({ event: "control_plane_failure", stage: "mcp_rpc_authorization",
+    outcome: "deadline", kind: "other", reason: "unknown", status: 200, phase: phases[index % phases.length] }));
+  assert.equal(emitted.length, 16);
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("").repeat(3)), expected);
 });
 
 test("load progress diagnostics retain only bounded counters and fixed phases", () => {
@@ -965,8 +981,8 @@ test("pinned esbuild formatting and the Windows ASCII error prefix preserve only
       { event: "proxy_upstream_connection_lost", method: "POST", attempts: 1 }],
     ["Error: Network connection lost.", { event: "runtime_log", signature: "network_connection_lost" }],
     ["There was an access violation in the runtime.", { event: "runtime_lifecycle", reason: "access_violation" }],
-    ["RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=fragment_limit kind=other reason=unknown status=200",
-      { event: "control_plane_failure", stage: "mcp_reauthorize", outcome: "fragment_limit", kind: "other", reason: "unknown", status: 200 }],
+    ["RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=fragment_limit kind=other reason=unknown status=200 phase=body_read",
+      { event: "control_plane_failure", stage: "mcp_reauthorize", outcome: "fragment_limit", kind: "other", reason: "unknown", status: 200, phase: "body_read" }],
     ["RUNMESH_MCP_HANDLER_ERROR kind=error stage=sdk_transport reason=unknown",
       { event: "mcp_handler_error", kind: "error", stage: "sdk_transport", reason: "unknown" }],
   ];

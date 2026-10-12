@@ -22,6 +22,7 @@ import { isolatedGitConfig } from "./config.js";
 import { sharedIndexName, validateSharedIndex, validateShallowBoundary } from "./metadata-format.js";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
+import { exactFileStats, sameFileIdentity } from "../file-identity.js";
 
 /**
  * Build a throw-away Git directory containing only the current HEAD and
@@ -129,14 +130,14 @@ export async function createIsolatedGitContext(worktree: string, deadline?: numb
 
 async function locateGitDirectory(worktree: string): Promise<string> {
   const dotGit = join(worktree, ".git");
-  const info = await lstat(dotGit);
+  const info = exactFileStats(await lstat(dotGit, { bigint: true }));
   if (info.isDirectory() && !info.isSymbolicLink()) {
     const canonicalWorktree = await realpath(worktree);
     const canonicalGit = await realpath(dotGit);
-    const after = await lstat(dotGit);
-    const canonicalInfo = await lstat(canonicalGit);
+    const after = exactFileStats(await lstat(dotGit, { bigint: true }));
+    const canonicalInfo = exactFileStats(await lstat(canonicalGit, { bigint: true }));
     if (!after.isDirectory() || after.isSymbolicLink() || !canonicalInfo.isDirectory() || canonicalInfo.isSymbolicLink()
-      || info.dev !== after.dev || info.ino !== after.ino || info.dev !== canonicalInfo.dev || info.ino !== canonicalInfo.ino
+      || !sameFileIdentity(info, after) || !sameFileIdentity(info, canonicalInfo)
       || !isPathWithin(canonicalGit, canonicalWorktree) || canonicalGit === canonicalWorktree) {
       throw new Error("Git metadata directory changed or escaped the worktree");
     }
@@ -181,7 +182,7 @@ async function resolveGitRef(gitDirectory: string, commonDirectory: string, ref:
 
 /** Missing optional metadata is valid; unreadable metadata cannot describe a repository. */
 async function optionalMetadataInfo(path: string): Promise<Stats | undefined> {
-  try { return await lstat(path); }
+  try { return exactFileStats(await lstat(path, { bigint: true })); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -210,8 +211,8 @@ async function readGitMetadata(root: string, parts: readonly string[], maxBytes:
       const handle = process.platform === "linux" ? await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) : undefined;
       directories.push({ path, info, ...(handle === undefined ? {} : { handle }) });
       if (handle !== undefined) {
-        const opened = await handle.stat();
-        if (opened.dev !== info.dev || opened.ino !== info.ino) throw new Error("Git ref directory changed while being opened");
+        const opened = exactFileStats(await handle.stat({ bigint: true }));
+        if (!sameFileIdentity(opened, info)) throw new Error("Git ref directory changed while being opened");
       }
       parent = handle === undefined ? path : `/proc/self/fd/${handle.fd}`;
     }
@@ -220,8 +221,8 @@ async function readGitMetadata(root: string, parts: readonly string[], maxBytes:
       throw error;
     });
     for (const { path, info } of directories) {
-      const after = await lstat(path);
-      if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) {
+      const after = exactFileStats(await lstat(path, { bigint: true }));
+      if (!after.isDirectory() || after.isSymbolicLink() || !sameFileIdentity(after, info)) {
         throw new Error("Git ref directory changed during inspection");
       }
     }
@@ -232,7 +233,7 @@ async function readGitMetadata(root: string, parts: readonly string[], maxBytes:
 }
 
 async function readRegularBytes(path: string, maxBytes: number): Promise<Buffer> {
-  const info = await lstat(path);
+  const info = exactFileStats(await lstat(path, { bigint: true }));
   if (!info.isFile() || info.isSymbolicLink() || info.size > maxBytes) throw new Error(`Git metadata file is invalid: ${path}`);
   // Keep the descriptor identity stable across the read. A lstat followed by
   // readFile(path) can otherwise be redirected to a symlink/replaced inode by
@@ -240,8 +241,8 @@ async function readRegularBytes(path: string, maxBytes: number): Promise<Buffer>
   // the descriptor check reject a FIFO replacement without waiting for a peer.
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size > maxBytes) {
+    const opened = exactFileStats(await handle.stat({ bigint: true }));
+    if (!opened.isFile() || !sameFileIdentity(opened, info) || opened.size > maxBytes) {
       throw new Error(`Git metadata file changed while being opened: ${path}`);
     }
     const buffer = Buffer.alloc(opened.size + 1);
@@ -251,9 +252,9 @@ async function readRegularBytes(path: string, maxBytes: number): Promise<Buffer>
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    const final = await handle.stat(), after = await lstat(path);
-    if (!final.isFile() || !after.isFile() || after.isSymbolicLink() || after.dev !== opened.dev || after.ino !== opened.ino
-      || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size || offset !== opened.size
+    const final = exactFileStats(await handle.stat({ bigint: true })), after = exactFileStats(await lstat(path, { bigint: true }));
+    if (!final.isFile() || !after.isFile() || after.isSymbolicLink() || !sameFileIdentity(after, opened)
+      || !sameFileIdentity(final, opened) || final.size !== opened.size || offset !== opened.size
       || final.mtimeMs !== opened.mtimeMs || final.ctimeMs !== opened.ctimeMs) {
       throw new Error(`Git metadata file changed while being read: ${path}`);
     }

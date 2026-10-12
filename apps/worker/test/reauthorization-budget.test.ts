@@ -81,7 +81,7 @@ it.each(["fetch", "body"] as const)("AR02 records a fixed %s runtime exception w
   try {
     expect(await reauthorizePrincipal(fetch, identity)).toEqual({ state: "unavailable" });
     expect(fetch).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledExactlyOnceWith(`RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=exception kind=error reason=network_connection_lost status=${phase === "fetch" ? "none" : "200"}`);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(`RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=exception kind=error reason=network_connection_lost status=${phase === "fetch" ? "none" : "200"} phase=${phase === "fetch" ? "fetch" : "body_read"}`);
   } finally { warn.mockRestore(); }
 });
 
@@ -95,7 +95,7 @@ it("AR02 retains the first deadline diagnosis when its cancelled transport later
   try {
     await vi.advanceTimersByTimeAsync(5001);
     expect(await result).toEqual({ state: "unavailable" }); expect(signal?.aborted).toBe(true);
-    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=deadline kind=other reason=unknown status=none");
+    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=deadline kind=other reason=unknown status=none phase=fetch");
     reject(new Error("Network connection lost.")); await vi.advanceTimersByTimeAsync(0);
     expect(warn).toHaveBeenCalledOnce(); expect(fetch).toHaveBeenCalledOnce();
   } finally { reject(new Error("synthetic cleanup")); await result; warn.mockRestore(); vi.useRealTimers(); }
@@ -105,9 +105,9 @@ it("AR02 distinguishes failed status and malformed identity while leaving author
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   try {
     expect(await reauthorizePrincipal(async () => new Response("private-status-body", { status: 503 }), identity)).toEqual({ state: "unavailable" });
-    expect(warn).toHaveBeenLastCalledWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=unexpected_status kind=other reason=unknown status=503");
+    expect(warn).toHaveBeenLastCalledWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=unexpected_status kind=other reason=unknown status=503 phase=fetch");
     expect(await reauthorizePrincipal(async () => Response.json({ private: "private-identity" }), identity)).toEqual({ state: "malformed" });
-    expect(warn).toHaveBeenLastCalledWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=invalid_receipt kind=other reason=unknown status=200");
+    expect(warn).toHaveBeenLastCalledWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=invalid_receipt kind=other reason=unknown status=200 phase=json_parse");
     for (const status of [401, 403, 404]) expect(await reauthorizePrincipal(async () => new Response(null, { status }), identity)).toEqual({ state: "denied" });
     expect(await reauthorizePrincipal(async () => allowed(), identity)).toMatchObject({ state: "allowed" });
     expect(warn).toHaveBeenCalledTimes(2);
@@ -122,6 +122,29 @@ it("AR02 identifies its existing total-fragment bound separately from byte overf
       pull(controller) { controller.enqueue(new Uint8Array()); }, cancel,
     })), identity)).toEqual({ state: "malformed" });
     expect(cancel).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=fragment_limit kind=other reason=unknown status=200");
+    expect(warn).toHaveBeenCalledExactlyOnceWith("RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=fragment_limit kind=other reason=unknown status=200 phase=body_read");
   } finally { warn.mockRestore(); }
+});
+
+it.each(["fetch", "body_read", "json_parse"] as const)("AR02 identifies a 200 deadline reached during %s", async phase => {
+  let elapsed = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const body = await allowed().text(), parse = JSON.parse;
+  const parsed = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+    const value = parse(text, reviver);
+    if (phase === "json_parse" && text === body) elapsed = 5001;
+    return value;
+  });
+  const fetch = vi.fn(async () => {
+    if (phase === "fetch") elapsed = 5001;
+    return phase === "body_read" ? new Response(new ReadableStream({
+      pull(controller) { elapsed = 5001; controller.close(); },
+    }, { highWaterMark: 0 })) : new Response(body);
+  });
+  try {
+    expect(await reauthorizePrincipal(fetch, identity)).toEqual({ state: "unavailable" });
+    expect(warn).toHaveBeenCalledExactlyOnceWith(`RUNMESH_CONTROL_PLANE_FAILURE stage=mcp_reauthorize outcome=deadline kind=other reason=unknown status=200 phase=${phase}`);
+    expect(fetch).toHaveBeenCalledOnce();
+  } finally { parsed.mockRestore(); warn.mockRestore(); clock.mockRestore(); }
 });

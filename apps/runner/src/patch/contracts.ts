@@ -37,6 +37,7 @@ export type TargetBoundary = ParentBoundary;
 export type FileVersion = {
   readonly device: number;
   readonly inode: number;
+  readonly identityKey: string;
   readonly size: number;
   readonly mode: number;
   readonly modifiedAtMs: number;

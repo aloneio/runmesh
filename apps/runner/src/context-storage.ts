@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { lstat, opendir } from "node:fs/promises";
 import { join, parse, relative, resolve, sep } from "node:path";
 import { RpcRuntimeError } from "./errors.js";
+import { exactFileStats, sameFileIdentity, statIdentityKey } from "./file-identity.js";
 
 /** Logical revision-file bytes, not filesystem allocated blocks or total disk.
  * The index is separately bounded to 2 MiB by ContextStore. No timers/writes. */
@@ -18,8 +19,12 @@ export function contextStorageLimits(input: Partial<ContextStorageLimits> = {}):
 
 
 
-export function sameStorageStamp(a: Stamp, b: Stamp): boolean { return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
-function stamp(value: Stamp): Stamp { return { dev: value.dev, ino: value.ino, size: value.size, mtimeMs: value.mtimeMs, ctimeMs: value.ctimeMs }; }
+export function sameStorageStamp(a: Stamp, b: Stamp): boolean { return sameFileIdentity(a, b) && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
+function stamp(value: Stamp): Stamp {
+  const identityKey = statIdentityKey(value);
+  if (identityKey === undefined) throw unsafe();
+  return { dev: value.dev, ino: value.ino, identityKey, size: value.size, mtimeMs: value.mtimeMs, ctimeMs: value.ctimeMs };
+}
 const unsafe = () => new RpcRuntimeError("context_storage_unsafe", "Context storage contains an unsafe or unrecognized entry; preserve it for operator inspection");
 function absent(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"; }
 
@@ -36,7 +41,7 @@ export async function checkContextDirectory(path: string): Promise<void> {
 export async function verifyContextStorageFile(workspace: string, file: ContextStorageFile): Promise<void> {
   const directory = join(workspace, file.contextId);
   await checkContextDirectory(directory);
-  const info = await lstat(join(directory, `${file.revision}.json`));
+  const info = exactFileStats(await lstat(join(directory, `${file.revision}.json`), { bigint: true }));
   if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || !sameStorageStamp(info, file.stamp)) throw new RpcRuntimeError("context_plan_changed", "Context files changed since the retention preview; create a fresh preview");
 }
 
@@ -51,9 +56,9 @@ export async function scanContextStorage(workspace: string): Promise<ContextStor
   let entries = 0, bytes = 0, metadataBytes = 0, contexts = 0, pending = false;
   const deadline = performance.now() + 4000;
   const budget = () => { if (++entries > 16384 || files.length > 8192 || contexts > 1024 || performance.now() > deadline) throw new RpcRuntimeError("context_scan_budget", "Context storage inventory exceeded its bounded scan; no data was changed"); };
-  directories.push({ path: workspace, info: stamp(await lstat(workspace)) });
+  directories.push({ path: workspace, info: stamp(exactFileStats(await lstat(workspace, { bigint: true }))) });
   for await (const item of await opendir(workspace)) {
-    budget(); const path = join(workspace, item.name), info = await lstat(path);
+    budget(); const path = join(workspace, item.name), info = exactFileStats(await lstat(path, { bigint: true }));
     if (item.name === "index.json" || item.name === ".pending-checkpoint.json") {
       if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > (item.name === "index.json" ? 2 * 1024 * 1024 : 4096)) throw unsafe();
       metadata.push([item.name, stamp(info)]); metadataBytes += info.size; pending ||= item.name === ".pending-checkpoint.json"; continue;
@@ -63,16 +68,16 @@ export async function scanContextStorage(workspace: string): Promise<ContextStor
     for await (const revision of await opendir(path)) {
       budget();
       if (!/^[1-9]\d{0,15}\.json$/u.test(revision.name)) throw unsafe();
-      const number = Number(revision.name.slice(0, -5)), record = await lstat(join(path, revision.name));
+      const number = Number(revision.name.slice(0, -5)), record = exactFileStats(await lstat(join(path, revision.name), { bigint: true }));
       if (!Number.isSafeInteger(number) || !record.isFile() || record.isSymbolicLink() || record.nlink !== 1 || record.size > 64 * 1024) throw unsafe();
       files.push({ contextId: item.name, revision: number, stamp: stamp(record) }); bytes += record.size;
     }
   }
   budget();
-  for (const directory of directories) if (!sameStorageStamp(directory.info, await lstat(directory.path))) throw new RpcRuntimeError("context_plan_changed", "Context storage changed during inventory; retry the read-only preview");
+  for (const directory of directories) if (!sameStorageStamp(directory.info, exactFileStats(await lstat(directory.path, { bigint: true })))) throw new RpcRuntimeError("context_plan_changed", "Context storage changed during inventory; retry the read-only preview");
   files.sort((a, b) => a.contextId < b.contextId ? -1 : a.contextId > b.contextId ? 1 : a.revision - b.revision);
   metadata.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  const digest = createHash("sha256").update(JSON.stringify({ files, metadata, contexts, directoryIdentities: directories.map(item => [relative(workspace, item.path), item.info.dev, item.info.ino]).sort() })).digest("hex");
+  const digest = createHash("sha256").update(JSON.stringify({ files, metadata, contexts, directoryIdentities: directories.map(item => [relative(workspace, item.path), item.info.identityKey]).sort() })).digest("hex");
   return { exists: true, files, contexts, bytes, metadataBytes, pending, digest };
 }
 

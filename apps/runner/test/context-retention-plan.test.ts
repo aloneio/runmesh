@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { planContextRetention, type RetentionCandidate, type RetentionPlanInput } from "../src/context/retention-plan.js";
+import { sameStorageStamp } from "../src/context-storage.js";
 
 afterEach(() => vi.restoreAllMocks());
 function candidate(contextId: string, revision: number): RetentionCandidate {
@@ -11,6 +12,27 @@ function input(): RetentionPlanInput {
   return { workspaceId: "w", generation: 1, keepDays: 30, keepRevisions: 2, maxDelete: 2, inventoryDigest: "a".repeat(64),
     candidates: [candidate("b", 2), candidate("a", 3), candidate("a", 1)], preservedContexts: 2, scannedFiles: 5, scannedBytes: 120 };
 }
+
+it.each(["ino", "dev"] as const)("retention observations distinguish exact %s identities with equal numeric metadata", field => {
+  const first = 2n ** 53n, second = first + 1n;
+  const observation = (value: bigint) => ({ dev: field === "dev" ? Number(value) : 1,
+    ino: field === "ino" ? Number(value) : 7, identityKey: field === "dev" ? `${value}:7` : `1:${value}`,
+    size: 42, mtimeMs: 123.456, ctimeMs: 123.456 });
+  const before = observation(first), after = observation(second);
+  expect({ dev: before.dev, ino: before.ino }).toEqual({ dev: after.dev, ino: after.ino });
+  expect(sameStorageStamp(before, after)).toBe(false);
+  expect(sameStorageStamp(before, JSON.parse(JSON.stringify(before)))).toBe(true);
+  const { identityKey: _key, ...legacy } = before;
+  expect(sameStorageStamp(before, legacy)).toBe(false);
+});
+
+it("retention observations preserve safe legacy stamps and require matching size and timestamps", () => {
+  const legacy = { dev: 1, ino: 7, size: 42, mtimeMs: 123.456, ctimeMs: 123.456 };
+  const exact = { ...legacy, identityKey: "1:7" };
+  expect(sameStorageStamp(legacy, exact)).toBe(true);
+  for (const change of [{ size: 43 }, { mtimeMs: 124 }, { ctimeMs: 124 }, { identityKey: "1:8" }])
+    expect(sameStorageStamp(exact, { ...exact, ...change })).toBe(false);
+});
 
 it("AR07 retention planning is deterministic, does not mutate observations or consult a clock", () => {
   const value = input(), before = JSON.stringify(value);

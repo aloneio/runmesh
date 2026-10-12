@@ -18,7 +18,7 @@ export function layer(path) {
 const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
 const runnerRoot = "apps/runner/src/";
 const maintenanceSharedSources = new Set([
-  "profile.ts", "service.ts", "purge.ts", "windows-tools.ts", "platform-types.ts", "backoff.ts",
+  "profile.ts", "service.ts", "purge.ts", "windows-tools.ts", "platform-types.ts", "backoff.ts", "file-identity.ts",
   "version.ts", "generated-version.ts", "config.ts", "environment-contracts.ts", "maintenance-contract.ts", "enrollment.ts",
   "cli/contracts.ts", "cli/input.ts", "cli/lifecycle.ts", "cli/service-plan.ts", "cli/reporting.ts", "cli/enrollment.ts",
 ]);
@@ -78,6 +78,7 @@ const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSo
 const updateCore = path => /^apps\/runner\/src\/updates\/(?:contracts|coordinator)\.ts$/u.test(path);
 const nativeServiceContracts = runnerRoot + "services/contracts.ts";
 const runnerBackoff = runnerRoot + "backoff.ts";
+const runnerFileIdentity = runnerRoot + "file-identity.ts";
 const adminSessionContract = "apps/worker/src/contracts/admin-session.ts";
 const runnerSelectionContract = "apps/worker/src/contracts/runner-selection.ts";
 
@@ -90,6 +91,8 @@ export function boundaryNodeProblem(from, node) {
     return "Runner presence and selection decisions synchronously project supplied observations";
   if (source === runnerBackoff && (node.type === "AwaitExpression" || node.async === true))
     return "Shared Runner backoff calculates delays synchronously";
+  if (source === runnerFileIdentity && (node.type === "AwaitExpression" || node.async === true))
+    return "Shared file identity projects supplied metadata synchronously";
   if (source === "apps/worker/src/registry/release-cache.ts" && (node.type === "AwaitExpression" || node.async === true))
     return "Registry release cache admission must stay synchronous";
   if (source === "apps/worker/src/domain/runner-handshake.ts" && (node.type === "AwaitExpression" || node.async === true))
@@ -108,6 +111,9 @@ export function boundaryNodeProblem(from, node) {
   if (source === runnerBackoff
     && (networkGlobals.has(node.name) || registryPlatformTypes.has(node.name) || ["Request", "Response", "localStorage", "sessionStorage", "indexedDB", "crypto", "performance", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
     return "Shared Runner backoff calculates delays without I/O, storage or scheduling";
+  if (source === runnerFileIdentity
+    && (networkGlobals.has(node.name) || registryPlatformTypes.has(node.name) || ["Request", "Response", "localStorage", "sessionStorage", "indexedDB", "crypto", "performance", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Shared file identity uses supplied metadata without I/O, storage or scheduling";
   if (source === "apps/worker/src/domain/runner-admission.ts"
     && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "performance", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
     return "Runner admission rules must not own transport, storage, clocks or scheduling";
@@ -175,6 +181,8 @@ export function specifierProblem(from, specifier, typeOnly) {
   if (source === "apps/worker/src/async-deadline.ts") return "Shared deadline scheduling stays independent of imported implementations";
   if (source === nativeServiceContracts) return "Published native-service contracts are self-contained, without module imports";
   if (source === runnerBackoff) return "Shared Runner backoff is self-contained, without module imports";
+  if (source === runnerFileIdentity && !(typeOnly && specifier === "node:fs"))
+    return "Shared file identity references filesystem metadata types only";
   if (updateCore(source) && external && specifier !== "@aloneio/runmesh-protocol")
     return "Update contracts and coordination use shared protocol and local ports, not external adapters";
   if (isMaintenanceSource(source) && external && !builtin && !purePackages.test(specifier))

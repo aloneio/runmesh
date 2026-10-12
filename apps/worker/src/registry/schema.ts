@@ -4,6 +4,12 @@ export function ensureJobHistorySettings(sql: SqlStorage): void {
   sql.exec("INSERT INTO runmesh_data_migrations VALUES ('job-history-settings-v1')");
 }
 
+/** Add the optional access path once, including on existing Registry stores. */
+export function ensureRunnerMaintenanceIndex(sql: SqlStorage): void {
+  if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_runners_online_heartbeat'").toArray().length > 0) return;
+  sql.exec("CREATE INDEX idx_runners_online_heartbeat ON runners(COALESCE(last_heartbeat_ms, 0)) WHERE state = 'online'");
+}
+
 /** Core schema initialization remains in the original synchronous startup path. */
 export function createCoreRegistrySchema(sql: SqlStorage): void {
   sql.exec(`

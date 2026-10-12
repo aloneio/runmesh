@@ -1307,17 +1307,24 @@ describe("persistent local jobs", () => {
   });
 
   it("fails promptly when process-tree termination is not delivered", async () => {
-    const probe = createJobProcessProbe();
     const test = await fixture();
+    let child: ChildProcess | undefined;
+    let closed: Promise<void> | undefined;
     try {
       const manager = new JobManager({
         policy: policy(test.workspace),
         stateDir: test.state,
         terminateProcess: async () => false,
-      }, { processes: probe.processes });
+      }, { processes: {
+        ...nativeJobProcesses,
+        spawn: ((...args: Parameters<typeof spawn>) => {
+          child = spawn(...args);
+          closed = new Promise<void>(resolve => child!.once("close", () => resolve()));
+          return child;
+        }) as typeof spawn,
+      } });
       await manager.initialize();
       const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] });
-      const child = probe.children[0];
       expect(child).toBeDefined();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -1331,7 +1338,14 @@ describe("persistent local jobs", () => {
       expect(manager.get(job.job_id).status).toBe("running");
       child?.kill();
       await waitFor(() => manager.get(job.job_id), (value) => !["queued", "running", "cancelling"].includes(value.status));
-    } finally { await test.cleanup(); }
+    } finally {
+      try {
+        // The intentionally failing terminator cannot own fixture teardown.
+        // Register close at spawn so an already-exited child is also joined.
+        if (child !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await closed;
+      } finally { await test.cleanup(); }
+    }
   });
 
   it("persists cancellation delivery evidence when close races the terminator decision", async () => {

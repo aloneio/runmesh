@@ -1,8 +1,10 @@
 export type BoundedJsonFailureOutcome = "exception" | "deadline" | "parent_abort" | "unexpected_status" | "length_limit" | "empty_body" | "empty_chunks" | "body_limit" | "invalid_json";
+export type BoundedJsonFailurePhase = "fetch" | "body_read" | "json_parse";
 export interface BoundedJsonFailure {
   readonly outcome: BoundedJsonFailureOutcome;
   readonly error?: unknown;
   readonly status?: number;
+  readonly phase?: BoundedJsonFailurePhase;
 }
 
 /** One bounded observation, never a retry or an authorization grant. */
@@ -15,10 +17,11 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
   if (!Array.isArray(acceptedStatuses) || acceptedStatuses.length < 1 || acceptedStatuses.length > 16 || acceptedStatuses.some(status => !Number.isInteger(status) || status < 200 || status > 599)) return undefined;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1048576) return undefined;
   let reported = false, responseStatus: number | undefined;
+  let phase: BoundedJsonFailurePhase | undefined;
   const report = (outcome: BoundedJsonFailureOutcome, error?: unknown): void => {
     if (reported) return;
     reported = true;
-    try { onFailure?.({ outcome, ...(error === undefined ? {} : { error }), ...(responseStatus === undefined ? {} : { status: responseStatus }) }); }
+    try { onFailure?.({ outcome, ...(error === undefined ? {} : { error }), ...(responseStatus === undefined ? {} : { status: responseStatus }), ...(phase === undefined ? {} : { phase }) }); }
     catch { /* A diagnostic observer cannot change receipt semantics. */ }
   };
   if (parentSignal?.aborted) { report("parent_abort"); return undefined; }
@@ -30,6 +33,7 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
   const cancel = (): void => { controller.abort(); void reader?.cancel().catch(() => undefined); };
   const observe = async (): Promise<{ readonly status: number; readonly value?: unknown } | undefined> => {
     try {
+      phase = "fetch";
       const response = await fetchResponse(controller.signal);
       responseStatus = response.status;
       if (controller.signal.aborted || performance.now() >= deadline) { report(parentSignal?.aborted ? "parent_abort" : "deadline"); cancel(); void response.body?.cancel().catch(() => undefined); return undefined; }
@@ -37,6 +41,7 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
       const length = response.headers.get("content-length");
       if (length !== null && (!/^\d+$/u.test(length) || Number(length) > maxBytes)) { report("length_limit"); void response.body?.cancel().catch(() => undefined); return undefined; }
       if (response.body === null) { report("empty_body"); return undefined; }
+      phase = "body_read";
       reader = response.body.getReader();
       // The wire limit is an admission bound, not a per-response allocation.
       // Most control-plane receipts are tiny even when their route permits 1 MiB.
@@ -59,6 +64,7 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
         bytes.set(next.value, size); size += next.value.byteLength;
       }
       let value: unknown;
+      phase = "json_parse";
       try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size))); }
       catch (error) { report("invalid_json", error); return undefined; }
       if (controller.signal.aborted || performance.now() >= deadline) { report(parentSignal?.aborted ? "parent_abort" : "deadline"); cancel(); return undefined; }

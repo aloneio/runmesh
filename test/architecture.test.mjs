@@ -316,7 +316,8 @@ test("maintenance shares host adapters and types without acquiring execution dep
     "apps/runner/src/services/layout.ts": 'import "node:path";',
     "apps/runner/src/updates/agent.ts": 'import "./job-drain.js"; import "../backoff.js";',
     "apps/runner/src/backoff.ts": await readFile(join(project, "apps/runner/src/backoff.ts"), "utf8"),
-    "apps/runner/src/updates/job-drain.ts": 'import "../maintenance-contract.js"; import "node:fs/promises";',
+    "apps/runner/src/updates/job-drain.ts": 'import "../maintenance-contract.js"; import "../file-identity.js"; import "node:fs/promises";',
+    "apps/runner/src/file-identity.ts": await readFile(join(project, "apps/runner/src/file-identity.ts"), "utf8"),
     "apps/runner/src/maintenance-contract.ts": 'export const terminal = (value: string) => value === "succeeded";',
   });
   assert.deepEqual((await checkArchitecture(f.root)).failures, []);
@@ -337,6 +338,25 @@ test("shared Runner backoff rejects imports, I/O and scheduling", async t => {
     const f = await fixture(t, {
       "apps/runner/src/backoff.ts": source,
       "apps/runner/src/runtime.ts": 'export {};',
+    });
+    assert.ok((await checkArchitecture(f.root)).failures.length > 0, source);
+  }
+});
+
+test("shared file identity stays independent of I/O and execution modules", async t => {
+  for (const source of [
+    'import "./runtime.js";',
+    'import { statSync } from "node:fs";',
+    'import type { Config } from "./config.js";',
+    'export const observe = () => fetch("https://example.invalid");',
+    'export const observe = () => setTimeout(() => {}, 100);',
+    'export const observe = async () => 1;',
+  ]) {
+    const f = await fixture(t, {
+      "apps/runner/src/updates/job-drain.ts": 'import "../file-identity.js";',
+      "apps/runner/src/file-identity.ts": source,
+      "apps/runner/src/runtime.ts": 'export {};',
+      "apps/runner/src/config.ts": 'export type Config = {};',
     });
     assert.ok((await checkArchitecture(f.root)).failures.length > 0, source);
   }

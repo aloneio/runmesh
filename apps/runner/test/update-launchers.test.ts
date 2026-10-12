@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -13,6 +13,18 @@ async function waitForLockExit(completion: Promise<number | null>): Promise<numb
   try {
     return await Promise.race([completion, new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 5_000); })]);
   } finally { clearTimeout(timer); }
+}
+function lockFixtureManager(ready: string, held: string, stop: string, exitCode: number, waitMs = 20_000): string {
+  return `const fs=require('node:fs');
+    fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({runtime:process.execPath}));
+    const deadline=Date.now()+${waitMs};
+    const wait=setInterval(()=>{
+      const locked=fs.existsSync(${JSON.stringify(held)}),stopped=fs.existsSync(${JSON.stringify(stop)});
+      if(!locked&&!stopped&&Date.now()<deadline)return;
+      clearInterval(wait);
+      if(!locked&&!stopped){process.stderr.write('launcher fixture manager readiness timed out');process.exitCode=70;return;}
+      console.log(JSON.stringify({source:'manager',args:process.argv.slice(2),runtime:process.execPath}));process.exitCode=${exitCode};
+    },10);`;
 }
 async function fixture(purge = false) {
   const temporary = await realpath(await mkdtemp(join(tmpdir(), "runmesh-launcher-")));
@@ -65,8 +77,8 @@ it.runIf(process.platform === "win32")("runs Windows purge outside both installe
 
 for (const release of [true, false]) for (const exitCode of [0, 23])
 it.runIf(process.platform === "win32")(`cleans a ${release ? "released" : "persistent"} Windows runtime lock without losing uninstall exit ${exitCode}`, async () => {
-  const test = await fixture(), ready = join(test.temporary, "lock-ready.json"), held = join(test.temporary, "lock-held"), unlock = join(test.temporary, "unlock"), attempted = join(test.temporary, "cleanup-attempted");
-  await writeFile(join(test.manager, "runmesh.cjs"), `const fs=require('node:fs'); fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({runtime:process.execPath}));const wait=setInterval(()=>{if(!fs.existsSync(${JSON.stringify(held)}))return;clearInterval(wait);console.log(JSON.stringify({source:'manager',args:process.argv.slice(2),runtime:process.execPath}));process.exitCode=${exitCode};},10);`);
+  const test = await fixture(), ready = join(test.temporary, "lock-ready.json"), held = join(test.temporary, "lock-held"), unlock = join(test.temporary, "unlock"), stop = join(test.temporary, "manager-stop"), attempted = join(test.temporary, "cleanup-attempted");
+  await writeFile(join(test.manager, "runmesh.cjs"), lockFixtureManager(ready, held, stop, exitCode));
   // Observe a real sharing violation before releasing the independent process.
   // This instruments the filesystem call, not the cleanup's decision or retry.
   const deletion = "[IO.Directory]::Delete($temporary,$true)";
@@ -93,7 +105,7 @@ it.runIf(process.platform === "win32")(`cleans a ${release ? "released" : "persi
     // FileShare.Read keeps a real file handle open without granting deletion.
     lock = spawn(`${trustedWindowsRoot()}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`, ["-NoProfile", "-NonInteractive", "-Command",
       `$ErrorActionPreference='Stop'; $lock=[IO.File]::Open(${quote(runtime)},[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read); try { [IO.File]::WriteAllText(${quote(held)},'held'); while(-not [IO.File]::Exists(${quote(unlock)})) { [Threading.Thread]::Sleep(10) } } finally { $lock.Dispose() }`], { windowsHide: true, stdio: "ignore" });
-    lockCompletion = new Promise(resolve => { lock!.once("exit", resolve); lock!.once("error", () => resolve(-1)); });
+    lockCompletion = new Promise(resolve => { lock!.once("close", resolve); lock!.once("error", () => {}); });
     await waitFor(held);
     await waitFor(attempted);
     const cleanupStarted = performance.now();
@@ -111,7 +123,7 @@ it.runIf(process.platform === "win32")(`cleans a ${release ? "released" : "persi
     }
     expect(await readFile(join(test.manager, "runmesh.cjs"), "utf8")).toContain("lock-ready.json");
   } finally {
-    try { await writeFile(unlock, "release"); await running; }
+    try { await writeFile(stop, "stop"); await writeFile(unlock, "release"); await running; }
     finally {
       try {
         if (lockCompletion !== undefined) {
@@ -131,6 +143,25 @@ it.runIf(process.platform === "win32")(`cleans a ${release ? "released" : "persi
         } finally { await test.cleanup(); }
       }
     }
+  }
+}, 60000);
+
+it.runIf(process.platform === "win32").each(["stop", "deadline"] as const)("closes a Windows lock fixture after %s when its holder never signals readiness", async completion => {
+  const test = await fixture(), ready = join(test.temporary, "lock-ready.json"), held = join(test.temporary, "lock-held"), stop = join(test.temporary, "manager-stop");
+  await writeFile(join(test.manager, "runmesh.cjs"), lockFixtureManager(ready, held, stop, 0, completion === "deadline" ? 100 : 20_000));
+  const running = test.run(["uninstall"]).then(result => ({ result, error: undefined }), error => ({ result: undefined, error: error as Error & { code: number; stderr: string } }));
+  try {
+    let runtime: string | undefined;
+    await vi.waitFor(async () => { runtime = (JSON.parse(await readFile(ready, "utf8")) as { runtime: string }).runtime; }, { timeout: 15_000 });
+    if (completion === "stop") await writeFile(stop, "stop");
+    const result = await running;
+    if (completion === "stop") expect(result.result).toMatchObject({ source: "manager", args: ["uninstall"] });
+    else expect(result.error).toMatchObject({ code: 70, stderr: expect.stringContaining("launcher fixture manager readiness timed out") });
+    await expect(readFile(held)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(runtime!)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    try { await writeFile(stop, "stop"); await running; }
+    finally { await test.cleanup(); }
   }
 }, 60000);
 

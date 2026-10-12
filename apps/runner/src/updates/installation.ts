@@ -4,6 +4,7 @@ import { lstat, open, realpath, rename, symlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { isExactUpdateVersion, UpdateFailure, type InstalledRelease, type InstallationPointerPort } from "./contracts.js";
 import { readMetadataJson } from "./metadata-file.js";
+import { exactFileStats } from "../file-identity.js";
 
 const missing = (error: unknown): boolean => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 const samePath = (left: string, right: string): boolean => process.platform === "win32" ? resolve(left).toLowerCase() === resolve(right).toLowerCase() : resolve(left) === resolve(right);
@@ -34,7 +35,7 @@ export class ManagedInstallationPointer implements InstallationPointerPort {
       if (!info.isDirectory() || info.isSymbolicLink() || !samePath(await realpath(checked), checked)
         || (process.platform !== "win32" && ((info.mode & 0o022) !== 0 || info.uid !== process.getuid?.()))) throw new UpdateFailure("invalid_installation");
     }
-    const path = join(checked, "package.json"); const info = await lstat(path);
+    const path = join(checked, "package.json"); const info = exactFileStats(await lstat(path, { bigint: true }));
     if (process.platform !== "win32" && ((info.mode & 0o022) !== 0 || info.uid !== process.getuid?.())) throw new UpdateFailure("invalid_installation");
     const value = await readMetadataJson(path, info, { maxBytes: 64 * 1024, errorCode: "invalid_installation" });
     if (typeof value !== "object" || value === null || !("name" in value) || value.name !== "@aloneio/runmesh-runner" || !("version" in value) || typeof value.version !== "string" || !isExactUpdateVersion(value.version)) throw new UpdateFailure("invalid_installation");

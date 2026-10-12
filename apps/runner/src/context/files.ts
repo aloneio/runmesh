@@ -6,18 +6,19 @@ import { RpcRuntimeError } from "../errors.js";
 import { sameStorageStamp, checkContextDirectory } from "../context-storage.js";
 import { isErrno, conflict } from "./model.js";
 import type { ContextFilePort } from "./ports.js";
+import { exactFileStats } from "../file-identity.js";
 
 export const NOFOLLOW = process.platform === "win32" ? 0 : constants.O_NOFOLLOW ?? 0;
 
 export async function readJsonBounded(path: string, maxBytes: number): Promise<{ readonly value: unknown; readonly bytes: number; readonly sha256: string }> {
   await assertRegularParent(path);
-  const info = await lstat(path);
+  const info = exactFileStats(await lstat(path, { bigint: true }));
   if (!info.isFile() || info.isSymbolicLink() || info.size > maxBytes) throw new RpcRuntimeError("context_record_corrupt", "context file is not a bounded regular file");
   // The descriptor stamp below is meaningful only if a substituted FIFO
   // cannot block open before that validation runs.
   const handle = await open(path, constants.O_RDONLY | NOFOLLOW | (constants.O_NONBLOCK ?? 0));
   try {
-    const finalInfo = await handle.stat();
+    const finalInfo = exactFileStats(await handle.stat({ bigint: true }));
     if (!finalInfo.isFile() || !sameStorageStamp(info, finalInfo) || finalInfo.size > maxBytes) throw new RpcRuntimeError("context_record_corrupt", "context file changed or exceeds its budget");
     const data = Buffer.alloc(finalInfo.size);
     let offset = 0;
@@ -28,7 +29,7 @@ export async function readJsonBounded(path: string, maxBytes: number): Promise<{
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    const after = await handle.stat();
+    const after = exactFileStats(await handle.stat({ bigint: true }));
     if (!sameStorageStamp(after, finalInfo) || offset !== data.byteLength) throw new RpcRuntimeError("context_record_corrupt", "context file changed while reading");
     let value: unknown;
     try { value = JSON.parse(data.toString("utf8")); } catch { throw new RpcRuntimeError("context_record_corrupt", "Context record is not valid JSON"); }

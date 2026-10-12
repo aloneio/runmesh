@@ -7,6 +7,7 @@ import { stopWindowsTask, windowsTaskMissingCatch } from "./services/task-schedu
 import { launchdProcessExited, waitForLaunchdExit } from "./services/launchd.js";
 import { nativeProbeReliable } from "./services/probes.js";
 import { createDurableFile, syncDurableFile } from "./services/durable-file.js";
+import { exactFileStats, sameFileIdentity, statIdentityKey } from "./file-identity.js";
 
 /** Cleanup is restricted to these application-owned locations. */
 export function purgeLayout(platform: ServicePlatform, mode: ServiceMode, home = homedir()) {
@@ -23,6 +24,7 @@ export function purgeLayout(platform: ServicePlatform, mode: ServiceMode, home =
 export interface PurgeStat {
   readonly dev: number;
   readonly ino: number;
+  readonly identityKey?: string;
   isDirectory(): boolean;
   isFile(): boolean;
   isSymbolicLink(): boolean;
@@ -43,7 +45,7 @@ export interface PurgeFilesystem {
 }
 const missing = (error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 export const hostPurgeFilesystem: PurgeFilesystem = {
-  stat: async (path) => lstat(path).catch((error: unknown) => { if (missing(error)) return undefined; throw error; }),
+  stat: async (path) => lstat(path, { bigint: true }).then(exactFileStats).catch((error: unknown) => { if (missing(error)) return undefined; throw error; }),
   withDirectory: async (path, expected, action) => {
     if (process.platform !== "linux") {
       if (await realpath(path) !== path) throw new Error("directory alias changed during cleanup");
@@ -51,7 +53,7 @@ export const hostPurgeFilesystem: PurgeFilesystem = {
     }
     const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try {
-      if (!same(expected, await handle.stat())) throw new Error("directory changed while pinning cleanup handle");
+      if (!same(expected, exactFileStats(await handle.stat({ bigint: true })))) throw new Error("directory changed while pinning cleanup handle");
       await action(`/proc/self/fd/${handle.fd}`);
     } finally { await handle.close(); }
   },
@@ -65,11 +67,11 @@ export const hostPurgeFilesystem: PurgeFilesystem = {
   text: async (path, limit) => {
     let handle;
     try {
-      const before = await lstat(path);
+      const before = exactFileStats(await lstat(path, { bigint: true }));
       if (!before.isFile() || before.isSymbolicLink() || before.size > limit) throw new Error("unsafe or oversized metadata");
       handle = await open(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW) | (constants.O_NONBLOCK ?? 0));
-      const after = await handle.stat();
-      if (!after.isFile() || after.size > limit || before.dev !== after.dev || before.ino !== after.ino) throw new Error("metadata changed while opening");
+      const after = exactFileStats(await handle.stat({ bigint: true }));
+      if (!after.isFile() || after.size > limit || !sameFileIdentity(before, after)) throw new Error("metadata changed while opening");
       const bytes = Buffer.alloc(limit + 1); let offset = 0;
       while (offset <= limit) { const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset); if (bytesRead === 0) break; offset += bytesRead; }
       if (offset > limit) throw new Error("oversized metadata");
@@ -99,7 +101,8 @@ export interface PurgeOptions {
   readonly beforeServiceStop?: () => Promise<void>;
 }
 const within = (child: string, parent: string) => child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
-const same = (a: PurgeStat, b: PurgeStat | undefined) => b !== undefined && a.dev === b.dev && a.ino === b.ino && a.isDirectory() === b.isDirectory() && a.isSymbolicLink() === b.isSymbolicLink();
+const same = (a: PurgeStat, b: PurgeStat | undefined) => b !== undefined && sameFileIdentity(a, b) && a.isDirectory() === b.isDirectory() && a.isSymbolicLink() === b.isSymbolicLink();
+const deviceIdentity = (info: PurgeStat): string | undefined => statIdentityKey(info)?.split(":")[0];
 
 export async function purgeInstallation(options: PurgeOptions = {}): Promise<PurgeResult> {
   const platform = options.platform ?? currentServicePlatform(); const mode = options.mode ?? "system";
@@ -337,11 +340,11 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
   if (!await preflight()) return result;
   progress("[3/4] Removing installation, configuration, state and logs");
   let visited = 0;
-  async function removeTree(path: string, expected: PurgeStat, device: number, depth = 0): Promise<void> {
+  async function removeTree(path: string, expected: PurgeStat, device: string, depth = 0): Promise<void> {
     if (++visited > 500_000 || depth > 128) throw new Error("cleanup traversal limit reached");
     if (!same(expected, await io.stat(path))) throw new Error("path changed during cleanup");
     if (expected.isSymbolicLink() || !expected.isDirectory()) { await io.file(path); return; }
-    if (expected.dev !== device || mounts.includes(path)) throw new Error("refusing to cross a filesystem boundary");
+    if (deviceIdentity(expected) !== device || mounts.includes(path)) throw new Error("refusing to cross a filesystem boundary");
     const enumerate = async (anchor: string) => {
       for (const name of await io.list(anchor)) {
         if (name === "." || name === ".." || name.includes(sep)) throw new Error("invalid directory entry");
@@ -370,7 +373,9 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
       const safe = await safeParent(path); if (safe !== path) { if (!safe) { result.absent.push(path); continue; } throw new Error("parent changed during cleanup"); }
       const info = await io.stat(path); if (!info) { result.absent.push(path); continue; }
       await assertWorkspaceProtection(path);
-      await removeTree(path, info, (await io.stat(dirname(path)))?.dev ?? info.dev);
+      const device = deviceIdentity(await io.stat(dirname(path)) ?? info);
+      if (device === undefined) throw new Error("cleanup device identity is invalid");
+      await removeTree(path, info, device);
       result.removed.push(path);
     } catch (error) { errors(path, error); }
   }

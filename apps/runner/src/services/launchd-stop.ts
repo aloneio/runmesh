@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { LaunchdStopRecoveryFilesystem, ServiceCommandExecutor, ServiceMode } from "./contracts.js";
 import { createDurableFile, syncDurableFile } from "./durable-file.js";
 import { nativeProbeReliable } from "./probes.js";
+import { exactFileStats, sameFileIdentity } from "../file-identity.js";
 
 export type { LaunchdStopRecoveryFilesystem } from "./contracts.js";
 
@@ -24,11 +25,11 @@ export const hostLaunchdStopRecoveryFilesystem: LaunchdStopRecoveryFilesystem = 
     let handle;
     try {
       await checkParents(path);
-      const before = await lstat(path);
+      const before = exactFileStats(await lstat(path, { bigint: true }));
       if (!before.isFile() || before.isSymbolicLink() || before.size > 4096) throw new Error("Runner stop recovery record has an unsafe file type or size");
       handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-      const after = await handle.stat();
-      if (!after.isFile() || after.size > 4096 || before.dev !== after.dev || before.ino !== after.ino) throw new Error("Runner stop recovery record changed while opening");
+      const after = exactFileStats(await handle.stat({ bigint: true }));
+      if (!after.isFile() || after.size > 4096 || !sameFileIdentity(before, after)) throw new Error("Runner stop recovery record changed while opening");
       const bytes = Buffer.alloc(4097);
       let offset = 0;
       while (offset < bytes.length) {
