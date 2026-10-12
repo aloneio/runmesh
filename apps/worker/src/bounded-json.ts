@@ -29,14 +29,25 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
   const deadline = performance.now() + timeoutMs;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let completed = false;
+  let completed = false, abandoned = false;
   const cancel = (): void => { controller.abort(); void reader?.cancel().catch(() => undefined); };
   const observe = async (): Promise<{ readonly status: number; readonly value?: unknown } | undefined> => {
     try {
       phase = "fetch";
       const response = await fetchResponse(controller.signal);
+      // A fetch implementation may ignore AbortSignal and resolve after the
+      // observation has already settled. The late continuation no longer owns
+      // this response, so leave its body untouched.
+      if (abandoned) return undefined;
       responseStatus = response.status;
-      if (controller.signal.aborted || performance.now() >= deadline) { report(parentSignal?.aborted ? "parent_abort" : "deadline"); cancel(); void response.body?.cancel().catch(() => undefined); return undefined; }
+      if (controller.signal.aborted || performance.now() >= deadline) {
+        // The fetch resolved after this observation's budget. Fence the late
+        // continuation before inspecting or cancelling its response body.
+        abandoned = true;
+        report(parentSignal?.aborted ? "parent_abort" : "deadline");
+        cancel();
+        return undefined;
+      }
       if (!acceptedStatuses.includes(response.status)) { report("unexpected_status"); void response.body?.cancel().catch(() => undefined); return { status: response.status }; }
       const length = response.headers.get("content-length");
       if (length !== null && (!/^\d+$/u.test(length) || Number(length) > maxBytes)) { report("length_limit"); void response.body?.cancel().catch(() => undefined); return undefined; }
@@ -53,6 +64,7 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
       let bytes = new Uint8Array(0), size = 0, emptyChunks = 0;
       for (;;) {
         const next = await reader.read();
+        if (abandoned) return undefined;
         if (controller.signal.aborted || performance.now() >= deadline) { report(parentSignal?.aborted ? "parent_abort" : "deadline"); cancel(); return undefined; }
         if (next.done) break;
         // Empty chunks consume no byte budget and can keep resolving in the
@@ -76,10 +88,20 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
       completed = true;
       return { status: response.status, value };
     } catch (error) { report("exception", error); return undefined; }
+    finally {
+      // A timeout may return before a pending read observes cancellation. The
+      // continuation owns the reader until that read settles, then releases
+      // the lock so a late completion cannot retain the response stream.
+      const activeReader = reader;
+      reader = undefined;
+      if (activeReader !== undefined) {
+        try { activeReader.releaseLock(); } catch { /* a read may still be pending */ }
+      }
+    }
   };
-  // Settle even when a transport ignores abort; its late body is cancelled above.
+  // Settle even when a transport ignores abort; its late response is ignored.
   let stop!: () => void;
-  const stopped = new Promise<undefined>(resolve => { stop = () => { report(parentSignal?.aborted ? "parent_abort" : "deadline"); cancel(); resolve(undefined); }; });
+  const stopped = new Promise<undefined>(resolve => { stop = () => { abandoned = true; report(parentSignal?.aborted ? "parent_abort" : "deadline"); cancel(); resolve(undefined); }; });
   parentSignal?.addEventListener("abort", stop, { once: true });
   try {
     timer = setTimeout(stop, timeoutMs);
@@ -88,6 +110,6 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
     if (timer !== undefined) clearTimeout(timer);
     parentSignal?.removeEventListener("abort", stop);
     if (completed) reader?.releaseLock();
-    else cancel();
+    else { abandoned = true; cancel(); }
   }
 }

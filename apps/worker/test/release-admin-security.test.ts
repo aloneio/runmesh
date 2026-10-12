@@ -683,7 +683,9 @@ it("parent cancellation settles ignored aborts without cancelling another observ
   expect(independentBeforeCompletion).toBe(false);
   expect(await independent).toEqual({ status: 200, value: { ok: true } });
   expect(independentParent.signal.aborted).toBe(false);
-  expect(cancel).toHaveBeenCalledOnce();
+  // The cancelled observation must fence its late response rather than
+  // touching a body after the request lifecycle has ended.
+  expect(cancel).not.toHaveBeenCalled();
 });
 it.each(["complete", "cancel"])("a bounded observation removes its parent listener after %s", async outcome => {
   const { boundedJsonResponse } = await import("../src/bounded-json.js");
@@ -697,16 +699,35 @@ it.each(["complete", "cancel"])("a bounded observation removes its parent listen
     expect(parent.signal.aborted).toBe(outcome === "cancel");
   } finally { added.mockRestore(); removed.mockRestore(); }
 });
-it("a bounded observation cancels a late response even when fetch ignores abort", async () => {
+it("ignores a late response body after fetch ignores abort", async () => {
   const { boundedJsonReceipt } = await import("../src/bounded-json.js");
   let finish: ((response: Response) => void) | undefined, signal: AbortSignal | undefined;
-  const cancel = vi.fn();
-  const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
+  const response = new Response(new ReadableStream<Uint8Array>());
+  const cancel = vi.spyOn(response.body!, "cancel");
   const result = await boundedJsonReceipt(input => { signal = input; return new Promise(resolve => { finish = resolve; }); }, [200], 10);
   expect(result).toBeUndefined(); expect(signal?.aborted).toBe(true);
   finish!(response);
   await new Promise(resolve => setTimeout(resolve, 0));
-  expect(cancel).toHaveBeenCalledTimes(1);
+  expect(cancel).not.toHaveBeenCalled();
+  expect(response.body?.locked).toBe(false);
+});
+it("releases a reader after timeout cancellation settles a pending body read", async () => {
+  vi.useFakeTimers();
+  const { boundedJsonReceipt } = await import("../src/bounded-json.js");
+  const body = new ReadableStream<Uint8Array>({ cancel() {} });
+  const response = new Response(body);
+  const reader = body.getReader();
+  const cancel = vi.spyOn(reader, "cancel"), release = vi.spyOn(reader, "releaseLock");
+  vi.spyOn(body, "getReader").mockReturnValue(reader);
+  try {
+    const pending = boundedJsonReceipt(async () => response, [200], 10);
+    await vi.advanceTimersByTimeAsync(11);
+    expect(await pending).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cancel).toHaveBeenCalled();
+    expect(release).toHaveBeenCalled();
+    expect(body.locked).toBe(false);
+  } finally { vi.useRealTimers(); }
 });
 it.each([200, 403, 409])("an unfinished explicitly parsed HTTP %s body cannot exhaust the observation deadline", async status => {
   const { boundedJsonReceipt } = await import("../src/bounded-json.js");
