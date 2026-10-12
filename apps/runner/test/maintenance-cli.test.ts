@@ -5,6 +5,7 @@ import { RUNNER_VERSION } from "../src/version.js";
 import type { CliDependencies, MaintenanceCliDependencies, ServiceProfilePort } from "../src/cli/contracts.js";
 import type { RunnerProfile } from "../src/profile.js";
 import { renderService } from "../src/service.js";
+import type { ManagerRefreshResult } from "../src/updates/manager-refresh.js";
 
 it("exposes the maintenance package identity and only its dedicated command surface", async () => {
   const output: string[] = [];
@@ -13,7 +14,8 @@ it("exposes the maintenance package identity and only its dedicated command surf
     save: unexpectedProfileAccess, remove: unexpectedProfileAccess, assertServiceOwnership: unexpectedProfileAccess };
   await runMaintenanceCli(["--help"], { store, stdout: line => output.push(line) });
   expect(output[0]).toContain("Runmesh maintenance");
-  expect(output[0]).toContain("maintenance-agent|install|migrate|stop|restart|uninstall");
+  expect(output[0]).toContain("maintenance-agent|manager-refresh|install|migrate|stop|restart|uninstall");
+  expect(output[0]).toContain("manager-refresh --profile <existing-profile> --install-root <root> --release-dir <signed-assets> [--user] [--json]");
   await runMaintenanceCli(["--version"], { store, stdout: line => output.push(line) });
   expect(output[1]).toBe(RUNNER_VERSION);
 });
@@ -30,6 +32,74 @@ it("dispatches maintenance-agent directly without loading the Runner execution p
   const startMaintenanceAgent = vi.fn(async () => undefined);
   await runMaintenanceCli(["maintenance-agent", "--profile", "/home/fixture/profile.json", "--install-root", "/home/fixture/runmesh", "--user"], { servicePlatform: "linux", startMaintenanceAgent });
   expect(startMaintenanceAgent).toHaveBeenCalledExactlyOnceWith({ profilePath: "/home/fixture/profile.json", installRoot: "/home/fixture/runmesh", mode: "user", platform: "linux" });
+});
+
+const refreshArgs = ["manager-refresh", "--profile", "/home/fixture/profile.json", "--install-root", "/home/fixture/runmesh", "--release-dir", "/home/fixture/release"];
+const refreshed: ManagerRefreshResult = { action: "manager-refresh", manager_version: "0.1.9-dev.99", previous_manager_version: "0.1.8", runner_unchanged: true, restarted: true };
+
+it.each([
+  { user: false, json: false }, { user: false, json: true }, { user: true, json: false }, { user: true, json: true },
+])("refreshes only the independent manager with user=$user and json=$json", async ({ user, json }) => {
+  const refreshMaintenanceManager = vi.fn(async () => refreshed), output = vi.fn();
+  const startMaintenanceAgent = vi.fn(async () => undefined);
+  await runMaintenanceCli([...refreshArgs, ...(user ? ["--user"] : []), ...(json ? ["--json"] : [])], {
+    servicePlatform: "linux", refreshMaintenanceManager, startMaintenanceAgent, stdout: output,
+    get store() { throw new Error("manager refresh delegates existing profile validation to its own transaction"); },
+  });
+  expect(refreshMaintenanceManager).toHaveBeenCalledExactlyOnceWith({ profilePath: "/home/fixture/profile.json", installRoot: "/home/fixture/runmesh",
+    releaseDirectory: "/home/fixture/release", mode: user ? "user" : "system", platform: "linux" });
+  expect(startMaintenanceAgent).not.toHaveBeenCalled();
+  expect(output).toHaveBeenCalledExactlyOnceWith(json ? JSON.stringify(refreshed) : `Maintenance manager version: ${refreshed.manager_version}`);
+});
+
+it.each(["--profile", "--install-root", "--release-dir"])("requires %s before refreshing the manager", async option => {
+  const refreshMaintenanceManager = vi.fn(async () => refreshed);
+  const index = refreshArgs.indexOf(option), argv = [...refreshArgs.slice(0, index), ...refreshArgs.slice(index + 2)];
+  await expect(runMaintenanceCli(argv, { refreshMaintenanceManager })).rejects.toThrow(`${option} is required`);
+  expect(refreshMaintenanceManager).not.toHaveBeenCalled();
+});
+
+it.each(["--profile", "--install-root", "--release-dir"])("requires a value for manager-refresh %s", async option => {
+  const refreshMaintenanceManager = vi.fn(async () => refreshed);
+  const index = refreshArgs.indexOf(option), without = [...refreshArgs.slice(0, index), ...refreshArgs.slice(index + 2)];
+  for (const trailing of [[option], [option, ""], [option, "--json"]]) {
+    await expect(runMaintenanceCli([...without, ...trailing], { refreshMaintenanceManager })).rejects.toThrow(`unknown or incomplete option: ${option}`);
+  }
+  expect(refreshMaintenanceManager).not.toHaveBeenCalled();
+});
+
+it.each(["--purge", "--yes", "--insecure-local", "--re-enroll", "--confirm-privileged-host", "--code-stdin", "--server", "--execution-mode", "--trust-key", "extra", "--"])("rejects the unrelated manager-refresh option %s before dispatch", async option => {
+  const refreshMaintenanceManager = vi.fn(async () => refreshed);
+  await expect(runMaintenanceCli([...refreshArgs, option], { refreshMaintenanceManager })).rejects.toThrow(`unknown or incomplete option: ${option}`);
+  expect(refreshMaintenanceManager).not.toHaveBeenCalled();
+});
+
+it.each(["--profile", "--install-root", "--release-dir", "--user", "--json"])("rejects duplicate manager-refresh %s options", async option => {
+  const refreshMaintenanceManager = vi.fn(async () => refreshed);
+  const duplicate = option === "--user" || option === "--json" ? [option, option] : [option, "/another/path"];
+  await expect(runMaintenanceCli([...refreshArgs, ...duplicate], { refreshMaintenanceManager })).rejects.toThrow(`duplicate option: ${option}`);
+  expect(refreshMaintenanceManager).not.toHaveBeenCalled();
+});
+
+it.each(["install", "maintenance-agent"])("keeps --release-dir exclusive to manager-refresh instead of %s", async command => {
+  const refreshMaintenanceManager = vi.fn(async () => refreshed), startMaintenanceAgent = vi.fn(async () => undefined);
+  await expect(runMaintenanceCli([command, "--release-dir", "/home/fixture/release"], { refreshMaintenanceManager, startMaintenanceAgent })).rejects.toThrow("unknown or incomplete option: --release-dir");
+  expect(refreshMaintenanceManager).not.toHaveBeenCalled(); expect(startMaintenanceAgent).not.toHaveBeenCalled();
+});
+
+it("reports manager refresh failure once and leaves success output empty", async () => {
+  const failure = Object.freeze(new Error("manager refresh transaction failed")), stdout = vi.fn(), stderr = vi.fn();
+  const refreshMaintenanceManager = vi.fn(async () => { throw failure; });
+  const cause = await runMaintenanceCli(refreshArgs, { refreshMaintenanceManager, stdout, stderr }).catch(error => error);
+  expect(cause).toBe(failure); expect(isCliErrorReported(cause)).toBe(true);
+  expect(stderr).toHaveBeenCalledExactlyOnceWith(failure.message); expect(stdout).not.toHaveBeenCalled();
+  expect(refreshMaintenanceManager).toHaveBeenCalledOnce();
+});
+
+it("retains a completed manager refresh when success output fails", async () => {
+  const failure = new Error("refresh output unavailable"), refreshMaintenanceManager = vi.fn(async () => refreshed), stderr = vi.fn();
+  await expect(runMaintenanceCli(refreshArgs, { refreshMaintenanceManager, stdout: () => { throw failure; }, stderr })).rejects.toBe(failure);
+  expect(refreshMaintenanceManager).toHaveBeenCalledOnce(); expect(stderr).toHaveBeenCalledExactlyOnceWith(failure.message);
 });
 
 it("rejects incomplete maintenance arguments before starting the host agent", async () => {

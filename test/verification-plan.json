@@ -105,6 +105,8 @@
         "apps/runner/test/launchd-exit.test.ts",
         "apps/runner/test/launchd-lifecycle-recovery.test.ts",
         "apps/runner/test/maintenance-cli.test.ts",
+        "apps/runner/test/manager-refresh-native.test.ts",
+        "apps/runner/test/manager-refresh.test.ts",
         "apps/runner/test/patch-git.test.ts",
         "apps/runner/test/patch-large-lines.test.ts",
         "apps/runner/test/patch-persistence-failures.test.ts",

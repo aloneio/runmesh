@@ -45,7 +45,7 @@ Skill 文件以文本交付。AI 客户端根据说明使用可用工具，每�
 
 ## 从 GitHub 导入
 
-GitHub 导入及下文的版本管理功能需要 0.1.8 系列控制端。部署选择见[发行状态](release-readiness.zh-CN.md)。
+GitHub 导入及下文的版本管理功能需要 0.1.8 或后续兼容版本的控制端。部署选择见[发行状态](release-readiness.zh-CN.md)。
 
 在 Skill 区域展开「从 GitHub 导入」，填写公开仓库地址、完整的 40 位提交 SHA，以及 Skill 文件夹路径。`SKILL.md` 位于仓库根目录时，路径留空。点击「预览 Skill」，核对文件后点击「安装 Skill」或「更新 Skill」。
 

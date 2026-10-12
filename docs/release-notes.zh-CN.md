@@ -2,6 +2,14 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
+## 0.1.9 — 发布验证中
+
+0.1.9 版本管理器改进 Windows Runner 版本切换，在最终版本目录校验新运行时后再切换当前安装。升级及切回旧版继续保留现有配置。
+
+已有安装通过 [`manager-refresh`](upgrading.zh-CN.md#更新已安装的版本管理器) 更新管理器，使用独立验签发行包中的维护程序。先更新管理器，再在控制端选择 Runner 版本；已有管理器身份与状态、Node 运行时、Runner 配置、工作区及原服务启用状态继续保留。新安装及首次启用管理器使用所选包自带的管理器。
+
+当前安装方式见[发行状态](release-readiness.zh-CN.md)，版本管理步骤见 [Runner 版本管理](runner-versions.zh-CN.md)。
+
 ## 0.1.8 — 已发布正式版
 
 [Runmesh 0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) 已发布，提供签名便携 Runner 安装包。安装方式见[发行状态](release-readiness.zh-CN.md)，更新已有实例时请按[升级指南](upgrading.zh-CN.md)操作。

@@ -18,7 +18,7 @@ OAuth 提供方可采用客户端元数据文档或自动客户端注册。登�
 
 ## 检查连接
 
-连接检查、`server.json` 导入和 `remote_search` 由 0.1.8 系列控制端提供。部署渠道见[发行状态](release-readiness.zh-CN.md)。
+连接检查、`server.json` 导入和 `remote_search` 由 0.1.8 及后续兼容版本的控制端提供。部署渠道见[发行状态](release-readiness.zh-CN.md)。
 
 填写 MCP 地址后点击「检查连接」，查看协商的协议版本、工具数量及服务声明的能力。也可在已启用 MCP 的卡片上检查连接。需要登录时，新连接选择「OAuth → 连接」，已有连接点击卡片上的「重新授权」。
 

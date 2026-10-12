@@ -10,6 +10,7 @@ import type { ServiceProvisioner } from "../service.js";
 import type { validateRunnerConfig } from "../config.js";
 import type { MaintenanceManagerInstaller } from "../updates/manager-install.js";
 import type { MaintenanceAgentOptions } from "../updates/agent.js";
+import type { ManagerRefreshOptions, ManagerRefreshResult } from "../updates/manager-refresh-contracts.js";
 
 /** Profile capabilities used by service lifecycle transactions. The installed
  * manager does not need execution, diagnostic or concrete storage internals. */
@@ -46,6 +47,7 @@ export interface MaintenanceCliDependencies extends ServiceCliDependencies {
   readonly stderr?: (line: string) => void;
   readonly fetch?: typeof globalThis.fetch;
   readonly startMaintenanceAgent?: (options: MaintenanceAgentOptions) => Promise<void>;
+  readonly refreshMaintenanceManager?: (options: ManagerRefreshOptions) => Promise<ManagerRefreshResult>;
 }
 
 export interface CliDependencies extends MaintenanceCliDependencies {

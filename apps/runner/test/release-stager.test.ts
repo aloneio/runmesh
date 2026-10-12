@@ -1,19 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { exactRunnerRelease } from "@aloneio/runmesh-protocol";
 import { runnerArchiveFiles } from "../src/updates/release-archive.js";
 import { downloadRunnerReleaseAsset, stageRunnerRelease } from "../src/updates/release-stager.js";
 
-const cleanupFault = vi.hoisted(() => ({ error: undefined as Error | undefined }));
+const cleanupFault = vi.hoisted(() => ({ error: undefined as Error | undefined, matches: undefined as ((path: string) => boolean) | undefined }));
 const commitFault = vi.hoisted(() => ({ error: undefined as Error | undefined, remaining: 0, attempts: 0, onFailure: undefined as (() => void) | undefined }));
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const remove: typeof actual.rm = async (path, options) => {
-    if (cleanupFault.error !== undefined && String(path).endsWith(".staging")) throw cleanupFault.error;
+    if (cleanupFault.error !== undefined && (cleanupFault.matches?.(String(path)) ?? String(path).endsWith(".staging"))) throw cleanupFault.error;
     return actual.rm(path, options);
   };
   const rename: typeof actual.rename = async (source, destination) => {
@@ -80,6 +80,37 @@ describe("Runner exact release staging", () => {
     expect(f.calls).toHaveLength(4);
   }, 30000);
 
+  it("verifies the installed runtime and bundle before recording the release", async ({ onTestFinished }) => {
+    const root = await mkdtemp(join(tmpdir(), "runmesh-stager-")), observation = join(root, "probe.json");
+    onTestFinished(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const f = fixture("0.1.6", { bundle: `const fs = require("node:fs"), path = require("node:path");
+      const directory = path.dirname(path.dirname(process.execPath));
+      fs.writeFileSync(${JSON.stringify(observation)}, JSON.stringify({ runtime: process.execPath, bundle: process.argv[1],
+        releaseRecorded: fs.existsSync(path.join(directory, ".runmesh-release.json")) }));
+      console.log("0.1.6");` });
+    const result = await stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+      { installRoot: root, operationId: "installed-probe", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust });
+    const packageParts = process.platform === "win32" ? ["node_modules", "@aloneio", "runmesh-runner"] : ["lib", "node_modules", "@aloneio", "runmesh-runner"];
+    expect(JSON.parse(await readFile(observation, "utf8"))).toEqual({
+      runtime: join(result.versionDirectory, "runtime", process.platform === "win32" ? "node.exe" : "node"),
+      bundle: join(result.versionDirectory, ...packageParts, "dist", "runmesh.cjs"), releaseRecorded: false,
+    });
+    expect(JSON.parse(await readFile(join(result.versionDirectory, ".runmesh-release.json"), "utf8"))).toEqual({
+      version: "0.1.6", manifest_sha256: f.manifestSha, artifact_sha256: f.sha,
+    });
+  }, 30000);
+
+  it.each([
+    { name: "wrong version", bundle: 'console.log("0.0.0");', error: { message: "Runner package reported a different version." } },
+    { name: "nonzero exit", bundle: "process.exitCode = 7;", error: { code: 7 } },
+  ])("removes its placed installation after a probe reports $name", async ({ bundle, error }) => {
+    const root = await mkdtemp(join(tmpdir(), "runmesh-stager-")), f = fixture("0.1.6", { bundle });
+    onTestFinished(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+      { installRoot: root, operationId: "failed-probe", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toMatchObject(error);
+    expect(await readdir(join(root, "versions"))).toEqual([]);
+  }, 30000);
+
   it.each(["EBUSY", "EPERM", "EACCES"])("handles a transient %s at the private staging commit", async (code) => {
     const f = fixture(), root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
     const error = Object.assign(new Error("staging handle is busy"), { code });
@@ -101,7 +132,8 @@ describe("Runner exact release staging", () => {
   }, 30000);
 
   it.each(["EBUSY", "EIO"])("preserves a persistent %s and removes its uncommitted directory", async code => {
-    const f = fixture(), root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    const root = await mkdtemp(join(tmpdir(), "runmesh-stager-")), probeMarker = join(root, "probe-started");
+    const f = fixture("0.1.6", { bundle: `require("node:fs").writeFileSync(${JSON.stringify(probeMarker)}, "started"); console.log("0.1.6");` });
     const error = Object.assign(new Error("staging commit failed"), { code });
     commitFault.error = error; commitFault.remaining = 100; commitFault.attempts = 0;
     try {
@@ -109,6 +141,7 @@ describe("Runner exact release staging", () => {
         { installRoot: root, operationId: "failed-commit", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toBe(error);
       expect(commitFault.attempts).toBe(process.platform === "win32" && code === "EBUSY" ? 6 : 1);
       expect(await readdir(join(root, "versions"))).toEqual([]);
+      await expect(readFile(probeMarker)).rejects.toMatchObject({ code: "ENOENT" });
     } finally { commitFault.error = undefined; await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 30000);
 
@@ -232,7 +265,7 @@ describe("Runner exact release staging", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it("stops an active version probe that ignores SIGTERM and removes the temporary installation", async () => {
+  it("stops an active version probe that ignores SIGTERM and removes its owned installation", async () => {
     const root = await mkdtemp(join(tmpdir(), "runmesh-stager-")), marker = join(root, "probe-started");
     const f = fixture("0.1.6", { bundle: `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000);` });
     const controller = new AbortController();
@@ -273,6 +306,25 @@ describe("Runner exact release staging", () => {
       expect(failure.errors).toEqual([failure.cause, cleanup]);
     } finally { cleanupFault.error = undefined; await rm(root, { recursive: true, force: true }); }
   });
+
+  it("retains the probe failure and cleanup error for its placed installation", async ({ onTestFinished }) => {
+    const f = fixture("0.1.6", { bundle: 'console.log("0.0.0");' }), root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const cleanup = new Error("placed installation cleanup fixture");
+    cleanupFault.error = cleanup;
+    cleanupFault.matches = path => dirname(path) === join(root, "versions") && !path.endsWith(".staging");
+    try {
+      const failure = await stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
+        { installRoot: root, operationId: "probe-cleanup-failure", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust }).catch(error => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.cause).toMatchObject({ message: "Runner package reported a different version." });
+      expect(failure.errors).toEqual([failure.cause, cleanup]);
+      const directories = await readdir(join(root, "versions"));
+      expect(directories).toHaveLength(1);
+      expect(directories[0]).not.toMatch(/\.staging$/u);
+      await expect(readFile(join(root, "versions", directories[0]!, ".runmesh-release.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { cleanupFault.error = undefined; cleanupFault.matches = undefined; }
+  }, 30000);
 
   it("stages a cloud-selected signed wire v3 release independently of the manager's older wire protocol", async () => {
     const f = fixture("0.1.8-dev.99", { protocolMin: 3, protocolMax: 3 }); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
