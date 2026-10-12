@@ -1,6 +1,6 @@
 # Runner descriptor-boundary audit - 2026-09-18
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 ## Scope and preserved state
 
@@ -32,4 +32,4 @@ Final verification must identify the exact clean follow-up candidate and rerun a
 
 During this audit, a Host shell receipt's Job ID could not be retrieved through the connected job tool. The host schema rejected workspace-bound get arguments and exposed no context tool, while the candidate source supports both. A stale host tool catalog and deployed Worker/Runner provenance must be verified independently; source tests cannot close those live acceptance gaps.
 
-No automatic main promotion, force push, stable publication, production deployment, installed Runner restart or old-worktree deletion is part of this repair. Immutable v0.1.3 assets remain unchanged. Later dev changes still require a new stable version, exact-source provider verification and separate installed-component acceptance.
+The recorded review covers source repairs and regression checks. Immutable v0.1.3 assets remain unchanged. Later dev changes still require a new stable version, exact-source provider verification and separate installed-component acceptance.

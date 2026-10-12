@@ -1,0 +1,154 @@
+{
+  "scope": "isolated local Runner APIs with native Node/Git/filesystem; no network or system services",
+  "platform": "win32",
+  "node": "v22.23.2",
+  "started_at_utc": "2026-10-12T00:56:12.974Z",
+  "elapsed_ms": 119754,
+  "max_concurrent_jobs": 3,
+  "queued_peak": 15,
+  "parent_peak_rss_bytes": 56356864,
+  "rss_scope": "load driver only; child process memory excluded",
+  "metrics": {
+    "job_start": {
+      "count": 18,
+      "p50_ms": 569.47,
+      "p95_ms": 859.29,
+      "max_ms": 859.29
+    },
+    "job_input": {
+      "count": 3,
+      "p50_ms": 0.56,
+      "p95_ms": 16.91,
+      "max_ms": 16.91
+    },
+    "job_log_page": {
+      "count": 252,
+      "p50_ms": 66.78,
+      "p95_ms": 330.39,
+      "max_ms": 703.66
+    },
+    "job_recovery": {
+      "count": 1,
+      "p50_ms": 2602.15,
+      "p95_ms": 2602.15,
+      "max_ms": 2602.15
+    },
+    "patch_create": {
+      "count": 24,
+      "p50_ms": 5507.57,
+      "p95_ms": 8484.29,
+      "max_ms": 9287.27
+    },
+    "patch_update": {
+      "count": 24,
+      "p50_ms": 4177.09,
+      "p95_ms": 6671.88,
+      "max_ms": 8474.85
+    },
+    "file_read": {
+      "count": 192,
+      "p50_ms": 117.94,
+      "p95_ms": 336.45,
+      "max_ms": 458.65
+    },
+    "file_snapshot_page": {
+      "count": 31,
+      "p50_ms": 31.96,
+      "p95_ms": 56.44,
+      "max_ms": 145.77
+    },
+    "file_search": {
+      "count": 4,
+      "p50_ms": 1530.48,
+      "p95_ms": 2086.12,
+      "max_ms": 2086.12
+    },
+    "file_search_scoped": {
+      "count": 1,
+      "p50_ms": 71.63,
+      "p95_ms": 71.63,
+      "max_ms": 71.63
+    },
+    "git_status": {
+      "count": 3,
+      "p50_ms": 2293.7,
+      "p95_ms": 2733.45,
+      "max_ms": 2733.45
+    },
+    "git_diff": {
+      "count": 3,
+      "p50_ms": 2315.45,
+      "p95_ms": 3045.71,
+      "max_ms": 3045.71
+    },
+    "git_log": {
+      "count": 3,
+      "p50_ms": 1804.55,
+      "p95_ms": 2972.63,
+      "max_ms": 2972.63
+    },
+    "git_show": {
+      "count": 3,
+      "p50_ms": 897.55,
+      "p95_ms": 1876.34,
+      "max_ms": 1876.34
+    },
+    "git_blame": {
+      "count": 3,
+      "p50_ms": 1163.19,
+      "p95_ms": 2902.18,
+      "max_ms": 2902.18
+    },
+    "context_checkpoint": {
+      "count": 12,
+      "p50_ms": 631.15,
+      "p95_ms": 879.68,
+      "max_ms": 879.68
+    },
+    "context_recovery_read": {
+      "count": 12,
+      "p50_ms": 68.09,
+      "p95_ms": 105.15,
+      "max_ms": 105.15
+    },
+    "context_search": {
+      "count": 1,
+      "p50_ms": 78.31,
+      "p95_ms": 78.31,
+      "max_ms": 78.31
+    },
+    "job_cancel": {
+      "count": 4,
+      "p50_ms": 484.29,
+      "p95_ms": 630.4,
+      "max_ms": 630.4
+    }
+  },
+  "budget_observations": [
+    {
+      "operation": "file_search",
+      "returned": 24,
+      "truncated": false,
+      "reason": null
+    },
+    {
+      "operation": "file_search",
+      "returned": 24,
+      "truncated": false,
+      "reason": null
+    },
+    {
+      "operation": "file_search",
+      "returned": 24,
+      "truncated": false,
+      "reason": null
+    },
+    {
+      "operation": "file_search",
+      "returned": 24,
+      "truncated": false,
+      "reason": null
+    }
+  ],
+  "success": true
+}

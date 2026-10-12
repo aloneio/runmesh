@@ -7,6 +7,11 @@ import { handleBrowserAdmin } from "../src/http/admin.js";
 import { ADMIN_CSRF_COOKIE, ADMIN_SESSION_COOKIE } from "../src/http/constants.js";
 import { internalHeaders, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import type { WorkerEnv } from "../src/platform/env.js";
+import { SkillState } from "../src/platform/skills/store.js";
+import { CentralSchema } from "../src/platform/capabilities/schema.js";
+import { makeSkillBundle } from "../src/domain/skills/bundle.js";
+import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
+import { SKILL_LIMITS } from "../src/contracts/skills.js";
 
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName('registry'));
 const sharedTools = ['remote_call', 'remote_profiles', 'remote_search', 'remote_tools', 'skill_list', 'skill_read'];
@@ -43,6 +48,82 @@ async function fixture(nativeScopes: ["coding:read"] | [] = []) {
   };
   return { config, headers, clients, admin, rpc, invoke, hash, port, stub };
 }
+it('normal concurrent Skill MCP reads preserve complete pages and immutable content', async () => {
+  const f = await fixture(), count = SKILL_LIMITS.page + 2, text = 'Reference content.\n'.repeat(256);
+  const values = await Promise.all(Array.from({ length: count }, (_, index) => {
+    const id = 'load-skill-' + String(index).padStart(3, '0');
+    return makeSkillBundle({ skill_id: id, source: 'Local load fixture', license: 'MIT', files: [
+      { path: 'SKILL.md', text: `---\nname: ${id}\ndescription: Concurrent reading fixture\n---\nRead references/content.md.` },
+      { path: 'references/content.md', text },
+    ] }, catalogSha256);
+  }));
+  await runInDurableObject(f.stub, (_owner, state) => {
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    for (const value of values) {
+      expect(value).toBeDefined(); expect(store.install(value!, 0).state).toBe('written');
+    }
+  });
+  const selected = values[0]!, firstIds = values.slice(0, SKILL_LIMITS.page).map(value => value!.skill_id);
+  const lastIds = values.slice(SKILL_LIMITS.page).map(value => value!.skill_id), after = firstIds.at(-1)!;
+  const identity = { client_id: f.clients[0]!.id, secret_version: 1 };
+  expect(await f.port.readSkill(identity, { skill_id: selected.skill_id, digest: selected.digest, path: 'references/content.md' }))
+    .toMatchObject({ state: 'read', text });
+  expect(await f.port.listSkills(identity, {})).toMatchObject({ state: 'listed', next_after: after });
+  const warmup = await f.rpc(f.clients[0]!.secret, 'tools/call', { name: 'skill_read', arguments: {
+    skill_id: selected.skill_id, digest: selected.digest, path: 'references/content.md',
+  } });
+  expect(warmup.result?.isError, JSON.stringify(warmup)).not.toBe(true);
+  expect(warmup.error, JSON.stringify(warmup)).toBeUndefined();
+  const measurements: Array<{ concurrency: number; requests: number; failures: number; p50_ms: number; p95_ms: number }> = [];
+  for (const concurrency of [1, 4, 8, 16]) {
+    const durations: number[] = [], failures: string[] = [];
+    let next = 0;
+    const requests = 128;
+    await Promise.all(Array.from({ length: concurrency }, async () => {
+      for (;;) {
+        const index = next++; if (index >= requests) return;
+        const start = performance.now(), client = f.clients[index % f.clients.length]!;
+        try {
+          if (index % 4 < 2) {
+            const second = index % 4 === 1;
+            const reply = await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: second ? { after } : {} });
+            expect(reply.error, JSON.stringify(reply)).toBeUndefined(); expect(reply.result.isError, JSON.stringify(reply)).not.toBe(true);
+            const page = JSON.parse(reply.result.content[0].text);
+            expect(page.state).toBe('listed');
+            expect(page.skills.map((skill: { skill_id: string }) => skill.skill_id)).toEqual(second ? lastIds : firstIds);
+            expect(page.next_after).toBe(second ? null : after);
+          } else if (index % 4 === 2) {
+            const reply = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: {
+              skill_id: selected.skill_id, digest: selected.digest, path: 'references/content.md',
+            } });
+            expect(reply.error, JSON.stringify(reply)).toBeUndefined(); expect(reply.result.isError, JSON.stringify(reply)).not.toBe(true);
+            expect(JSON.parse(reply.result.content[0].text)).toMatchObject({ state: 'read', digest: selected.digest, text });
+          } else {
+            const reply = await f.rpc(client.secret, 'resources/read', {
+              uri: 'runmesh-skill://bundle/' + selected.skill_id + '/' + selected.digest + '/references/content.md',
+            });
+            expect(reply.error, JSON.stringify(reply)).toBeUndefined(); expect(reply.result.contents[0].text).toBe(text);
+          }
+        } catch (error) { failures.push(error instanceof Error ? error.message : String(error)); }
+        finally { durations.push(performance.now() - start); }
+      }
+    }));
+    durations.sort((a, b) => a - b);
+    const percentile = (p: number) => Math.round(durations[Math.ceil(durations.length * p) - 1]! * 100) / 100;
+    const measurement = { concurrency, requests, failures: failures.length, p50_ms: percentile(0.5), p95_ms: percentile(0.95) };
+    measurements.push(measurement);
+    console.info('skills-normal-load', JSON.stringify(measurement));
+    expect(failures).toEqual([]); expect(durations).toHaveLength(requests);
+  }
+  await runInDurableObject(f.stub, (_owner, state) => {
+    const store = new SkillState(state.storage, () => undefined);
+    expect(store.head(selected.skill_id)).toMatchObject({ revision: 1, active_digest: selected.digest, enabled: true });
+    expect(store.bundle(selected.skill_id, selected.digest)).toEqual(selected);
+    expect(state.storage.sql.exec('SELECT COUNT(*) AS n FROM skill_bundles_v2').one().n).toBe(count);
+  });
+  expect(measurements.reduce((sum, value) => sum + value.requests, 0)).toBe(512);
+}, 120_000);
+
 it('large Skill packages install through HTTP and return complete one MiB files through MCP tools and resources', async () => {
   const f = await fixture(), client = f.clients[0]!;
   const files = [{ path: 'SKILL.md', text: '---\nname: large-folder\ndescription: Large folder fixture\n---\nRead the references.' },

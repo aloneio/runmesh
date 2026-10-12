@@ -1,12 +1,12 @@
 # Historical security remediation
 
-Use the [security model](security.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md) for current operation. The [security ledger](../release/security-readiness.json) lists candidate regression requirements. The records below and the [2026-09-17 audit](release-audit-20260917.md) describe their stated review periods, including historical version, configuration and CI results; they do not report your deployment's current state.
+Use the [security model](../../docs/security.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md) for current operation. The [security ledger](../../release/security-readiness.json) lists candidate regression requirements. The records below and the [2026-09-17 audit](release-audit-20260917.md) describe their stated review periods, including historical version, configuration and CI results; they do not report your deployment's current state.
 
 ## Historical remediation record
 
 # Complete maintenance update (dev.5)
 
-The current cleanup contract is documented in [Runner uninstall](runner-uninstall.md).
+The current cleanup contract is documented in [Runner uninstall](../../docs/runner-uninstall.md).
 A full purge deletes local Runner job history and logs but preserves project workspaces.
 The notes below document the prior dev.4 authentication and auditing remediation.
 

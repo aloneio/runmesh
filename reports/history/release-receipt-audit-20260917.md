@@ -1,10 +1,10 @@
 # Pre-release receipt and Runner identity audit - 2026-09-17
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 ## Scope and acceptance boundary
 
-This audit started from `31bdbcbba1e93bb9583f038aa5ad16db10038c66` in a separate detached worktree on oci0. The original checkout contained uncommitted work and was not reset, rebased or overwritten. Repository installation, tests and Git commands ran as the repository owner, not the root identity used by the connected Host shell. A separate npm cache avoided changing the shared cache. No production deployment, installed Runner replacement, main promotion, stable publication or old-file cleanup was performed.
+Review source: `31bdbcbba1e93bb9583f038aa5ad16db10038c66` on oci0. Installation, tests and Git commands ran as the repository owner with a separate npm cache. The review covers source repairs and verification; deployment and publication were outside its scope.
 
 The source repair is `bc7883b62db6a36a5f6984467cf4bf6c3f907145`. Source closure is not stable-release approval. A clean candidate needs its own full verification, provider results, deployed-component acceptance and publication evidence. Earlier CI results do not verify these changes.
 
@@ -33,6 +33,6 @@ The mandatory security manifest now includes SEC12 (completion receipts) and SEC
 
 At the starting commit, GitHub CI run `35223760870` was successful. GitLab pipeline `2858147729` was also green, but reported `source: external`; that alone does not prove that GitLab's own mandatory verification jobs ran. Stable publication must continue to require the exact protected main commit and actual required jobs on both providers, rather than weakening the cross-provider gate.
 
-The connected chat host exposed nine tools. A newly created local Job was visible through workspace-bound live listing, but history-based `job.get` returned `not_found`. That observed installed-component behavior must be checked against fresh source, server and host catalogs; passing tests in this worktree do not establish that the live connector was upgraded.
+The connected chat host exposed nine tools. A newly created local Job was visible through workspace-bound live listing, but history-based `job.get` returned `not_found`. That observed installed-component behavior must be checked against fresh source, server and host catalogs; source tests and the installed connector require separate version checks.
 
 Some unrelated host-inspection calls were rejected by the tool platform. Those calls are not counted as executed verification, and no unobserved provider configuration or deployment state is asserted here. Final release acceptance still requires the supported native-platform matrix, browser lane, exact-candidate checks, protected dev-to-main promotion, a fresh valid release version, signatures, independent public-asset verification and installed upgrade acceptance. Existing stable assets must remain immutable.

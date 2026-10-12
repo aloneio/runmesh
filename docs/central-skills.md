@@ -45,6 +45,8 @@ Skill files are delivered as text. An AI client follows the instructions through
 
 ## Import from GitHub
 
+GitHub import and the version-management tools below require a 0.1.8-series control plane. Check [release status](release-readiness.md) for deployment choices.
+
 In the Skill section, expand **Import from GitHub** and enter a public repository URL, the full 40-character commit SHA, and the Skill folder path. Leave the path empty when `SKILL.md` is at the repository root. Select **Preview Skill**, review the files, then select **Install Skill** or **Update Skill**.
 
 The installed source links to that exact commit. To update later, enter the new commit SHA and preview it again. One import can include up to 32 text files; use folder upload for a larger collection.

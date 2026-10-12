@@ -1,10 +1,10 @@
 # Release-tool input audit - 2026-09-18
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 ## Scope and baseline
 
-This review starts from dev `3c18b5e96485c1d33f0c024f4018fec65f94d074` in an isolated detached worktree on oci0. The original dev checkout has existing uncommitted work and is preserved, not reset, rebased or overwritten. Verification and repair run as the repository owner, not the root identity used by the installed Host shell service. The existing shared npm cache contains root-owned entries; this review uses a separate cache instead of changing shared permissions.
+Review source: dev `3c18b5e96485c1d33f0c024f4018fec65f94d074` on oci0. Verification ran as the repository owner with a separate npm cache because the shared cache contained root-owned entries.
 
 The unmodified baseline passed all 26 declared CI gates locally. Those results do not approve later changes. GitHub's baseline verify-all and required runtime jobs passed, while GitLab's external pipeline `2858652641` reported a failed `Workers Builds: runmeshdev` build and contained no native GitLab jobs. A missing provider build log is not evidence of a particular build root cause.
 
@@ -24,4 +24,4 @@ Full post-repair verification must identify the exact clean candidate, including
 
 At this review's live check, dev health was available but still identified `4a3d2a461c6400603c781d6f720fa66b02fcbf35`, not the audited dev baseline. Production health did not identify a source commit. The current host's callable MCP surface lacked the source catalog's context tool and workspace-bound Job parameters; a returned Shell job identifier subsequently produced an unavailable Registry lookup. Source repairs, deployed Worker identity, installed Runner identity and host catalog freshness require separate acceptance.
 
-No production deployment, installed Runner restart, main promotion, stable publication, force push, new named branch or old-file deletion is part of this repair. The active system service executes as root, so Host shell operations are not an operating-system sandbox; changing its user or restarting it while auditing would interrupt active jobs and is not performed implicitly. Existing immutable v0.1.3 assets must remain unchanged, and later dev work still requires a new stable version and the protected release process.
+This review covers source repairs; production deployment and stable publication require their own verification records. The active system service executes as root, so Host shell operations are not an operating-system sandbox; changing its user or restarting it while auditing would interrupt active jobs and is not performed implicitly. Existing immutable v0.1.3 assets must remain unchanged, and later dev work still requires a new stable version and the protected release process.

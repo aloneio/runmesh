@@ -1,6 +1,6 @@
 # Pre-release follow-up audit — 2026-09-17
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 This document records the earlier iteration. The [cumulative candidate audit](release-final-audit-20260917.md) records subsequent repository execution and additional repairs without rewriting the evidence boundary below.
 
@@ -12,7 +12,7 @@ The observed starting checkout was clean `dev` at `ed2967a6157eadff8e08d3121bfe9
 
 The initial oci0 observation showed about 9.1 GiB available on the root filesystem. No cleanup was required or performed. The installed Runner and production deployment were not restarted, upgraded or replaced. No main promotion or release publication was performed.
 
-After the initial reads, the host-shell execution channel was blocked by the tool platform. A separate earlier worktree creation attempt had also failed on filesystem ownership. Neither attempt produced the requested follow-up checkout. No alternative host execution route was used. Authorized, context-checked MCP file edits remained available and were used for the changes below. The changes are not accompanied by a new verified commit or remote CI result in this audit.
+After the initial reads, the host-shell execution channel was blocked by the tool platform. A separate earlier worktree creation attempt had also failed on filesystem ownership. The follow-up source edits were applied through the available MCP file interface. The changes are not accompanied by a new verified commit or remote CI result in this audit.
 
 ## Confirmed source defects and corrections
 

@@ -22,16 +22,16 @@
 - [main 分支晋级](../main-promotion-policy.zh-CN.md)
 - [分支保护（英文）](../BRANCH_PROTECTION.md)与[发版预检（英文）](../runbooks/release-preflight.md)
 - [发布与激活流程（英文）](release-process.md)
-- [中央功能验收（英文）](../central-rollout.md)
+- [部署与验证 MCP 连接和 Skill](../central-rollout.zh-CN.md)
 - [MCP 重新授权（英文）](../mcp-reauthorization.md)与[成本测量（英文）](../cost-baseline.md)
 
 ## 历史记录
 
 - [历史版本说明（英文）](release-history.md)
-- [历次审查记录（英文）](release-evidence.md)
+- [验证记录与历史档案（英文）](release-evidence.md)
 - [早期版本迁移（英文）](../migration.md)
-- [main 生产切换（英文）](../production-main-cutover.md)与[旧 Durable Object 退役（英文）](../retire-legacy-production-do.md)
-- [正确性审查（2026-09-15，英文）](../review-correctness-20260915.md)与[开发版产品审查（2026-09-25，英文）](../dev-product-readiness-20260925.md)
-- [优化记录（英文）](../optimization-ledger.md)
+- [main 生产切换（英文）](../../reports/history/production-main-cutover.md)与[旧 Durable Object 退役（英文）](../../reports/history/retire-legacy-production-do.md)
+- [正确性审查（2026-09-15，英文）](../../reports/history/review-correctness-20260915.md)与[开发版产品审查（2026-09-25，英文）](../../reports/history/dev-product-readiness-20260925.md)
+- [优化记录（英文）](../../reports/history/optimization-ledger.md)
 
 历史记录对应各文档注明的版本与日期。更新现有实例时，按当前[升级指南](../upgrading.zh-CN.md)和[发行状态](../release-readiness.zh-CN.md)操作。

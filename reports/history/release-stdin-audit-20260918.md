@@ -1,6 +1,6 @@
 # Runner stdin delivery audit - 2026-09-18
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 ## Scope
 
@@ -22,4 +22,4 @@ SEC19 is mandatory in the release-readiness contract, references the source repa
 
 All 26 ordinary gates and real browser E2E must be rerun on the exact clean follow-up candidate. The companion evidence directory records start/end commit and tree, each exit status, source-bound security evidence, and the browser executable actually used. Focused tests, provider status from an earlier commit and local Linux results are not substitutes for native platform, signed artifact, installed-component or production acceptance.
 
-A child that remains alive and never consumes stdin can still apply backpressure; this repair does not promise a new input deadline or prove delivery to the child application. Cancellation/retry policy and operating-system process containment are unchanged. The original workspace is not reset, no named branch is added, no push/main promotion/stable publication is performed, and immutable v0.1.3 assets are untouched.
+A child that remains alive and never consumes stdin can still apply backpressure; this repair does not promise a new input deadline or prove delivery to the child application. Cancellation/retry policy and operating-system process containment are unchanged. The recorded source repair leaves the immutable v0.1.3 assets unchanged.

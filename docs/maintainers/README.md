@@ -22,16 +22,16 @@ Use these references when developing Runmesh, integrating its APIs or preparing 
 - [Protected main promotion](../main-promotion-policy.md)
 - [Branch protection](../BRANCH_PROTECTION.md) and [release preflight](../runbooks/release-preflight.md)
 - [Publication and activation](release-process.md)
-- [Central feature acceptance](../central-rollout.md)
+- [Deploy and verify MCP connections and Skills](../central-rollout.md)
 - [MCP reauthorization](../mcp-reauthorization.md) and [cost measurement](../cost-baseline.md)
 
 ## Historical records
 
 - [Archived release notes](release-history.md)
-- [Dated review evidence](release-evidence.md)
+- [Verification records and archive](release-evidence.md)
 - [Early-version migration](../migration.md)
-- [Main production cutover](../production-main-cutover.md) and [legacy Durable Object retirement](../retire-legacy-production-do.md)
-- [Correctness review (2026-09-15)](../review-correctness-20260915.md) and [development product review (2026-09-25)](../dev-product-readiness-20260925.md)
-- [Optimization ledger](../optimization-ledger.md)
+- [Main production cutover](../../reports/history/production-main-cutover.md) and [legacy Durable Object retirement](../../reports/history/retire-legacy-production-do.md)
+- [Correctness review (2026-09-15)](../../reports/history/review-correctness-20260915.md) and [development product review (2026-09-25)](../../reports/history/dev-product-readiness-20260925.md)
+- [Optimization ledger](../../reports/history/optimization-ledger.md)
 
 Historical records describe the versions and dates named in each document. For an existing installation, follow the current [upgrade guide](../upgrading.md) and [release status](../release-readiness.md).

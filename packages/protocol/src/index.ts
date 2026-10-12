@@ -80,6 +80,7 @@ export type {
 } from "./schema.js";
 
 export { generateWireMessageJsonSchema } from "./schema-artifact.js";
+export { MIN_PROCESS_EXIT_CODE, MAX_PROCESS_EXIT_CODE, ProcessExitCodeSchema, isProcessExitCode } from "./process-exit.js";
 export { canonicalJson, policyWithoutChecksum, runnerPolicyChecksum, sha256Hex } from "./crypto.js";
 export {
   FULL_PERMISSION_SET,

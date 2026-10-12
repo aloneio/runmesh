@@ -7,6 +7,8 @@ import {
   PROTOCOL_CURRENT_VERSION,
   ProtocolFrameError,
   JsonValueSchema,
+  ProcessExitCodeSchema,
+  isProcessExitCode,
   JobMetadataSchema,
   RpcRequestSchema,
   runnerPolicyChecksum,
@@ -306,6 +308,20 @@ describe("Runner-Worker protocol", () => {
 
   it("rejects completed jobs whose status and outcome disagree", () => {
     expect(() => encodeWireFrame({ ...messages[10], job: { ...job, status: "running" }, outcome: "succeeded", exit_code: 0 } as WireMessage)).toThrow(/invalid wire message/);
+  });
+
+  it("preserves native process status bounds while keeping v2 lifecycle frame compatibility", () => {
+    for (const code of [-(2 ** 31), -1, 0, 255, 256, 3010, 2 ** 31, 0xc0000005, 0xffffffff]) {
+      expect(isProcessExitCode(code)).toBe(true);
+      expect(ProcessExitCodeSchema.parse(code)).toBe(code);
+      const completed = { ...messages[10], job: { ...job, status: "failed" }, outcome: "failed", exit_code: code } as WireMessage;
+      if (code >= -1 && code <= 255) expect(decodeWireFrame(encodeWireFrame(completed))).toMatchObject({ exit_code: code });
+      else expect(() => encodeWireFrame(completed)).toThrow(ProtocolFrameError);
+    }
+    for (const code of [-(2 ** 31) - 1, 2 ** 32, 0.5, NaN, Infinity, "3010", null]) {
+      expect(isProcessExitCode(code)).toBe(false);
+      expect(ProcessExitCodeSchema.safeParse(code).success).toBe(false);
+    }
   });
 
   it("accepts compatible additions only beneath extensions", () => {

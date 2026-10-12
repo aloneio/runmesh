@@ -1,14 +1,13 @@
 # Concurrent cancellation audit - 2026-09-18
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 ## Decision and scope
 
 The initial review performed repository reconnaissance, focused source review and one repair; it did not complete comprehensive pre-release verification. At the end of that review, the source changes and regression tests were uncommitted in an isolated detached worktree. The follow-up validation section below records subsequent observations separately; formal publication still requires the complete acceptance chain.
 
-The observed clean main working directory was `/home/xwzy/runmesh`, on dev at `6a2e9dc6d053667eed4f76d56996a3d7616dee04`. GitHub dev matched that commit when checked. Local main remained `b330f1dcb4334c1d36cf7c5858adf0de692e5b97`; the observed named local branches were only dev and main. The configured Git identity was `aloneio <git@aloneio.aleeas.com>`. Later branch changes by other actors were not rechecked.
+The observed clean source was dev at `6a2e9dc6d053667eed4f76d56996a3d7616dee04`. GitHub dev matched that commit when checked. Local main remained `b330f1dcb4334c1d36cf7c5858adf0de692e5b97`; the observed named local branches were only dev and main. The configured Git identity was `aloneio <git@aloneio.aleeas.com>`. Later branch changes by other actors were not rechecked.
 
-Repair worktree: `/home/xwzy/runmesh-release-audit-20260918-0923`.
 Evidence directory: `/home/xwzy/runmesh-release-evidence-20260918-0923`.
 
 ## Finding: a completed delivery can be repeated by a concurrent caller
@@ -29,7 +28,7 @@ An extracted-method diagnostic ran in the assistant's local sandbox using Node v
 
 The oci0 aggregate verification command and the independent typecheck command were blocked by the tool platform. They have no successful execution result. The two new repository regressions, full unit/security suites, packaging, transport, browser checks, cross-platform checks and candidate-bound release gates have not been run for this patch. Earlier audit results cannot be relabelled as evidence for this change.
 
-The initial detached-worktree setup and dependency-installation call returned a running receipt (`job-9012788e-be1c-42ea-b38e-f23fdbead8c3`); this session did not obtain a verified completion result for that installation. Do not interpret the existence of the worktree as installation success.
+The initial dependency-installation operation returned receipt `job-9012788e-be1c-42ea-b38e-f23fdbead8c3` without a verified completion result. Installation success is therefore unconfirmed for that attempt.
 
 ## Other reviewed boundaries
 
@@ -41,7 +40,7 @@ The connected MCP catalog exposes nine tools and no context tool. A successful s
 
 Native MCP Git inspection returned `git_unavailable`. The initial root shell also encountered Git's dubious-ownership check; repository reconnaissance then succeeded as the repository owner. No global safe-directory exception was added. Remote execution used root at entry, which is a deployment least-privilege concern to review separately, not proof of an authorization bypass.
 
-The initial disk reading showed about 2.1 GiB available and 96 percent usage. This is an initial observation, not a post-installation capacity measurement. No old worktrees or user data were deleted.
+The initial disk reading showed about 2.1 GiB available and 96 percent usage. This is an initial observation, not a post-installation capacity measurement.
 
 The first patch attempt returned runner_offline with an unknown outcome. Connection and file state were rechecked; a later transactional patch succeeded. A subsequent ambiguous-hunk response explicitly reported not_started and was corrected with exact context before the successful patch. Neither failed attempt is counted as a successful edit.
 

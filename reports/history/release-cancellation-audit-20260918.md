@@ -1,10 +1,10 @@
 # Cancellation observation audit - 2026-09-18
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 ## Scope and baseline
 
-The independent oci0 audit started from clean dev `d8366941b48e060b274ebfb9416a552d5f668ecd`, synchronized to GitHub and GitLab. An isolated detached worktree and a fresh lockfile installation were used. Commands and commits use the repository owner, not the root identity of the installed Runner. The existing npm cache contains root-owned entries; this audit uses a separate owner-writable cache instead of changing unrelated host ownership.
+Review source: clean dev `d8366941b48e060b274ebfb9416a552d5f668ecd`, synchronized to GitHub and GitLab. Verification used an isolated source checkout and a fresh lockfile installation on oci0, with repository-owner permissions and a separate npm cache.
 
 All 26 ordinary CI gates passed on that unmodified baseline, including source unit/security tests, release tooling, all Worker dry runs, archive smoke checks, local transport and installed-package transport. GitHub CI `35292426602` passed its Linux/Windows/macOS, Node LTS and browser jobs. GitLab's matching external Cloudflare build `0131a8ed-dcc8-4b7d-8a55-f9da8d348870` in pipeline `2859921915` succeeded. The baseline Dev Runner Prerelease workflow only passed its cadence check; its build and publish jobs were skipped. None of these observations is verification of a later repair or proof that installed components were upgraded.
 

@@ -14,7 +14,7 @@ configurations include the independent central binding and enable Skills,
 direct-directory and governance. Managed connections store their endpoint policy
 through the control panel. OAuth encryption derives its key from the existing
 deployment secret. See [release status](../release-readiness.md) for deployment
-and upgrade steps, and the [rollout ledger](../central-rollout.md) for acceptance evidence.
+and upgrade steps, and the [deployment checklist](../central-rollout.md) to verify an installed instance.
 
 ## What is implemented
 

@@ -18,6 +18,8 @@ OAuth providers can use a client metadata document or automatic client registrat
 
 ## Check a connection
 
+Connection checks, `server.json` import and `remote_search` are available in the 0.1.8-series control plane. Use [release status](release-readiness.md) to choose your deployment channel.
+
 Enter the MCP URL and select **Check connection** to see its negotiated protocol, tool count and declared capabilities. You can also check an enabled MCP from its card. If sign-in is needed, choose **OAuth → Connect** for a new connection, or **Reconnect** on its card.
 
 The check reads connection information. Select **Connect** to add the MCP, or **Refresh tools** to update an existing MCP's shared tool list.

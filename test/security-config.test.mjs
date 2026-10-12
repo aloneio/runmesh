@@ -111,7 +111,7 @@ test("hosted installer commands retain the convenience credential handoff", asyn
   const entrypoint = await readFile(new URL("../apps/worker/src/http/admin-presentation.ts", import.meta.url), "utf8");
   assert.ok(entrypoint.includes('from "../admin/enrollment-view.js"'));
   assert.ok(entrypoint.includes("return html(enrollmentDocument("));
-  const document = await readFile(new URL("../docs/security-remediation.md", import.meta.url), "utf8");
+  const document = await readFile(new URL("../reports/history/security-remediation.md", import.meta.url), "utf8");
   assert.ok(document.includes("--code"));
   assert.ok(document.includes("command history"));
 });

@@ -212,6 +212,58 @@ it("Skill schema upgrades preserve files, digests, approval, revisions and pause
   });
 });
 
+it.each(["normal completion", "midway write failure"] as const)("streaming Skill migration preserves content and capacity after %s", async scenario => {
+  const values = (await Promise.all(Array.from({ length: 24 }, (_, index) => bundle(`Version ${index}\n${"reference ".repeat(4096)}`)))) as SkillBundle[];
+  await runInDurableObject(owner(), (_instance, state) => {
+    seedLegacy(state.storage, values);
+    const original = state.storage.sql.exec.bind(state.storage.sql);
+    let fetched = 0, inserted = 0, interrupt = scenario === "midway write failure";
+    const exec = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+      if (query.startsWith("INSERT INTO skill_bundles_v2")) {
+        expect(fetched - inserted).toBe(1);
+        if (interrupt && inserted === 12) throw new Error("synthetic migration write failure");
+        const cursor = original(query, ...args); inserted++; return cursor;
+      }
+      const cursor = original(query, ...args);
+      if (!query.includes("content_json,bytes,approved FROM skill_bundles_v1")) return cursor;
+      return new Proxy(cursor, { get(target, key) {
+        if (key === "toArray") return () => {
+          const rows = target.toArray();
+          // Each bounded body reaches the new tables before another is read.
+          expect(rows.length).toBeLessThanOrEqual(1);
+          expect(fetched).toBe(inserted); fetched += rows.length;
+          return rows;
+        };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+    });
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    try {
+      if (interrupt) {
+        expect(() => store.head(values[0]!.skill_id)).toThrow("synthetic migration write failure");
+        expect(inserted).toBe(12);
+        expect(original("SELECT schema_version FROM skill_meta").toArray()).toEqual([{ schema_version: 1 }]);
+        expect(original("SELECT name FROM sqlite_master WHERE name IN ('skill_bundles_v2','skill_files_v2','skill_capacity_v1','skill_library_capacity_v1')").toArray()).toEqual([]);
+        expect(original("SELECT COUNT(*) AS n FROM skill_bundles_v1").one().n).toBe(values.length);
+        interrupt = false; fetched = 0; inserted = 0;
+      }
+      expect(store.head(values[0]!.skill_id)).toMatchObject({ revision: 3, enabled: false,
+        staged_digest: values.at(-1)!.digest, active_digest: values[0]!.digest });
+      expect(fetched).toBe(values.length); expect(inserted).toBe(values.length);
+    } finally { exec.mockRestore(); }
+    const reopened = new SkillState(state.storage, () => undefined);
+    for (const [index, value] of values.entries()) {
+      expect(reopened.bundle(value.skill_id, value.digest)).toEqual(value);
+      expect(reopened.approved(value.skill_id, value.digest)).toBe(index === 0);
+    }
+    const bytes = values.reduce((total, value) => total + new TextEncoder().encode(JSON.stringify(value)).byteLength, 0);
+    expect(readSkillCapacity(state.storage.sql, values[0]!.skill_id)).toMatchObject({ skill_versions: values.length,
+      skill_bytes: bytes, library_bytes: bytes, library_skills: 1 });
+    expect(original("SELECT name FROM sqlite_master WHERE name='skill_bundles_v1'").toArray()).toEqual([]);
+  });
+});
+
 it("existing schema-2 content receives one atomic capacity backfill and reconstruction never recounts it", async () => {
   const first = (await bundle())!, second = (await bundle('second'))!;
   await runInDurableObject(owner(), (_instance, state) => {

@@ -1,6 +1,6 @@
 # Enrollment fence recovery investigation — 2026-09-14
 
-This historical investigation concerns the 0.1.2-era Worker and the observations recorded below. For current recovery and component updates, use [troubleshooting](../troubleshooting.md) and the [upgrade guide](../upgrading.md).
+This historical investigation concerns the 0.1.2-era Worker and the observations recorded below. For current recovery and component updates, use [troubleshooting](../../../docs/troubleshooting.md) and the [upgrade guide](../../../docs/upgrading.md).
 
 ## Observed incident
 

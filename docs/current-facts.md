@@ -8,12 +8,12 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
 {
   "schema_version": 1,
   "evidence": "source_checkout_only",
-  "product_version": "0.1.7",
+  "product_version": "0.1.8",
   "protocol": {
     "minimum": 2,
     "current": 2
   },
-  "catalog_sha256": "97046f987be6c3593ca2f316a73bff76f58a4c6bb5478a7bb5d88c567c8d8bd5",
+  "catalog_sha256": "a3f0292012b8d1b2b7717748b9108f997e475a4dbc0e190cd47b167774ee920a",
   "tools": [
     "runner_list",
     "runner_current",
@@ -246,10 +246,8 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
     "HISTORY_DB"
   ],
   "reviewed_release_record": {
-    "version": "0.1.7",
-    "state": "released",
-    "commit": "e4a3931f5ea4d9b7f43fbdf422eab006ef61c9ac",
-    "manifest_sha256": "9b71f360c694c8961447211d5a0764b23e7a8dbca06e500b12c13de7a55c468a"
+    "version": "0.1.8",
+    "state": "candidate"
   },
   "observations": {
     "test_execution": "not_run",

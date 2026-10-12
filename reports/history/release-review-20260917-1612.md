@@ -1,6 +1,6 @@
 # Independent candidate review — 2026-09-17
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 **Decision: HOLD. Repairs are applied, but post-repair oci0 verification, a new commit, remote CI and deployment acceptance are not complete.**
 

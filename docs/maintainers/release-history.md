@@ -42,7 +42,7 @@ This package does not automatically upgrade existing services. Install through t
 
 Measured local regression: updating one or 100 Jobs in an existing packed snapshot writes one D1 row. An unchanged simulated daily upload cadence emits no additional uploads. Required heartbeat and bounded maintenance costs remain; this is not a promise of zero total usage or unlimited free-tier capacity.
 
-See [release readiness](../release-readiness.md), [batching and retention](../batched-job-history.md), and [chain audit](../release-chain-audit.md).
+See [release readiness](../release-readiness.md), [batching and retention](../batched-job-history.md), and [chain audit](../../reports/history/release-chain-audit.md).
 
 ---
 
@@ -97,7 +97,7 @@ This candidate also includes password-generation session CAS, Linux directory
 handle and search budget fixes, Git ownership/confinement checks, nonce-aware
 throttle pages, bounded source eviction, precise CI tooling, independent
 production validation and native-platform/Node 20 CI definitions.
-See [rollout notes](../security-remediation.md) for remaining platform and cloud
+See [rollout notes](../../reports/history/security-remediation.md) for remaining platform and cloud
 acceptance, legacy backup retention and new signed release requirements.
 
 ---

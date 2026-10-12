@@ -12,7 +12,7 @@
 
 保留 MCP、Skill 绑定，以及现有 Registry 和 Runner 命名空间。资源标识和已有的两个密钥保持不变；OAuth 加密使用 `INTERNAL_CONTROL_SECRET`。先部署兼容的 Worker 并核对运行结果，再更新 Runner。下文的受管系统服务流程读取实际旧版本，使用明确选择并验签的目标版本，也适用于 `0.1.6-dev.26` 等旧开发版。
 
-首次启用远程版本管理时，选择包含独立 `dist/maintenance.cjs` 的[已验签开发包](dev-runner-prereleases.zh-CN.md)。在共用暂存命令中设置 `ENABLE_MANAGER=1` 或 `$EnableManager = $true`，切换后继续执行[管理器首次启用](#切换程序后首次启用管理器)。仅更新程序包时可关闭该选项；已发布的 0.1.7 包早于此功能。
+首次启用远程版本管理时，选择包含独立 `dist/maintenance.cjs` 的已验签 Runner 包。生产使用[发行状态](release-readiness.zh-CN.md)列出的正式包，测试环境也可选择[开发包](dev-runner-prereleases.zh-CN.md)。在共用暂存命令中设置 `ENABLE_MANAGER=1` 或 `$EnableManager = $true`，切换后继续执行[管理器首次启用](#切换程序后首次启用管理器)。仅更新程序包时可关闭该选项；已发布的 0.1.7 包早于此功能。
 
 分别安排以下更新：
 
@@ -86,13 +86,13 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 | macOS | `/opt/runmesh/current/bin/runmesh` | `/Library/LaunchDaemons/io.alone.runmesh.runner.plist` |
 | Windows | `C:\Program Files\Runmesh\current\runmesh.cmd` | 已有 `RunmeshRunner` 计划任务；原 XML 位于 `C:\ProgramData\Runmesh\RunmeshRunner.xml` |
 
-在同一个 root／管理员会话中操作，确保没有其他安装或维护同时运行。安装根目录已有 `manager` 时，使用[已有管理器的升级或恢复流程](runner-versions.zh-CN.md)，不要套用首次启用步骤。先备份和排空任务，再按[独立验证说明](portable-runner-installation.md#independently-verify-a-downloaded-package)取得同一发行版的完整资产，以及通过独立渠道信任的源码副本。共用暂存命令会调用该源码的验签器与可信公钥目录，再次核对签名、发行契约、包大小及摘要。
+在同一个 root／管理员会话中操作，确保没有其他安装或维护同时运行。安装根目录已有 `manager` 时，使用[已有管理器的升级或恢复流程](runner-versions.zh-CN.md)，按已有管理器流程操作。先备份和排空任务，再按[独立验证说明](portable-runner-installation.md#independently-verify-a-downloaded-package)取得同一发行版的完整资产，以及通过独立渠道信任的源码副本。共用暂存命令会调用该源码的验签器与可信公钥目录，再次核对签名、发行契约、包大小及摘要。
 
 共用脚本填写三项输入，并选择是否首次启用管理器；必要时另行指定暂存用运行时：
 
 | 输入 | 含义 |
 | --- | --- |
-| `TARGET_VERSION` / `$TargetVersion` | 已选择的完整签名版本号；旧版本由脚本读取，不要求等于 `0.1.6` |
+| `TARGET_VERSION` / `$TargetVersion` | 已选择的完整签名版本号；旧版本由脚本自动读取 |
 | `DOWNLOAD` / `$Download` | 该版本完整发行资产所在的绝对目录 |
 | `TRUSTED_CHECKOUT` / `$TrustedCheckout` | 独立可信的源码目录，含验签器和可信公钥目录 |
 | `STAGING_NODE` / `$StagingNode` | 默认留空，沿用旧私有 Node；旧运行时不兼容时填写另行验签的兼容 Node 程序绝对路径 |
@@ -102,7 +102,7 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 
 托管安装可能只保留私有 Node 而没有 `npm`。暂存前可从 [Node.js 官方发行目录](https://nodejs.org/download/release/)获取上述兼容范围内、匹配主机系统及架构的分发包，核验签名校验和后解压到管理员拥有的临时目录。仅在本次维护会话中，将其 `bin` 目录（POSIX）或包含 `node.exe`、`npm.cmd` 的目录（Windows）加入 `PATH`，确认 `node --version`、`npm --version` 可用。[本地 tarball 安装说明](portable-runner-installation.md#install-from-the-verified-local-tarball)采用相同的离线 npm 方法。
 
-首次启用前，检查控制台的待处理目标。没有未完成请求时，选择与暂存包相同的精确版本；已有同目标请求可以保留。不同目标的未完成请求不能通过表单覆盖：先核验该发行版，确认可以让新管理器完成已有请求，待它进入终态后再申请最终目标。不能接受这次中间切换时，只执行程序包更新，设置 `ENABLE_MANAGER=0` / `$EnableManager = $false`，保持管理器未安装；原请求继续等待。管理器启动后会处理原有目标，可能把刚部署的新包切回旧版。首次启用步骤会启动 Runner 和管理器，应安排在允许两项服务运行的维护窗口。
+首次启用前，检查控制台的待处理目标。没有未完成请求时，选择与暂存包相同的精确版本；已有同目标请求可以保留。已有请求保持原目标：先核验该发行版，安排新管理器完成请求，待它进入终态后再申请最终目标。需要直接保留本次暂存版本时，只执行程序包更新，设置 `ENABLE_MANAGER=0` / `$EnableManager = $false`，保持管理器未安装；原请求继续等待。管理器启动后会处理原有目标，可能把刚部署的新包切回旧版。首次启用步骤会启动 Runner 和管理器，应安排在允许两项服务运行的维护窗口。
 
 ### Linux 与 macOS
 
@@ -125,19 +125,19 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 
 ### 切换程序后首次启用管理器
 
-在同一 root／管理员会话执行[共用首次启用命令](upgrading.md#enable-the-manager-after-the-package-switch)。命令使用原 canonical profile 和读出的执行模式；原模式为 `privileged_host` 时，显式带上 `--confirm-privileged-host`。这是现有全主机服务执行 `install` 仍要求的确认，不能省略。命令不传 `--executable-path`，保留已有受管服务的程序路径、参数和账号，只允许安装逻辑更新已知生成字段。
+在同一 root／管理员会话执行[共用首次启用命令](upgrading.md#enable-the-manager-after-the-package-switch)。命令使用原 canonical profile 和读出的执行模式；原模式为 `privileged_host` 时，显式带上 `--confirm-privileged-host`。该标记确认继续使用现有全主机服务模式。沿用示例中的 `install` 参数，保留已有受管服务的程序路径、参数和账号，由安装逻辑更新已知生成字段。
 
 Windows 首次启用由新目录中的私有 Node 直接执行已验签的 `maintenance.cjs`。安装会改写 `.cmd` 启动器，直接入口可避免正在运行的批处理在返回时续读改写后的内容。
 
-脚本检查安装报告中的 `remote_version_management: available` 和原执行模式，并确认系统管理器服务正在运行，然后再次运行 `doctor`。原服务或 profile 显示身份／模式不一致时先处理该问题；不要借首次启用来切换权限模式。若返回 `manual` / `custom_service_layout`，检查实际服务定义及覆盖配置，不要删除自定义参数来强行启用。
+脚本检查安装报告中的 `remote_version_management: available` 和原执行模式，并确认系统管理器服务正在运行，然后再次运行 `doctor`。原服务或 profile 显示身份／模式不一致时，先恢复一致的配置。若返回 `manual` / `custom_service_layout`，检查实际服务定义及覆盖配置，沿用自定义参数对应的维护流程。
 
 独立管理器会从已验签包复制到安装根目录的 `manager`。控制台还需从“等待主机管理器领取”推进到目标版本完成，并保留原 Runner 身份和工作区策略；本地服务启动成功不等于远程请求已经领取。
 
 ### 恢复旧包
 
-如果管理器已经启动，手工恢复前先通过系统服务管理器停止它，保留其程序包与 journal。未完成的版本操作必须先完成恢复，不可删除 journal 或安装锁再切换 `current`。重新启动管理器前也要核对控制台的目标，避免再次自动切换。
+如果管理器已经启动，手工恢复前先通过系统服务管理器停止它，保留其程序包与 journal。保留 journal 和安装锁，先完成未结束版本操作的恢复，再切换 `current`。重新启动管理器前也要核对控制台的目标，避免再次自动切换。
 
-确认没有维护操作运行后，按同一平台步骤暂停 Runner。重新读取并记录 `current` 的实际物理路径，核对程序包身份，确认它是受管 `versions` 目录的直属子目录。管理器即使安装同版本，也可能已经切换到另一个目录，不能假定当前目标仍为 `NEW` / `$New`。POSIX 将实际路径记为 `ROLLBACK_FROM`，让 `current.next` 指向原 `OLD`，用原 Node 命令替换 `current`，传入 `ROLLBACK_FROM` 作为预期当前目标。Windows 在任务停止后，把实际的 `current` junction 改名为尚未使用的恢复名称，再把 `$Previous` 改回 `current`；重命名前再次确认绝对路径都在 `$Root` 内。使用保留的服务定义启动，恢复任务原启用状态。
+确认没有维护操作运行后，按同一平台步骤暂停 Runner。重新读取并记录 `current` 的实际物理路径，核对程序包身份，确认它是受管 `versions` 目录的直属子目录。管理器安装同版本时也可能切换目录；恢复操作应使用此时读到的实际路径。POSIX 将实际路径记为 `ROLLBACK_FROM`，让 `current.next` 指向原 `OLD`，用原 Node 命令替换 `current`，传入 `ROLLBACK_FROM` 作为预期当前目标。Windows 在任务停止后，把实际的 `current` junction 改名为尚未使用的恢复名称，再把 `$Previous` 改回 `current`；重命名前再次确认绝对路径都在 `$Root` 内。使用保留的服务定义启动，恢复任务原启用状态。
 
 首次升级前的旧目录仍包含旧启动器。已经安装独立管理器时，手工恢复该目录会让 `install`、`uninstall` 等命令重新进入不认识管理器的旧 CLI。刷新启动器前，服务管理操作使用保留的独立入口：POSIX 为 `/opt/runmesh/manager/runtime/node /opt/runmesh/manager/runmesh.cjs`；Windows 用 `C:\Program Files\Runmesh\manager\runtime\node.exe` 执行 `C:\Program Files\Runmesh\manager\runmesh.cjs`。Windows 卸载使用保留的 `C:\Program Files\Runmesh\manager\uninstall.ps1` 或托管维护命令，通过临时运行时完成清理。
 

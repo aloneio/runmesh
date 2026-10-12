@@ -2,7 +2,7 @@
 
 [简体中文](central-capabilities-architecture.zh-CN.md)
 
-The current source uses an instance-wide shared library: every valid authenticated client in an instance shares the enabled, published MCP tools and active Skills. Administrators connect MCP services and install Skills in the control panel. Clients do not need individual capability assignments. The [rollout ledger](central-rollout.md) records deployment and acceptance evidence.
+The current source uses an instance-wide shared library: every valid authenticated client in an instance shares the enabled, published MCP tools and active Skills. Administrators connect MCP services and install Skills in the control panel. Clients do not need individual capability assignments. The [rollout ledger](../reports/history/central-rollout-20261004.md) records deployment and acceptance evidence.
 
 ## Ownership and dependency direction
 

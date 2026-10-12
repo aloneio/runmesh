@@ -10,7 +10,7 @@
 
 | 现象 | 处理 |
 | --- | --- |
-| Registry 或鉴权依赖不可用 | 检查部署，等待恢复后用当前凭据重试登录 |
+| Registry 或鉴权服务连接异常 | 检查部署，服务恢复后用当前凭据重试登录 |
 | 多次失败后登录被节流 | 等待节流窗口结束 |
 | 修改密码后会话过期 | 使用当前密码重新登录 |
 | 数据或 schema 不匹配 | 保护数据，比较所部署代码与资源绑定，按[升级指南](upgrading.zh-CN.md)处理 |
@@ -25,7 +25,7 @@
 
 Runner 在线但策略被拒绝时，检查工作区是否存在、服务账号是否具有操作系统访问权限。重连时间和分层诊断见[连接恢复](connection-recovery.md)。
 
-## 安装失败或不可用
+## 完成安装或处理安装错误
 
 在相应系统的管理员终端使用注册页面的命令，按[安装依赖](installer-prerequisites.zh-CN.md)处理 `RMI_*` 错误。
 
@@ -47,7 +47,7 @@ Worker 更新后刷新 Runmesh 工具目录。任务后续查询拒绝 `workspac
 
 用 `runner_current` 确认机器，用 `workspace_list` 核对工作区 ID。请管理员检查客户端 scope、Runner 限制、授权期限、工作区权限和策略确认；Runner 服务账号还需要对应的操作系统权限。
 
-按[权限排查流程](runbooks/permission-denial.md)找到需要调整的设置。所需服务暂不可用时，先恢复服务并重新检查权限。
+按[权限排查流程](runbooks/permission-denial.md)找到需要调整的设置。服务连接异常时，先恢复连接，再重新检查权限。
 
 ## MCP 连接或 OAuth 需要处理
 
@@ -65,7 +65,7 @@ Worker 更新后刷新 Runmesh 工具目录。任务后续查询拒绝 `workspac
 
 ## 任务仍运行或云端历史为空
 
-保留原 `job_id`、`workspace_id` 和 Runner 选择。前台调用可以在命令结束前返回，应继续使用带工作区 ID 的在线查询。云端历史被关闭、延迟、过期或暂不可用时，Runner 仍可能保留任务。
+保留原 `job_id`、`workspace_id` 和 Runner 选择。前台调用可以在命令结束前返回，应继续使用带工作区 ID 的在线查询。云端历史查询受记录设置、保留时间和连接状态影响；在线 Runner 可查询其仍保留的任务。
 
 遇到 `job_history_unavailable` 或旧版 `not_found`，恢复原 Runner 在线，使用 shell 回执中的 `job_id` 和 `workspace_id` 重新查询 `job`。客户端缺少 `workspace_id` 参数时，刷新工具目录。仍然查询失败时，请管理员检查原 Runner 上的本地任务记录。发起另一条命令前，先核实原任务状态。
 

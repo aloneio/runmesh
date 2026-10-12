@@ -1,12 +1,12 @@
 # Pre-release security audit — 2026-09-17
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 ## Source and release boundary
 
 The audit began at dev commit `4861aa5b2c2900b79d80ed4e1effb50f53d2abd7` in an isolated detached worktree. The existing v0.1.3 assets are immutable; these post-release changes are not part of those artifacts. A subsequent stable candidate needs a new version, protected dev-to-main promotion, exact-source provider checks, signing and independent artifact verification. Local checks neither deploy production nor upgrade an installed Runner.
 
-The checked-in [security ledger](../release/security-readiness.json) identifies reviewed fixes and owned regressions. `npm run test:security` executes those files, reads actual Vitest assertions and checks the current clean commit. It rejects skipped, failed, missing, duplicate or unowned suites and inconsistent counts. A failed attempt replaces stale passing evidence. Both verification providers run this blocking gate; the release job regenerates it before signing rather than assuming a previous job's local files exist. The report is self-reported execution evidence, not a cryptographic attestation or production acceptance.
+The checked-in [security ledger](../../release/security-readiness.json) identifies reviewed fixes and owned regressions. `npm run test:security` executes those files, reads actual Vitest assertions and checks the current clean commit. It rejects skipped, failed, missing, duplicate or unowned suites and inconsistent counts. A failed attempt replaces stale passing evidence. Both verification providers run this blocking gate; the release job regenerates it before signing rather than assuming a previous job's local files exist. The report is self-reported execution evidence, not a cryptographic attestation or production acceptance.
 
 ## Confirmed defects and repairs
 

@@ -548,6 +548,44 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(calls.every((result) => result.isError !== true && result.structuredContent?.data === "hello from a real local runner\n")).toBe(true);
   });
 
+  it("keeps mixed MCP reads and task results consistent across concurrent load levels", async () => {
+    const started = await mcpTool("shell", {
+      workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('load-log\\n')"), background: true,
+    });
+    expect(started.isError).not.toBe(true);
+    const jobId = started.structuredContent?.job_id;
+    expect(typeof jobId).toBe("string");
+    await waitFor(async () => (await mcpTool("job", { action: "get", job_id: jobId })).structuredContent?.status === "succeeded", 10_000);
+    const operations = [
+      { name: "read", args: { workspace_id: "workspace-1", path: "note.txt", limit: 128 }, check: (value: ToolResult) => expect(value.structuredContent?.data).toBe("hello from a real local runner\n") },
+      { name: "workspace_list", args: {}, check: (value: ToolResult) => expect(value.structuredContent).toMatchObject({ workspaces: expect.arrayContaining([expect.objectContaining({ workspace_id: "workspace-1" })]) }) },
+      { name: "job", args: { action: "get", job_id: jobId }, check: (value: ToolResult) => expect(value.structuredContent).toMatchObject({ status: "succeeded", exit_code: 0 }) },
+      { name: "job", args: { action: "logs", job_id: jobId, stream: "stdout", limit: 128 }, check: (value: ToolResult) => expect(value.structuredContent?.data).toBe("load-log\n") },
+    ];
+    const levels: { concurrency: number; requests: number; failed: number; p50_ms: number; p95_ms: number; elapsed_ms: number }[] = [];
+    for (const concurrency of [1, 4, 8, 16]) {
+      const latencies: number[] = [];
+      let next = 0;
+      const begin = performance.now();
+      await Promise.all(Array.from({ length: concurrency }, async () => {
+        while (next < 128) {
+          const operation = operations[next++ % operations.length]!;
+          const start = performance.now();
+          const result = await mcpTool(operation.name, operation.args);
+          latencies.push(performance.now() - start);
+          expect(result.isError, mcpToolResultDiagnostic("mixed_load", result)).not.toBe(true);
+          operation.check(result);
+        }
+      }));
+      latencies.sort((a, b) => a - b);
+      expect(latencies).toHaveLength(128);
+      levels.push({ concurrency, requests: latencies.length, failed: 0,
+        p50_ms: Math.round(latencies[Math.ceil(latencies.length * 0.5) - 1]!),
+        p95_ms: Math.round(latencies[Math.ceil(latencies.length * 0.95) - 1]!), elapsed_ms: Math.round(performance.now() - begin) });
+    }
+    console.log("RUNMESH_MCP_LOAD=" + JSON.stringify({ fixture: "local_worker_runner", levels }));
+  }, 90_000);
+
   it("GA-001 writable MCP add/update/move/delete returns success consistent with disk", async () => {
     const edits = [
       "*** Add File: ga-write.txt\n+old",

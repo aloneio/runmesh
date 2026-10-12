@@ -1,10 +1,10 @@
 # Existing production Worker: GitLab main cutover
 
-> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](../../docs/README.md), [upgrade guide](../../docs/upgrading.md) and [release status](../../docs/release-readiness.md).
 
 ## Scope
 
-Promote the verified, published v0.1.2 production source into protected main before changing the Cloudflare source branch. Old main predates the quota fixes and uses an incompatible deployment layout. Do not deploy that old tip. Preserve the existing Worker named runmesh, its domain, D1 history binding, Durable Object namespace and secrets. The unfinished v0.1.3 worktree is not part of this promotion.
+Promote the verified, published v0.1.2 production source into protected main before changing the Cloudflare source branch. Old main predates the quota fixes and uses an incompatible deployment layout. Do not deploy that old tip. Preserve the existing Worker named runmesh, its domain, D1 history binding, Durable Object namespace and secrets.
 
 The v0.1.2 signed archive keeps its original immutable provenance; moving the serving Worker to main does not republish or relabel the archive. All subsequent formal publication requires the exact protected main tip and the main-restricted release environment. Reusing a published release identifier remains forbidden.
 

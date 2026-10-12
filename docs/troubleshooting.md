@@ -10,7 +10,7 @@ Check the public HTTPS origin and deployment status. If you configured `RUNMESH_
 
 | Symptom | Action |
 | --- | --- |
-| Registry or authorization dependency unavailable | Inspect the deployment and wait for recovery, then retry login with the current credential |
+| Registry or authorization connection error | Inspect the deployment and restore the service, then retry login with the current credential |
 | Login throttled after repeated failures | Wait for the throttle window to expire |
 | Session expired after a password change | Sign in with the current password |
 | Data/schema mismatch | Preserve data, compare deployed code and resource bindings, and follow the [upgrade guide](upgrading.md) |
@@ -25,7 +25,7 @@ Check the dashboard's Runner authorization period and credential status. Extend 
 
 For an online Runner with rejected policy, check workspace existence and the service account's OS permissions. See [connection recovery](connection-recovery.md) for timing and layered diagnostics.
 
-## Installation fails or is unavailable
+## Complete installation or resolve an installer error
 
 Use the administrator enrollment page's command in the appropriate elevated terminal. Resolve `RMI_*` errors with [installer prerequisites](installer-prerequisites.md).
 
@@ -47,7 +47,7 @@ For shared MCP or Skill access, use the connection checks below. For computer ac
 
 Confirm `runner_current` and the workspace ID from `workspace_list`. Ask the administrator to check client scopes and Runner restrictions, the authorization period, workspace permissions and policy acknowledgement. The Runner's service account also needs OS access.
 
-Use the [permission runbook](runbooks/permission-denial.md) to identify which setting needs attention. If a required service is unavailable, restore it and repeat the permission checks.
+Use the [permission runbook](runbooks/permission-denial.md) to identify which setting needs attention. For a service connection error, restore the connection and repeat the permission checks.
 
 ## Connected MCP or OAuth needs attention
 
@@ -65,7 +65,7 @@ For a same-name replacement, review the files and select **Update Skill**. If an
 
 ## Job still running or absent from cloud history
 
-Keep the original `job_id`, `workspace_id` and Runner selection. A foreground call can return while the command continues. Follow it with workspace-bound live queries; the Runner can retain a Job whose cloud history is disabled, delayed, expired or unavailable.
+Keep the original `job_id`, `workspace_id` and Runner selection. A foreground call can return while the command continues. Follow it with workspace-bound live queries; cloud history depends on recording settings, retention and connectivity, while the online Runner can query its retained Jobs.
 
 For `job_history_unavailable` or an older `not_found`, bring the original Runner online and repeat the `job` query with the `job_id` and `workspace_id` from the shell receipt. Refresh the client's tool catalog if it omits `workspace_id`. If the query still fails, ask the administrator to check the original Runner's local Job record. Check that Job's state before launching another command.
 

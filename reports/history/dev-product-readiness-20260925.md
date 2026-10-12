@@ -1,12 +1,12 @@
 # Dev product readiness audit — 2026-09-25
 
-> Historical review. The 2026-09-26 direct connection and installation workflow supersedes the approved-endpoint selector and advanced diagnostics described below. The shared library also supersedes this audit's per-client selection and pinned-grant behavior; those results describe the earlier implementation. Since 2026-09-29, OAuth encryption uses the existing control secret, superseding this audit's separate vault prerequisite. See [current administration](central-administration.md).
+> Historical review. The 2026-09-26 direct connection and installation workflow supersedes the approved-endpoint selector and advanced diagnostics described below. The shared library also supersedes this audit's per-client selection and pinned-grant behavior; those results describe the earlier implementation. Since 2026-09-29, OAuth encryption uses the existing control secret, superseding this audit's separate vault prerequisite. See [current administration](../../docs/central-administration.md).
 
-Status: local product iteration and regression review complete, including the successful Linux transport follow-up on 2026-09-26. Baseline: `6d9b169`; development stays on `dev` in the existing `runmesh-central-completion` worktree. The separate `main` worktree and its staged release edits are untouched.
+Review baseline: `6d9b169` on `dev`. Local product and regression checks include the Linux transport follow-up recorded on 2026-09-26.
 
 ## Product outcome
 
-A user connects their AI client to Runmesh once, selects approved shared MCP tools and Skills, and uses them without a Runner. A Runner is only required for machine operations. Instance administrators configure services once; routine use must not require JSON, internal IDs, revision numbers or content digests. This review treats the September 24 plan as product context, not permission to configure new external services or relax authorization.
+A user connects their AI client to Runmesh once, selects approved shared MCP tools and Skills, and uses them without a Runner. A Runner is only required for machine operations. Instance administrators configure services once; routine use must not require JSON, internal IDs, revision numbers or content digests. The review covers the existing service authorization model and its user-facing configuration flow.
 
 ## Baseline findings
 

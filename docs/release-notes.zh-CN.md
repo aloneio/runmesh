@@ -2,14 +2,15 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
-## 未发布 — 当前 dev
+## 0.1.8 — 发布候选版
 
-以下功能已包含在当前 dev 源码中。已发布正式版仍为 0.1.7；安装包的可用状态见[发行状态](release-readiness.zh-CN.md)和 [Runner 开发渠道](dev-runner-prereleases.zh-CN.md)。
+Runmesh 0.1.8 汇集了以下 dev 改进。选择安装包时请查看[发行状态](release-readiness.zh-CN.md)；体验候选功能可使用 [Runner 开发渠道](dev-runner-prereleases.zh-CN.md)。
 
 - **远程管理 Runner 版本。** 在控制端选择签名发行包，也可切换到旧版。标准受管安装使用独立版本管理器，保留 Runner 配置，等待本地任务结束并检查重新连接。变更中断后可通过本地日志恢复；切换失败时尝试还原原安装包。安装要求与恢复指引见 [Runner 版本管理](runner-versions.zh-CN.md)。
 - **MCP 连接检查与工具搜索。** 检查连接状态和声明的能力，从 MCP Registry 的 `server.json` 文件导入支持的远程条目，通过 `remote_search` 跨已启用服务查找已发布工具。详见[连接 MCP](central-remote-mcp.zh-CN.md)。
 - **Skill 导入与版本管理。** 从固定 commit 的公开 GitHub 目录导入，查看文件清单、比较历史版本、保留重要版本、恢复旧版并预览存储清理。详见 [Skill 安装与更新](central-skills.zh-CN.md)。
-- **控制端改进。** 更新导航与 Runner 操作，明确 MCP 和 Skill 状态，并在输入校验报错后保留恢复指引。
+- **控制端改进。** 更新导航与 Runner 操作，明确 MCP 和 Skill 状态，简化客户端凭据状态，并分行显示日期与 UTC 时间。输入校验报错后保留恢复指引。
+- **任务结果与资料库升级。** 详细任务结果保留完整的 Windows 进程退出码；Skill 资料库升级逐包处理已保存内容，控制迁移时的内存用量。
 - **文档与视频。** 同步中英文指南，加入 [60 秒 Runmesh 介绍](media/README.zh-CN.md)，提供中英文旁白与字幕。
 
 ## 0.1.7 — 已发布正式版
@@ -25,10 +26,6 @@
 
 - 控制端短暂不可用时保留现有 OAuth 连接；账号需要重新登录时再打开授权页面。
 - Runner 断开连接或遇到控制端暂时故障时，会及时释放无需继续读取的响应资源。
-
-### 控制端
-
-- 客户端列表的凭据状态更简洁，日期与 UTC 时间分行显示，可查看完整时间戳。
 
 ### 安全更新
 
