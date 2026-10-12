@@ -24,7 +24,7 @@ Runner 在每次读取中检查文件身份、大小、修改时间及变更时�
 
 `next_cursor`、`offset`、`size`、`truncated` 和 `data` 等兼容字段继续保留。`page_state=incomplete` 时，空 `next_cursor` 表示应停止翻页，末尾仍有待补全字节。`source_truncated` 针对整个 Job，无法提供每个输出流丢失的具体字节数。
 
-源内容中的非法 UTF-8 使用 Node 替换解码；分页边界处的完整字符会保留。Worker 校验元数据并返回允许的字段；可选字段缺失时，应视为该观测暂不可用。详见[MCP 输出契约](mcp-output-contracts.zh-CN.md)。
+源内容中的非法 UTF-8 使用 Node 替换解码；分页边界处的完整字符会保留。Worker 校验元数据并返回允许的字段。可选字段缺失表示本次响应未提供相应观测，请按已返回的字段解释结果；需要该元数据时，先核对 Worker 与 Runner 的兼容版本。详见[MCP 输出契约](mcp-output-contracts.zh-CN.md)。
 
 ## 恢复日志读取
 

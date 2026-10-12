@@ -11,6 +11,69 @@ it("AR02 projects only valid current scopes and makes one request", async () => 
     .toEqual({ state: "allowed", scopes: ["coding:read"] });
   expect(calls).toBe(1);
 });
+
+function observeReader(response: Response) {
+  const body = response.body!;
+  const reader = body.getReader();
+  const cancel = vi.spyOn(reader, "cancel"), release = vi.spyOn(reader, "releaseLock");
+  vi.spyOn(body, "getReader").mockReturnValue(reader);
+  return { body, cancel, release };
+}
+
+it.each(["allowed", "denied"] as const)("AR02 releases a complete valid %s receipt without cancelling its transport", async state => {
+  vi.useFakeTimers();
+  const abort = vi.fn();
+  let signal: AbortSignal | undefined;
+  const receipt = JSON.stringify({ ...identity, secret_version: state === "allowed" ? 1 : 2, scopes: ["coding:read"] });
+  const bytes = new TextEncoder().encode(receipt);
+  const response = new Response(new ReadableStream<Uint8Array>({ start(controller) {
+    controller.enqueue(bytes.subarray(0, 7)); controller.enqueue(bytes.subarray(7)); controller.close();
+  } }));
+  const observed = observeReader(response);
+  const fetch = vi.fn(async (input: AbortSignal) => {
+    signal = input; input.addEventListener("abort", abort); return response;
+  });
+  try {
+    expect(await reauthorizePrincipal(fetch, identity)).toEqual(state === "allowed"
+      ? { state, scopes: ["coding:read"] } : { state });
+    expect(fetch).toHaveBeenCalledOnce(); expect(signal?.aborted).toBe(false);
+    expect(abort).not.toHaveBeenCalled(); expect(observed.cancel).not.toHaveBeenCalled();
+    expect(observed.release).toHaveBeenCalledOnce(); expect(observed.body.locked).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(signal?.aborted).toBe(false); expect(abort).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it.each([401, 403, 404, 503])("AR02 cancels the unread body and aborts a status %s observation", async status => {
+  let signal: AbortSignal | undefined;
+  const cancelled = vi.fn();
+  const response = new Response(new ReadableStream<Uint8Array>({ cancel: cancelled }), { status });
+  const cancel = vi.spyOn(response.body!, "cancel");
+  const fetch = vi.fn(async (input: AbortSignal) => { signal = input; return response; });
+  expect(await reauthorizePrincipal(fetch, identity)).toEqual({ state: status === 503 ? "unavailable" : "denied" });
+  expect(fetch).toHaveBeenCalledOnce(); expect(signal?.aborted).toBe(true);
+  expect(cancel).toHaveBeenCalledOnce(); expect(cancelled).toHaveBeenCalledOnce();
+  expect(response.body!.locked).toBe(false);
+});
+
+it.each(["utf8", "json", "identity", "bytes", "fragments", "stream"] as const)("AR02 cancels and releases an unsuccessful %s receipt", async failure => {
+  let signal: AbortSignal | undefined;
+  const response = failure === "utf8" ? new Response(new Uint8Array([255]))
+    : failure === "json" ? new Response("{")
+    : failure === "identity" ? Response.json({ ...identity, scopes: ["unknown"] })
+    : new Response(new ReadableStream<Uint8Array>({ pull(controller) {
+      if (failure === "stream") controller.error(new Error("synthetic failed body"));
+      else controller.enqueue(new Uint8Array(failure === "bytes" ? 16385 : 0));
+    } }, { highWaterMark: 0 }));
+  const observed = observeReader(response);
+  const fetch = vi.fn(async (input: AbortSignal) => { signal = input; return response; });
+  expect(await reauthorizePrincipal(fetch, identity)).toEqual({ state: failure === "stream" ? "unavailable" : "malformed" });
+  expect(fetch).toHaveBeenCalledOnce(); expect(signal?.aborted).toBe(true);
+  expect(observed.cancel).toHaveBeenCalledOnce(); expect(observed.release).toHaveBeenCalledOnce();
+  expect(observed.body.locked).toBe(false);
+});
+
 it("AR02 network timeout aborts without a retry or cached allow", async () => {
   let signal: AbortSignal | undefined, calls = 0;
   const result = await reauthorizePrincipal(input => { signal = input; calls++; return new Promise(() => {}); }, identity, 10);
@@ -20,6 +83,42 @@ it("AR02 timeout also bounds a stalled response body and cancels it", async () =
   let cancelled = false;
   const result = await reauthorizePrincipal(async () => new Response(new ReadableStream({ cancel() { cancelled = true; } })), identity, 10);
   expect(result).toEqual({ state: "unavailable" }); expect(cancelled).toBe(true);
+});
+
+it("AR02 cancels a late response after its fetch deadline has settled", async () => {
+  vi.useFakeTimers();
+  let signal: AbortSignal | undefined, deliver!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => { deliver = resolve; });
+  const fetch = vi.fn((input: AbortSignal) => { signal = input; return pending; });
+  const result = reauthorizePrincipal(fetch, identity);
+  const cancelled = vi.fn();
+  const response = new Response(new ReadableStream<Uint8Array>({ cancel: cancelled }));
+  const cancel = vi.spyOn(response.body!, "cancel");
+  try {
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(await result).toEqual({ state: "unavailable" }); expect(signal?.aborted).toBe(true);
+    deliver(response); await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
+    expect(cancelled).toHaveBeenCalledOnce(); expect(response.body!.locked).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { deliver(response); await result; vi.useRealTimers(); }
+});
+
+it("AR02 releases a stalled reader when timeout cancellation settles its pending read", async () => {
+  vi.useFakeTimers();
+  let signal: AbortSignal | undefined;
+  const cancelled = vi.fn();
+  const response = new Response(new ReadableStream<Uint8Array>({ cancel: cancelled }));
+  const observed = observeReader(response);
+  const fetch = vi.fn(async (input: AbortSignal) => { signal = input; return response; });
+  const result = reauthorizePrincipal(fetch, identity);
+  try {
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(await result).toEqual({ state: "unavailable" }); expect(signal?.aborted).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce(); expect(observed.cancel).toHaveBeenCalled();
+    expect(cancelled).toHaveBeenCalledOnce(); expect(observed.release).toHaveBeenCalledOnce();
+    expect(observed.body.locked).toBe(false); expect(vi.getTimerCount()).toBe(0);
+  } finally { await result; vi.useRealTimers(); }
 });
 it("AR02 empty fragments cannot bypass byte limits indefinitely", async () => {
   let pulls = 0, cancelled = false;

@@ -2,7 +2,7 @@
 
 日期：2026-10-12。基线：`origin/dev` 的 `115ba45`，以及本次 0.1.8 候选修复。执行平台：Windows，Node.js 22.23.2。
 
-当前状态：候选 `aab0b18` 的 push CI 全部成功；PR CI 的 Windows 网络 E2E 记录 3 项失败，其余 jobs 成功。本机干净源码与安装包 E2E 各 41/41 通过、混合请求各 512 次成功；源码日志另记录原生运行时退出与重启，所处测试或收尾阶段尚未归因。完整证据与历史 `5984ae8` 记录分别保存，0.1.8 保持 candidate。
+当前状态：最新本机候选 `d73d909` 的干净源码 Windows E2E 为 40 通过、1 失败、0 跳过；并发 16 的 read_initial 收到 HTTP 500、network_connection_lost，后续 19 项全部通过。本次归档时，该提交尚未推送或运行托管 CI，远端 dev 仍为 `aab0b18`。最新已完成 CI 仍是 `aab0b18` 的 push 全部成功、PR Windows 网络 E2E 三项失败，其余 jobs 成功。各次证据分别保存，后续候选继续调查，正式版保持 0.1.7，0.1.8 保持 candidate。
 
 ## 检查与修复
 
@@ -159,6 +159,26 @@ Worker 仅在 `RUNMESH_TEST_MODE=1` 保留固定分类与数值，正常请求�
 Worker 定向验证 4 个文件、252/252 通过、0 跳过，耗时 48.19 秒，覆盖生产路径、流转发和取消等边界。工具层 4 套测试为 394 通过、14 跳过，耗时 91.661 秒，日志为 `.audit/mcp-timing-tooling-full.log`；其中包含此前 5/5 通过的解析器测试，其日志为 `.audit/mcp-timing-parser-tests.log`。工具完整集合运行于容量裁剪修改之前，3 项容量用例随后单独执行；Worker 与容量结果以本轮工具执行回执为证据，未另存日志文件。
 
 TypeScript、文档、runbook 与版本检查通过；format 为 1,054 文件，架构为 474 模块、2,426 条依赖边、0 环，测试清单为 9 组、261 文件，CI 契约为 26 门禁。上述结果用于确认观测实现与证据容量边界，最新完整 CI 仍以 `aab0b18` 的 push 成功、PR Windows 三项失败为准，正式版 0.1.7 与 0.1.8 candidate 状态保持原样。
+
+## `d73d909` 本机源码复验
+
+Windows x64、Node 22.23.2 的本次运行绑定干净提交 `d73d909ea8106efd7374ae3cc9ecdc03dc7bebd9` 与源码树 `ab171416219ab8103e8700760f27a60e5139c60a`。41 项中 40 通过、1 失败、0 跳过，wrapper 耗时 265,426 ms、退出码 1，在原 300,000 ms 预算内结束。唯一失败为 test22：并发 16、read_initial、HTTP 500、`network_connection_lost`，用例耗时 14,230.952 ms，属于 HTTP 失败而非测试超时。
+
+并发 1/4/8 的 test19–21 全部通过，耗时为 24,615.242 / 23,506.334 / 18,546.357 ms；失败前 21 项合计 87,888.263 ms。失败后的 test23–41 共 19 项全部通过、合计 72,865.460 ms，其中紧邻的 test23 为 23,975.362 ms。安全证据保留 216 条事件，完整日志与工件一致，失败详情与事件均未截断，省略数为 0。
+
+失败后的单次健康快照在独立 1 秒窗口内超时，只说明该探测未完成；本轮没有取得活动请求快照。阶段指标的样本和起止点不同，计时差值不归为 Worker 外部耗时，也不据快照缺失或 CPU 使用率确定网络根因。JSON 记录 reporter 初始化至首测试 69,131 ms、首至末测试跨度 191,938.327 ms；用例耗时和为 174,984.674 ms，跨度内 hooks 与间隙为 16,953.653 ms。wrapper 其余 4,356.673 ms 混合前置及末测试后开销，不能单独解释为收尾时间。
+
+固定归档 `.audit/d73d909-ci/local-evidence-summary.json` 的 SHA256 为 `d7d13b8144cdb2a06b122313a5556fe2aa8388d17bcb80b936b668a11b34efaa`，状态为 `local_evidence_archived`、`validation_state=failed`；原始文件为 `.audit/source-e2e-d73d909` 的 log/json/evidence.json/gate.json。本次归档时，该提交未推送，CI 为 `not_run`，远端 dev 仍为 `aab0b18`，正式版保持 0.1.7。各候选归档保持原样，后续调查和完整验证采用新的源码身份。
+
+## 后续候选的资源清理与失败观测
+
+后续候选将失败后的单次快照窗口由 1 秒改为 5 秒，保留 32 KiB 正文上限、原始错误和原有负载、60 秒用例预算及 300 秒 wrapper 门禁。该调整只作用于失败收尾观测，发生于上述 `d73d909` 归档之后，按新的源码身份验证。
+
+轻量验证 12/12 通过、未处理拒绝为 0，覆盖快照内容边界、异常与取消、迟到拒绝、独立探测超时和原错误保留。驱动为 `.audit/mcp-snapshot-probe-tests.mjs`，日志为 `.audit/mcp-snapshot-probe-tests.log`；完整压力验证与托管 CI 将由后续候选另行记录。
+
+MCP 再授权的完整有效收据改为正常释放读取锁，失败与超时保留取消清理；授权投影和请求预算保持原值。两文件定向验证 45/45 通过，独立复核通过，日志 `.audit/reauthorization-lifecycle-tests.log`。固定 Wrangler error/warn 前缀的诊断解析补充验证 11/11 通过，日志 `.audit/wrangler-runtime-prefix-tests.log`。这些结果证明对应生命周期和解析边界，完整网络验证另行验收。
+
+修正工作区的完整 Worker 回归为 115 文件、2,488/2,488 通过、0 跳过，耗时 334.77 秒；构建来源为 dirty，日志 `.audit/reauthorization-worker-full.log`。测试工具四文件完整回归为 399 通过、14 条件跳过、0 失败，耗时 97.362 秒，日志 `.audit/reauthorization-tooling-full.log`。专项与完整集合存在覆盖重叠，计数不累加。
 
 ## 证据边界
 

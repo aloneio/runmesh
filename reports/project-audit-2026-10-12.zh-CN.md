@@ -3,7 +3,7 @@
 检查日期：2026-10-12（Asia/Shanghai）
 
 检查基线：`dev`，`115ba45`
-阶段：候选 `aab0b18` 的托管 push CI 全部通过；PR CI 的 Windows 网络 E2E 记录 3 项失败，其余 jobs 成功。两侧 Linux unit 各 5,001 通过、36 跳过，其中 Vitest 4,696 通过、根级 Node 305 通过；tooling 各 1,050 通过、23 跳过，单独计量。Windows 本机干净源码与安装包 E2E 各 41/41 通过，每组混合负载 512 请求、0 失败；本机源码日志另记录原生运行时退出与重启，发生阶段尚未归因。`5984ae8` 等历史候选证据保持原样，Windows 网络首因继续定位，0.1.8 保持 candidate。
+阶段：最新本机候选 `d73d909` 的干净源码 Windows E2E 为 40 通过、1 失败、0 跳过；并发 16 的 read_initial 收到 HTTP 500、network_connection_lost，后续 19 项测试全部通过。本次归档时，该提交尚未推送、CI 尚未运行，远端 dev 仍为 `aab0b18`。最新已完成托管 CI 仍是 `aab0b18` 的 push 全部通过与 PR Windows 网络 E2E 三项失败；其余 jobs 成功。各候选证据分别保留，后续候选继续调查 Windows 网络首因，正式版保持 0.1.7，0.1.8 保持 candidate。
 
 ## 范围与方法
 
@@ -26,6 +26,7 @@
 | A09 | P2 | Windows 暂存运行时退出后的短暂文件占用会影响暂存提交与清理；测试清理错误还可能覆盖阶段原错。位置：`apps/runner/src/updates/release-stager.ts`、`apps/runner/test/release-stager.test.ts`。 | 私有暂存提交和清理使用有限重试，取消保留调用方原因，双重失败保留主错及清理错。39/39 项定向验证通过；新候选仍需完整安装升级验收。 |
 | A10 | P2 | 两处原生测试的提前失败路径未完整回收测试进程：Runtime 的失败终止夹具仅在主路径停止子进程；Windows 锁夹具在持有者未就绪时无法解除维护子进程等待。位置：`apps/runner/test/runtime.test.ts`、`apps/runner/test/update-launchers.test.ts`。 | 测试持有的进程在收尾时独立停止并等待 `close`；维护夹具具有独立停止信号和自身截止。两文件 118 通过、4 跳过，包含 stop/deadline 故障分支。该发现限于测试提前失败路径，不能解释单元测试全通过后的网络失败。 |
 | A11 | P2 | 补丁回滚测试在操作原错发生后仍断言 `external` 已创建，可能以 `undefined` 断言覆盖真正的首个异常。位置：`apps/runner/test/patch-persistence-failures.test.ts`。 | 已保留操作原错，28/28 项定向诊断验证通过；在新候选 Windows 完整测试中继续复验回滚行为。该项属于证据完整性修复。 |
+| A12 | P2 | MCP 再授权在完整读取有效 200 收据后仍取消 reader 并触发 AbortSignal，使正常完成与失败清理采用同一取消路径。位置：`apps/worker/src/mcp/reauthorization.ts`。 | 完整有效收据（允许及有效主体不匹配的拒绝）释放读取锁并清除计时器；失败、超时、未读正文和迟到回执继续取消。45/45 项定向测试通过，独立复核通过；该资源生命周期修正与 Windows 网络故障的关系另行验证。 |
 
 ## 验证矩阵
 
@@ -471,3 +472,29 @@ E2E 对 read、workspace_list、job/get、job/logs 分别保留响应头、正�
 Worker 定向验证 4 个文件、252/252 通过、0 跳过，耗时 48.19 秒；涵盖请求隔离、固定容量、生产路径、逐块转发、EOF、取消、挂起读取时取消、取消失败、身份异常和首字节错误边界。工具层 4 套测试为 394 通过、14 跳过，耗时 91.661 秒，日志为 `.audit/mcp-timing-tooling-full.log`；其中已包含此前独立通过的 5 项解析器测试，独立日志为 `.audit/mcp-timing-parser-tests.log`，两组计数存在重叠。工具完整集合运行于容量裁剪修改之前；容量修改随后以 3/3 定向用例验证，包含 579 条事件的极值输入、小工件逐字节一致、主证据超限拒绝。Worker 与容量用例以本轮工具执行回执为证据，未另存日志文件。
 
 本批 TypeScript 检查通过；format 覆盖 1,054 文件，架构检查为 474 模块、2,426 条依赖边、0 环，测试清单为 9 组、261 文件，CI 契约为 26 门禁。文档、runbook 与版本一致性检查通过。这些结果验证观测与证据处理边界；最新已完成托管 CI 仍为上述 `aab0b18` 的 push 成功与 PR Windows 三项失败，正式版保持 0.1.7，0.1.8 保持 candidate。
+
+### `d73d909` 的本机源码失败证据
+
+本轮 Windows x64、Node 22.23.2 运行绑定干净提交 `d73d909ea8106efd7374ae3cc9ecdc03dc7bebd9`，源码树为 `ab171416219ab8103e8700760f27a60e5139c60a`。源码 E2E 共 41 项，40 通过、1 失败、0 跳过；wrapper 耗时 265,426 ms，以退出码 1 结束，处于原有 300,000 ms 预算内。本次归档时，该提交尚未推送，托管 CI 状态为 `not_run`，远端 dev 仍为 `aab0b18`；本轮没有签名或正式发布。
+
+唯一失败为 test22 的并发 16 档，分类为 read_initial、HTTP 500、`network_connection_lost`，用例耗时 14,230.952 ms，属于 HTTP 失败而非 60 秒测试超时。此前并发 1/4/8 的 test19–21 全部通过，耗时分别为 24,615.242 / 23,506.334 / 18,546.357 ms。test22 之后的 test23–41 共 19 项全部通过，合计 72,865.460 ms；紧邻的 test23 耗时 23,975.362 ms。失败前 21 项全部通过，合计 87,888.263 ms。后续通过说明测试继续完成，不能反向抹去本次连接丢失。
+
+原始 JSON 的时间字段按 Vitest reporter 实现解释：reporter 初始化至首项测试为 69,131 ms，占 wrapper 的 26.05%；首项至末项测试跨度为 191,938.327 ms，占 72.31%。41 项用例耗时合计 174,984.674 ms，跨度内另有 16,953.653 ms 的组间 hooks 与间隙；wrapper 剩余 4,356.673 ms 同时包含 reporter 之前与末项测试之后的开销。这些字段没有提供每项测试的绝对开始时刻，也不能单独拆出启动与收尾。客户端与服务端阶段样本具有不同起止点和覆盖范围，未覆盖的计时差值不归为 Worker 外部耗时。
+
+安全证据完整保留 216 条 Worker 事件，完整安全日志与工件一致，失败详情和事件均未截断；`worker_event_truncation` 字段未出现，省略数为 0。并发 16 失败后的单次健康快照在独立 1 秒窗口内超时，仅表明该探测未完成。它没有提供活动请求快照，不能据此判断请求未进入 Worker、运行时健康或网络根因，也不据 CPU 使用率作因果结论。
+
+固定本机归档为 `.audit/d73d909-ci/local-evidence-summary.json`，SHA256 为 `d7d13b8144cdb2a06b122313a5556fe2aa8388d17bcb80b936b668a11b34efaa`，状态为 `local_evidence_archived`、`validation_state=failed`。原始文件为 `.audit/source-e2e-d73d909` 的 log/json/evidence.json/gate.json。该归档及 `aab0b18`、`5984ae8` 历史证据保持原样；后续候选按新的源码身份验证。
+
+### `d73d909` 之后的候选修正
+
+后续候选将失败后的单次健康快照窗口由 1 秒调整为 5 秒，保持 32 KiB 正文上限与原失败结果。该调整仅增加失败收尾的观测机会；四档并发、每档 128 请求、每档 60 秒测试预算、300 秒 wrapper 门禁与产品调用行为保持原值。本节改动发生于上述 `d73d909` 归档之后，按新的源码身份验证。
+
+轻量验证 12/12 通过，覆盖快照读取、32 KiB 边界、超限取消、异常、迟到拒绝、原错误保留和独立 5 秒探测超时；未处理拒绝数为 0。驱动与日志分别为 `.audit/mcp-snapshot-probe-tests.mjs`、`.audit/mcp-snapshot-probe-tests.log`。本组结果只验证探测边界，后续完整负载与候选 CI 另行验收，正式版继续保持 0.1.7。
+
+A12 修正保留原有授权投影、一次请求、5 秒截止、16 KiB 正文与 256 次读取上限。定向验证为 `reauthorization-budget.test.ts` 与 `central-identity.test.ts`，45/45 通过、0 跳过，耗时 15.50 秒；日志 `.audit/reauthorization-lifecycle-tests.log`。独立复核覆盖有效收据、流错误、字节与片段边界、超时和迟到响应的资源清理。Registry 与 RunnerDO 常规等待链的静态审阅未发现输入／输出 gate 循环；该结论不排除存储排队或调度延迟。
+
+随后执行完整 Worker 套件：115 文件、2,488/2,488 通过、0 跳过，耗时 334.77 秒，日志 `.audit/reauthorization-worker-full.log`。该轮在修正工作区执行，构建来源标记为 dirty，属于本机代码回归；后续完整网络与托管 CI 按冻结后的精确提交验收。上述 45 项已包含在完整集合内，计数不累加。
+
+A06 的日志解析进一步识别 pinned Wrangler 的固定 `[wrangler:error]` 与 `[wrangler:warn]` 前缀，仍只输出完整固定消息对应的分类，事件上限与字段投影保持原值。新增回归在修正前复现漏解析，修正后与既有生命周期、代理及证据出口回归共 11/11 通过。日志 `.audit/wrangler-runtime-prefix-tests.log`，SHA256 为 `ea635b804311a4076ca7f8c824793e0f1e8efd2dd0207d36d40afdb124ae39c8`。这证明解析缺口，尚无原始日志证据证明 `d73d909` 失败时曾出现被遗漏的该类消息。
+
+本批工具层完整复验包含 verification-tools、package-verification、browser-fixture 与 ci-remediation：399 通过、14 既有条件跳过、0 失败，共 413 项，耗时 97.362 秒。日志 `.audit/reauthorization-tooling-full.log`。该完整集合包含前缀修正和此前容量裁剪测试，专项计数与本组结果分别保留。
