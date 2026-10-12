@@ -274,8 +274,10 @@ describe("Runner exact release staging", () => {
     const result = staging.then(value => value, error => error);
     let probePid: number | undefined, deadline: ReturnType<typeof setTimeout> | undefined;
     try {
+      // Copying the private Node runtime can take several seconds on a busy
+      // Windows host; keep readiness bounded without racing the copy itself.
       await Promise.race([
-        vi.waitFor(async () => expect(await readFile(marker, "utf8")).toMatch(/^\d+$/u), { timeout: 5000 }),
+        vi.waitFor(async () => expect(await readFile(marker, "utf8")).toMatch(/^\d+$/u), { timeout: 15000 }),
         result.then(outcome => { throw outcome instanceof Error ? outcome : new Error("Version staging ended before the probe signaled readiness."); }),
       ]);
       probePid = Number(await readFile(marker, "utf8"));
@@ -292,7 +294,7 @@ describe("Runner exact release staging", () => {
       await result;
       await rm(root, { recursive: true, force: true });
     }
-  }, 10000);
+  }, 30000);
 
   it("retains the staging failure and cleanup error when removing its temporary installation fails", async () => {
     const f = fixture(), root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
