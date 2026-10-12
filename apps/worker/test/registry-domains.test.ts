@@ -91,9 +91,12 @@ it("AR06 preserves cross-domain SQL, transaction order, costs and receipts", asy
       if (RECORD_BASELINE) console.log("AR06_CHARACTERIZATION=" + JSON.stringify(reports));
       // Session and readiness checks reuse their current rows. Preserve their
       // original receipts and explicit costs without freezing the new SQL text;
-      // every other domain observation still matches the ca511cf baseline.
+      // the online-heartbeat index adds one measured write to connection and
+      // heartbeat updates. Other observations retain the ca511cf baseline.
       else expect(reports).toEqual({
         ...baseline,
+        session_begin: { ...baseline.session_begin, writes: 2 },
+        heartbeat: { ...baseline.heartbeat, writes: 2 },
         admin_session_read: { ...baseline.admin_session_read, calls: 1, reads: 2, writes: 0, trace: expect.any(String) },
         admin_session_revoked: { ...baseline.admin_session_revoked, calls: 1, reads: 0, writes: 0, trace: expect.any(String) },
         final_authorization: { ...baseline.final_authorization, calls: 10, reads: 9, writes: 0, trace: expect.any(String) },

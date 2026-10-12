@@ -417,7 +417,7 @@ async function browserGateFixture(t) {
   });
   await mkdir(join(directory, "scripts"));
   await mkdir(join(directory, "node_modules/vitest"), { recursive: true });
-  for (const file of ["run-browser-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "browser-evidence.mjs", "test-evidence.mjs", "evidence-io.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const file of ["run-browser-e2e.mjs", "worker-fixture.mjs", "worker-runtime-observer.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "browser-evidence.mjs", "test-evidence.mjs", "evidence-io.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await writeFile(join(directory, "scripts", file === "worker-fixture.mjs" ? "actual-worker-fixture.mjs" : file), await readFile(join(root, "scripts", file)));
   await writeFile(join(directory, "scripts/build-provenance.mjs"), "export async function writeBuildProvenance() {}\n");
   // Keep real process-tree management and ordinary startup budgets. Shorten

@@ -3,7 +3,7 @@
 检查日期：2026-10-12（Asia/Shanghai）
 
 检查基线：`dev`，`115ba45`
-阶段：候选 `130c834` 的本机源码 E2E 41/41 通过；托管 push、PR 和开发预发布分别记录 Windows 单元测试与网络 E2E 失败。此后的 Registry 维护查询、精确文件身份、Windows 暂存发布、测试进程收尾和控制面阶段诊断已取得定向证据；本机 Windows 完整 Runner 套件 1,494 通过、142 平台跳过、0 失败。完整架构、package-verification/verification-tools、类型、测试收集与构建通过，新一轮功能负载 594/594 通过；源码/安装包 E2E 等待冻结提交后执行。
+阶段：候选 `5984ae8` 在干净源码上完成 Windows 本机源码与安装包 E2E，各 41/41 通过，每组混合负载完成 512 请求、0 失败。托管 push 与 PR 的 Windows Runner 单元测试各 1,494 通过、142 平台跳过，后续网络 E2E 分别记录 1 与 2 项失败。两侧 Linux verify 同时发现 Registry 索引写入成本的历史断言需更新；其余原生平台、Node LTS 与浏览器 jobs 成功。精确成本断言修正后的本机完整 Worker 2,459/2,459 通过，原候选失败证据完整保留。Windows 网络首因继续定位，0.1.8 保持 candidate。
 
 ## 范围与方法
 
@@ -21,7 +21,7 @@
 | A04 | P2 | 测试错误分类读取完整堆栈，将通用包装函数 `runWithTimeout` 误认为实际超时，可能掩盖原始业务错误。位置：`scripts/test-evidence.mjs`。 | 已修正分类逻辑并通过 8 项轻量回归；旧分类结果需结合原始失败消息解释。 |
 | A05 | P1 | Runner Runtime 在首次 shell 发现失败后永久缓存失败状态，后续 shell 请求持续返回 `shell_unavailable`，即使 Runner online 与读取仍正常。位置：`apps/runner/src/runtime.ts`。 | 已加入有界、共享的发现恢复，36 项定向回归及本机 Windows 完整网络 E2E 41 项通过；首次探测具体失败原因未被捕获，与已修复的永久缓存行为分别记录。 |
 | A06 | P2 | 网络负载首错后的主动停止、在途请求取消与汇合需要完整绑定；失败工件曾遗漏负载进度、内部运行时生命周期和控制面失败阶段，Windows ASCII 日志前缀也未被识别。已有测试 HTTP 作用域会在结束时取消请求，因此该缺口本身不能解释首次 Windows 故障。 | 已实现首错快照、停止领取、主动取消与请求汇合，13/13 项定向回归通过；前置控制面 217/217、日志诊断 17/17 项定向回归及架构、类型检查通过。`130c834` 已取得授权路径 deadline 与负载首错事件，完整结果见下文。 |
-| A07 | P1 | Registry 在每次受保护 RPC 的例行维护中扫描全部 Runner 记录，查询读取量随 Runner 数量增长，增加授权请求路径的开销。位置：`apps/worker/src/registry/lifecycle.ts`、`apps/worker/src/registry/schema.ts`。 | 已加入部分表达式索引并使用等价 `MIN` 查询，保留维护写预算、nonce 与权限约束；33/33 项定向验证通过。1,000 条记录时 `rowsRead` 从至少 1,000 降至最多 2，类型、架构与测试收集检查通过。等待新候选完整验收，当前证据尚未将其与历史 Windows 首错建立因果关系。 |
+| A07 | P1 | Registry 在每次受保护 RPC 的例行维护中扫描全部 Runner 记录，查询读取量随 Runner 数量增长，增加授权请求路径的开销。位置：`apps/worker/src/registry/lifecycle.ts`、`apps/worker/src/registry/schema.ts`。 | 已加入部分表达式索引并使用等价 `MIN` 查询，保留维护写预算、nonce 与权限约束；33/33 项定向验证通过。1,000 条记录时 `rowsRead` 从至少 1,000 降至最多 2。`5984ae8` 的完整 Worker 验证发现 heartbeat 与 session_begin 的索引计量写入由 1 增至 2，其余对应调用、读取、顺序及回执保持一致；精确成本断言按该取舍更新后复验。 |
 | A08 | P1 | Workspace、补丁及分页读取使用 JavaScript `number` 表示系统文件标识，较大的 inode 会丢失整数精度，影响身份一致性比较；同类表示也用于 Jobs、Context、配置、元数据、Git 与验证证据读取链路。共享位置：`apps/runner/src/file-identity.ts`；证据读取位置：`scripts/evidence-io.mjs`。 | 已改为完整整数身份；Workspace/补丁/分页集合 95 通过、3 跳过，Jobs/Context 的 8 文件 139 通过、1 跳过，配置/元数据/Git 等 8 文件合计 97 通过、64 跳过，证据读取 10/10 通过。本机 Windows 完整 Runner 1,494 通过、142 平台跳过、0 失败；package-verification/verification-tools 两文件完整验证通过。各定向集合与完整套件分别记录，尚无证据将该独立防御修复认定为 Windows 网络首错原因。 |
 | A09 | P2 | Windows 暂存运行时退出后的短暂文件占用会影响暂存提交与清理；测试清理错误还可能覆盖阶段原错。位置：`apps/runner/src/updates/release-stager.ts`、`apps/runner/test/release-stager.test.ts`。 | 私有暂存提交和清理使用有限重试，取消保留调用方原因，双重失败保留主错及清理错。39/39 项定向验证通过；新候选仍需完整安装升级验收。 |
 | A10 | P2 | 两处原生测试的提前失败路径未完整回收测试进程：Runtime 的失败终止夹具仅在主路径停止子进程；Windows 锁夹具在持有者未就绪时无法解除维护子进程等待。位置：`apps/runner/test/runtime.test.ts`、`apps/runner/test/update-launchers.test.ts`。 | 测试持有的进程在收尾时独立停止并等待 `close`；维护夹具具有独立停止信号和自身截止。两文件 118 通过、4 跳过，包含 stop/deadline 故障分支。该发现限于测试提前失败路径，不能解释单元测试全通过后的网络失败。 |
@@ -29,19 +29,19 @@
 
 ## 验证矩阵
 
-下表中的托管结果绑定候选 `130c834e7d55ae7588809828dc5b7dde5acefe22`；更早提交的结果按源码身份保留在下文。后续 Registry 与 Runner 修改需使用新提交重新完成门禁。不同专项与完整测试存在覆盖重叠，计数分别列示。
+下表中的候选结果绑定 `5984ae8609373390230b6a97b9f6993dec173d89`，源码树 `2360913788b45611b3a737c940c8fbe177c57640`；更早提交的结果按源码身份保留在下文。成本断言及后续修复使用新提交重新完成门禁。不同专项与完整测试存在覆盖重叠，计数分别列示。
 
 | 功能面 | 验证内容 | 当前证据 |
 | --- | --- | --- |
 | 协议与 API | Schema、帧编解码、输出契约、分页、客户端选择 | 本地退出码专项 106 项通过；候选 Linux protocol 57 项、contracts 50 项通过。 |
-| 任务与连接 | 并发排队、输入、取消、完成、持久化、恢复、重连 | 历史本地 Runner 负载 594 次操作通过；候选 Linux Runner 单元测试 1,564 通过、34 跳过，源码与安装包网络 E2E 各 41/41；Windows 本机源码 E2E 41/41，开发预发布 Windows 网络 E2E 4 项失败。 |
-| 工作区 | 文件、搜索、Git、补丁、Context 存储 | 本地真实文件/Git/Context 并发负载通过；候选 Runner 单元测试及 Linux 网络 E2E 通过。 |
-| 中央能力 | Skills 迁移与版本、远程 MCP 目录与调用、OAuth 状态 | 本地迁移专项 42 项及集成 28 项通过；候选 Worker 单元测试 2,441 项通过，Skills 四档共 512 请求、0 失败；后续 A07 已有定向证据，等待新候选完整验收。 |
-| 管理界面 | 登录、导航、Runner、客户端、Skills、语言及窄屏 | 候选 push 与 PR 的 browser job 均成功，push 浏览器 E2E 5/5；根级 UI/导航测试 305 项通过。 |
-| 安装与升级 | Windows/Linux/macOS 服务、安装锁、排空、更新恢复 | 候选 Linux/macOS native jobs、Node 22.23.2/24.21.0 LTS jobs 成功；push/PR Windows Runner 单元测试各 1,456 通过、1 失败、141 跳过，网络 E2E 均未执行。开发预发布的 Windows 单元测试 1,457 通过、141 跳过，后续网络 E2E 失败。 |
-| 发布物 | 编译、打包、离线安装、包级端到端、签名与校验和 | 候选 Linux 构建、包校验及安装包 E2E 通过；该测试包未签名、未发布，正式签名制品另行验收。 |
-| 文档与治理 | 文档链接、版本事实、许可证、架构、测试收集、CI 一致性 | 本地文档契约 39 项、安全配置 10 项；文档调整后，145 份 Markdown 的 963 个链接和 30 个锚点通过；候选 verify job 与 main-source-policy 成功。 |
-| 正式发布 | 同一候选提交双端 CI、受保护 dev→main、签名发布、激活与线上来源 | 候选 GitHub push、PR 与开发预发布门禁失败；[PR118](https://github.com/aloneio/runmesh/pull/118) 为 ready，main-source-policy 成功。现有生产 0.1.7 的发布前置检查通过；0.1.8 的双端 main CI、签名发布与 activation 尚待完成。 |
+| 任务与连接 | 并发排队、输入、取消、完成、持久化、恢复、重连 | 本地新一轮 Runner 功能负载 594/594 通过；候选 Linux Runner 单元测试 1,600 通过、36 跳过。Windows 本机源码与安装包 E2E 各 41/41、混合请求各 512/512；托管 push/PR 的 Windows 网络 E2E 分别失败 1/2 项。 |
+| 工作区 | 文件、搜索、Git、补丁、Context 存储 | 本地真实文件/Git/Context 并发负载、候选 Runner 完整套件及本机两组网络 E2E 通过；云端网络首错继续定位。 |
+| 中央能力 | Skills 迁移与版本、远程 MCP 目录与调用、OAuth 状态 | 本地迁移专项 42 项及集成 28 项通过；候选 Worker 单元测试 2,458 通过、1 项 Registry 成本断言失败。历史 Skills 512 请求证据保留原提交归属；该候选 Linux 后续门禁为 `not_run`。 |
+| 管理界面 | 登录、导航、Runner、客户端、Skills、语言及窄屏 | 候选 push 与 PR 的 browser job 均成功，浏览器 E2E 各 5/5、0 跳过；历史根级 UI/导航 305 项证据按原提交保留。 |
+| 安装与升级 | Windows/Linux/macOS 服务、安装锁、排空、更新恢复 | 候选 Linux/macOS native jobs、Node 22.23.2/24.21.0 LTS jobs 成功；push/PR Windows Runner 单元测试各 1,494 通过、142 平台跳过，随后网络 E2E 失败。 |
+| 发布物 | 编译、打包、离线安装、包级端到端、签名与校验和 | 固定工具链本地构建通过；候选 Windows 本机安装包 E2E 41/41、0 跳过，包 1,206,785 字节，签名与发布状态均为 false。正式签名制品另行验收。 |
+| 文档与治理 | 文档链接、版本事实、许可证、架构、测试收集、CI 一致性 | 本地文档契约 39 项、安全配置 10 项及 963 个链接、30 个锚点通过；候选托管文档、runbook、架构、类型、CI 策略与 main-source-policy 通过。完整 verify 在 unit 门禁停止。 |
+| 正式发布 | 同一候选提交双端 CI、受保护 dev→main、签名发布、激活与线上来源 | 候选 GitHub push、PR 为 failure；开发预发布 cadence 成功且 due=false，plan/verification/build/publish 按节奏跳过。[PR118](https://github.com/aloneio/runmesh/pull/118) 的 main-source-policy 成功。现有生产为 0.1.7；0.1.8 的双端 main CI、签名发布与 activation 按后续证据验收。 |
 
 ## 判定原则
 
@@ -289,11 +289,11 @@ A06 的修改保留每档 128 请求、并发 1/4/8/16、每档 60 秒测试时�
 
 `510bc2a` 后补齐前置 `reauthorizePrincipal` 与 Registry RPC 路径的九个固定阶段，以及现有碎片上限对应的 `fragment_limit` 分类。200 成功、404 缺失、403/409 权限拒绝、合法 202 延迟审计回执均保持静默；签名异常仍原样抛出。两个 Worker 定向文件共 217/217 项通过，架构检查覆盖 472 模块、2,402 条依赖边、0 环，TypeScript 和差异检查通过。另使用 Wrangler 实际依赖的 esbuild 0.28.1 验证 Windows `X [ERROR]` 格式，修正严格日志解析器，17/17 项定向回归通过。
 
-只读运行时源码核对发现，Miniflare core 的外层 `service.fetch` 异常路径可以返回无专用诊断头的文本 500，且无需经过 ProxyWorker 的 fetch 拒绝日志。因此缺少代理事件不足以排除该路径；目前没有证据确认它是本次故障来源。正常 MCP 请求与响应的成功路径均完成正文读取，已安装的 Miniflare loopback server 也已设置 `keepAliveTimeout=0`。这些核对结果用于约束后续判断，现有证据确认了测试收尾与观测缺口，Windows 初始故障原因尚待确认。
+此前对顶层 Miniflare 源码的只读核对发现，其 core 外层 `service.fetch` 异常路径可以返回无专用诊断头的文本 500，loopback server 也已设置 `keepAliveTimeout=0`。后续依赖解析确认该顶层版本属于 Worker 单元测试池，E2E 由 Wrangler 的嵌套运行时启动。因此这项源码观测仅作为对应依赖实现的参考；E2E 路径及版本以末节的 `createRequire` 解析结果为准。现有首错证据尚未确认具体运行时触发路径。
 
-### `130c834` 之后的修复状态
+### `130c834` 后、`5984ae8` 冻结前的修复状态
 
-以下修改发生在 `130c834` 之后，定向证据与前述候选完整验收分别使用。
+以下记录保留 `5984ae8` 冻结前的修复与定向验证状态；该候选的最终本机与托管结果见末节。定向证据与完整验收分别使用。
 
 | 项目 | 已确认的问题与当前进度 | 下一项验收 |
 | --- | --- | --- |
@@ -332,3 +332,77 @@ A08 同时扩展至 `scripts/evidence-io.mjs`：读取路径及已打开描述�
 负载驱动加入可选输出文件参数，各次结果分别保存，历史文件保持原样。新增输出变量最初与既有 payload 变量重名，esbuild 在负载执行前拒绝构建；改为 `reportPath` 后，`node --check` 与 bundle 检查通过，再完成上述新一轮负载。该准备问题未记为一次失败的产品负载运行。
 
 本批用户文档复核确认 `release/release-state.json` 为 0.1.8 candidate，中英文发行状态均列出正式版 0.1.7 与正在验证的 0.1.8，README 引导读者查看该状态。0.1.8 双语发行说明仅补充大型 Runner 部署的维护读取优化，以及文件编辑和分页读取的完整系统标识校验。文档契约与源码事实、3 项 runbook 检查通过；145 份 Markdown 的 963 个本地链接及 30 个标题锚点再次通过，未据此改变发行状态。
+
+### `5984ae8` 候选的完整观测
+
+候选提交为 `5984ae8609373390230b6a97b9f6993dec173d89`，源码树为 `2360913788b45611b3a737c940c8fbe177c57640`。本机源码与安装包 E2E 均在此提交的干净源码上执行。托管 push 产物绑定该提交；PR 产物绑定合成提交 `e1be7c5862f29ee081550394c6055326c970288b`，源码树与候选一致。以下运行均为 attempt 1，完整保留首轮结果。
+
+| 工作流 | 终态与覆盖 |
+| --- | --- |
+| [push CI 38208199049](https://github.com/aloneio/runmesh/actions/runs/38208199049) | `verify` 的 unit 门禁与 Windows 网络 E2E 失败，`verify-all` 失败；Linux/macOS native、两个 Node LTS 及 browser jobs 成功。 |
+| [PR CI 38208203605](https://github.com/aloneio/runmesh/actions/runs/38208203605) | 与 push 相同的两个失败门禁，`verify-all` 失败；其余五个 jobs 成功。 |
+| [Main Source Policy 38208203616](https://github.com/aloneio/runmesh/actions/runs/38208203616) | 成功，PR118 的来源符合策略。 |
+| [Dev Runner Prerelease 38208199360](https://github.com/aloneio/runmesh/actions/runs/38208199360) | cadence 成功，`due=false`、push number 316、remaining 4、sequence 62；plan、verification、build 与 publish 按节奏跳过，产物数为 0。 |
+
+Linux 两侧 unit 日志各记录 4,695 通过、1 失败、36 跳过：domain 530、contracts 50、protocol 57、Runner 1,600 通过及 36 跳过、Worker 2,458 通过及 1 失败。失败位于 `apps/worker/test/registry-domains.test.ts:95` 的 AR06 精确成本对照，`heartbeat.writes` 与 `session_begin.writes` 的实际值均为 2，历史预期均为 1。其余对应调用数、读取数、SQL 顺序摘要与回执保持一致。push/PR unit 门禁分别耗时 180,946/223,450 ms；门禁工件中的 `test_counts` 为 null，上述测试数来自独立日志汇总。
+
+Registry 维护索引使 1,000 条 Runner 的例行维护读取量由至少 1,000 降至最多 2，同时在更新该索引时增加计量写入。成本回归应精确体现 heartbeat 与 session_begin 的 2 次写入，保留历史 JSON，以及调用、读取、顺序和回执的现有断言。该取舍用于解释本轮 AR06 差异；Windows 网络首错仍按自己的证据定位。
+
+两侧 Linux 的工具链、安装、依赖、文档、runbook、版本、格式、空白、架构、类型、清单、CI 策略和提升策略门禁通过。unit 之后的 tooling、安全专项、构建、源码/安装包网络与发布契约等工件记录为 `not_run`；独立 browser jobs 的 E2E 各 5/5 通过、0 跳过。
+
+Windows push 与 PR 的完整 Runner 套件各 1,494 通过、142 平台跳过、0 失败；75 个文件中 72 通过、3 平台跳过，Vitest 总耗时分别为 225.13/239.95 秒。其后的网络门禁失败，原始工件仅提供失败及跳过数，完整通过计数按缺失保留。
+
+| 执行 | 有界首错 | 首错时的负载快照 |
+| --- | --- | --- |
+| push，测试索引 21 | `mcp_http_failure`，HTTP 500；`job_logs` 阶段，文本非 JSON，RPC code/id 缺失，固定运行时特征 `network_connection_lost`。位置 `test/e2e/mcp-runner.e2e.test.ts:1193:42`。共 1 个失败测试、0 跳过。 | 并发 8；started 57、completed 49、elapsed 17,767 ms；pending_headers 7、pending_body 1。 |
+| PR，测试索引 19 | `test_timeout`，位置 `test/e2e/mcp-runner.e2e.test.ts:1186:24`。 | 并发 1；started 87、completed 86、elapsed 60,014 ms；pending_headers 1、pending_body 0。 |
+| PR，测试索引 22 | `mcp_http_failure`，HTTP 500；`read_initial` 阶段，文本非 JSON，RPC code/id 缺失，固定运行时特征 `network_connection_lost`。位置 `test/e2e/mcp-runner.e2e.test.ts:1193:42`。PR 共 2 个失败测试、0 跳过。 | 并发 16；started 85、completed 69、elapsed 24,824 ms；pending_headers 15、pending_body 1。 |
+
+两侧均记录一次 `proxy_upstream_connection_lost`，方法 POST、attempts 1。`launcher_snapshot` 显示 `test_failed` 时退出码与信号为 null，teardown 尚未开始，进程也未提前退出。失败列表无截断；本轮未观察到控制面阶段或运行时重启事件。因此现有字段支持连接丢失与等待停滞的定位，尚未确定触发它们的运行时路径。Windows push/PR 网络门禁分别耗时 203,301/254,659 ms。
+
+Windows 本机源码与安装包 E2E 各 41/41 通过、0 跳过，每组混合负载在并发 1/4/8/16 下各完成 128 请求，总计各 512 请求、0 失败。以下延迟来自各自原始日志，属于本轮本机条件。
+
+| 并发 | 源码 P50/P95（ms） | 安装包 P50/P95（ms） |
+| --- | --- | --- |
+| 1 | 97 / 146 | 94 / 128 |
+| 4 | 311 / 669 | 317 / 521 |
+| 8 | 788 / 1,159 | 587 / 835 |
+| 16 | 1,511 / 1,836 | 893 / 1,080 |
+
+源码 Vitest 总耗时 152.31 秒、测试耗时 146.42 秒，门禁 wrapper 为 158,457 ms；Vitest JSON 单文件 wall 为 114.390 秒，各字段保留原口径。安装包 Vitest 总耗时 101.92 秒，wrapper 为 138,550 ms；包 1,206,785 字节，SHA256 `d3e4b189f58d5de200acae76f0e54531122af3c481f7c4b37dfc864d0320042a`，`signed=false`、`published=false`。源码证据为 `.audit/source-e2e-5984ae8` 的 log、json、evidence.json 与 gate.json；安装包证据为 `.audit/package-e2e-5984ae8.json` 和对应 log。
+
+四个工作流的运行/attempt/作业身份、6 份产物 ZIP、5 份必要日志及其 SHA256 归档在 `.audit/5984ae8-ci`。固定来源验证后的 `safe-summary.json` SHA256 为 `4c4539e30f414fd07404bf99e67e7eff0e9214a166dd77fc01fb67e9321e2389`；`state=complete` 表示观测结束，`validation_state=failed` 表示候选门禁结论。本机通过证据单独记录于 `local_validation`。新修复的执行日志与该候选归档分开计量，成本断言修正与后续网络修复由新候选重新验收。
+
+运行时版本使用 Node 22.23.2 的实际模块解析核对：`createRequire` 从每个 owner 的 `package.json` 解析 Miniflare，再从该 Miniflare 解析 workerd。Wrangler 4.135.0 实际解析到自身嵌套的 Miniflare `5.20260918.0-alpha` 与 workerd `1.20260918.1`；`@cloudflare/vitest-pool-workers` 0.22.0 解析到顶层 Miniflare `5.20260815.0-alpha` 与 workerd `1.20260815.1`。`scripts/worker-fixture.mjs` 启动 `node_modules/wrangler/bin/wrangler.js dev`，因此 E2E 运行时按前一条链路分析。解析原始记录为 `.audit/5984ae8-ci/runtime-resolution.json`，对应 `package-lock.json` SHA256 为 `62ffc6f22c9569c2de400b801c8c4cad84c4a7640b415d7b5e2f8e38a9673570`。仅凭顶层安装版本推断 E2E 运行时的早期判断已收窄至测试池依赖范围。
+
+### `5984ae8` 之后的成本断言复验
+
+修正仅在 `apps/worker/test/registry-domains.test.ts` 为 `session_begin` 与 `heartbeat` 各覆盖精确 `writes: 2`，历史 baseline 文件及其他成本、回执和顺序断言保持原样。4 文件定向回归 28/28 通过，耗时 22.50 秒；完整 Worker 114 文件、2,459 项测试全部通过，0 失败、0 跳过，Vitest 总耗时 509.18 秒。原始日志分别为 `.audit/5984ae8-ci/registry-cost-regression.log`（SHA256 `cea058aa37fcc09001ec26ac34029dd473edd18790eb26b1bd981a40038a694e`）和 `.audit/5984ae8-ci/worker-full-after-cost-fix.log`（SHA256 `11a63ca49453797f9b59ed4a64851d82f97a9b63dfad3d52c2dd3a019e7ad527`）。
+
+这两次运行使用成本断言修改后的本机工作区，属于 `5984ae8` 之后的修复证据；上述固定候选 `safe-summary.json` 不包含这两份修复日志。新候选 CI 继续验收完整门禁，Windows 网络故障仍保留独立定位结论。
+
+### `5984ae8` 之后的 HTTP 资源清理修正与生命周期核查
+
+只读核查发现，`test/e2e/mcp-runner.e2e.test.ts` 中两处管理 API 注册 Runner 的成功 HTTP 200 响应只断言状态，未消费 JSON 正文：一处为混合负载前的第二 Runner 注册，另一处为混合负载后的根目录 Git 测试注册。`apps/worker/src/http/runner-api.ts` 的成功契约为 `{ runner_id, token }`。两处现已在状态断言后增加 `await response.json()` 并仅断言返回的 `runner_id`，让正文读取在各自测试作用域结束前完成，断言也避免输出完整凭据回执。
+
+此项归类为测试 HTTP 资源清理修正。它没有增加重试、延迟或改变测试负载；网络初始原因尚未确证，不能将这两行修改列为 `network_connection_lost` 的根因修复。修改后 `git diff --check` 通过，完整 E2E 等待新候选冻结后验证；`5984ae8` 的既有通过与失败结果均保留原归属。
+
+HTTP 作用域的 `finally` 会取消该测试尚未结束的请求，`beforeAll` 准备请求保持自身生命周期。成功表单重定向由 `apps/worker/src/http/html-response.ts` 返回 body 为 null 的 303；成功 MCP 响应通过 `readMcp().text()` 完整读取。当前安装的 Agents legacy adapter 为每个请求建立局部 server/transport，在 SSE EOF 时等待两者的 close 调用结束后才关闭响应流。上述源码核查确认了每请求的响应消费与清理路径，未提供成功 SSE 跨测试遗留的证据。
+
+`5984ae8` PR Windows 的首个失败可以进一步定位：并发 1、started 87、completed 86、pending_headers 1、pending_body 0，表示唯一在途请求为从 0 计数的 index 86。夹具按 `index % 4` 轮换 read、workspace_list、job/get、job/logs，因此该请求是省略 `workspace_id` 的 `job/get`，在 60,014 ms 的用例超时时仍等待 HTTP 响应头。push 的并发 8 与 PR 后续并发 16 的首错快照各有一条 pending_body；`mcpMessage` 对非 200 响应同样先进入 body 阶段再分类错误，所以这两条分别包含正在分类的 `job_logs`、`read_initial` HTTP 500，不能据此判断成功 SSE 正文读取停滞。这些是既有工件与夹具源码的联合定位，未新增一次测试执行。
+
+前序恢复测试先关闭传输，再终止并重启 Runner 进程，随后确认恢复 Job 为 `interrupted`。Runner 当前连接的 close 路径清理心跳/同步计时器并拒绝 pending RPC；旧进程的内存状态不跨进程延续。混合负载前其余后台 Job 已观察到成功终态；排队、busy 与历史模式变更测试均在混合负载之后。现有源码核查没有建立前序测试遗留传输与首错之间的因果关系。
+
+下一项诊断为夹具原生进程观察器，用于补足 Wrangler launcher 状态与实际运行时子进程状态之间的证据缺口。该方案处于实现与待验证阶段，本节暂不记录成功计数或将其视为网络修复；后续以独立运行结果补录。
+
+### 原生进程观察器的实现与本机验证
+
+上述待验证方案随后完成实现。`scripts/worker-fixture.mjs` 通过 fixture 专用 preload 加载 `scripts/worker-runtime-observer.mjs`，按 Wrangler 实际解析的 Miniflare→workerd 链路匹配原生进程，仅输出固定的覆盖状态、spawn/exit 阶段、有界启动序号、耗时、原生退出码及信号分类。观察器最多跟踪 16 次匹配启动，保留原 spawn 的接收者、参数对象、返回值和异常行为；生产入口与运行时依赖版本保持原样。诊断接收器接受完整的 Windows/POSIX 原生退出码范围。
+
+Windows、Node 22.23.2 的真实 Wrangler 健康检查 smoke 通过。`.audit/runtime-observer-smoke.json` 记录 bin 与 CLI 两层各一次 `coverage=installed`，以及嵌套 workerd 的两次实际启动：index 1 为 6,963 ms，index 2 为 11,858 ms。该结果确认 preload 与实际运行时的观测覆盖；两次 spawn 本身不构成运行时重启或崩溃证据，也不证明历史网络故障已修复。
+
+新增 observer 定向验证 10/10、browser-fixture 定向验证 5/5、完整原生退出码诊断定向验证 8/8 通过。随后 verification-tools 与 observer 两文件完整执行 107/107 通过、0 跳过，耗时 35.076 秒，原始日志为 `.audit/runtime-observer-tools-full.log`。这些定向集合与完整集合分别记录，存在覆盖重叠。
+
+CI 接线首轮将观察器测试并入冻结的旧 native 命令，触发 5 项布局契约失败；原始日志 `.audit/observer-ci-wiring-tests.log` 保留 238 通过、5 失败、2 跳过，共 245 项的结果。随后改为 `NATIVE_ADDED_COMMANDS` 中的独立 step，旧 native 命令继续保留；ci-layout 复验 6/6 通过、0 跳过，耗时 362.823 ms，证据为 `.audit/observer-ci-layout-corrected.log`。这一修正属于 CI 测试接线，未改变产品网络行为。
+
+本轮静态检查通过：format 覆盖 1,051 文件；架构为 473 模块、2,422 条依赖边、0 环；测试清单为 9 组、260 文件；CI 契约为 26 门禁；文档源码事实、3 项 runbook、版本一致性及 TypeScript 检查均通过。以上结果属于冻结前工作区验证，新的干净提交源码 E2E 将另行记录，Windows 网络首因继续保留独立调查结论。

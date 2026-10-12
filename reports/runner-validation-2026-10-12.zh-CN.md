@@ -61,6 +61,47 @@ node .audit/runner-functional-load.bundle.mjs
 
 驱动器现在接受可选报告路径，后续运行可保存到新的文件。准备时新增输出路径变量曾与既有 payload 变量重名，esbuild 在执行负载前拒绝构建；改为 `reportPath` 后，语法检查与打包通过，再完成上述负载。该准备问题未形成一次失败的产品负载运行。
 
+## `5984ae8` 网络与原生平台复验
+
+候选提交 `5984ae8609373390230b6a97b9f6993dec173d89`，源码树 `2360913788b45611b3a737c940c8fbe177c57640`。Windows 本机在干净源码上执行源码与安装包 E2E，各 41/41 通过、0 跳过；每组混合负载在并发 1/4/8/16 下各完成 128 请求，总计各 512 请求、0 失败。
+
+| 并发 | 源码 P50/P95（ms） | 安装包 P50/P95（ms） |
+| --- | --- | --- |
+| 1 | 97 / 146 | 94 / 128 |
+| 4 | 311 / 669 | 317 / 521 |
+| 8 | 788 / 1,159 | 587 / 835 |
+| 16 | 1,511 / 1,836 | 893 / 1,080 |
+
+源码 Vitest 总耗时 152.31 秒、测试耗时 146.42 秒；门禁 wrapper 为 158,457 ms。安装包 Vitest 总耗时 101.92 秒、wrapper 为 138,550 ms。测试包 1,206,785 字节，SHA256 `d3e4b189f58d5de200acae76f0e54531122af3c481f7c4b37dfc864d0320042a`，签名与发布状态均为 false。源码证据保存在 `.audit/source-e2e-5984ae8` 的 log/json/evidence.json/gate.json，安装包证据保存在 `.audit/package-e2e-5984ae8.json` 与对应 log。
+
+托管 [push CI](https://github.com/aloneio/runmesh/actions/runs/38208199049) 和 [PR CI](https://github.com/aloneio/runmesh/actions/runs/38208203605) 均为 attempt 1。Linux Runner 单元测试各 1,600 通过、36 跳过；Windows Runner 各 1,494 通过、142 平台跳过、0 失败，Vitest 总耗时分别为 225.13/239.95 秒。Linux/macOS native、Node 22.23.2/24.21.0 LTS 与 browser jobs 成功。
+
+Windows 网络 E2E 的 push 记录 1 个失败测试：8 并发的 `job_logs` 返回 HTTP 500、固定运行时特征 `network_connection_lost`，首错时 started/completed 为 57/49，等待响应头/正文为 7/1。PR 记录 2 个失败测试：1 并发在 60,014 ms 超时，started/completed 为 87/86、等待响应头为 1；16 并发的 `read_initial` 返回同类 HTTP 500，started/completed 为 85/69、等待响应头/正文为 15/1。两侧均为 0 跳过，完整通过计数未由失败工件提供。
+
+两次连接丢失均记录 POST attempts 1；首错时 launcher 尚未退出或开始 teardown，工件没有控制面阶段或运行时重启事件。该证据保留网络等待与连接丢失的事实，初始触发路径继续定位。本机两组通过与托管失败分别记录。Linux verify 同时因 Registry 的两个索引写入成本历史断言失败，后续 Linux E2E 工件为 `not_run`。
+
+完整源身份、PR 合成树一致性、作业与工件摘要见[项目检查书](project-audit-2026-10-12.zh-CN.md)及 `.audit/5984ae8-ci/safe-summary.json`。本轮所有终态与首错已保存，后续修复使用新候选完成验收。
+
+## 后续 HTTP 资源清理与首错定位
+
+`test/e2e/mcp-runner.e2e.test.ts` 的第二 Runner 注册及根目录 Git 测试注册原先只检查 HTTP 200。两处已在状态断言后完整读取 JSON 正文，并按 `apps/worker/src/http/runner-api.ts` 的 `{ runner_id, token }` 契约仅断言 `runner_id`。这是测试 HTTP 资源清理修正，`git diff --check` 通过，完整网络 E2E 等待新候选冻结后验收。修正保持原请求量、并发、超时与调用顺序，网络初始原因尚未确证。
+
+对既有 `5984ae8` PR 工件的进一步定位表明：并发 1 在 started/completed 87/86、pending_headers/pending_body 1/0 时超时。此时唯一在途请求为从 0 计数的 index 86；按固定四种操作的轮换顺序，它是省略 `workspace_id` 的 `job/get`，等待 HTTP 响应头。push 的并发 8 与 PR 的并发 16 各自记录的 pending_body 1 包含正在分类的 HTTP 500：夹具对所有响应均在检查状态前进入 body 阶段。这两个计数不构成成功 SSE 正文卡住的证据。
+
+生命周期核查确认：成功 303 为 null body，成功 MCP 经 `readMcp().text()` 完整消费；Agents legacy adapter 在 SSE EOF 时先等待 server/transport 清理，再关闭响应流。离线恢复测试会重启 Runner 进程并确认恢复 Job 为 `interrupted`，其余前序后台 Job 已达到成功终态；排队、busy 与历史模式切换测试位于混合负载之后。上述源码事实及两处响应读取修正分别记录，尚未建立它们与历史连接丢失的因果关系。
+
+夹具原生进程观察器作为下一项待验证诊断，用于区分 Wrangler launcher 与实际运行时子进程的生命周期。该方案尚无本节可引用的验证结果；后续执行证据另行补录，历史测试记录保持原样。
+
+## 原生进程诊断的后续实现与验证
+
+夹具观察器随后通过专用 preload 接入真实 Wrangler 启动链路，匹配其实际解析的嵌套 workerd，仅保留固定覆盖状态、spawn/exit 阶段、有界序号与耗时、原生退出码和信号分类。Windows、Node 22.23.2 健康检查 smoke 通过；`.audit/runtime-observer-smoke.json` 中 bin 与 CLI 两层各报告一次 installed，实际 workerd spawn 为 index 1（6,963 ms）和 index 2（11,858 ms）。这验证了观测覆盖；两个启动事件本身不代表故障重启，也不作为历史连接丢失已修复的证据。
+
+observer 定向 10/10、browser-fixture 定向 5/5、完整原生退出码诊断定向 8/8 通过。verification-tools 与 observer 两文件完整复验 107/107 通过、0 跳过，耗时 35.076 秒，原始日志为 `.audit/runtime-observer-tools-full.log`。专项与完整测试覆盖有重叠，计数分别保留。
+
+CI 接线初次替换冻结的旧 native 命令，产生 5 项布局契约失败；`.audit/observer-ci-wiring-tests.log` 保留 238 通过、5 失败、2 跳过的首轮结果。改为 `NATIVE_ADDED_COMMANDS` 独立 step 后，ci-layout 复验 6/6 通过、0 跳过、362.823 ms，日志为 `.audit/observer-ci-layout-corrected.log`。产品请求与负载预算保持原值。
+
+本轮 format（1,051 文件）、架构（473 模块、2,422 边、0 环）、清单（9 组、260 文件）、CI 契约（26 门禁）、文档源码事实、3 项 runbook、版本一致性及 TypeScript 检查通过。这些属于冻结前工作区验证，新的干净提交源码 E2E 结果另行追加。
+
 ## 证据边界
 
 本轮负载使用隔离临时目录、真实 Node/Git 子进程与文件系统 API，不连接生产服务，也不操作系统级 Runner 注册。驱动器使用显式的本机 Git 路径作为测试注入。升级协调器、服务回滚和跨平台服务适配器由项目完整测试及 CI 矩阵覆盖；原生 Linux/macOS 服务行为需由对应平台执行证据确认。Worker→Runner 网络链路和浏览器验证另行记录。

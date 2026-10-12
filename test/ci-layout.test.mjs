@@ -26,6 +26,7 @@ test("CI integration preserves native, LTS and generated main-admission jobs", a
   expectedNative.steps.splice(runtime + 1, 0, { ...WINDOWS_REPORT_INITIALIZATION_STEP });
   expectedNative.steps.push({ run: "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs" });
   expectedNative.steps.push({ run: "node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs" });
+  expectedNative.steps.push({ run: "node --test test/worker-runtime-observer.test.mjs" });
   expectedNative.steps.push({ run: "npm run test:e2e", if: "matrix.os == 'windows-latest'" });
   expectedNative.steps.push(githubReportUpload("native-runner"));
   assert.deepEqual(expectedNative, next.jobs["native-runner"]);

@@ -96,7 +96,7 @@ async function transportFixture(t) {
   });
   await mkdir(join(directory, "scripts"));
   await mkdir(join(directory, "node_modules/vitest"), { recursive: true });
-  for (const file of ["run-e2e.mjs", "worker-fixture.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
+  for (const file of ["run-e2e.mjs", "worker-fixture.mjs", "worker-runtime-observer.mjs", "windows-tools.mjs", "ci-report.mjs", "source-git.mjs", "ci-supplement.mjs", "evidence-io.mjs", "test-evidence.mjs", "mcp-diagnostics.mjs", "ui-browser-contract.mjs", "ui-browser-diagnostics.mjs"])
     await writeFile(join(directory, "scripts", file), await readFile(join(root, "scripts", file)));
   await writeFile(join(directory, "scripts/build-provenance.mjs"), "export async function writeBuildProvenance() {}\n");
   await writeFile(join(directory, "node_modules/vitest/vitest.mjs"), `
@@ -756,6 +756,8 @@ test("Job completion evidence distinguishes terminal failures from timeouts with
     { outcome: "timeout", status: "running", exit_code: null },
     { outcome: "terminal_failure", status: "failed", exit_code: 1 },
     { outcome: "tool_error", status: "absent", exit_code: null },
+    ...[-2147483648, -1, 0, 2147483647, 2147483648, 3221225477, 4294967295]
+      .map(exit_code => ({ outcome: "terminal_failure", status: "failed", exit_code })),
   ]) {
     const text = "Job did not complete successfully\n" + marker({ ...value, command: "private-command", job_id: "private-job" });
     assert.deepEqual(jobCompletionDiagnostic(text), value);
@@ -765,7 +767,7 @@ test("Job completion evidence distinguishes terminal failures from timeouts with
   const valid = { outcome: "timeout", status: "running", exit_code: null };
   for (const patch of [
     { outcome: "private" }, { status: "private" }, { exit_code: "private" }, { exit_code: 0.5 },
-    { exit_code: 2147483648 }, { exit_code: -2147483649 },
+    { exit_code: 4294967296 }, { exit_code: -2147483649 },
   ]) assert.equal(jobCompletionDiagnostic(marker({ ...valid, ...patch })), undefined);
   assert.equal(jobCompletionDiagnostic("private " + marker(valid)), undefined);
   assert.equal(jobCompletionDiagnostic(marker(valid) + "private"), undefined);
@@ -884,6 +886,48 @@ test("runtime lifecycle diagnostics reject unknown formats and reconstruct only 
     assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, ...patch })), []);
   assert.deepEqual(mcpWorkerFailureEvidence(marker({ event: "runtime_lifecycle", reason: "access_violation", crash_count: "private", cause: "private" })),
     [{ event: "runtime_lifecycle", reason: "access_violation" }]);
+});
+
+test("native runtime process events preserve exits independently of launcher liveness", () => {
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  const observed = { event: "runtime_observer", coverage: "installed" };
+  const spawned = { event: "runtime_process", phase: "spawn", runtime_index: 1, elapsed_ms: 17, exit_code: null, signal: null };
+  const exited = { ...spawned, phase: "exit", elapsed_ms: 80, exit_code: 3221225477 };
+  const line = "RUNMESH_E2E_RUNTIME_PROCESS=" + JSON.stringify({ ...exited, command: "private-command", pid: 123, cause: "private-cause" }) + "\n";
+  forward("RUNMESH_E2E_RUNTIME_OBSERVER=" + JSON.stringify(observed) + "\n");
+  forward("RUNMESH_E2E_RUNTIME_PROCESS=" + JSON.stringify(spawned) + "\n");
+  forward(line.slice(0, 45)); forward(line.slice(45));
+  const launcher = mcpLauncherDiagnostic({ reason: "test_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false });
+  const events = mcpWorkerFailureEvidence(emitted.join("") + launcher);
+  assert.deepEqual(events.slice(0, 3), [observed, spawned, exited]);
+  assert.equal(events[3].event, "launcher_snapshot");
+  assert.doesNotMatch(emitted.join(""), /private|command|cause|pid/u);
+});
+
+test("native process markers reject malformed metadata and bound independent event floods", () => {
+  const valid = { event: "runtime_process", phase: "exit", runtime_index: 16, elapsed_ms: 900000, exit_code: -2147483648, signal: null };
+  const marker = value => "RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify(value) + "\n";
+  assert.deepEqual(mcpWorkerFailureEvidence(marker(valid)), [valid]);
+  for (const patch of [{ phase: "private" }, { phase: "spawn" }, { runtime_index: 0 }, { runtime_index: 17 }, { runtime_index: "1" },
+    { elapsed_ms: -1 }, { elapsed_ms: 900001 }, { elapsed_ms: 1.5 }, { exit_code: -2147483649 }, { exit_code: 4294967296 },
+    { exit_code: "0" }, { signal: "private" }]) assert.deepEqual(mcpWorkerFailureEvidence(marker({ ...valid, ...patch })), []);
+  for (const coverage of ["installed", "worker_thread", "runtime_override", "resolution_failed"])
+    assert.deepEqual(mcpWorkerFailureEvidence(marker({ event: "runtime_observer", coverage, path: "private" })), [{ event: "runtime_observer", coverage }]);
+  assert.deepEqual(mcpWorkerFailureEvidence(marker({ event: "runtime_observer", coverage: "private" })), []);
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  for (const invalid of ["private RUNMESH_E2E_RUNTIME_PROCESS=" + JSON.stringify(valid), "RUNMESH_E2E_RUNTIME_PROCESS=[]",
+    "RUNMESH_E2E_RUNTIME_PROCESS=" + JSON.stringify({ ...valid, event: "launcher_snapshot" }), "RUNMESH_E2E_RUNTIME_PROCESS={private}"])
+    forward(invalid + "\n");
+  assert.deepEqual(emitted, []);
+  for (let index = 0; index < 100; index++) {
+    forward("RUNMESH_E2E_RUNTIME_PROCESS=" + JSON.stringify(valid) + "\n");
+    forward('RUNMESH_E2E_RUNTIME_OBSERVER={"event":"runtime_observer","coverage":"installed"}\n');
+  }
+  const launcher = mcpLauncherDiagnostic({ reason: "test_failed", exit_code: null, signal: null, teardown_started: false, exited_before_teardown: false });
+  const events = mcpWorkerFailureEvidence(emitted.join("").repeat(2) + launcher);
+  assert.equal(events.filter(event => event.event === "runtime_process").length, 64);
+  assert.equal(events.filter(event => event.event === "runtime_observer").length, 8);
+  assert.equal(events.filter(event => event.event === "launcher_snapshot").length, 1);
 });
 
 test("control plane diagnostics preserve fixed failure boundaries across fragmented logs", () => {
@@ -1034,7 +1078,11 @@ test("launcher snapshots report only lifecycle classification and bounded exit s
   assert.deepEqual(mcpWorkerFailureEvidence(line), [expected]);
   assert.deepEqual(mcpWorkerFailureEvidence(mcpLauncherDiagnostic({ ...expected, exit_code: 137, signal: "SIGKILL", exited_before_teardown: true })),
     [{ ...expected, exit_code: 137, signal: "SIGKILL", exited_before_teardown: true }]);
-  for (const patch of [{ reason: "private" }, { exit_code: "137" }, { exit_code: 0.5 }, { exit_code: 2147483648 },
+  for (const exit_code of [-2147483648, -1, 0, 2147483647, 2147483648, 3221225477, 4294967295]) {
+    const value = { ...expected, exit_code, exited_before_teardown: true };
+    assert.deepEqual(mcpWorkerFailureEvidence(mcpLauncherDiagnostic({ ...value, command: "private-command", pid: 123 })), [value]);
+  }
+  for (const patch of [{ reason: "private" }, { exit_code: "137" }, { exit_code: 0.5 }, { exit_code: 4294967296 }, { exit_code: -2147483649 },
     { signal: "private" }, { teardown_started: "false" }, { exited_before_teardown: 1 }]) {
     assert.equal(mcpLauncherDiagnostic({ ...expected, ...patch }), undefined);
     assert.deepEqual(mcpWorkerFailureEvidence("RUNMESH_E2E_MCP_WORKER_EVENT=" + JSON.stringify({ ...expected, ...patch }) + "\n"), []);

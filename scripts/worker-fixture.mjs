@@ -7,7 +7,8 @@ import { resolveTrustedTaskkillPath } from "./windows-tools.mjs";
 /** Source and browser fixtures share the exact local Worker launch contract. */
 export function spawnWorkerFixture({ cwd, persistTo, vars, env = process.env }) {
   assert.ok(isAbsolute(cwd) && isAbsolute(persistTo), "Worker fixture paths must be absolute");
-  return spawn(process.execPath, [join(cwd, "node_modules/wrangler/bin/wrangler.js"), "dev", "--local", "--ip", "127.0.0.1",
+  return spawn(process.execPath, ["--import", new URL("./worker-runtime-observer.mjs", import.meta.url).href,
+    join(cwd, "node_modules/wrangler/bin/wrangler.js"), "dev", "--local", "--ip", "127.0.0.1",
     "--config", "apps/worker/wrangler.jsonc", "--port", "0", "--inspector-port", "0", "--persist-to", persistTo,
     "--show-interactive-dev-session=false", ...Object.entries(vars).flatMap(([name, value]) => ["--var", `${name}:${value}`])], {
     cwd, env: { ...env, ...vars }, stdio: ["ignore", "pipe", "pipe", "ipc"], detached: true, windowsHide: true,
