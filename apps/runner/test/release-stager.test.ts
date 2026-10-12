@@ -218,7 +218,7 @@ describe("Runner exact release staging", () => {
     }
   });
 
-  it("cancels a response that arrives after its release request was stopped", async () => {
+  it("ignores a response that arrives after its release request was stopped", async () => {
     const controller = new AbortController(), reason = new Error("maintenance stopped"), cancel = vi.fn();
     let respond!: (response: Response) => void;
     let requestSignal: AbortSignal | null | undefined;
@@ -232,7 +232,7 @@ describe("Runner exact release staging", () => {
     expect(requestSignal?.aborted).toBe(true);
     const body = new ReadableStream<Uint8Array>({ cancel });
     respond(new Response(body));
-    await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(cancel).not.toHaveBeenCalled());
     expect(body.locked).toBe(false);
   });
 

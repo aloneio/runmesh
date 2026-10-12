@@ -18,7 +18,10 @@ export async function downloadRunnerReleaseAsset(url: string, limit: number, fet
   signal?.throwIfAborted();
   const controller = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  const stop = () => controller.abort(signal?.reason);
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+  let abandoned = false, completed = false;
+  const release = (active: ReadableStreamDefaultReader<Uint8Array>): void => { try { active.releaseLock(); } catch { /* a read may still be pending */ } };
+  const stop = () => { abandoned = true; controller.abort(signal?.reason); };
   const interrupted = new Promise<never>((_, reject) => {
     controller.signal.addEventListener("abort", () => {
       reject(controller.signal.reason);
@@ -26,14 +29,17 @@ export async function downloadRunnerReleaseAsset(url: string, limit: number, fet
     }, { once: true });
   });
   signal?.addEventListener("abort", stop, { once: true });
-  const timer = setTimeout(() => controller.abort(new Error("Runner release download timed out.")), 30000);
+  const timer = setTimeout(() => { abandoned = true; controller.abort(new Error("Runner release download timed out.")); }, 30000);
   try { return await Promise.race([interrupted, (async () => {
     let current = new URL(url);
     for (let redirects = 0; redirects <= 4; redirects++) {
       controller.signal.throwIfAborted();
       if (current.protocol !== "https:" || current.username || current.password || !origins.has(current.origin)) throw new Error("Runner release download origin is invalid.");
       const response = await fetchImpl(current.toString(), { method: "GET", signal: controller.signal, redirect: "manual", credentials: "omit", headers: { accept: "application/octet-stream" } });
-      if (controller.signal.aborted) { void response.body?.cancel().catch(() => undefined); controller.signal.throwIfAborted(); }
+      // A fetch implementation may ignore AbortSignal and return after this
+      // operation has ended. The late response is orphaned; do not inspect or
+      // cancel its body after the request lifecycle has been torn down.
+      if (abandoned) throw controller.signal.reason;
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location"); void response.body?.cancel().catch(() => undefined);
         if (location === null || redirects === 4) throw new Error("Runner release redirect is invalid.");
@@ -47,17 +53,37 @@ export async function downloadRunnerReleaseAsset(url: string, limit: number, fet
         for (let parts = 0; ; parts++) {
           controller.signal.throwIfAborted();
           if (parts > 32768) throw new Error("Runner release response is too fragmented.");
-          const part = await reader.read(); controller.signal.throwIfAborted(); if (part.done) break;
+          const active = reader;
+          const read = active.read();
+          pendingRead = read;
+          let part: ReadableStreamReadResult<Uint8Array>;
+          try { part = await read; }
+          finally { if (pendingRead === read) pendingRead = undefined; }
+          controller.signal.throwIfAborted(); if (part.done) break;
           size += part.value.length;
           if (size > limit) throw new Error("Runner release download exceeds its size limit.");
           chunks.push(part.value);
         }
-      } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); reader = undefined; }
+      } finally {
+        const active = reader;
+        if (active !== undefined) {
+          void active.cancel().catch(() => undefined);
+          const read = pendingRead;
+          if (read !== undefined) void read.then(() => release(active), () => release(active));
+          else release(active);
+        }
+        reader = undefined;
+      }
       if (size === 0) throw new Error("Runner release download is empty.");
+      completed = true;
       return Buffer.concat(chunks, size);
     }
     throw new Error("Runner release redirect limit exceeded.");
-  })()]); } finally { clearTimeout(timer); signal?.removeEventListener("abort", stop); controller.abort(); }
+  })()]); } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", stop);
+    if (!completed) { abandoned = true; controller.abort(); }
+  }
 }
 
 async function ensureDirectory(path: string): Promise<void> {

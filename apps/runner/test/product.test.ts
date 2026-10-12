@@ -506,7 +506,7 @@ describe("runner product profile and enrollment", () => {
       expect(settled).toBe(true); expect(await pending).toMatchObject({ outcomeUnknown: true, message: expect.stringContaining("timed out") });
       expect(signal?.aborted).toBe(true); expect(remove).toHaveBeenCalledTimes(1);
       respond(late); await vi.advanceTimersByTimeAsync(0);
-      expect(save).not.toHaveBeenCalled(); expect(cancel).toHaveBeenCalledTimes(1); expect(fetch).toHaveBeenCalledTimes(1);
+      expect(save).not.toHaveBeenCalled(); expect(cancel).not.toHaveBeenCalled(); expect(fetch).toHaveBeenCalledTimes(1);
       expect(errors.join("\n")).toContain("generate a new enrollment code"); expect(vi.getTimerCount()).toBe(0);
     } finally {
       respond(late); await pending; load.mockRestore(); save.mockRestore(); remove.mockRestore(); lease.mockRestore(); vi.useRealTimers(); await test.cleanup();
