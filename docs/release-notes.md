@@ -2,9 +2,13 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.9 — release validation
+## 0.1.10 — preparing
 
-The 0.1.9 version manager improves Windows Runner version switches by validating the new runtime in its final version directory before switching the active installation. Upgrades and returns to an earlier release preserve existing configuration.
+Runmesh 0.1.10 is in preparation. It makes cancellation consistent during Runner maintenance and release downloads, including the final stage of a response. An interrupted update keeps its interrupted result and can be retried safely with the same installation. Use the published 0.1.9 package for stable installations until 0.1.10 is published.
+
+## 0.1.9 — published stable release
+
+[Runmesh 0.1.9](https://github.com/aloneio/runmesh/releases/tag/v0.1.9) is available with a signed portable Runner package. Its version manager improves Windows Runner version switches by validating the new runtime in its final version directory before switching the active installation. Upgrades and returns to an earlier release preserve existing configuration.
 
 Existing installations receive the manager update through [`manager-refresh`](upgrading.md#update-an-installed-version-manager), using the maintenance program from an independently verified signed package. Refresh the manager first, then choose the Runner version in the control panel. This keeps the manager identity and state, installed Node runtime, Runner profile, workspaces and original service enablement. New installations and first manager setup use the manager included in their selected package.
 

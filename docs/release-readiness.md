@@ -2,9 +2,13 @@
 
 [简体中文](release-readiness.zh-CN.md) · [Documentation](README.md) · [Release notes](release-notes.md) · [Upgrade guide](upgrading.md)
 
-## Current stable release: 0.1.8
+## Current stable release: 0.1.9
 
-[Runmesh 0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) is available with a signed portable Runner package. This release adds remote Runner version management, MCP connection checks and tool search, Skill imports and version management, and improvements to control-panel navigation and daily tasks. See the [release notes](release-notes.md) for the changes.
+[Runmesh 0.1.9](https://github.com/aloneio/runmesh/releases/tag/v0.1.9) is available with a signed portable Runner package. This release improves Windows Runner version switches and manager refresh while retaining the existing installation configuration. See the [release notes](release-notes.md) for the changes.
+
+### Next release: 0.1.10 in preparation
+
+Runmesh 0.1.10 is being prepared with consistent cancellation handling for Runner maintenance and release downloads. The published 0.1.9 package remains the stable choice until the next release is published.
 
 | Your task | Next step |
 | --- | --- |
@@ -14,16 +18,12 @@
 | Install from a downloaded archive | Use the [portable installation guide](portable-runner-installation.md) to verify and install the signed package. |
 | Try upcoming changes | Use the separate [development channel](dev-runner-prereleases.md). |
 
-During an upgrade, keep your existing Cloudflare resources, deployment secrets and Runner profiles. These preserve account connections, enrolled machines and workspace settings.
-
-## Next update: 0.1.9
-
-Version 0.1.9 is undergoing release validation. Its version manager checks a new runtime in its final version directory before switching the active installation. Existing managers receive this update through the separate `manager-refresh` procedure. See the [release notes](release-notes.md) for details.
+During an upgrade, keep your existing Cloudflare resources, deployment secrets and Runner profiles. These preserve account connections, enrolled machines and workspace settings. Existing installations should refresh the installed version manager before selecting a new Runner version; the [upgrade guide](upgrading.md#update-an-installed-version-manager) describes the steps.
 
 ## Check your installed version
 
 The control plane exposes its running version at `/health`. Its `/runner/releases/stable` endpoint lists the stable Runner package selected for that instance. Follow [build provenance](build-provenance.md) to check the deployed source, and the [upgrade guide](upgrading.md) to confirm the Runner service version.
 
-[Runmesh 0.1.7](https://github.com/aloneio/runmesh/releases/tag/v0.1.7) and earlier signed releases remain available from [GitHub Releases](https://github.com/aloneio/runmesh/releases). The upgrade guide includes recovery steps for an existing installation.
+[Runmesh 0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) and earlier signed releases remain available from [GitHub Releases](https://github.com/aloneio/runmesh/releases). The upgrade guide includes recovery steps for an existing installation.
 
 Maintainers preparing a new version can follow the [publication and activation workflow](maintainers/release-process.md).

@@ -120,6 +120,7 @@ test("release validates source identity before installation and generates tracke
 test("stable publication uses version-scoped notes validated before tag creation", async () => {
   const workflow = parseCi(await readFile(join(repositoryRoot, ".github/workflows/release.yml"), "utf8"));
   const steps = workflow.jobs.release.steps;
+  assert.equal(workflow.jobs.verification.with.release_verification, true, "release verification must not be canceled by ordinary CI");
   const identity = steps.findIndex(step => step.name === "Validate triggering commit, release identity, and secrets");
   const tag = steps.findIndex(step => step.name === "Create annotated release tag");
   const draft = steps.find(step => step.name === "Create stable draft release");
@@ -224,6 +225,13 @@ test("release health fences a response that arrives after its deadline", async (
   assert.equal(response.body.locked, false);
 });
 
+test("release health settles when a transport never resolves its fetch", async () => {
+  const controller = new AbortController();
+  const pending = readReleaseHealth("https://preflight.invalid", () => new Promise(() => {}), controller.signal);
+  setImmediate(() => controller.abort(new Error("health deadline")));
+  await assert.rejects(pending, /health deadline/u);
+});
+
 test("release health enforces encoded bytes rather than UTF-16 string length", async () => {
   const text = JSON.stringify({ padding: "汉".repeat(30000) });
   assert.ok(text.length < MAX_RELEASE_HEALTH_BYTES);
@@ -243,6 +251,21 @@ test("release health cancels an oversized stream before draining the remote body
   await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => response), /oversized health response/u);
   assert.ok(pulls <= 18, "only the bounded prefix plus stream prefetch may be pulled");
   assert.equal(cancelled, true);
+  assert.equal(response.body.locked, false);
+});
+
+test("release health does not wait for a transport cancel promise during cleanup", async () => {
+  const response = new Response(new ReadableStream({
+    pull(controller) { controller.enqueue(new Uint8Array(MAX_RELEASE_HEALTH_BYTES)); },
+    cancel() { return new Promise(() => {}); },
+  }));
+  const pending = readReleaseHealth("https://preflight.invalid", async () => response);
+  const result = await Promise.race([
+    pending.then(() => "resolved", error => error),
+    new Promise(resolve => setTimeout(() => resolve("cleanup_timeout"), 500)),
+  ]);
+  assert.notEqual(result, "cleanup_timeout", "release preflight must not await an unbounded transport cleanup");
+  assert.match(String(result?.message ?? result), /oversized health response/u);
   assert.equal(response.body.locked, false);
 });
 

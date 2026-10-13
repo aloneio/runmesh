@@ -26,10 +26,19 @@ export async function readReleaseHealth(configuredOrigin, fetchImpl = fetch, sig
   const origin = new URL(configuredOrigin);
   assert.equal(origin.protocol, "https:"); assert.equal(origin.origin, configuredOrigin);
   signal.throwIfAborted();
-  const response = await fetchImpl(new URL("/health", origin), {
-    redirect: "error", cache: "no-store", credentials: "omit", signal,
-    headers: { accept: "application/json", "cache-control": "no-cache" },
+  let stop;
+  const interrupted = new Promise((_, reject) => {
+    stop = () => reject(signal.reason ?? new Error("release health request aborted"));
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
   });
+  let response;
+  try {
+    response = await Promise.race([fetchImpl(new URL("/health", origin), {
+      redirect: "error", cache: "no-store", credentials: "omit", signal,
+      headers: { accept: "application/json", "cache-control": "no-cache" },
+    }), interrupted]);
+  } finally { signal.removeEventListener("abort", stop); }
   // A transport may ignore AbortSignal and resolve after the deadline. The
   // response then belongs to the retired preflight; fence it before reading
   // status or touching its body.
@@ -40,13 +49,19 @@ export async function readReleaseHealth(configuredOrigin, fetchImpl = fetch, sig
   }
   assert.ok(response.body, "public control plane returned no health body");
   const reader = response.body.getReader(), chunks = [];
+  let pendingRead;
+  const release = () => { try { reader.releaseLock(); } catch { /* a read may still be pending */ } };
   let bytes = 0, fragments = 0;
   const abort = () => { void reader.cancel().catch(() => undefined); };
   signal.addEventListener("abort", abort, { once: true });
   try {
     for (;;) {
       signal.throwIfAborted();
-      const item = await reader.read();
+      const read = reader.read();
+      pendingRead = read;
+      let item;
+      try { item = await read; }
+      finally { if (pendingRead === read) pendingRead = undefined; }
       signal.throwIfAborted();
       if (item.done) break;
       assert.ok(++fragments <= MAX_RELEASE_HEALTH_FRAGMENTS, "health response fragment limit exceeded");
@@ -56,8 +71,10 @@ export async function readReleaseHealth(configuredOrigin, fetchImpl = fetch, sig
     }
   } finally {
     signal.removeEventListener("abort", abort);
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    void reader.cancel().catch(() => undefined);
+    const read = pendingRead;
+    if (read !== undefined) void read.then(release, release);
+    else release();
   }
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, bytes)));
 }
