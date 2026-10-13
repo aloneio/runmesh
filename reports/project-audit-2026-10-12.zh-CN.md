@@ -1456,7 +1456,7 @@ GitLab 主线流水线 `2943895492` 的 `verify`（`17150524651`）、`browser`�
 
 ### 2026-10-14 0.1.10 双 provider 对齐与生产激活复验
 
-GitHub PR #127、GitLab MR !66 和对齐 MR !67 均已合并。GitHub 与 GitLab 的受保护 `main`、`dev` 四个分支引用现在统一为 `067bc3c7b95682eda88c5be2ec8dce7cdb57a5ab`；该提交是 GitHub PR #127 的受保护合并提交，父提交包含已发布的 `7f8e1cd1da27a14092a80b516da9efc1facb6aa9` 和文档事实更新提交。GitLab 对齐流水线 `2944186479` 的 `main-source-policy`、`verify`、`browser` 全部通过；此前的 GitLab 激活流水线 `2944123013`、主线发布流水线 `2944179384` 也均为通过状态。
+GitHub PR #127、GitLab MR !66 和对齐 MR !67 均已合并。在本节记录的生产激活验收时，GitHub 与 GitLab 的 `main`、`dev` 四个引用均为 `067bc3c7b95682eda88c5be2ec8dce7cdb57a5ab`。`067bc3c7` 是 GitHub PR #127 的受保护合并提交，父提交为已发布的 `7f8e1cd1da27a14092a80b516da9efc1facb6aa9` 和激活提交 `e926551043dcddba5b9bf28cdffdbc95f190a238`。GitLab 对齐流水线 `2944186479` 的 `main-source-policy`、`verify`、`browser` 全部通过；此前的 GitLab 激活流水线 `2944123013`、主线发布流水线 `2944179384` 也均为通过状态。
 
 生产复验结果如下：
 
