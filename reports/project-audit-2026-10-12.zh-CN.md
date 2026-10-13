@@ -1471,7 +1471,7 @@ GitHub PR #127、GitLab MR !66 和对齐 MR !67 均已合并。在本节记录�
 
 ### 2026-10-14 0.1.10 最终双 provider 对齐与线上收口
 
-针对检查书上一节记录后的文档事实修正，GitHub PR #129 与 GitLab MR !68 已按 `dev → main` 流程完成。最终提交 `8949585e188ba475189f27322fa0fe1862bcdca4` 同时存在于 GitHub/GitLab 的 `main` 与 `dev`，四个引用完全一致。GitHub PR #129 的完整检查矩阵通过；最终快进同步触发的 GitHub `dev` CI 共 20 个 check run，其中 17 个成功、4 个按条件跳过，0 个失败或运行中。GitLab MR pipeline `2944462069` 与 main pipeline `2944498522` 均通过，包含 `main-source-policy`、`verify`、`browser` 和 Cloudflare Workers Builds。
+针对检查书上一节记录后的文档事实修正，GitHub PR #129 与 GitLab MR !68 已按 `dev → main` 流程完成。最终提交 `8949585e188ba475189f27322fa0fe1862bcdca4` 同时存在于 GitHub/GitLab 的 `main` 与 `dev`，四个引用完全一致。GitHub PR #129 的完整检查矩阵通过；最终快进同步触发的 GitHub `dev` CI 共 21 个 check run，其中 17 个成功、4 个按条件跳过，0 个失败或运行中。GitLab MR pipeline `2944462069` 与 main pipeline `2944498522` 均通过，包含 `main-source-policy`、`verify`、`browser` 和 Cloudflare Workers Builds。
 
 生产 Cloudflare Worker 已运行最终提交。只读验收结果如下：
 
