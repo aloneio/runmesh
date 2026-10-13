@@ -2,17 +2,17 @@
 
 [Maintainer documentation](README.md) · [Current release status](../release-readiness.md)
 
-## Prepare the candidate
+## Prepare the release
 
 Keep package and lockfile versions, installer identity and release notes aligned at the selected version. Promote reviewed changes from `dev` to protected `main` through the [main promotion policy](../main-promotion-policy.md).
 
-Prepare publication notes in `docs/releases/<version>.md`, starting with `# Runmesh <version>`. The release workflow uses these versioned notes. Use the [deployment checklist](../central-rollout.md) for real-client and MCP provider checks, and keep their results with the candidate's verification record.
+Prepare publication notes in `docs/releases/<version>.md`, starting with `# Runmesh <version>`. The release workflow uses these versioned notes. Use the [deployment checklist](../central-rollout.md) for real-client and MCP provider checks, and keep their results with the release verification record.
 
 ## Verify and publish
 
-The exact main candidate must pass GitHub `verify-all`, native-platform, Node LTS and browser verification, plus the required cross-provider checks. Execute candidate-bound security regressions, verify the exact portable archive end to end, and bind the signed manifest and annotated tag to that candidate. The protected GitHub and GitLab main branches must point to the same reviewed source before signing.
+The exact main source must pass GitHub `verify-all`, native-platform, Node LTS and browser verification, plus the required cross-provider checks. Execute the security regressions for that source, verify the exact portable archive end to end, and bind the signed manifest and annotated tag to the same reviewed commit. The protected GitHub and GitLab main branches must point to that source before signing.
 
-Independently verify draft and public assets before recording the release as `released`. Keep existing immutable releases intact. Retain the candidate commit, gate results and asset checksums with the publication record.
+Independently verify draft and public assets before recording the release as `released`. Keep existing immutable releases intact. Retain the source commit, gate results and asset checksums with the publication record.
 
 ## Activate and check the installation
 
@@ -21,7 +21,7 @@ After completing [independent package verification](../portable-runner-installat
 ```json
 {
   "version": "<version>",
-  "state": "candidate",
+  "state": "released",
   "release_branch": "main",
   "release_commit": "<manifest commit_sha>",
   "manifest_sha256": "<SHA256 of the verified public manifest.json>"
@@ -37,7 +37,7 @@ npm run check:docs
 node scripts/check-release-contract.mjs --require-distributable
 ```
 
-Keep a release under `state: "candidate"` while its publication and activation checks are in progress. Record `state: "released"` only after the signed public assets have been independently verified. The publication workflow requires the exact `verify-all` gate set. **RELEASED** records the independently verified publication, and generation places the selected version in `REVIEWED_RELEASE_VERSION`. **ENABLED** is confirmed after deployment when `/runner/releases/stable` returns that version with `distributable: true`. Production uses the generated version as its default activation value, together with a valid public origin and disabled test mode. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override pauses hosted distribution.
+The publication workflow requires the exact `verify-all` gate set. **RELEASED** records the independently verified publication, and generation places the selected version in `REVIEWED_RELEASE_VERSION`. **ENABLED** is confirmed after deployment when `/runner/releases/stable` returns that version with `distributable: true`. Production uses the generated version as its default activation value, together with a valid public origin and disabled test mode. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override pauses hosted distribution.
 
 Include `apps/worker/src/generated-release.ts` and the current release status in the activation change. Verify and promote that change through `dev` to protected `main`, then deploy it through the [production deployment procedure](../deployment.md#select-the-environment).
 
@@ -47,6 +47,6 @@ Runmesh uses the existing `INTERNAL_CONTROL_SECRET` for OAuth encryption and `RU
 
 Record development deployment, signed publication and production acceptance with their corresponding source commits and verification results.
 
-## 0.1.10 candidate checks
+## Release-specific verification
 
-For the 0.1.10 cancellation update, verify maintenance responses and release artifact reads when the complete body arrives before stream close or EOF. The completion path checks the signal immediately before recording success, so a cancellation remains visible to the caller and the operation can be retried safely. The candidate baseline includes 27/27 Runner `update-cloud` tests, 170/170 Worker development-distribution tests and the related type checks. Keep the release state as `candidate` until the normal signed publication, protected branch promotion and production acceptance are complete.
+For each release, verify maintenance responses and release artifact reads when the complete body arrives before stream close or EOF. The completion path checks the signal immediately before recording success, so a cancellation remains visible to the caller and the operation can be retried safely. Record the full test matrix, signed asset checksums, protected branch promotion and production acceptance with the publication record.
