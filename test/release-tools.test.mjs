@@ -132,7 +132,11 @@ test("stable publication uses version-scoped notes validated before tag creation
 
   const notes = await readFile(join(repositoryRoot, "docs/releases", `${productVersion}.md`), "utf8");
   assert.equal(notes.split(/\r?\n/u)[0], `# Runmesh ${productVersion}`);
-  assert.ok(!/release candidate|current stable package remains|候选版本|当前正式安装包/iu.test(notes), "publication notes must not carry the candidate ledger's status");
+  for (const forbidden of [
+    /\bcandidate\b|\bpreparing\b|\bbeing\s+prepared\b|\bin\s+preparation\b/iu,
+    /current\s+stable\s+package\s+remains|until\s+[^.]*\bis\s+published/iu,
+    /候选版本|候选发布|当前正式安装包|正在准备|准备中|正式发布(?:前|后)/u,
+  ]) assert.doesNotMatch(notes, forbidden, "publication notes must describe the published version without candidate or preparation status");
   for (const match of notes.matchAll(/\[[^\]]*\]\(([^)]+)\)/gu)) {
     assert.ok(match[1].startsWith("https://"), "publication links must work outside the repository document path");
   }
