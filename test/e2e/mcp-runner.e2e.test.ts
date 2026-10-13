@@ -15,12 +15,19 @@ import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, emitMcpFa
 import { spawnWorkerFixture, stopFixtureProcess, waitForFixtureExit, waitForWorker } from "../../scripts/worker-fixture.mjs";
 import { createTestHttpScope, runBoundedConcurrentLoad, trackTestBodies } from "../../scripts/test-http-scope.mjs";
 import { createFixtureTransportObserver } from "../../scripts/fixture-transport-observer.mjs";
+import { Agent } from "undici";
 import WebSocket from "ws";
 import { decodeWireFrame, encodeWireFrame, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 
 const testHttp = createTestHttpScope();
 const it = trackTestBodies(vitestIt, testHttp);
 const fetch = testHttp.fetch;
+// The native Wrangler entry closes idle HTTP/1.1 sockets on a roughly one
+// second cadence. Keep the test dispatcher below that boundary so a request
+// never reuses a socket after the Worker has already retired it. The default
+// Node dispatcher waits longer and can surface a stale-socket ECONNRESET on
+// Windows when a mixed load leaves a connection idle between batches.
+const mcpDispatcher = new Agent({ keepAliveTimeout: 500, keepAliveMaxTimeout: 500, keepAliveTimeoutThreshold: 0 });
 aroundEach((runTest, { signal }) => testHttp.run(signal, runTest));
 afterEach(() => testHttp.finish());
 
@@ -287,7 +294,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     } catch (error) {
       reportWorkerDiagnostics("teardown failed");
       throw error;
-    } finally { transportObserver?.close(); }
+    } finally {
+      transportObserver?.close();
+      await mcpDispatcher.close();
+    }
   }, 30_000);
 
   it("R01 actual local Worker exposes its compiled source without a deployment tag", async () => {
@@ -1307,7 +1317,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
         ...(signal === undefined ? {} : { signal }),
         headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
         body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
-      });
+        dispatcher: mcpDispatcher,
+      } as RequestInit & { dispatcher: Agent });
       if (observe !== undefined) observe("body", mcpServerTiming(response.headers.get("server-timing")));
       if (response.status !== 200) throw await mcpHttpFailure(response, id, name, args);
       return await readMcp(response);
