@@ -2,9 +2,9 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.10 — preparing
+## 0.1.10 — published stable release
 
-Runmesh 0.1.10 is in preparation. It makes cancellation consistent during Runner maintenance and release downloads, including the final stage of a response. An interrupted update keeps its interrupted result and can be retried safely with the same installation. Use the published 0.1.9 package for stable installations until 0.1.10 is published.
+[Runmesh 0.1.10](https://github.com/aloneio/runmesh/releases/tag/v0.1.10) is available with a signed portable Runner package. It makes cancellation consistent during Runner maintenance and release downloads, including the final stage of a response. An interrupted update keeps its interrupted result and can be retried safely with the same installation.
 
 ## 0.1.9 — published stable release
 
