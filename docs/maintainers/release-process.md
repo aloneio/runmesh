@@ -20,8 +20,8 @@ After completing [independent package verification](../portable-runner-installat
 
 ```json
 {
-  "version": "0.1.9",
-  "state": "released",
+  "version": "<version>",
+  "state": "candidate",
   "release_branch": "main",
   "release_commit": "<manifest commit_sha>",
   "manifest_sha256": "<SHA256 of the verified public manifest.json>"
@@ -37,7 +37,7 @@ npm run check:docs
 node scripts/check-release-contract.mjs --require-distributable
 ```
 
-**RELEASED** records the verified publication as `state: "released"`; generation places its version in `REVIEWED_RELEASE_VERSION`. **ENABLED** is confirmed after deployment when `/runner/releases/stable` returns that version with `distributable: true`. Production uses the generated version as its default activation value, together with a valid public origin and disabled test mode. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override pauses hosted distribution.
+Keep a release under `state: "candidate"` while its publication and activation checks are in progress. Record `state: "released"` only after the signed public assets have been independently verified. The publication workflow requires the exact `verify-all` gate set. **RELEASED** records the independently verified publication, and generation places the selected version in `REVIEWED_RELEASE_VERSION`. **ENABLED** is confirmed after deployment when `/runner/releases/stable` returns that version with `distributable: true`. Production uses the generated version as its default activation value, together with a valid public origin and disabled test mode. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override pauses hosted distribution.
 
 Include `apps/worker/src/generated-release.ts` and the current release status in the activation change. Verify and promote that change through `dev` to protected `main`, then deploy it through the [production deployment procedure](../deployment.md#select-the-environment).
 
@@ -46,3 +46,7 @@ The publication commit identifies the signed Runner package and remains in `rele
 Runmesh uses the existing `INTERNAL_CONTROL_SECRET` for OAuth encryption and `RUNNER_TOKEN_PEPPER` for Runner credentials. Preserve both values during upgrades. For a new deployment, follow the [runtime configuration guide](../runtime-config.md) to initialize them.
 
 Record development deployment, signed publication and production acceptance with their corresponding source commits and verification results.
+
+## 0.1.10 candidate checks
+
+For the 0.1.10 cancellation update, verify maintenance responses and release artifact reads when the complete body arrives before stream close or EOF. The completion path checks the signal immediately before recording success, so a cancellation remains visible to the caller and the operation can be retried safely. The candidate baseline includes 27/27 Runner `update-cloud` tests, 170/170 Worker development-distribution tests and the related type checks. Keep the release state as `candidate` until the normal signed publication, protected branch promotion and production acceptance are complete.

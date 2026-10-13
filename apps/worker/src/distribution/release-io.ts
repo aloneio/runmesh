@@ -99,10 +99,19 @@ export async function releaseFetch(input: string, init: Omit<RequestInit, "signa
   for (let attempt = 0; attempt < DEV_RELEASE_FETCH_ATTEMPTS; attempt++) {
     try {
       const attemptSignal = AbortSignal.timeout(10_000);
-      const response = await fetchImpl(input, { ...init, signal: attemptSignal });
+      const signal = ownerSignal === undefined ? attemptSignal : AbortSignal.any([ownerSignal, attemptSignal]);
+      let stop!: () => void;
+      const interrupted = new Promise<never>((_, reject) => {
+        stop = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+        signal.addEventListener("abort", stop, { once: true });
+        if (signal.aborted) stop();
+      });
+      let response: Response;
+      try { response = await Promise.race([fetchImpl(input, { ...init, signal }), interrupted]); }
+      finally { signal.removeEventListener("abort", stop); }
       // Keep the per-attempt budget authoritative even when an injected or
       // platform transport resolves after its signal was aborted.
-      attemptSignal.throwIfAborted();
+      signal.throwIfAborted();
       if (!retryableReleaseResponse(response) || releaseRetryAtMs(response) !== undefined || attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) return response;
       // Start disposal without letting a peer's cleanup promise own the retry budget.
       void response.body?.cancel().catch(() => undefined);
@@ -145,8 +154,8 @@ export async function boundedJson(response: Response, signal?: AbortSignal): Pro
           finally { signal.removeEventListener("abort", onAbort); }
         }
         if (readSettled) pendingRead = undefined;
-        if (part.done) break;
         signal?.throwIfAborted();
+        if (part.done) break;
         bytes += part.value.byteLength; if (bytes > MAX_DISCOVERY_BYTES) throw new Error("development release discovery response is too large"); chunks.push(part.value);
       }
     } finally {
@@ -194,8 +203,8 @@ export async function boundedReleaseBytes(url: string, limit: number, fetchImpl:
           finally { signal.removeEventListener("abort", onAbort); }
         }
         if (readSettled) pendingRead = undefined;
-        if (part.done) break;
         signal?.throwIfAborted();
+        if (part.done) break;
         bytes += part.value.byteLength; if (bytes > limit) throw new Error("development release asset exceeds its size bound"); chunks.push(part.value);
       }
     } finally {
