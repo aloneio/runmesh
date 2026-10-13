@@ -13,7 +13,7 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
     "minimum": 2,
     "current": 2
   },
-  "catalog_sha256": "32c741879073055cf399827a49e85d85d8f49c2126710061691260d1455658f3",
+  "catalog_sha256": "6fd7d7a4d325efecfbabb7a62aba7749ecfe44cf245456b424c09aab796f894a",
   "tools": [
     "runner_list",
     "runner_current",
