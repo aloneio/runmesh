@@ -819,7 +819,9 @@ test("Shared Worker launch owns an IPC-discovered port and shuts down its proces
       process.send(JSON.stringify({ event: 'DEV_SERVER_READY', ip: '127.0.0.1', port: server.address().port }));
     });
   `);
-  child = spawnWorkerFixture({ cwd: directory, persistTo: directory, vars: { FIXTURE_ROLE: "browser" } });
+  // This test inspects Wrangler's ProxyWorker command-line contract. Keep the
+  // proxy hop explicit; transport fixtures otherwise use the native entry.
+  child = spawnWorkerFixture({ cwd: directory, persistTo: directory, vars: { FIXTURE_ROLE: "browser" }, transport: "proxy" });
   child.stdout.resume(); child.stderr.resume();
   const argumentsSeen = new Promise(resolve => child.on("message", value => { if (value?.event === "fixture_arguments") resolve(value); }));
   const origin = await waitForWorker(child, 10_000);
@@ -904,7 +906,7 @@ async function nativeLauncherFixture(t, mode = "success") {
       }
     }
   `);
-  child = spawnWorkerFixture({ cwd: directory, persistTo: directory, transport: "native",
+  child = spawnWorkerFixture({ cwd: directory, persistTo: directory,
     vars: { FIXTURE_ROLE: "native-contract", FIXTURE_SECRET: "PRIVATE_BINDING_VALUE" }, env: { ...process.env, NATIVE_FIXTURE_MODE: mode } });
   const messages = [];
   child.on("message", value => messages.push(value));

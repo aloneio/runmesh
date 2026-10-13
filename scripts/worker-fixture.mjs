@@ -5,8 +5,13 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { resolveTrustedTaskkillPath } from "./windows-tools.mjs";
 
-/** Both transports retain the real Wrangler config and native Worker runtime. */
-export function spawnWorkerFixture({ cwd, persistTo, vars, env = process.env, transport = "proxy" }) {
+/**
+ * Native is the default fixture transport. Wrangler's local ProxyWorker hop has
+ * a known 5-second keep-alive race (https://github.com/cloudflare/workers-sdk/issues/14641)
+ * that can reset a request at the same cadence; proxy remains available for
+ * explicit proxy contract coverage.
+ */
+export function spawnWorkerFixture({ cwd, persistTo, vars, env = process.env, transport = "native" }) {
   assert.ok(isAbsolute(cwd) && isAbsolute(persistTo), "Worker fixture paths must be absolute");
   assert.ok(transport === "proxy" || transport === "native", "Unknown Worker fixture transport");
   if (transport === "native") {
