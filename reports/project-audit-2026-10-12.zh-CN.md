@@ -1432,7 +1432,7 @@ Worker、Runner 全套均在修复后的当前源码上完成；安装包 E2E �
 
 ### 2026-10-14 0.1.10 根因修复、跨平台门禁与发布前复核
 
-本轮针对托管 Windows native transport 的 `ECONNRESET` 完成请求级边界复核。失败请求复用了已被 Worker 回收的旧 HTTP socket，Worker 与 Runner 进程均保持运行。修复在 MCP E2E 请求中使用 `Undici Agent({ pipelining: 0 })`，让每个 MCP 请求使用独立连接并彻底关闭连接复用；测试收尾显式关闭 dispatcher，避免下一轮复用上一轮的连接。该修复对应 `test/e2e/mcp-runner.e2e.test.ts` 的 native transport 变更，保留原生入口与 proxy 专项覆盖的边界。
+本轮针对托管 Windows native transport 的 `ECONNRESET` 完成请求级边界复核。失败表现为请求在响应头返回前遇到已被 Worker 回收的旧 HTTP socket，Worker 与 Runner 进程均保持运行。最终测试修复在 MCP E2E 请求中使用 `Undici Agent({ pipelining: 0 })`，让每个请求使用独立连接，避免依赖 native server 的 HTTP socket 生命周期；测试收尾显式释放请求资源。该修复对应 `test/e2e/mcp-runner.e2e.test.ts` 的 native transport 变更，保留原生入口与 proxy 专项覆盖的边界。
 
 | 验证面 | 结果 |
 | --- | --- |
