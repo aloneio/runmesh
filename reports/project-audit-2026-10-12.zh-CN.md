@@ -1468,3 +1468,19 @@ GitHub PR #127、GitLab MR !66 和对齐 MR !67 均已合并。在本节记录�
 | 在线门禁 | `check-live-provenance.mjs` 返回 `verified=true`；`check-live-release-prereqs.mjs` 返回 `passed` |
 
 生产响应、稳定发行物指针、发布 manifest 的版本与提交关系已完成交叉核对，0.1.10 正式版本验收闭环。
+
+### 2026-10-14 0.1.10 最终双 provider 对齐与线上收口
+
+针对检查书上一节记录后的文档事实修正，GitHub PR #129 与 GitLab MR !68 已按 `dev → main` 流程完成。最终提交 `8949585e188ba475189f27322fa0fe1862bcdca4` 同时存在于 GitHub/GitLab 的 `main` 与 `dev`，四个引用完全一致。GitHub PR #129 的完整检查矩阵通过；最终快进同步触发的 GitHub `dev` CI 共 20 个 check run，其中 17 个成功、4 个按条件跳过，0 个失败或运行中。GitLab MR pipeline `2944462069` 与 main pipeline `2944498522` 均通过，包含 `main-source-policy`、`verify`、`browser` 和 Cloudflare Workers Builds。
+
+生产 Cloudflare Worker 已运行最终提交。只读验收结果如下：
+
+| 验证面 | 结果 |
+| --- | --- |
+| `/health` | HTTP 200；`worker_version=0.1.10`；`test_mode_disabled=true`；`deployment.branch=main`；`deployment.commit=8949585e188ba475189f27322fa0fe1862bcdca4` |
+| 部署来源 | `check-live-provenance.mjs` 返回 `verified=true`；`tree=e2a1f400dabe39dd0b99cb7e8ecbb0568491fff2`；`agreement=matched`；provider `version_id=dca19310-6749-4970-aa25-f027bf58a531` |
+| 发布前置 | `check-live-release-prereqs.mjs` 返回 `live_release_preflight=passed`；`contract=release-chain-audit-v1`；`history_backend=packed_d1` |
+| 稳定发行物 | `/runner/releases/stable` 与 `/runner/releases/latest` 均为 `current/latest/package_version=0.1.10`，`distributable=true` |
+| 线上并发烟测 | `/health` 及 `/runner/releases/stable` 各 512 次、并发 64，均为 HTTP 200，失败数为 0；总耗时 8.069 秒 |
+
+本节记录的 refs、CI、部署和线上响应均来自最终提交；此前各节保留对应时点的历史收据，不与本次最终验收混用。
