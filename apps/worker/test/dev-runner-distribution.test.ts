@@ -7,7 +7,7 @@ import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerRelea
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { developmentDescriptor, isDevelopmentReleaseVersion } from "../src/domain/release-selection.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
-import { boundedJson, readDevelopmentReleaseCache, releaseFetch, DevelopmentReleaseError, developmentReleaseFailure, safeDevelopmentReleaseFailure } from "../src/distribution/release-io.js";
+import { boundedJson, boundedReleaseBytes, readDevelopmentReleaseCache, releaseFetch, DevelopmentReleaseError, developmentReleaseFailure, safeDevelopmentReleaseFailure } from "../src/distribution/release-io.js";
 
 // Each call models a new isolate, with the real runtime algorithm enabled.
 function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch, verify: DevelopmentReleaseVerifier, cache?: DevelopmentReleaseCache | null, schedule?: DevelopmentReleaseRefreshScheduler) {
@@ -66,6 +66,27 @@ it.each(["rejected", "pending"] as const)("release rejection settles when body c
     await expect(boundedJson(new Response(body, { status: 503 }))).rejects.toThrow("development release discovery failed");
     expect(cancel).toHaveBeenCalledTimes(1);
   } finally { void body.cancel().catch(() => undefined); }
+});
+
+it.each(["json", "asset"] as const)("rejects cancellation at a complete release %s body's pending EOF", async kind => {
+  const controller = new AbortController(), reason = new DOMException("release stopped", "AbortError");
+  let awaitingEof!: () => void, reads = 0;
+  const eof = new Promise<void>(resolve => { awaitingEof = resolve; });
+  const cancel = vi.fn(), body = new ReadableStream<Uint8Array>({
+    pull(stream) { if (++reads === 1) stream.enqueue(new TextEncoder().encode("{}")); else awaitingEof(); },
+    cancel,
+  }, { highWaterMark: 0 });
+  const response = new Response(body);
+  const pending = kind === "json" ? boundedJson(response, controller.signal)
+    : boundedReleaseBytes("https://github.com/aloneio/runmesh/releases/download/probe/manifest.json", 65536, (async () => response) as typeof fetch, "manifest", controller.signal);
+  try {
+    await eof;
+    controller.abort(reason);
+    if (kind === "json") await expect(pending).rejects.toMatchObject({ failure: { phase: "discovery", reason: "timeout" } });
+    else await expect(pending).rejects.toBe(reason);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+  } finally { controller.abort(reason); await pending.catch(() => undefined); }
 });
 
 it("rejected release response cancels every retry including the final response", async () => {
@@ -242,6 +263,14 @@ it("stalled cancellation does not block the next release fetch attempt", async (
     (async () => ++attempts === 1 ? new Response(new ReadableStream({ cancel }), { status: 503 }) : Response.json([])) as typeof fetch));
   expect(result).toMatchObject({ status: "fulfilled", value: expect.objectContaining({ status: 200 }) });
   expect(attempts).toBe(2);
+});
+
+it("owner cancellation settles a transport that never resolves its fetch", async () => {
+  const controller = new AbortController();
+  const pending = releaseFetch("https://example.invalid/release", { method: "GET" },
+    (async () => new Promise<Response>(() => {})) as typeof fetch, "discovery", controller.signal);
+  setImmediate(() => controller.abort(new Error("refresh stopped")));
+  await expect(pending).rejects.toMatchObject({ failure: { phase: "discovery", reason: "timeout" } });
 });
 
 it.each(["oversized", "fragmented"] as const)("stalled cancellation does not delay rejection of %s discovery JSON", async mode => {

@@ -29,6 +29,10 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
+    with:
+      # Keep the exact-source verification for this release alive even when
+      # another ordinary CI run starts on the same branch during the release.
+      release_verification: true
 
   release:
     name: signed stable release from verified main
