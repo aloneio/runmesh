@@ -13,7 +13,7 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
     "minimum": 2,
     "current": 2
   },
-  "catalog_sha256": "a3f0292012b8d1b2b7717748b9108f997e475a4dbc0e190cd47b167774ee920a",
+  "catalog_sha256": "32c741879073055cf399827a49e85d85d8f49c2126710061691260d1455658f3",
   "tools": [
     "runner_list",
     "runner_current",
@@ -247,7 +247,9 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
   ],
   "reviewed_release_record": {
     "version": "0.1.10",
-    "state": "candidate"
+    "state": "released",
+    "commit": "7f8e1cd1da27a14092a80b516da9efc1facb6aa9",
+    "manifest_sha256": "ff99b5dd2d135827348728c2ad2804d0e76bc6713c47fafc3dd74d1e0dee1202"
   },
   "observations": {
     "test_execution": "not_run",

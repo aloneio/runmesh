@@ -1443,3 +1443,13 @@ Worker、Runner 全套均在修复后的当前源码上完成；安装包 E2E �
 | 面向用户的文档 | `docs` 发布说明提交 `d38e33992c69ef23f5163ee4d9b46dcf212fd24b`，中英文发行状态与版本说明均切换到 0.1.10 正式版表述 |
 
 本节记录的是发布前的源码、门禁与文档证据。正式 `v0.1.10` 标签、签名公开资产、manifest 校验和、release-state 的 `released` 记录以及生产 `/health` 和 `/runner/releases/stable` 验收，待发布流程完成后另行追加；本节不将尚未取得的发行物或生产响应计为已完成。
+
+### 2026-10-14 0.1.10 正式发布与生产激活记录
+
+正式发布工作流已在受保护 `main` 的提交 `7f8e1cd1da27a14092a80b516da9efc1facb6aa9` 上完成。GitHub Release 工作流 `38451075997` 的第 2 次尝试通过完整验证矩阵和签名发布作业：Linux、Windows、macOS native、Node 22.23.2、Node 24.21.0、browser、`verify` 与 `verify-all` 均通过，发布作业 `115495136649` 成功。第 1 次尝试仅因 macOS Hosted Runner 容量排队耗尽而结束，第 2 次尝试取得 runner 后完成全部检查。
+
+GitLab 主线流水线 `2943895492` 的 `verify`（`17150524651`）、`browser`（`17150524652`）和 Workers Builds 均通过。GitHub 与 GitLab 的受保护 `main`、`dev` 四个分支引用均指向 `7f8e1cd1da27a14092a80b516da9efc1facb6aa9`。GitHub 已创建不可变的正式 Release `v0.1.10`（release id `412038176`，`draft=false`、`prerelease=false`、`immutable=true`）；annotated tag 对象为 `9517a49743dd6f2f13211d33221bb83611cb6a78`，目标提交为上述源码提交。
+
+公开 Release 的九项资产集合为 `runmesh-runner-0.1.10.tgz`、`manifest.json`、`manifest.sig`、`manifest.signature.json`、`SHA256SUMS`、`LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md` 和 `trust-keyring.json`。独立下载后使用仓库 `runmesh-preview-2026-01` 信任根完成验签，`release-verify.mjs` 返回成功；`manifest.json` SHA256 为 `ff99b5dd2d135827348728c2ad2804d0e76bc6713c47fafc3dd74d1e0dee1202`，Runner 包 SHA256 为 `5ed5a8bd2c21981453837ba0fe2aaf732bd91da9fc67b522297b7e5a662bc6fa`，`SHA256SUMS` 中其余资产逐项匹配。manifest 的 `version/tag/commit` 分别为 `0.1.10`、`v0.1.10` 和上述发布提交。
+
+发布记录已准备 `release/release-state.json` 的 `released` 字段、发布提交和 manifest 摘要，并由生成模块提供 `REVIEWED_RELEASE_VERSION=0.1.10`。正式发布前置的公开资产与源码证据已完成；生产激活仍需以部署后的实际响应确认。发布后即时读取的生产 `/health` 返回 200，但 `worker_version` 仍为 `0.1.7`，部署提交为 `a18f3c015740458cfc90ce9b6c1626580937e6b9`；`/runner/releases/stable` 的 `current_version`、`latest_version` 和包地址仍为 `0.1.7`。因此当前收据证明正式发行物已公开并可验签，尚不把生产 Worker 或 stable 分发指针计为 0.1.10 激活；激活提交部署完成后，应在本节追加新的 `/health`、`/runner/releases/stable`、部署提交和 stable 包摘要，并核对与 release-state 的发布提交关系。
