@@ -1432,14 +1432,14 @@ Worker、Runner 全套均在修复后的当前源码上完成；安装包 E2E �
 
 ### 2026-10-14 0.1.10 根因修复、跨平台门禁与发布前复核
 
-本轮针对托管 Windows native transport 的 `ECONNRESET` 完成请求级边界复核。失败请求复用已空闲约 1.0–1.6 秒、随后由 Worker 侧回收的 HTTP socket，在收到响应头前被关闭；Worker 与 Runner 进程均保持运行。修复在 MCP E2E 请求中使用独立的 Undici dispatcher，并将空闲复用窗口限制为 500 ms；测试收尾显式关闭 dispatcher，避免下一轮复用上一轮的连接。该修复对应 `test/e2e/mcp-runner.e2e.test.ts` 的 native transport 变更，保留原生入口与 proxy 专项覆盖的边界。
+本轮针对托管 Windows native transport 的 `ECONNRESET` 完成请求级边界复核。失败表现为请求在响应头返回前遇到已被 Worker 回收的旧 HTTP socket，Worker 与 Runner 进程均保持运行。最终测试修复在 MCP E2E 请求中使用 `Undici Agent({ pipelining: 0 })`，让每个请求使用独立连接，避免依赖 native server 的 HTTP socket 生命周期；测试收尾显式释放请求资源。该修复对应 `test/e2e/mcp-runner.e2e.test.ts` 的 native transport 变更，保留原生入口与 proxy 专项覆盖的边界。
 
 | 验证面 | 结果 |
 | --- | --- |
 | Windows 本地源码与安装包 E2E | 各 41/41 通过，0 失败、0 跳过 |
 | Windows 本地混合负载 | 并发 1、4、8、16 各 128 请求，合计 512/512，0 失败 |
-| GitHub CI | PR #124 合入提交 `91cde892d3021df341b095d767e71de775004c46`；GitHub CI run `38423849491` 全部通过，Windows transport 门禁通过 |
-| GitLab 受保护分支 | MR !63（`dev` → `main`）已合并；GitLab main 与 GitHub main 均指向 `91cde892d3021df341b095d767e71de775004c46` |
+| GitHub CI | main push run `38441360445` 的 8 个 jobs 全部通过（Windows `115454776507`、verify-all `115460142627`），提交 `e06b2b695f59a576c4d30b60698bea512934e3b3` |
+| GitLab 受保护分支 | pipeline `2943538161` 的 verify、browser、Workers Builds 全部通过，提交 `6d5da177ad27f4a7464a96c27bb0c65f81a45c93`；两端源码树一致，最终提升将把受保护 main 对齐到同一提交 |
 | 面向用户的文档 | `docs` 发布说明提交 `d38e33992c69ef23f5163ee4d9b46dcf212fd24b`，中英文发行状态与版本说明均切换到 0.1.10 正式版表述 |
 
 本节记录的是发布前的源码、门禁与文档证据。正式 `v0.1.10` 标签、签名公开资产、manifest 校验和、release-state 的 `released` 记录以及生产 `/health` 和 `/runner/releases/stable` 验收，待发布流程完成后另行追加；本节不将尚未取得的发行物或生产响应计为已完成。
