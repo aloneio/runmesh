@@ -2,13 +2,11 @@
 
 [简体中文](release-readiness.zh-CN.md) · [Documentation](README.md) · [Release notes](release-notes.md) · [Upgrade guide](upgrading.md)
 
-## Current stable release: 0.1.9
+## Current stable release: 0.1.10
 
-[Runmesh 0.1.9](https://github.com/aloneio/runmesh/releases/tag/v0.1.9) is available with a signed portable Runner package. This release improves Windows Runner version switches and manager refresh while retaining the existing installation configuration. See the [release notes](release-notes.md) for the changes.
+[Runmesh 0.1.10](https://github.com/aloneio/runmesh/releases/tag/v0.1.10) is available with a signed portable Runner package. This release keeps cancellation consistent through the final stage of Runner maintenance and release downloads, so an interrupted update retains its result and can be retried safely. See the [release notes](release-notes.md) for the changes.
 
-### Next release: 0.1.10 in preparation
-
-Runmesh 0.1.10 is being prepared with consistent cancellation handling for Runner maintenance and release downloads. The published 0.1.9 package remains the stable choice until the next release is published.
+The 0.1.9 package remains available from [GitHub Releases](https://github.com/aloneio/runmesh/releases) for installations that need that version.
 
 | Your task | Next step |
 | --- | --- |
@@ -24,6 +22,6 @@ During an upgrade, keep your existing Cloudflare resources, deployment secrets a
 
 The control plane exposes its running version at `/health`. Its `/runner/releases/stable` endpoint lists the stable Runner package selected for that instance. Follow [build provenance](build-provenance.md) to check the deployed source, and the [upgrade guide](upgrading.md) to confirm the Runner service version.
 
-[Runmesh 0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) and earlier signed releases remain available from [GitHub Releases](https://github.com/aloneio/runmesh/releases). The upgrade guide includes recovery steps for an existing installation.
+[Runmesh 0.1.9](https://github.com/aloneio/runmesh/releases/tag/v0.1.9) and earlier signed releases remain available from [GitHub Releases](https://github.com/aloneio/runmesh/releases). The upgrade guide includes recovery steps for an existing installation.
 
-Maintainers preparing a new version can follow the [publication and activation workflow](maintainers/release-process.md).
+Maintainers can follow the [publication and activation workflow](maintainers/release-process.md).

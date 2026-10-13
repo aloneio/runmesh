@@ -2,13 +2,11 @@
 
 [English](release-readiness.md) · [文档目录](README.zh-CN.md) · [版本说明](release-notes.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
-## 当前正式版：0.1.9
+## 当前正式版：0.1.10
 
-[Runmesh 0.1.9](https://github.com/aloneio/runmesh/releases/tag/v0.1.9) 已发布，提供签名便携 Runner 安装包。本版改进 Windows Runner 版本切换和管理器刷新，同时保留现有安装配置。具体变化见[版本说明](release-notes.zh-CN.md)。
+[Runmesh 0.1.10](https://github.com/aloneio/runmesh/releases/tag/v0.1.10) 已发布，提供签名便携 Runner 安装包。本版让 Runner 维护和发行物下载在响应即将结束时继续保持取消状态，中断更新会保留中断结果，可在同一安装上安全重试。具体变化见[版本说明](release-notes.zh-CN.md)。
 
-### 下一版本：0.1.10 准备中
-
-Runmesh 0.1.10 正在准备，让 Runner 维护和发行物下载在取消时保持一致。下一版本正式发布前，稳定安装继续使用已发布的 0.1.9。
+0.1.9 安装包仍可从 [GitHub Releases](https://github.com/aloneio/runmesh/releases) 获取，适用于需要继续运行该版本的实例。
 
 | 你要做什么 | 下一步 |
 | --- | --- |
@@ -24,6 +22,6 @@ Runmesh 0.1.10 正在准备，让 Runner 维护和发行物下载在取消时保
 
 控制端的 `/health` 返回运行中的版本，`/runner/releases/stable` 列出当前实例选用的正式 Runner 包。按[构建来源](build-provenance.zh-CN.md)核对部署源码，并按[升级指南](upgrading.zh-CN.md)确认 Runner 服务版本。
 
-[Runmesh 0.1.8](https://github.com/aloneio/runmesh/releases/tag/v0.1.8) 及更早的签名版本仍可从 [GitHub Releases](https://github.com/aloneio/runmesh/releases) 下载。已有实例的恢复步骤见升级指南。
+[Runmesh 0.1.9](https://github.com/aloneio/runmesh/releases/tag/v0.1.9) 及更早的签名版本仍可从 [GitHub Releases](https://github.com/aloneio/runmesh/releases) 下载。已有实例的恢复步骤见升级指南。
 
-维护者准备新版本时，按[发布与激活流程（英文）](maintainers/release-process.md)操作。
+维护者可按[发布与激活流程（英文）](maintainers/release-process.md)操作。
