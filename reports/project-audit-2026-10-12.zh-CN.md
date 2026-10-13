@@ -1453,3 +1453,18 @@ GitLab 主线流水线 `2943895492` 的 `verify`（`17150524651`）、`browser`�
 公开 Release 的九项资产集合为 `runmesh-runner-0.1.10.tgz`、`manifest.json`、`manifest.sig`、`manifest.signature.json`、`SHA256SUMS`、`LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md` 和 `trust-keyring.json`。独立下载后使用仓库 `runmesh-preview-2026-01` 信任根完成验签，`release-verify.mjs` 返回成功；`manifest.json` SHA256 为 `ff99b5dd2d135827348728c2ad2804d0e76bc6713c47fafc3dd74d1e0dee1202`，Runner 包 SHA256 为 `5ed5a8bd2c21981453837ba0fe2aaf732bd91da9fc67b522297b7e5a662bc6fa`，`SHA256SUMS` 中其余资产逐项匹配。manifest 的 `version/tag/commit` 分别为 `0.1.10`、`v0.1.10` 和上述发布提交。
 
 发布记录已准备 `release/release-state.json` 的 `released` 字段、发布提交和 manifest 摘要，并由生成模块提供 `REVIEWED_RELEASE_VERSION=0.1.10`。正式发布前置的公开资产与源码证据已完成；生产激活仍需以部署后的实际响应确认。发布后即时读取的生产 `/health` 返回 200，但 `worker_version` 仍为 `0.1.7`，部署提交为 `a18f3c015740458cfc90ce9b6c1626580937e6b9`；`/runner/releases/stable` 的 `current_version`、`latest_version` 和包地址仍为 `0.1.7`。因此当前收据证明正式发行物已公开并可验签，尚不把生产 Worker 或 stable 分发指针计为 0.1.10 激活；激活提交部署完成后，应在本节追加新的 `/health`、`/runner/releases/stable`、部署提交和 stable 包摘要，并核对与 release-state 的发布提交关系。
+
+### 2026-10-14 0.1.10 双 provider 对齐与生产激活复验
+
+GitHub PR #127、GitLab MR !66 和对齐 MR !67 均已合并。GitHub 与 GitLab 的受保护 `main`、`dev` 四个分支引用现在统一为 `067bc3c7b95682eda88c5be2ec8dce7cdb57a5ab`；该提交是 GitHub PR #127 的受保护合并提交，父提交包含已发布的 `7f8e1cd1da27a14092a80b516da9efc1facb6aa9` 和文档事实更新提交。GitLab 对齐流水线 `2944186479` 的 `main-source-policy`、`verify`、`browser` 全部通过；此前的 GitLab 激活流水线 `2944123013`、主线发布流水线 `2944179384` 也均为通过状态。
+
+生产复验结果如下：
+
+| 验证面 | 结果 |
+| --- | --- |
+| `/health` | HTTP 200；`worker_version=0.1.10`；`test_mode_disabled=true` |
+| 部署来源 | `branch=main`；`commit=067bc3c7b95682eda88c5be2ec8dce7cdb57a5ab`；`tree=3e89bec1fe50a3a4f5751512e228a9b04a7b8c9e`；`agreement=matched`；provider `version_id=3a85e3eb-fb14-4783-84d0-ca38eebea3d3` |
+| `/runner/releases/stable` | `current_version=0.1.10`；`latest_version=0.1.10`；`package_version=0.1.10`；`distributable=true` |
+| 在线门禁 | `check-live-provenance.mjs` 返回 `verified=true`；`check-live-release-prereqs.mjs` 返回 `passed` |
+
+生产响应、稳定发行物指针、发布 manifest 的版本与提交关系已完成交叉核对，0.1.10 正式版本验收闭环。
