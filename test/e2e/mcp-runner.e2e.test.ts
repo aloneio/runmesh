@@ -22,12 +22,12 @@ import { decodeWireFrame, encodeWireFrame, PROTOCOL_CURRENT_VERSION, PROTOCOL_MI
 const testHttp = createTestHttpScope();
 const it = trackTestBodies(vitestIt, testHttp);
 const fetch = testHttp.fetch;
-// Hosted Windows evidence showed reused HTTP/1.1 sockets sitting idle for
-// about one second before an ECONNRESET with no response headers. Keep the
-// fixture dispatcher below that observed boundary so mixed-load requests do
-// not reuse a socket after the native Worker has retired it. The default Node
-// dispatcher waits longer and can surface the stale-socket failure.
-const mcpDispatcher = new Agent({ keepAliveTimeout: 500, keepAliveMaxTimeout: 500, keepAliveTimeoutThreshold: 0 });
+// The native Worker can retire an HTTP/1.1 socket while another request is
+// being admitted. Even a short idle timeout leaves a race window, so fixture
+// MCP calls use one request per connection. This keeps the transport test
+// focused on MCP behavior instead of relying on the native server's socket
+// lifetime.
+const mcpDispatcher = new Agent({ pipelining: 0 });
 aroundEach((runTest, { signal }) => testHttp.run(signal, runTest));
 afterEach(() => testHttp.finish());
 
