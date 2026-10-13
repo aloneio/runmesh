@@ -57,6 +57,7 @@ export function createCloudMaintenance(options: { readonly profile: () => Promis
         let part: ReadableStreamReadResult<Uint8Array>;
         try { part = await read; }
         finally { if (pendingRead === read) pendingRead = undefined; }
+        signal.throwIfAborted();
         if (part.done) break;
         total += part.value.byteLength; if (total > limit) throw new Error("invalid maintenance response"); parts.push(part.value);
       }

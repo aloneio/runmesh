@@ -76,6 +76,26 @@ describe("maintenance HTTPS and CLI", () => {
     expect(cancel).not.toHaveBeenCalled();
     expect(response.body?.locked).toBe(false);
   });
+  it.each(["owner", "deadline"] as const)("rejects cancellation at a complete maintenance body's pending EOF from %s", async source => {
+    const controller = new AbortController(), reason = new DOMException("maintenance stopped", source === "deadline" ? "TimeoutError" : "AbortError");
+    const timeout = source === "deadline" ? vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal) : undefined;
+    let awaitingEof!: () => void, reads = 0;
+    const eof = new Promise<void>(resolve => { awaitingEof = resolve; });
+    const cancel = vi.fn(), body = new ReadableStream<Uint8Array>({
+      pull(stream) { if (++reads === 1) stream.enqueue(new TextEncoder().encode(JSON.stringify(idle))); else awaitingEof(); },
+      cancel,
+    }, { highWaterMark: 0 });
+    const cloud = createCloudMaintenance({ profile: async () => profile, fetch: (async () => new Response(body)) as typeof fetch,
+      ...(source === "owner" ? { signal: controller.signal } : {}) });
+    const pending = cloud.poll();
+    try {
+      await eof;
+      controller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(body.locked).toBe(false);
+    } finally { timeout?.mockRestore(); controller.abort(reason); await pending.catch(() => undefined); }
+  });
   it("wires only the internal maintenance command to its injectable service entry point", async () => {
     const received: unknown[] = [];
     await runCli(["maintenance-agent", "--profile", "C:\\Runmesh\\profile.json", "--install-root", "C:\\Runmesh", "--user"], { startMaintenanceAgent: async options => { received.push(options); } });
