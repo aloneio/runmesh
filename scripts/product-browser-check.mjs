@@ -353,7 +353,9 @@ export async function checkGuidedProduct(executable) {
   controls.discovery.uncertainAuthorization=false;controls.discovery.reject=false;
   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).click();await status.filter({hasText:'Connected.'}).waitFor();
-  assert.equal(await page.locator('[data-service-list] input[type=password]').count(),0);
+  assert.equal(await oauthCard.locator('input[type=password]').count(),1,'OAuth MCP exposes one optional pre-registered client secret field');
+  assert.equal(await oauthCard.locator('input[type=password]').getAttribute('autocomplete'),'new-password');
+  assert.equal(await publicCard.locator('input[type=password]').count(),0,'Unauthenticated MCPs do not expose OAuth credential fields');
   assert.equal(await page.getByText('Update service credentials',{exact:true}).count(),0);
   await page.locator('[data-central-tab=skills]').click();
   const importer=page.locator('[data-skill-import]');

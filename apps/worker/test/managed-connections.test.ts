@@ -543,6 +543,45 @@ it("managed OAuth validates, encrypts and forwards a pre-registered client witho
   expect(await f.service().run(f.hash, "begin", { ...f.selection, oauth_client: { client_secret: secret } })).toMatchObject({ state: "failed", code: "invalid_request" });
 });
 
+it("a failed OAuth handoff retains the encrypted pre-registered client for an explicit retry", async () => {
+  const observed: unknown[] = []; let attempts = 0;
+  const protocol: ManagedOAuthProtocol = {
+    begin: async input => {
+      observed.push(input.client); attempts++;
+      if (attempts === 1) throw new Error("synthetic provider outage");
+      return { authorization_url: issuer + "/authorize?state=" + input.state, discovery: { provider_version: 1 }, client: input.client!, verifier: "fixture-verifier" };
+    },
+    complete: async () => ({ access_token: "unused", token_type: "Bearer" }), refresh: async () => ({ access_token: "unused", token_type: "Bearer" }),
+  };
+  const f = oauthFixture(false, origin, protocol), secret = "fixture-retry-secret";
+  const client = { client_id: "fixture-retry-client", client_secret: secret, token_endpoint_auth_method: "client_secret_post" };
+  expect(await f.service().run(f.hash, "begin", { ...f.selection, oauth_client: { client_id: client.client_id, client_secret: secret } }))
+    .toMatchObject({ state: "failed", code: "unavailable" });
+  expect(JSON.stringify(f.record())).not.toContain(secret);
+  expect(await storedOAuthValue(f, "client")).toMatchObject({ value: client });
+  expect(await f.service().run(f.hash, "begin", f.selection)).toMatchObject({ state: "started" });
+  expect(observed).toEqual([client, client]);
+});
+
+it("OAuth does not forward a stored client into a changed profile revision", async () => {
+  const observed: unknown[] = []; let attempts = 0;
+  const protocol: ManagedOAuthProtocol = {
+    begin: async input => {
+      observed.push(input.client); attempts++;
+      if (attempts === 1) throw new Error("synthetic provider outage");
+      return { authorization_url: issuer + "/authorize?state=" + input.state, discovery: { provider_version: 1 },
+        client: input.client ?? { client_id: "replacement-client" }, verifier: "fixture-verifier" };
+    },
+    complete: async () => ({ access_token: "unused", token_type: "Bearer" }), refresh: async () => ({ access_token: "unused", token_type: "Bearer" }),
+  };
+  const f = oauthFixture(false, origin, protocol), client = { client_id: "fixture-revision-client", client_secret: "fixture-revision-secret" };
+  expect(await f.service().run(f.hash, "begin", { ...f.selection, oauth_client: client })).toMatchObject({ state: "failed", code: "unavailable" });
+  f.pause(); const current = f.resume();
+  expect(await f.service().run(f.hash, "begin", { profile_id: current.profile_id, expected_revision: current.revision })).toMatchObject({ state: "started" });
+  expect(observed[0]).toMatchObject({ ...client, token_endpoint_auth_method: "client_secret_post" });
+  expect(observed[1]).toBeUndefined();
+});
+
 it("OAuth reconnect reuses the encrypted client registration instead of registering again", async () => {
   const f = oauthFixture(), first = await f.begin();
   expect(await f.service().run(f.hash, "complete", f.callback(first))).toMatchObject({ state: "linked" });

@@ -83,10 +83,15 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     let reusableClient: unknown = suppliedClient;
     // A previously registered client is account-independent. Reuse it on an
     // ordinary reconnect so providers are not asked to register a new client.
-    if (reusableClient === undefined && old?.client) reusableClient = await ports.cipher.open(context(old, 'client'), old.client);
+    if (reusableClient === undefined && old?.client && old.profile_revision === selected.revision)
+      reusableClient = await ports.cipher.open(context(old, 'client'), old.client);
     const state = ports.random(), stateHash = await ports.hash(state); await admin(hash, signal); profile(selected.profile_id, selected.revision);
     let record: ManagedOAuthRecord = { profile_id: selected.profile_id, profile_revision: selected.revision, revision: (old?.revision ?? 0) + 1,
       state: "starting", session_hash: hash, state_hash: stateHash, origin: base, expires_at: ports.now() + 600_000, token_expires_at: 0 };
+    // Preserve the chosen client across a failed provider handoff. The ciphertext
+    // is rebound to this state so an explicit retry can reuse the registration
+    // without exposing or asking for the client secret again.
+    if (reusableClient !== undefined) record = { ...record, client: await ports.cipher.seal(context(record, 'client'), reusableClient) };
     if (!ports.repository.replace(record, old?.revision ?? 0)) return fault("conflict");
     const authorize = async () => { await admin(hash, signal); if (!current(record)) return fault("conflict"); };
     const result = await ports.protocol.begin({ endpoint: selected.endpoint, origin: base, state, signal, authorize,
