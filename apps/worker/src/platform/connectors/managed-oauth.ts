@@ -74,7 +74,8 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
             discovery: p.discovery, phase: 'begin', ...(send ? { send } : {}) }) });
       } catch (error) {
         const metadata = p.discovery()?.authorizationServerMetadata;
-        if (input.client === undefined && metadata !== undefined && metadata.client_id_metadata_document_supported !== true && !metadata.registration_endpoint)
+        if (input.client === undefined && metadata !== undefined && metadata.client_id_metadata_document_supported !== true
+          && !metadata.registration_endpoint && error instanceof Error && error.message.includes("does not support dynamic client registration"))
           return fault("client_registration_required");
         throw error;
       }
