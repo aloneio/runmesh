@@ -988,14 +988,21 @@ export class RunnerDO {
     if (state.enrollment_mutation_committed === true && state.credential_mutation_committed === false) {
       return (await this.releasePolicyNeutralMutation(expected, state)).ok;
     }
-    // A revocation may have committed before its transport cleanup response
-    // was lost. Finalize only this proven owner before accepting a delete;
-    // an uncommitted operation or a creation still issuing enrollment stays
-    // exclusive. Finalization rechecks ownership under the write queue.
-    if (state.credential_mutation_kind === "credential_revoke" && state.credential_mutation_committed === true
+    // A credential revocation or initial Runner creation may have committed
+    // before its transport cleanup response was lost. A committed runner_create
+    // is recoverable only while the Runner is still at its synthetic pre-
+    // enrollment credential generation; Registry stops reporting that marker
+    // committed as soon as enrollment advances credentials. The original
+    // create flow also withholds its enrollment code until finalization, so a
+    // later mutation which recovers this proven owner cannot disclose a stale
+    // code. Uncommitted creation remains exclusive. Finalization rechecks exact
+    // ownership under the write queue.
+    if ((state.credential_mutation_kind === "credential_revoke" || state.credential_mutation_kind === "runner_create")
+      && state.credential_mutation_committed === true
       && typeof state.lifecycle_id === "string" && validLifecycleId(state.lifecycle_id)
       && this.mutationLifecycleMatches(expected, state.lifecycle_id)) {
-      return await this.finalizeOwnedMutation(expected.mutationId, "credentials revoked") === "ok";
+      return await this.finalizeOwnedMutation(expected.mutationId,
+        state.credential_mutation_kind === "runner_create" ? "runner created" : "credentials revoked") === "ok";
     }
     if (typeof state.lifecycle_id !== "string" || !validLifecycleId(state.lifecycle_id) || state.lifecycle_id !== expected.lifecycleId) return false;
     const desiredRevision = state.desired_revision;
