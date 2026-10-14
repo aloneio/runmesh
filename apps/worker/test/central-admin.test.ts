@@ -285,7 +285,7 @@ it("OAuth redirect receipts retain the existing bounded long-query support", asy
 
 it.each([
   ["invalid_request", 400], ["invalid_callback", 400], ["denied", 403], ["conflict", 409],
-  ["provider_unsupported", 503], ["unavailable", 503], ["reauthorization_required", 503],
+  ["provider_unsupported", 503], ["client_registration_required", 503], ["unavailable", 503], ["reauthorization_required", 503],
 ] as const)("OAuth preserves the recognized %s failure contract", async (code, status) => {
   const response = await connectionReceipt("begin", { state: "failed", code, operation_state: "not_started", private_detail: "private-error-do-not-reflect" });
   expect(response.status).toBe(status);

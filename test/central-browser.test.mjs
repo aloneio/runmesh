@@ -294,6 +294,13 @@ for (const locale of ["en", "zh-CN"]) test("OAuth deployment configuration failu
   assert.equal(api.requests.length, 1);
 });
 
+for (const locale of ["en", "zh-CN"]) test("OAuth providers without automatic client registration give actionable " + locale + " guidance", async t => {
+  const translate = createCentralTranslator(locale);
+  const api = client(t, () => Response.json({ error: { code: "oauth_client_registration_required", operation_state: "not_started" } }, { status: 503 }), translate);
+  await assert.rejects(api.request("connections/begin", { profile_id: "service", expected_revision: 1 }), { message: translate("oauthClientRegistrationRequired") });
+  assert.equal(api.requests.length, 1);
+});
+
 for (const locale of ["en", "zh-CN"]) for (const path of ["connection-check", "discovery/service"])
 for (const state of ["not_started", "unknown"]) for (const [code, key] of [
   ["remote_upstream_unavailable", "mcpServiceUnavailable"],
