@@ -423,6 +423,29 @@ describe("Worker runner transport", () => {
     }
   });
 
+  it("recovers a committed never-connected runner_create fence before deletion", async () => {
+    const id = `committed-create-delete-${crypto.randomUUID()}`;
+    const object = env.RUNNER.get(env.RUNNER.idFromName(id));
+    const createMutation = `runner-create-${crypto.randomUUID()}`;
+    const path = "/begin-policy-mutation", body = JSON.stringify({ runner_id: id, mutation_id: createMutation });
+    const headers = await internalHeaders("test-internal-control-secret-not-for-production", "POST", path, body);
+    expect((await object.fetch(new Request(`https://runner.internal${path}`, { method: "POST", headers, body }))).status).toBe(204);
+    await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), instance => {
+      expect(instance.addRunner(id, "Never connected", Date.now(), createMutation, "dedicated_user")).toBeDefined();
+      expect(instance.getRunnerMutationState(id, createMutation)).toMatchObject({
+        runner_exists: true, mutation_committed: true, credential_mutation_kind: "runner_create", credential_version: 0
+      });
+    });
+    const deletion = await SELF.fetch(`https://worker.test/admin/runners/${encodeURIComponent(id)}/delete`, {
+      method: "POST", headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ confirmation: id }),
+    });
+    expect(deletion.status, await deletion.text()).toBe(204);
+    await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), instance => {
+      expect(instance.getRunnerExecutionState(id)).toBeUndefined();
+    });
+  });
+
   it("reports uncertain deletion when RunnerDO rejects transport cleanup", async () => {
     const id = `delete-transport-${crypto.randomUUID()}`;
     const runnerToken = "abcdef0123456789abcdef0123456789";
