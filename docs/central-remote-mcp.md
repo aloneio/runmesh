@@ -14,7 +14,7 @@ Add an MCP once in the control panel, then use its enabled tools from your conne
 
 Use the direct endpoint on the standard HTTPS port. The URL should contain its hostname and MCP path; keep account credentials in the OAuth flow. If the provider gives you a download or setup page, obtain its MCP endpoint from its connection instructions.
 
-OAuth providers can use a client metadata document or automatic client registration. See [MCP account authorization](central-oauth.md) for the sign-in flow.
+OAuth providers can use a client metadata document or automatic client registration. Providers that require a pre-registered OAuth application can use the optional **OAuth client settings** in the connection form. See [MCP account authorization](central-oauth.md) for the sign-in flow.
 
 ## Check a connection
 
