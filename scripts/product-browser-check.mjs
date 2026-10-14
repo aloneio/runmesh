@@ -221,16 +221,22 @@ export async function checkGuidedProduct(executable) {
   assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,['search']);
   assert.equal(await review.getByRole('button').count(),0);
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
-  // Existing connected catalogs, including an empty prior selection, finish automatically.
+  // Ordinary page loads are read-only for remote MCPs. An unpublished catalog
+  // is retried only after the administrator explicitly selects Refresh tools.
+  const primaryCard=page.locator('[data-service-list] .central-card').filter({has:page.getByText('https://docs.example.com/mcp',{exact:true})});
   for(const approved of [null,digest]){
    const existing=catalogs.get(profiles[0].profile_id);existing.head.approved_digest=approved;existing.head.approved_names=[];
    const before=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
    const catalogPath='/admin/central/catalogs/'+profiles[0].profile_id;
    const reads=requests.filter(r=>r.path===catalogPath&&r.method==='GET').length;
-   await page.reload();await status.filter({hasText:'Connected.'}).waitFor();
+   await page.reload();await status.filter({hasText:'List refreshed.'}).waitFor();await page.waitForLoadState('networkidle');
+   assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,[]);
+   assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,before,'Page reload must not probe an unpublished MCP');
+   assert.equal(requests.filter(r=>r.path===catalogPath&&r.method==='GET').length,reads,'Page reload must not read the remote catalog for recovery');
+   await primaryCard.getByRole('button',{name:'Refresh tools',exact:true}).click();await status.filter({hasText:'Connected.'}).waitFor();
    assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,['search']);
    assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,before+1);
-   assert.equal(requests.filter(r=>r.path===catalogPath&&r.method==='GET').length,reads+2,'Recovery reads the catalog once before discovery and once after publication');
+   assert.equal(requests.filter(r=>r.path===catalogPath&&r.method==='GET').length,reads+2,'Explicit refresh reads once before discovery and once after publication');
   }
   controls.discovery.reject=true;await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('[type=submit]').click();
   await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();
@@ -260,11 +266,17 @@ export async function checkGuidedProduct(executable) {
   await callbackLink.evaluate(link=>link.setAttribute('href','/admin/central'));
   assert.equal(await page.evaluate(()=>window.oauthHistoryNavigationMarker),true,'OAuth callback mounts through the existing navigation owner');
   await checkOAuthReturnHistory(page,origin,requests,'mounted');
-  // A completed OAuth sign-in whose return was interrupted also finishes on reopening.
+  // An interrupted OAuth return is the only automatic recovery marker. A plain
+  // reload stays idle; restoring the exact callback marker retries only that MCP.
   catalogs.delete(oauthId);
-  await page.reload();await status.filter({hasText:'Connected.'}).waitFor();
+  const interruptedDiscoveries=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
+  await page.reload();await status.filter({hasText:'List refreshed.'}).waitFor();await page.waitForLoadState('networkidle');
+  assert.equal(catalogs.has(oauthId),false);
+  assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,interruptedDiscoveries);
+  await page.goto(origin+'/admin/central?connected='+oauthId);await status.filter({hasText:'Connected.'}).waitFor();
   assert.deepEqual(catalogs.get(oauthId).head.approved_names,['search']);
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);
+  assert.equal(new URL(page.url()).search,'');
   const oauthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByRole('button',{name:'Reconnect',exact:true})});
   const discoveries=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
   await oauthCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();
@@ -325,9 +337,11 @@ export async function checkGuidedProduct(executable) {
   await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).click();
   await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();await page.waitForLoadState('networkidle');
   assert.equal(requests.slice(noLoopStart).filter(r=>r.path==='/admin/central/connections/begin').length,1);
-  catalogs.delete(oauthId);await page.reload();
-  await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();await page.waitForLoadState('networkidle');
-  assert.equal(requests.slice(noLoopStart).filter(r=>r.path==='/admin/central/connections/begin').length,1,'Background recovery does not restart authorization');
+  catalogs.delete(oauthId);const idleReloadStart=requests.length;await page.reload();
+  await status.filter({hasText:'List refreshed.'}).waitFor();await page.waitForLoadState('networkidle');
+  assert.equal(requests.slice(noLoopStart).filter(r=>r.path==='/admin/central/connections/begin').length,1,'Ordinary reload does not restart authorization');
+  assert.equal(requests.slice(idleReloadStart).filter(r=>r.path==='/admin/central/discovery/'+oauthId).length,0,'Ordinary reload does not rediscover an unpublished OAuth MCP');
+  assert.equal(catalogs.has(oauthId),false);
   // A public MCP and an uncertain failure must never silently initiate OAuth.
   for(const card of [publicCard,oauthCard]){
    controls.discovery.uncertainAuthorization=card===oauthCard;
@@ -503,36 +517,33 @@ export async function checkGuidedProduct(executable) {
    }finally{settledOAuth?.dispose();releaseOAuth();releaseDestination();controls.oauth.delayed=undefined;if(pendingDestination)await page.unroute(origin+'/admin');}
    await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
    await page.locator('[data-central-product][aria-busy="false"]').waitFor();
-   // Background recovery releases each MCP separately after the list is ready.
+   // Returning to the library performs collection reads only; MCP controls are
+   // immediately available because no remote discovery is started implicitly.
    const reconnect=page.locator('[data-service-list] [data-operation-scope="mcp:'+oauthId+'"]').getByRole('button',{name:'Reconnect',exact:true});
    await reconnect.and(page.locator(':enabled')).waitFor();
    assert.equal(await reconnect.isEnabled(),true);
   }
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
   assert.equal(await page.getByText('Enabled · tool review required before sharing',{exact:true}).count(),0);
-  // A broken service must not strand another pending service or replay the failed write.
+  // Missing catalogs do not cause broad recovery work. The OAuth callback names
+  // one connection, so an unrelated broken MCP is never probed as a side effect.
   const publicId=profiles[0].profile_id;
   const discoveryPath=id=>'/admin/central/discovery/'+id;
   catalogs.delete(publicId);catalogs.delete(oauthId);controls.discovery.rejectedProfile=publicId;
-  const recoveryStart=requests.length;
-  await page.reload();await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();await page.waitForLoadState('networkidle');
-  assert.ok(catalogs.has(oauthId),'A healthy pending service must recover after another service fails');
-  const recovery=requests.slice(recoveryStart),failedIndex=recovery.findIndex(r=>r.path===discoveryPath(publicId)),healthyIndex=recovery.findIndex(r=>r.path===discoveryPath(oauthId));
-  assert.equal(recovery.filter(r=>r.path===discoveryPath(publicId)).length,1);
-  assert.equal(recovery.filter(r=>r.path===discoveryPath(oauthId)).length,1);
-  assert.ok(recovery.slice(failedIndex+1,healthyIndex).some(r=>r.path==='/admin/central/profiles'&&r.method==='GET'),'Refresh admission before a different service writes');
-  assert.ok((await status.textContent()).includes('团队文档'));assert.equal(await status.getAttribute('data-error'),'true');
-  // A failed refresh must still stop later recovery writes.
-  catalogs.delete(oauthId);controls.discovery.failRefreshAfterRejection=true;
-  const blockedStart=requests.length;
-  await page.reload();await status.filter({hasText:'Could not confirm the result. Refresh to check the status.'}).waitFor();await page.waitForLoadState('networkidle');
-  assert.equal(requests.slice(blockedStart).filter(r=>r.path===discoveryPath(oauthId)).length,0);
-  controls.discovery.rejectedProfile=undefined;controls.discovery.failRefreshAfterRejection=false;controls.library.unavailable=false;
-  // OAuth return finishes its own connection and other interrupted connections once each.
+  const idleStart=requests.length;
+  await page.reload();await status.filter({hasText:'List refreshed.'}).waitFor();await page.waitForLoadState('networkidle');
+  const idle=requests.slice(idleStart);
+  assert.equal(idle.filter(r=>r.path===discoveryPath(publicId)).length,0);
+  assert.equal(idle.filter(r=>r.path===discoveryPath(oauthId)).length,0);
+  assert.equal(catalogs.has(publicId),false);assert.equal(catalogs.has(oauthId),false);
   const callbackStart=requests.length;
   await page.goto(origin+'/admin/central?connected='+oauthId);await status.filter({hasText:'Connected.'}).waitFor();await page.waitForLoadState('networkidle');
-  for(const id of [publicId,oauthId])assert.equal(requests.slice(callbackStart).filter(r=>r.path===discoveryPath(id)).length,1);
+  const callbackRequests=requests.slice(callbackStart);
+  assert.equal(callbackRequests.filter(r=>r.path===discoveryPath(publicId)).length,0,'OAuth recovery must not probe another MCP');
+  assert.equal(callbackRequests.filter(r=>r.path===discoveryPath(oauthId)).length,1);
+  assert.equal(catalogs.has(publicId),false);assert.ok(catalogs.has(oauthId));
   assert.equal(new URL(page.url()).search,'');
+  controls.discovery.rejectedProfile=undefined;controls.discovery.failRefreshAfterRejection=false;controls.library.unavailable=false;
   // The refreshed state, rather than an earlier successful write, determines readiness.
   for(const state of ['paused','missing','unpublished']){
    controls.discovery.after=id=>{if(state==='paused'){const p=profiles.find(p=>p.profile_id===id);p.enabled=false;p.revision++;}else if(state==='missing')catalogs.delete(id);else catalogs.get(id).head.approved_names=[];};
@@ -556,25 +567,26 @@ export async function checkGuidedProduct(executable) {
    assert.equal((await status.textContent()).includes('research installed.'),false,'Do not report an active installation after '+state);
    assert.equal(await status.getAttribute('data-error'),'true');
   }
-  // Recreated controls preserve their connection lock while other workflows remain usable.
+  // Explicit discovery locks only that MCP while unrelated workflows remain usable.
   catalogs.delete(publicId);
   profiles.find(p=>p.profile_id===oauthId).enabled=false;
+  await page.reload();await status.filter({hasText:'List refreshed.'}).waitFor();
   let releaseDiscovery;controls.discovery.delayed=new Promise(resolve=>{releaseDiscovery=resolve;});
   const pendingDiscovery=page.waitForRequest(request=>request.url().endsWith('/discovery/'+publicId));
   try{
-   await page.reload();await pendingDiscovery;
-   assert.equal(await publicCard.getByRole('button',{name:'View tools',exact:true}).isDisabled(),true,'Newly rendered service controls must stay disabled while recovery runs');
+   await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).click();await pendingDiscovery;
+   assert.equal(await publicCard.getByRole('button',{name:'View tools',exact:true}).isDisabled(),true,'The selected MCP stays locked while explicit discovery runs');
    assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isEnabled(),true);
    assert.equal(await page.locator('[data-central-tab=skills]').isEnabled(),true);
-   assert.equal(await page.locator('[data-product-refresh]').isEnabled(),true);
-   assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'false');
+   assert.equal(await page.locator('[data-product-refresh]').isDisabled(),true);
+   assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'true');
   }finally{releaseDiscovery();controls.discovery.delayed=undefined;}
   await status.filter({hasText:'Connected.'}).waitFor();
-  // Connected describes one service; wait until that connection releases its controls.
   await page.locator('[data-central-product][aria-busy="false"]').waitFor();
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isEnabled(),true);
+  assert.equal(await page.locator('[data-product-refresh]').isEnabled(),true);
   assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'false');
   // A valid long hostname must still connect with the optional name left blank.
   const longEndpoint='https://docs-'+ 'a'.repeat(55) +'.example.com/mcp';
@@ -627,7 +639,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(requests.slice(pausedRetry).filter(r=>r.path==='/admin/central/connections/begin').length,0);
   assert.equal(await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).isDisabled(),true);
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',single_dashboard:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,pending_service_failure_isolation:true,recovery_refresh_failure_blocks_writes:true,oauth_return_recovers_other_services:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',single_dashboard:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,idle_pages_do_not_probe_remote_mcp:true,oauth_recovery_is_targeted:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
  }, [
   { phase: 'browser_close', run: () => { stage('product_cleanup'); return browser?.close(); } },
   { phase: 'fixture_close', run: () => fixture?.close() },

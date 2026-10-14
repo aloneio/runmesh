@@ -131,6 +131,51 @@ it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch prese
   } finally { await session.close(); }
 });
 
+it.each([
+  { errorCode: -32603, expected: "upstream_unavailable" },
+  { errorCode: -32001, expected: "upstream_unavailable" },
+  { errorCode: -32601, expected: "upstream_protocol_error" },
+  { errorCode: -32022, expected: "upstream_protocol_error" },
+] as const)("W05 valid JSON-RPC error $errorCode from tools/list maps to $expected without retry", async ({ errorCode, expected }) => {
+  const remote = upstream(), attempts = vi.fn(), sent = vi.fn();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "tools/list") {
+        attempts();
+        return Response.json({ jsonrpc: "2.0", id: request.id, error: { code: errorCode, message: "synthetic provider error" } });
+      }
+      return remote.http(input, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
+  try {
+    await expect(session.listTools()).rejects.toMatchObject({ code: expected });
+    expect(attempts).toHaveBeenCalledOnce();
+    expect(sent).not.toHaveBeenCalled();
+  } finally { await session.close(); }
+});
+
+it("W05 valid provider InternalError after tools/call is availability evidence and is never replayed", async () => {
+  const remote = upstream(), attempts = vi.fn(), sent = vi.fn();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "tools/call") {
+        attempts();
+        return Response.json({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: "synthetic provider limit" } });
+      }
+      return remote.http(input, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    await expect(session.callTool(tools[0]!, { value: 1 }, async () => undefined)).rejects.toMatchObject({ code: "upstream_unavailable" });
+    expect(attempts).toHaveBeenCalledOnce();
+    expect(sent).toHaveBeenCalledOnce();
+    expect(remote.invoked).not.toHaveBeenCalled();
+  } finally { await session.close(); }
+});
+
 it.each([401, 403])("W05 HTTP %s during connection and discovery requests requires authorization without dispatch", async status => {
   for (const protocol of ["2025-11-25", "2026-07-28"] as const) {
     for (const method of [protocol === "2025-11-25" ? "initialize" : "server/discover", "tools/list"]) {

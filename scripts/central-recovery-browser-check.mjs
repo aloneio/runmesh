@@ -24,7 +24,7 @@ export async function checkCentralRecovery(browser) {
       else await route.continue();
     });
     const aStarted = page.waitForRequest(request => request.url().endsWith('/discovery/slow-a'));
-    await page.goto(fixture.origin + '/admin/central'); await aStarted;
+    await page.goto(fixture.origin + '/admin/central?connected=slow-a'); await aStarted;
     assert.equal(await card('slow-a').getByRole('button', { name: 'Pause', exact: true }).isDisabled(), true);
     assert.equal(await card('pending-b').getByRole('button', { name: 'Pause', exact: true }).isEnabled(), true);
     assert.equal(await page.locator('[data-central-tab=skills]').isEnabled(), true);
@@ -50,16 +50,19 @@ export async function checkCentralRecovery(browser) {
     await review.getByRole('heading', { name: 'independent-skill', exact: true }).waitFor();
     const skillStatus = await page.locator('[data-product-status]').textContent();
     responses.set('slow-a', { error: { code: 'central_unavailable', operation_state: 'unknown' } });
-    const cStarted = page.waitForRequest(request => request.url().endsWith('/discovery/slow-c'));
-    waits.get('slow-a').resolve(); await cStarted; await observed.get('slow-c').promise;
-    assert.deepEqual(started, ['slow-a', 'slow-c'], 'A paused pending connection is skipped and conflicting clicks are never replayed');
+    waits.get('slow-a').resolve(); await observed.get('slow-a').promise;
+    await page.waitForFunction(() => document.querySelector('[data-service-status="slow-a"]')?.getAttribute('data-error') === 'true');
+    assert.deepEqual(started, ['slow-a'], 'Targeted recovery never scans another pending MCP');
     assert.equal(fixture.requests.filter(request => request.path === '/admin/central/profiles/slow-a').length, 0);
-    assert.equal(await review.isVisible(), true, 'Background MCP completion preserves the independent Skill review');
+    assert.equal(await review.isVisible(), true, 'Targeted MCP completion preserves the independent Skill review');
     assert.equal(await review.getByRole('heading', { name: 'independent-skill', exact: true }).count(), 1);
     assert.equal(await page.locator('[data-product-status]').textContent(), skillStatus);
     await page.locator('[data-central-tab=services]').click();
     assert.equal(await card('slow-a').getByRole('button', { name: 'Pause', exact: true }).isEnabled(), true);
-    assert.equal(await card('slow-c').getByRole('button', { name: 'Pause', exact: true }).isDisabled(), true);
+    assert.equal(await card('slow-c').getByRole('button', { name: 'Pause', exact: true }).isEnabled(), true);
+    const cStarted = page.waitForRequest(request => request.url().endsWith('/discovery/slow-c'));
+    await page.goto(fixture.origin + '/admin/central?connected=slow-c'); await cStarted; await observed.get('slow-c').promise;
+    assert.deepEqual(started, ['slow-a', 'slow-c'], 'A second callback starts only its named connection');
     const beforeNavigation = fixture.requests.length;
     await page.locator('nav a[href="/admin"]').click();
     await page.getByRole('heading', { name: 'Dashboard', exact: true }).waitFor();
@@ -70,10 +73,10 @@ export async function checkCentralRecovery(browser) {
     assert.equal(await page.locator('[data-central-product]').count(), 0);
 
     // A form draft also takes presentation ownership, without needing a submitted action.
-    fixture.profiles.splice(0, fixture.profiles.length, profile('draft-only'));
+    fixture.profiles.splice(0, fixture.profiles.length, profile('draft-only', 'oauth'));
     waits.clear(); const draftWait = gate(); waits.set('draft-only', draftWait);
     const draftStarted = page.waitForRequest(request => request.url().endsWith('/discovery/draft-only'));
-    await page.goto(fixture.origin + '/admin/central'); await draftStarted;
+    await page.goto(fixture.origin + '/admin/central?connected=draft-only'); await draftStarted;
     const draft = page.locator('[data-service-create] [name=name]');
     await draft.fill('Connection draft');
     const draftStatus = await page.locator('[data-product-status]').textContent();
@@ -84,11 +87,11 @@ export async function checkCentralRecovery(browser) {
     assert.equal(await page.locator('[data-product-status]').textContent(), draftStatus);
 
     // A failed reconciliation continues to block writes to the MCP collection, not Skill work.
-    fixture.profiles.splice(0, fixture.profiles.length, profile('uncertain'));
+    fixture.profiles.splice(0, fixture.profiles.length, profile('uncertain', 'oauth'));
     waits.clear(); responses.set('uncertain', { error: { code: 'central_unavailable', operation_state: 'unknown' } });
     const uncertainWait = gate(); waits.set('uncertain', uncertainWait);
     const uncertainStarted = page.waitForRequest(request => request.url().endsWith('/discovery/uncertain'));
-    await page.goto(fixture.origin + '/admin/central'); await uncertainStarted;
+    await page.goto(fixture.origin + '/admin/central?connected=uncertain'); await uncertainStarted;
     fixture.controls.library.unavailable = true; uncertainWait.resolve();
     await card('uncertain').locator('[data-service-status][data-error=true]').waitFor();
     await card('uncertain').getByRole('button', { name: 'Refresh tools', exact: true }).click();
@@ -145,7 +148,7 @@ async function checkServicePanelOwnership(browser) {
     const fixture = await createProductFixture(), page = await browser.newPage(), pending = gate(), entered = gate(), errors = [];
     page.on('pageerror', error => errors.push(error.message));
     try {
-      fixture.profiles.push(profile('panel-a'), profile('panel-b')); fixture.catalogs.set('panel-b', catalog('panel-b'));
+      fixture.profiles.push(profile('panel-a', 'oauth'), profile('panel-b')); fixture.catalogs.set('panel-b', catalog('panel-b'));
       await page.route('**/admin/central/discovery/panel-a', async route => {
         entered.resolve(); await pending.promise;
         await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'central_unavailable', operation_state: 'unknown' } }) });
@@ -153,7 +156,7 @@ async function checkServicePanelOwnership(browser) {
       await page.route('**/admin/central/connection-check', route => route.fulfill({ contentType: 'application/json',
         body: JSON.stringify(inspected(route.request().postDataJSON().endpoint ?? 'https://panel-b.example/mcp')) }));
       await page.route('**/admin/central/registry-preview', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(registryPreview) }));
-      await page.goto(fixture.origin + '/admin/central'); await entered.promise;
+      await page.goto(fixture.origin + '/admin/central?connected=panel-a'); await entered.promise;
       const b = page.locator('[data-service-list] article').filter({ has: page.getByRole('heading', { name: 'panel-b', exact: true }) });
       let panel;
       if (kind === 'tools') {

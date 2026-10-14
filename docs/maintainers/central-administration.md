@@ -15,17 +15,17 @@ preregistration are not automatically connectable. The saved service is displaye
 before opening OAuth, so a failed sign-in handoff retains its recovery controls.
 After signing in, return to
 the control panel. A successful connection discovers and publishes every tool
-atomically; no separate approval is required. Existing enabled connections with
-unpublished tools finish on opening the library. View tools is read-only; Refresh
-tools updates the shared catalog immediately. Resuming a paused service refreshes
-its tools automatically.
+atomically; no separate approval is required. Opening or refreshing the library
+does not contact upstream MCPs to repair unpublished catalogs. View tools is
+read-only; Refresh tools explicitly updates the shared catalog immediately.
+Resuming a paused service explicitly refreshes its tools.
 
-An unavailable pending service does not block other connections. Recovery reports
-each failed service and refreshes the library before a different service can
-write; it never retries the failed connection in the same pass. If that refresh
-fails, recovery stops. Returning from OAuth also resumes other pending services.
-Ready-to-use messages require the refreshed service to remain enabled and its
-complete tool catalog to remain published.
+Automatic discovery recovery is scoped to the exact MCP named by a successful
+OAuth callback. The callback marker remains until that targeted attempt settles;
+ordinary library loads never iterate other pending connections. A failed MCP
+therefore cannot consume upstream or Worker work merely because the administrator
+opens the page. Ready-to-use messages still require the refreshed service to
+remain enabled and its complete tool catalog to remain published.
 
 Select SKILL.md and supporting text files, a complete Skill folder, or import a
 public GitHub folder at an exact commit to install a Skill. Its name and description
@@ -115,7 +115,8 @@ metadata receipts. Receipts exclude arguments, results and credentials. Audit
 failure does not replay calls or change completed results. This is not a billing
 system or a promise of distributed rate limiting.
 
-Browser checks cover immediate availability, OAuth
-callbacks, Skill updates, stale confirmations, failed refresh and no replay.
+Browser checks cover immediate availability, idle library loads with no
+upstream discovery, targeted OAuth callback recovery, Skill updates, stale
+confirmations, failed refresh and no replay.
 Use the [deployment checklist](../central-rollout.md) to verify provider sign-in
 and each supported AI client, then retain those results with the release record.

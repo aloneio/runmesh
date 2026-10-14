@@ -108,12 +108,15 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, r
     await refresh();
     if (!isCurrent()) return;
     const connected = new URL(location.href).searchParams.get('connected');
-    if (connected) replaceCurrentUrl('/admin/central');
-    // Start after the initial collection lock is released; recovery owns each MCP separately.
+    // Keep the callback marker until its targeted recovery settles. If the page
+    // is interrupted before then, a reload can retry only that connection.
     return { connected };
   }, 'library').then(result => {
     const activity = operations.activity();
-    if (result && isCurrent()) void services.resumePending(profiles, result.connected,
-      () => isCurrent() && operations.activity() === activity);
+    if (!result || !isCurrent()) return;
+    void services.resumePending(profiles, result.connected,
+      () => isCurrent() && operations.activity() === activity).then(() => {
+        if (result.connected && isCurrent()) replaceCurrentUrl('/admin/central');
+      });
   });
 }

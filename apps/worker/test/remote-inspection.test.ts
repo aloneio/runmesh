@@ -75,16 +75,31 @@ it.each(["2025-11-25", "2026-07-28"] as const)("RM10 inspects real SDK tools in 
   } finally { compile.mockRestore(); }
 });
 
-it.each(extensions)("RM10 counts lawful $label while ordinary discovery retains publication checks", async ({ tool }) => {
+it.each(extensions.slice(0, 3))("RM10 safely projects lawful $label instead of rejecting the MCP catalog", async ({ tool }) => {
   const inspection = fixture([{ tools: [tool] }]);
   expect(await inspection.run()).toEqual(observed());
   expect(inspection.methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
   const publication = fixture([{ tools: [tool] }], false), dispatched = vi.fn();
   const session = await publication.connector.open(profile, new AbortController().signal, dispatched, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    expect(tools).toEqual([{ name: "lookup", inputSchema: { type: "object" } }]);
+    expect(tools[0]).not.toHaveProperty("_meta");
+    expect(tools[0]).not.toHaveProperty("icons");
+    expect(tools[0]).not.toHaveProperty("execution");
+  } finally { await session.close(); }
+  expect(dispatched).not.toHaveBeenCalled();
+  expect(publication.methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
+});
+
+it.each(extensions.slice(3))("RM10 inspection can observe unsupported $label without publishing an unsafe schema", async ({ tool }) => {
+  const inspection = fixture([{ tools: [tool] }]);
+  expect(await inspection.run()).toEqual(observed());
+  const publication = fixture([{ tools: [tool] }], false), dispatched = vi.fn();
+  const session = await publication.connector.open(profile, new AbortController().signal, dispatched, async () => undefined);
   try { await expect(session.listTools()).rejects.toMatchObject({ code: "upstream_protocol_error" }); }
   finally { await session.close(); }
   expect(dispatched).not.toHaveBeenCalled();
-  expect(publication.methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
 });
 
 it("RM10 counts every tools page, including metadata outside the publication subset on a later page", async () => {
