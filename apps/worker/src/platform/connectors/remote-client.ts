@@ -1,4 +1,4 @@
-import { Client, StreamableHTTPClientTransport, type FetchLike } from "@modelcontextprotocol/client";
+import { Client, ProtocolError, ProtocolErrorCode, StreamableHTTPClientTransport, type FetchLike } from "@modelcontextprotocol/client";
 import { CATALOG_LIMITS, type RemoteToolDefinition } from "../../contracts/catalog.js";
 import type { ConnectionProfile, CredentialInput } from "../../contracts/connectors.js";
 import type { CredentialLease } from "../../contracts/oauth.js";
@@ -10,6 +10,20 @@ import { parseRemoteResult, publicMcpEndpoint } from "../../contracts/remote-val
 import { guardedRemoteResponse, boundedWireJson, reflectsRemoteSecret } from "./remote-response.js";
 import { BoundedRemoteValidator } from "./remote-validation.js";
 import { createRemoteSessionState } from "./remote-session.js";
+
+function remoteClientFault(error: unknown, fallback: "upstream_protocol_error" | "result_invalid"): RemoteFault {
+  if (error instanceof RemoteFault) return error;
+  if (!ProtocolError.isInstance(error)) return new RemoteFault(fallback);
+  // A syntactically valid JSON-RPC error is provider evidence, not malformed
+  // transport. Internal/server errors are availability failures and must not be
+  // surfaced as "invalid response". Modern negotiation/header errors remain
+  // protocol failures, while URL elicitation is deliberately unsupported here.
+  if (error.code === ProtocolErrorCode.InternalError) return new RemoteFault("upstream_unavailable");
+  if (error.code === ProtocolErrorCode.UrlElicitationRequired) return new RemoteFault("unsupported_interaction");
+  if (error.code >= -32099 && error.code <= -32000 && ![-32020, -32021, -32022].includes(error.code))
+    return new RemoteFault("upstream_unavailable");
+  return new RemoteFault("upstream_protocol_error");
+}
 
 export interface HttpRemotePorts {
   readonly inspection?: boolean;
@@ -161,7 +175,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
       try {
         await client.connect(transport, { signal, timeout: REMOTE_LIMITS.operation_ms });
         if (signal.aborted || (!ports.inspection && client.getServerCapabilities()?.tools === undefined)) throw new RemoteFault("upstream_protocol_error");
-      } catch (error) { await close(); throw lastFault ?? (error instanceof RemoteFault ? error : new RemoteFault("upstream_protocol_error")); }
+      } catch (error) { await close(); throw lastFault ?? remoteClientFault(error, "upstream_protocol_error"); }
       return {
         describe() {
           const capabilities = client.getServerCapabilities();
@@ -179,7 +193,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             if (response.tools.length !== totalTools || names.size !== response.tools.length
               || catalogJson(response.tools, CATALOG_LIMITS.snapshot_bytes) === undefined) throw new RemoteFault("upstream_protocol_error");
             return response.tools.length;
-          } catch (error) { throw lastFault ?? (error instanceof RemoteFault ? error : new RemoteFault("upstream_protocol_error")); }
+          } catch (error) { throw lastFault ?? remoteClientFault(error, "upstream_protocol_error"); }
         },
         async listTools() {
           try {
@@ -193,7 +207,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             }
             if (catalogJson(tools, CATALOG_LIMITS.snapshot_bytes) === undefined) throw new RemoteFault("upstream_protocol_error");
             return tools;
-          } catch (error) { throw lastFault ?? (error instanceof RemoteFault ? error : new RemoteFault("upstream_protocol_error")); }
+          } catch (error) { throw lastFault ?? remoteClientFault(error, "upstream_protocol_error"); }
         },
         async callTool(tool, args, beforeDispatch) {
           beforeCall = beforeDispatch;
@@ -203,7 +217,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             if (result === undefined || (!result.isError && tool.outputSchema !== undefined && !validator.validate(tool.outputSchema, result.structuredContent)))
               throw new RemoteFault("result_invalid");
             return result;
-          } catch (error) { throw lastFault ?? (error instanceof RemoteFault ? error : new RemoteFault("result_invalid")); }
+          } catch (error) { throw lastFault ?? remoteClientFault(error, "result_invalid"); }
           finally { beforeCall = undefined; }
         },
         close,

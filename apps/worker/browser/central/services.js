@@ -134,11 +134,12 @@ export function createServiceWorkflow({
     return currentProfiles;
   }
   async function resumePending(profiles, connected, mayPresent = () => false) {
-    const ids = profiles.map(profile => profile.profile_id);
-    if (ids.includes(connected)) {
-      ids.splice(ids.indexOf(connected), 1);
-      ids.unshift(connected);
-    }
+    // Automatic recovery is scoped to the OAuth callback that names the exact
+    // connection. Ordinary page loads never rediscover every unpublished MCP:
+    // a persistently incompatible upstream would otherwise consume Worker/DO
+    // and provider requests each time the admin page is opened or refreshed.
+    if (!connected) return;
+    const ids = profiles.some(profile => profile.profile_id === connected) ? [connected] : [];
     let stopped = false;
     const failures = [];
     function failed(id, error) {

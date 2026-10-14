@@ -10,7 +10,11 @@ export function parseRemoteTool(value: unknown): RemoteToolDefinition | undefine
   const encoded = catalogJson(value, CATALOG_LIMITS.tool_bytes);
   if (encoded === undefined) return undefined;
   const item = catalogObject(JSON.parse(encoded));
-  if (item === undefined || !catalogKeys(item, ["name", "title", "description", "inputSchema", "outputSchema", "annotations"])
+  // Current MCP tool descriptors may carry presentation/execution metadata.
+  // Runmesh does not trust or publish those hints, but rejecting the whole tool
+  // makes standards-compliant servers unusable. Admit the SDK-defined fields,
+  // validate the security-relevant subset below, then project a minimal catalog.
+  if (item === undefined || !catalogKeys(item, ["name", "title", "description", "inputSchema", "outputSchema", "annotations", "icons", "execution", "_meta"])
     || !toolName(item.name) || !text(item.title, 256) || !text(item.description, 8192)
     || !validCatalogSchema(item.inputSchema, true) || (item.outputSchema !== undefined && !validCatalogSchema(item.outputSchema, false))) return undefined;
   if (item.annotations !== undefined) {
@@ -18,7 +22,31 @@ export function parseRemoteTool(value: unknown): RemoteToolDefinition | undefine
     if (annotations === undefined || !catalogKeys(annotations, ["title", ...optionalFlags]) || !text(annotations.title, 256)
       || optionalFlags.some(key => annotations[key] !== undefined && typeof annotations[key] !== "boolean")) return undefined;
   }
-  return item as unknown as RemoteToolDefinition;
+  if (item.execution !== undefined) {
+    const execution = catalogObject(item.execution);
+    if (execution === undefined || !catalogKeys(execution, ["taskSupport"])
+      || execution.taskSupport !== undefined && !["required", "optional", "forbidden"].includes(execution.taskSupport as string)) return undefined;
+  }
+  if (item.icons !== undefined) {
+    if (!Array.isArray(item.icons) || item.icons.length > 32 || item.icons.some(value => {
+      const icon = catalogObject(value);
+      return icon === undefined || !catalogKeys(icon, ["src", "mimeType", "sizes", "theme"])
+        || typeof icon.src !== "string" || !icon.src || icon.src.length > 2048
+        || !text(icon.mimeType, 256)
+        || icon.sizes !== undefined && (!Array.isArray(icon.sizes) || icon.sizes.length > 32
+          || icon.sizes.some(size => typeof size !== "string" || size.length > 64))
+        || icon.theme !== undefined && !["light", "dark"].includes(icon.theme as string);
+    })) return undefined;
+  }
+  if (item._meta !== undefined && catalogObject(item._meta) === undefined) return undefined;
+  return {
+    name: item.name,
+    ...(item.title === undefined ? {} : { title: item.title as string }),
+    ...(item.description === undefined ? {} : { description: item.description as string }),
+    inputSchema: item.inputSchema as RemoteToolDefinition["inputSchema"],
+    ...(item.outputSchema === undefined ? {} : { outputSchema: item.outputSchema as NonNullable<RemoteToolDefinition["outputSchema"]> }),
+    ...(item.annotations === undefined ? {} : { annotations: item.annotations as NonNullable<RemoteToolDefinition["annotations"]> }),
+  };
 }
 
 export function parseToolNames(value: unknown): string[] | undefined {
