@@ -1,3 +1,5 @@
+import { reportTransportClose } from "./connection/diagnostics.js";
+import { RunnerTransportKeepalive, negotiatedHeartbeatInterval, type TransportKeepaliveClock } from "./connection/keepalive.js";
 import { jobEventMessage } from "./connection/job-events.js";
 import { createHash } from "node:crypto";
 import { HistoryUploadScheduler, type HistoryUploadClock } from "./history-upload.js";
@@ -44,6 +46,7 @@ const CONTROL_RPC_METHODS = new Set(["echo", "runner.info", "job.get", "job.canc
 export interface RunnerConnectionDependencies {
   readonly createRuntime?: ConnectionRuntimeFactory;
   readonly createSocket?: ConnectionTransportFactory;
+  readonly keepaliveClock?: TransportKeepaliveClock;
 }
 
 export interface RunnerConnectionOptions {
@@ -70,7 +73,7 @@ export class RunnerConnection {
   private demandSnapshot: { revision: number; socket: WebSocket; jobs: RunnerSync["jobs"]; workspaces: RunnerSync["workspaces"]; snapshot: string } | undefined;
   private readonly config: RunnerConfig;
   private readonly metadata: RunnerMetadata;
-  private readonly heartbeatMs: number;
+  private readonly heartbeatMs: number | undefined;
   private readonly rpcTimeoutMs: number;
   private readonly syncMs: number;
   private jobHistory: JobHistorySettings | undefined;
@@ -100,6 +103,8 @@ export class RunnerConnection {
   private syncSequence = 0;
   private lastSyncSnapshot: string | undefined;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  private transportKeepalive: RunnerTransportKeepalive | undefined;
+  private readonly keepaliveClock: TransportKeepaliveClock | undefined;
   private syncTimer: ReturnType<typeof setInterval> | undefined;
   private appliedPolicyRevision: number | null = null;
   private desiredPolicyRevision = 0;
@@ -134,10 +139,10 @@ export class RunnerConnection {
   public constructor(options: RunnerConnectionOptions, dependencies: RunnerConnectionDependencies = {}) {
     this.createSocket = dependencies.createSocket ?? ((url, options) => new WebSocket(url, options));
     this.config = options.config;
-    // Heartbeats keep an online Runner lease alive in RegistryDO. A 30s
-    // cadence stays below the 45s stale threshold while cutting steady
-    // Durable Object traffic for idle runners in half.
-    this.heartbeatMs = options.heartbeatMs ?? 30_000;
+    this.keepaliveClock = dependencies.keepaliveClock;
+    // A caller override is used by local fixtures. Production cadence is
+    // negotiated per welcome; an older Worker must retain its 30s fallback.
+    this.heartbeatMs = options.heartbeatMs;
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? LOCAL_RUNNER_OPERATION_TIMEOUT_MS;
     this.syncMs = options.syncMs ?? 30_000;
     this.random = options.random ?? Math.random;
@@ -177,7 +182,7 @@ export class RunnerConnection {
       ...(executionMode === undefined ? {} : { execution_mode: executionMode }),
       ...(serviceIdentity === undefined ? {} : { service_identity: serviceIdentity }),
       ...(executionMode === undefined ? {} : { privilege_state: processPrivilegeState(executionMode, serviceIdentity) }),
-      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1", job_queue_protocol: "1", job_reporting_protocol: "2" } },
+      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1", job_queue_protocol: "1", job_reporting_protocol: "2", transport_ping_protocol: "1" } },
     };
   }
 
@@ -276,6 +281,7 @@ export class RunnerConnection {
     this.queueNegotiated = false;
     this.historyUploads.stop(); this.reportingNegotiated = false; this.demandSnapshot = undefined;
     this.cancelReconnectSleep?.();
+    this.transportKeepalive?.stop(); this.transportKeepalive = undefined;
     if (this.cleanupTimer !== undefined) clearInterval(this.cleanupTimer);
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
     if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
@@ -362,6 +368,8 @@ export class RunnerConnection {
       this.welcomedSocket = undefined;
       let welcomed = false;
       let welcomedAtMs = 0;
+      let keepalive: RunnerTransportKeepalive | undefined;
+      let localCloseReason = "";
       let settled = false;
       const fail = (error: Error): void => {
         clearTimeout(handshakeTimer);
@@ -402,10 +410,12 @@ export class RunnerConnection {
         try { socket.send(encodeWireFrame(hello)); }
         catch (error) { fail(error instanceof Error ? error : new Error("failed to send runner hello")); socket.terminate(); }
       });
-      socket.on("message", (value: WebSocket.RawData) => {
+      socket.on("message", (value: WebSocket.RawData, isBinary: boolean) => {
+        const bytes = Array.isArray(value) ? Buffer.concat(value) : value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+        if (!isBinary && bytes.byteLength === 4 && Buffer.from(bytes).toString("utf8") === "pong" && keepalive?.acknowledge()) return;
         let message: WireMessage;
         try {
-          message = decodeWireFrame(Array.isArray(value) ? Buffer.concat(value) : value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+          message = decodeWireFrame(bytes);
         } catch {
           socket.close(1007, "invalid protocol frame");
           return;
@@ -454,6 +464,16 @@ export class RunnerConnection {
           // Stop/restart observers retire this socket before session timers
           // and history work may be installed.
           if (this.stopped || this.socket !== socket || this.welcomedSocket !== socket) return;
+          if (message.extensions?.runmesh_transport_ping === 1) {
+            keepalive = new RunnerTransportKeepalive(
+              () => welcomed && !this.stopped && this.socket === socket && this.welcomedSocket === socket && socket.readyState === WebSocket.OPEN,
+              () => socket.send("ping"),
+              () => { localCloseReason = "transport keepalive timeout"; socket.terminate(); },
+              this.keepaliveClock,
+            );
+            this.transportKeepalive = keepalive;
+            keepalive.start();
+          }
           this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
           if (this.reportingNegotiated && history !== undefined) {
@@ -462,7 +482,7 @@ export class RunnerConnection {
           this.heartbeatTimer = setInterval(() => {
             if (this.socket !== socket || this.stopped) return;
             try { this.sendHeartbeat(socket); } catch { /* close handler drives reconnect */ }
-          }, this.heartbeatMs);
+          }, this.heartbeatMs ?? negotiatedHeartbeatInterval(message.extensions));
           if (!this.reportingNegotiated && this.jobHistory?.mode !== "off") this.syncTimer = setInterval(() => {
             if (this.socket !== socket || this.stopped) return;
             void this.sendSync(socket).catch(() => undefined);
@@ -515,6 +535,8 @@ export class RunnerConnection {
       });
       socket.once("close", (code: number, reason: Buffer) => {
         clearTimeout(handshakeTimer);
+        keepalive?.stop();
+        if (this.transportKeepalive === keepalive) this.transportKeepalive = undefined;
         // A socket that failed before `open` can emit `close` after the
         // reconnect loop has already installed a newer socket. Never clear
         // the newer session's heartbeat/sync timers from that stale event.
@@ -531,7 +553,9 @@ export class RunnerConnection {
           this.socket = undefined;
           this.welcomedSocket = undefined;
         }
-        const closeReason = reason.toString("utf8");
+        const closeReason = reason.toString("utf8") || localCloseReason;
+        reportTransportClose({ code, reason: closeReason, welcomed, current: currentSocket,
+          connectedMs: welcomed ? Date.now() - welcomedAtMs : 0 });
         const failure = classifyConnectionFailure({ closeCode: code, reason: closeReason }) === "authentication"
           ? new RunnerAuthenticationError("runner credentials were revoked or rejected")
           : code === 4000 ? new RunnerSessionConflictError()

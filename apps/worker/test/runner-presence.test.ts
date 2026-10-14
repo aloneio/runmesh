@@ -1,7 +1,13 @@
+import { RUNNER_PRESENCE_TIMEOUT_MS } from "../src/contracts/runner-selection.js";
+import { RUNNER_HEARTBEAT_PERSISTENCE_INTERVAL_MS } from "@aloneio/runmesh-protocol";
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
 import { randomBase64Url, sha256Hex } from "../src/security.js";
+
+it("allows a 60-second presence margin beyond the negotiated persistence cadence", () => {
+  expect(RUNNER_PRESENCE_TIMEOUT_MS).toBe(RUNNER_HEARTBEAT_PERSISTENCE_INTERVAL_MS + 60_000);
+});
 
 it("projects expired and missing heartbeats consistently without waiting for maintenance", async () => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName(crypto.randomUUID()));
@@ -9,9 +15,9 @@ it("projects expired and missing heartbeats consistently without waiting for mai
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const cases = [
-      { id: "expired", stored: "online", heartbeat: now - 45_001, expected: "stale" },
+      { id: "expired", stored: "online", heartbeat: now - (RUNNER_PRESENCE_TIMEOUT_MS + 1), expected: "stale" },
       { id: "missing", stored: "online", heartbeat: null, expected: "stale" },
-      { id: "boundary", stored: "online", heartbeat: now - 45_000, expected: "online" },
+      { id: "boundary", stored: "online", heartbeat: now - RUNNER_PRESENCE_TIMEOUT_MS, expected: "online" },
       { id: "fresh", stored: "online", heartbeat: now, expected: "online" },
       { id: "disconnected", stored: "offline", heartbeat: now, expected: "offline" },
     ];
@@ -47,7 +53,7 @@ it("observes presence and validity at one instant for each public Runner snapsho
     const now = Date.now();
     for (const id of ["boundary-one", "boundary-two"]) {
       registry.registerRunner(id, "a".repeat(64), now, undefined, "dedicated_user");
-      state.storage.sql.exec("UPDATE runners SET state='online', last_heartbeat_ms=?, valid_until_ms=? WHERE runner_id=?", now - 45_000, now + 1, id);
+      state.storage.sql.exec("UPDATE runners SET state='online', last_heartbeat_ms=?, valid_until_ms=? WHERE runner_id=?", now - RUNNER_PRESENCE_TIMEOUT_MS, now + 1, id);
     }
     const observations = [
       () => [registry.getRunner("boundary-one")!],
@@ -74,13 +80,13 @@ it("observes presence and validity at one instant for each public Runner snapsho
   });
 });
 
-it("persists an expired presence once while repeated and missing Runner observations stay read-only", async () => {
+it("projects expired presence while all Runner observations remain read-only", async () => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName(crypto.randomUUID()));
   await runInDurableObject(stub, (registry, state) => {
     const now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const cases = [
-      { id: "expired", heartbeat: now - 45_001, writes: 1, reads: 3 },
-      { id: "boundary", heartbeat: now - 45_000, writes: 0, reads: 2 },
+      { id: "expired", heartbeat: now - (RUNNER_PRESENCE_TIMEOUT_MS + 1), writes: 0, reads: 2 },
+      { id: "boundary", heartbeat: now - RUNNER_PRESENCE_TIMEOUT_MS, writes: 0, reads: 2 },
       { id: "missing", heartbeat: null, writes: 0, reads: 2 },
     ];
     try {
@@ -139,7 +145,7 @@ it.each(["offline", "stale"] as const)("keeps runner_current and runner_list val
     }, now, before.lifecycle_id, "presence-session");
     registry.createMcpClient({ client_id: "presence-client", label: "HTTP presence regression", secret_verifier: verifier, secret_prefix: "test", scopes: ["coding:read"] }, now);
     expect(registry.selectMcpClientRunner("presence-client", "presence-runner", false, now).ok).toBe(true);
-    state.storage.sql.exec("UPDATE runners SET state=?, last_heartbeat_ms=? WHERE runner_id='presence-runner'", expected === "stale" ? "online" : "offline", now - 60_000);
+    state.storage.sql.exec("UPDATE runners SET state=?, last_heartbeat_ms=? WHERE runner_id='presence-runner'", expected === "stale" ? "online" : "offline", now - RUNNER_PRESENCE_TIMEOUT_MS - 15_000);
   });
   const dispatch = vi.fn(() => { throw new Error("Presence tools must not dispatch Runner RPC"); });
   const localEnv = { ...env, REGISTRY: { idFromName: () => id, get: () => stub },

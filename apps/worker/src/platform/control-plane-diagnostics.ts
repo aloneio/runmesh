@@ -1,4 +1,4 @@
-const stages = ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization",
+const stages = ["registry_initialize", "registry_fetch", "runner_fetch", "runner_registry_sign", "runner_registry_fetch", "runner_mcp_authorization", "runner_heartbeat", "runner_session", "runner_message", "runner_history_sync", "runner_history_event",
   "mcp_reauthorize", "mcp_active_runner", "mcp_permissions", "mcp_policy_readiness", "mcp_workspaces", "mcp_job_snapshot", "mcp_rpc_authorization", "mcp_registry_read", "mcp_registry_post", "other"] as const;
 const outcomes = ["exception", "deadline", "parent_abort", "unexpected_status", "length_limit", "empty_body", "empty_chunks", "fragment_limit", "body_limit", "invalid_json", "invalid_receipt", "other"] as const;
 const phases = ["fetch", "body_read", "json_parse", "other"] as const;

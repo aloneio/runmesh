@@ -1,3 +1,4 @@
+import { RUNNER_PRESENCE_TIMEOUT_MS } from "../src/contracts/runner-selection.js";
 import { env, runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, type RunnerMetadata } from "@aloneio/runmesh-protocol";
 import { expect, it, vi } from "vitest";
@@ -29,15 +30,15 @@ async function recoveringRunner(retainSession = false) {
         expect(instance.createAdminSession("a".repeat(64), "b".repeat(64), now + 600_000, now, 1)).toBe(true);
       }
       await instance.alarm();
-      expect(await state.storage.getAlarm()).toBe(now + 45_000);
+      expect(await state.storage.getAlarm()).toBe(now + RUNNER_PRESENCE_TIMEOUT_MS);
     });
-    clock.mockReturnValue(now + 45_001);
+    clock.mockReturnValue(now + (RUNNER_PRESENCE_TIMEOUT_MS + 1));
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     await runInDurableObject(stub, async (instance, state) => {
       expect(instance.getRunner(runnerId)?.state).toBe("stale");
       expect(await state.storage.getAlarm()).toBe(retainSession ? now + 900_000 : null);
     });
-    const recoveredAt = now + 60_000;
+    const recoveredAt = now + RUNNER_PRESENCE_TIMEOUT_MS + 15_000;
     clock.mockReturnValue(recoveredAt);
     return { stub, clock, now, recoveredAt, runnerId, identity, request };
   } catch (error) { clock.mockRestore(); throw error; }
@@ -49,9 +50,9 @@ it.each([false, true])("recovered heartbeat restores liveness before retained hi
     expect((await f.request("heartbeat", { now_ms: f.recoveredAt })).status).toBe(204);
     await runInDurableObject(f.stub, async (instance, state) => {
       expect(instance.getRunner(f.runnerId)?.state).toBe("online");
-      expect(await state.storage.getAlarm()).toBe(f.recoveredAt + 45_000);
+      expect(await state.storage.getAlarm()).toBe(f.recoveredAt + RUNNER_PRESENCE_TIMEOUT_MS);
     });
-    f.clock.mockReturnValue(f.recoveredAt + 45_001);
+    f.clock.mockReturnValue(f.recoveredAt + (RUNNER_PRESENCE_TIMEOUT_MS + 1));
     expect(await runDurableObjectAlarm(f.stub)).toBe(true);
     expect((await f.request("session", { require_online: true })).status).toBe(409);
   } finally { f.clock.mockRestore(); }
@@ -61,10 +62,10 @@ it("the online session route expires a recovered heartbeat without a dashboard r
   const f = await recoveringRunner();
   try {
     expect((await f.request("heartbeat", { now_ms: f.recoveredAt })).status).toBe(204);
-    f.clock.mockReturnValue(f.recoveredAt + 45_001);
+    f.clock.mockReturnValue(f.recoveredAt + (RUNNER_PRESENCE_TIMEOUT_MS + 1));
     await runDurableObjectAlarm(f.stub);
-    // Probe the signed transport route first: getRunner() can lazily persist
-    // stale state and otherwise hide a lost background liveness alarm.
+    // Probe the signed transport route first; public reads are deliberately
+    // read-only and cannot hide a lost maintenance alarm.
     expect((await f.request("session", { require_online: true })).status).toBe(409);
     await runInDurableObject(f.stub, async (instance, state) => {
       expect(instance.getRunner(f.runnerId)?.state).toBe("stale");
@@ -115,7 +116,7 @@ it("concurrent recovered heartbeats share one alarm and rejected sessions schedu
         expect(alarm).not.toHaveBeenCalled(); expect(reads).not.toHaveBeenCalled();
         const responses = await Promise.all([0, 1].map(() => f.request("heartbeat", { now_ms: f.recoveredAt }, request => instance.fetch(request))));
         expect(responses.map(response => response.status)).toEqual([204, 204]);
-        expect(alarm).toHaveBeenCalledExactlyOnceWith(f.recoveredAt + 45_000);
+        expect(alarm).toHaveBeenCalledExactlyOnceWith(f.recoveredAt + RUNNER_PRESENCE_TIMEOUT_MS);
       } finally { alarm.mockRestore(); reads.mockRestore(); }
     });
   } finally { f.clock.mockRestore(); }

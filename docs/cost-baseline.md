@@ -28,3 +28,11 @@ Use p50, p95, and maximum values. A retry is counted separately from the origina
 ## Operator acceptance policy
 
 Before a hosted rollout, collect a seven-day development window and set a quota threshold for each provider resource you rely on. Record unavailable counters as unknown. Compare subsequent windows using the same measurement definitions and record each deployment's SHA. Assign an operator to collect the exports and review the thresholds alongside the CI and deployment results.
+
+## Heartbeat persistence regression budget
+
+The healthy Worker persistence interval is 120 seconds; it coalesces legacy Runner inputs that arrive every 30 seconds. Over a simulated 24-hour steady-state window this means 720 persistence requests per Runner, or 4,320 for six Runners instead of 17,280. That is a 75% reduction in heartbeat persistence requests, not a claim that total account storage cost falls by the same percentage. Reconnects, schema/index maintenance, authorization, active Jobs and other features have separate costs.
+
+`apps/worker/test/heartbeat-budget.test.ts` executes the six-Runner scenario against the local Durable Object SQLite implementation and records `input_frames`, `persistence_requests`, `rows_read` and `rows_written`. It excludes initialization and checks that the heartbeat lane does not add Job, MCP-audit or nonce history. `apps/worker/test/heartbeat-persistence.test.ts` separately exercises a continuous dependency outage, hibernation, successful recovery, explicit identity rejection and the absence of authorization grants from retry metadata.
+
+Treat request counts and SQLite row counts as different measurements: an indexed update can write more than one row. Preserve the emitted counters and test revision, then compare them with a real Cloudflare usage export after a development rollout. Keep the host/transport reconnect rate, unknown audit receipts, deferred history and failed authorization checks visible alongside storage reductions.
