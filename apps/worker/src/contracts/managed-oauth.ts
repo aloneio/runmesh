@@ -39,7 +39,7 @@ interface TokenOperation extends ProtocolOperation {
   readonly beforeTokenRequest: () => void;
 }
 export interface ManagedOAuthProtocol {
-  begin(input: ProtocolOperation & { readonly state: string }): Promise<{
+  begin(input: ProtocolOperation & { readonly state: string; readonly client?: unknown }): Promise<{
     readonly authorization_url: string; readonly discovery: ManagedOAuthDocument;
     readonly client: unknown; readonly verifier: string;
   }>;

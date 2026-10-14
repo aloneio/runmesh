@@ -43,6 +43,7 @@ export function classifyCentralFailure({ serviceInput, skillInput, skillInstalla
   if (status === 403) return failure('accessWasDeniedSignInAgainOrCheckThe');
   if (status === 400) return failure(serviceInput ? 'checkServiceNameAndPublicMcpUrl' : skillInput ? 'checkSkillFilesRequireNameAndDescription' : 'invalidActionRefreshLibrary');
   if (code === 'oauth_provider_unsupported') return failure('thisServiceDoesNotSupportAutomaticOauthConnectionCheck');
+  if (code === 'oauth_client_registration_required') return failure('oauthClientRegistrationRequired');
   if (code === 'oauth_configuration_required') return failure('oauthConfigurationRequired');
   if (code === 'remote_authorization_required' || code === 'oauth_reauthorization_required') return failure('signInToThisServiceAgainUsingReconnect');
   if (code === 'oauth_unavailable') return failure('authorizationCouldNotBeCompletedRefreshAndReconnectIf');

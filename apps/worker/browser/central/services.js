@@ -19,6 +19,22 @@ export function createServiceWorkflow({
     clear
   } = view;
   const recoveryMessages = new Map(), messageNodes = new Map();
+  function oauthClientInput(clientId, clientSecret) {
+    const client_id = (clientId?.value ?? '').trim(), client_secret = clientSecret?.value ?? '';
+    if (!client_id && !client_secret) return undefined;
+    if (!client_id) throw new Error(t('oauthClientIdRequired'));
+    return { client_id, ...(client_secret ? { client_secret } : {}) };
+  }
+  function oauthClientSettings() {
+    const details = el('details', undefined, 'central-file-preview oauth-client-settings'), summary = el('summary', t('oauthClientSettings')),
+      help = el('p', t('oauthClientSettingsHelp'), 'muted'), form = el('div', undefined, 'connection-form'),
+      idLabel = el('label', t('oauthClientId')), secretLabel = el('label', t('oauthClientSecret')),
+      clientId = el('input'), clientSecret = el('input');
+    clientId.type = 'text'; clientId.maxLength = 2048; clientId.autocomplete = 'off'; clientId.spellcheck = false;
+    clientSecret.type = 'password'; clientSecret.maxLength = 4096; clientSecret.autocomplete = 'new-password'; clientSecret.spellcheck = false;
+    idLabel.appendChild(clientId); secretLabel.appendChild(clientSecret); form.append(idLabel, secretLabel); details.append(summary, help, form);
+    return { details, clientId, clientSecret };
+  }
   // OAuth redirects share the whole page even though MCP work is scoped per connection.
   // Capture the intent before any creation, enabling or discovery can await a response.
   let authorizationGeneration = 0;
@@ -80,8 +96,9 @@ export function createServiceWorkflow({
       });
       card.append(actions);
       if (profile.authentication === 'oauth') {
+        const oauth = oauthClientSettings();
         var reconnect = button(actions, t('reconnect'), function () {
-          return connectOAuth(profile);
+          return connectOAuth(profile, undefined, oauthClientInput(oauth.clientId, oauth.clientSecret));
         });
         reconnect.disabled = !profile.enabled;
         button(actions, t('disconnectAccount'), async function () {
@@ -93,6 +110,7 @@ export function createServiceWorkflow({
           await refresh();
           say(t('accountDisconnectedReconnectToUseThisService'));
         });
+        card.append(oauth.details);
       }
       if (!profile.enabled) card.append(el('p', profile.authentication === 'oauth' ? t('enableThisServiceBeforeCheckingItsConnectionOrReconnecting') : t('enableThisServiceBeforeCheckingItsConnection'), 'muted'));
       const message = recoveryMessages.get(profile.profile_id), status = el('p', message?.text ?? '', 'muted');
@@ -199,7 +217,7 @@ export function createServiceWorkflow({
     say(t('toolsReadyToView'));
     return catalog;
   }
-  async function connectOAuth(profile, authorization = authorizationIntent(profile.authentication)) {
+  async function connectOAuth(profile, authorization = authorizationIntent(profile.authentication), oauthClient) {
     const currentIntent = () => authorization === authorizationGeneration;
     if (!currentIntent()) return getProfiles?.() ?? [];
     view.invalidate(serviceOperationScope(profile.profile_id));
@@ -213,7 +231,8 @@ export function createServiceWorkflow({
       if (!current || !current.enabled || current.authentication !== 'oauth') throw new Error(t('serviceNoLongerEnabled'));
       var result = await api('connections/begin', {
         profile_id: current.profile_id,
-        expected_revision: current.revision
+        expected_revision: current.revision,
+        ...(oauthClient === undefined ? {} : { oauth_client: oauthClient })
       });
       if (currentIntent()) navigate(result.authorization_url);
       return currentProfiles;
@@ -237,7 +256,8 @@ export function createServiceWorkflow({
         if (name.length > limit) name = name.slice(0, limit - 1) + '…';
       }
       var id = 'service-' + crypto.randomUUID();
-      const authorization = authorizationIntent(authentication);
+      const authorization = authorizationIntent(authentication), oauthClient = authentication === 'oauth'
+        ? oauthClientInput(form.elements.oauth_client_id, form.elements.oauth_client_secret) : undefined;
       await run(async () => {
         view.invalidate('mcp-create');
         const selection = authentication === 'none' ? selectTools({ profile_id: id }) : undefined;
@@ -255,7 +275,7 @@ export function createServiceWorkflow({
         });
         await refresh();
         if (authentication === 'oauth') {
-          await connectOAuth(enabled.profile, authorization);
+          await connectOAuth(enabled.profile, authorization, oauthClient);
           return;
         }
         await connectService(enabled.profile, { selection });
