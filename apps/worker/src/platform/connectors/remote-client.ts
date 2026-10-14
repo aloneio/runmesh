@@ -126,7 +126,12 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             headers, redirect: "manual", credentials: "omit", cache: "no-store", signal });
           if (signal.aborted) { void response.body?.cancel().catch(() => undefined); throw new RemoteFault("operation_timed_out"); }
           if (response.status === 401 || response.status === 403) {
-            void response.body?.cancel().catch(() => undefined); throw new RemoteFault("authorization_required");
+            void response.body?.cancel().catch(() => undefined);
+            // RFC 6750 distinguishes an invalid/missing bearer (401) from an
+            // authenticated principal that is not allowed to use the resource
+            // (403). Treating both as reauthorization causes a reconnect loop
+            // for providers that gate MCP access after a successful OAuth flow.
+            throw new RemoteFault(response.status === 401 ? "authorization_required" : "permission_denied");
           }
           if (response.status === 429 || response.status >= 500) {
             void response.body?.cancel().catch(() => undefined); throw new RemoteFault("upstream_unavailable");

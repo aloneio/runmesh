@@ -24,6 +24,8 @@ Enter the MCP URL and select **Check connection** to see its negotiated protocol
 
 The check reads connection information. Select **Connect** to add the MCP, or **Refresh tools** to update an existing MCP's shared tool list.
 
+Runmesh treats an upstream HTTP `401` as an authentication challenge and may ask you to reconnect. An upstream HTTP `403` means the provider accepted the credential but denied MCP access; Runmesh reports a provider permission error instead of starting another OAuth loop. Check the provider's MCP feature availability and the account, group or project permissions in that case.
+
 ## Import a server.json entry
 
 Expand **Import server.json**, choose the provider's file, then select **Preview connections**. For a ready HTTPS entry, select **Use this connection** to fill the connection form, choose the authentication method and select **Connect**.

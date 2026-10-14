@@ -37,6 +37,7 @@ export function classifyCentralFailure({ serviceInput, skillInput, skillInstalla
     return { messageKey: 'skillSourceBusy', confirmedNotStarted: true };
   const sourceError = sourceAction && typeof code === 'string' && Object.hasOwn(sourceMessages, code) ? sourceMessages[code] : undefined;
   if (sourceError) return failure(sourceError);
+  if (status === 403 && code === 'remote_permission_denied') return failure('mcpPermissionDenied');
   if (inspection) return failure(status === 400 ? 'checkServiceNameAndPublicMcpUrl' : status === 403 ? 'accessWasDeniedSignInAgainOrCheckThe' : 'inspectionFailed');
   if (registry && code === 'registry_invalid_entry') return failure('registryInvalidEntry');
   if (status === 409) return failure('thisItemChangedRefreshAndReviewItAgainBefore');

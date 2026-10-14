@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "c16620a39a4b1388604b739fef612752fd04490ee9ec8d3e20358cd0c82e0219",
-      "bytes": 191045,
+      "sha256": "19a9b76a6c4f7ffd8935e1313ef263fe2a9d8859101780fd57ac237f6cefafdb",
+      "bytes": 191409,
       "pre_mcp_relay_sha256": "0a6483245562b6387d2adb579539b46b41a1fbb5572445a890c9f1ef7b632fd2",
       "pre_mcp_relay_bytes": 187677,
       "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
@@ -38,8 +38,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "a9a488e795a4d27ae0c4121275e1f9cb61f0740f9fdb947a817f170b8bc3a2f0",
-      "bytes": 191705,
+      "sha256": "8d4a300bca48d29c1a0e787b3e9eaf36fac8427bab5c9b711f523b95002ac4d0",
+      "bytes": 192069,
       "pre_mcp_relay_sha256": "56d9298c83d590d413eb7c589b853078ed0b872da4b0d6bc7c6f0c1df89c39d3",
       "pre_mcp_relay_bytes": 188337,
       "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
@@ -62,8 +62,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "1c52af725dcb978e16eb75cc235648e41bea906e0e3aa1282906a836fc96d15d",
-      "bytes": 194002,
+      "sha256": "4d68c56a6b5c50618692326153532aaa68a2b5fcae168714183d77ba11a3db7c",
+      "bytes": 194366,
       "pre_mcp_relay_sha256": "2e9f336f95e1e5a1bc89cf3f551123c85c20762898d53a82c25f8d6315bea6a0",
       "pre_mcp_relay_bytes": 190634,
       "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
@@ -438,8 +438,8 @@
           }
         ]
       ],
-      "sha256": "a4ade81aebaacba38bb728919317324d3ceb1fe3e1c3e59a77d1e1e3b0d1cdfd",
-      "bytes": 194351,
+      "sha256": "453f00be72cce0e443f6ed8e28a32b4d4bfdb1e938b28751f2986b3937f0a4b5",
+      "bytes": 194715,
       "pre_mcp_relay_sha256": "83a6789b7acb712713274551956933f747f289a902235f24540fb3b4b31e3f8b",
       "pre_mcp_relay_bytes": 190983,
       "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
@@ -1579,6 +1579,38 @@
         "name": "admin-document",
         "sha256": "6c29674e71a373cd4b5e425fe9e57742a16ee4fb4b51b96da4fffee63d9fe523",
         "bytes": 193733
+      }
+    ]
+  },
+  "mcp_permission_denial_review": {
+    "source_base": "70a619ea3e900043130c801264ecf6232a1633ac",
+    "reviewed_change": "The shared admin browser bundle now distinguishes upstream MCP HTTP 403 permission denial from HTTP 401 reauthorization. Only the four renderers that embed the shared bundle change; all server-rendered non-script markup remains unchanged.",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "c16620a39a4b1388604b739fef612752fd04490ee9ec8d3e20358cd0c82e0219",
+        "bytes": 191045
+      },
+      {
+        "name": "setup",
+        "sha256": "a9a488e795a4d27ae0c4121275e1f9cb61f0740f9fdb947a817f170b8bc3a2f0",
+        "bytes": 191705
+      },
+      {
+        "name": "secret",
+        "sha256": "1c52af725dcb978e16eb75cc235648e41bea906e0e3aa1282906a836fc96d15d",
+        "bytes": 194002
+      },
+      {
+        "name": "admin-document",
+        "sha256": "a4ade81aebaacba38bb728919317324d3ceb1fe3e1c3e59a77d1e1e3b0d1cdfd",
+        "bytes": 194351
       }
     ]
   }
