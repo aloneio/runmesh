@@ -158,7 +158,7 @@ export async function registryPostCall(env: McpRequestEnv, path: string, input: 
     const fetchResponse = (signal: AbortSignal) => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal }));
     const response = await boundedJsonReceipt(diagnostic === undefined ? fetchResponse : async signal => {
       const result = await fetchResponse(signal); if (!signal.aborted) diagnostic.dependency(dependency, "body"); return result;
-    }, receiptKind === "audit" ? [200, 403, 409, 202] : [200, 403, 409], 5000, 16384, undefined, failure => reportRegistryFailure(stage, failure));
+    }, receiptKind === "audit" ? [200, 403, 409, 202] : [200, 403, 409], receiptKind === "audit" ? 750 : 5000, 16384, undefined, failure => reportRegistryFailure(stage, failure));
     diagnostic?.dependency("none", "none");
     // Authority and selection require completed JSON receipts at 200. Only
     // the audit caller opts into the documented disabled/degraded 202 receipt;

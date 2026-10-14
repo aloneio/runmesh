@@ -1,3 +1,4 @@
+import { RUNNER_PRESENCE_TIMEOUT_MS } from "../src/contracts/runner-selection.js";
 import { env, runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { REGISTRY_HISTORY_CLEANUP_INTERVAL_MS } from "../src/registry.js";
@@ -8,7 +9,7 @@ it("expires Runner presence in one batch and keeps the exact heartbeat boundary 
   await runInDurableObject(stub, async (instance, state) => {
     const now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
-      for (const [id, heartbeat] of [["expired-one", now - 45_001], ["expired-two", now - 60_000], ["missing", null], ["boundary", now - 45_000]] as const) {
+      for (const [id, heartbeat] of [["expired-one", now - (RUNNER_PRESENCE_TIMEOUT_MS + 1)], ["expired-two", now - RUNNER_PRESENCE_TIMEOUT_MS - 15_000], ["missing", null], ["boundary", now - RUNNER_PRESENCE_TIMEOUT_MS]] as const) {
         instance.registerRunner(id, "synthetic", now, undefined, "dedicated_user");
         state.storage.sql.exec("UPDATE runners SET state='online', last_heartbeat_ms=? WHERE runner_id=?", heartbeat, id);
       }

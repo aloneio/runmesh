@@ -8,6 +8,8 @@ export interface WorkerEnv extends RuntimeConfiguration {
   readonly adminSessionHash?: string;
   /** Optional independent metadata-only audit store; never an auth fallback. */
   HISTORY_DB?: D1Database;
+  /** Emergency rollback: "reconnect" restores legacy heartbeat failure closes. */
+  RUNMESH_HEARTBEAT_FAILURE_MODE?: string;
   RUNMESH_AUDIT_BACKEND?: string;
   RUNMESH_JOB_HISTORY_BACKEND?: string;
   REGISTRY: DurableObjectNamespace;

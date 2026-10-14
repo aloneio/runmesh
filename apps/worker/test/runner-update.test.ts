@@ -1,3 +1,4 @@
+import { RUNNER_PRESENCE_TIMEOUT_MS } from "../src/contracts/runner-selection.js";
 import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { RunnerExactVersionSchema, type RunnerUpdateResponse } from "@aloneio/runmesh-protocol";
@@ -236,7 +237,7 @@ describe("independent Runner update control", () => {
         for (const progress of ["draining", "installing", "checking"]) expect((await external("/status", { ...claim, state: progress })).status).toBe(200);
         const version = terminal === "succeeded" ? create.target_version : "0.1.7";
         const status = { ...claim, state: terminal, observed_version: version };
-        for (const heartbeat of [now - 45_001, null]) {
+        for (const heartbeat of [now - (RUNNER_PRESENCE_TIMEOUT_MS + 1), null]) {
           state.storage.sql.exec("UPDATE runners SET current_runner_version=?, state='online', connection_epoch=5, session_id='replacement', last_heartbeat_ms=? WHERE runner_id=?", version, heartbeat, runnerId);
           // No alarm or detail query runs first: status must validate its own
           // current-session evidence before committing a terminal update.
@@ -253,7 +254,7 @@ describe("independent Runner update control", () => {
           } finally { sql.mockRestore(); }
         }
         // The exact shared heartbeat boundary remains admissible.
-        state.storage.sql.exec("UPDATE runners SET last_heartbeat_ms=? WHERE runner_id=?", now - 45_000, runnerId);
+        state.storage.sql.exec("UPDATE runners SET last_heartbeat_ms=? WHERE runner_id=?", now - RUNNER_PRESENCE_TIMEOUT_MS, runnerId);
         const confirmed = await external("/status", status);
         expect(confirmed.status).toBe(200);
         expect(await confirmed.json()).toMatchObject({ operation: { state: terminal }, observed_version: version, observed_new_session: true });
