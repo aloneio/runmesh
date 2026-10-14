@@ -446,6 +446,55 @@ describe("Worker runner transport", () => {
     });
   });
 
+  it("recovers a committed credential_enroll fence before a later mutation when hello never completed", async () => {
+    const id = `committed-enroll-recovery-${crypto.randomUUID()}`;
+    const object = env.RUNNER.get(env.RUNNER.idFromName(id));
+    const enrollmentMutation = `credential-enroll-${crypto.randomUUID()}`;
+    const begin = async (mutationId: string) => {
+      const path = "/begin-policy-mutation", body = JSON.stringify({ runner_id: id, mutation_id: mutationId });
+      const headers = await internalHeaders("test-internal-control-secret-not-for-production", "POST", path, body);
+      return object.fetch(new Request(`https://runner.internal${path}`, { method: "POST", headers, body }));
+    };
+    expect((await begin(enrollmentMutation)).status).toBe(204);
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const verifier = await sha256Hex(randomBase64Url()), now = Date.now();
+    const info = { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2 };
+    await runInDurableObject(registry, async instance => {
+      expect(instance.addRunner(id, "Never completed hello", now, undefined, "dedicated_user")).toBeDefined();
+      expect(instance.createRunnerEnrollment(id, randomBase64Url(), verifier, now)).toBeDefined();
+      await expect(instance.redeemRunnerEnrollment(verifier, "a".repeat(64), info, now + 1, enrollmentMutation)).resolves.toEqual({ runner_id: id });
+      expect(instance.getRunnerMutationState(id, enrollmentMutation)).toMatchObject({
+        runner_exists: true, mutation_committed: true, credential_mutation_kind: "credential_enroll",
+        credential_mutation_committed: true, credential_version: 1, runner_state: "offline"
+      });
+    });
+    const laterMutation = `runner-delete-${crypto.randomUUID()}`;
+    expect((await begin(laterMutation)).status).toBe(204);
+  });
+
+  it("recovers a committed credential_rotate fence before a later mutation when no Runner session exists", async () => {
+    const id = `committed-rotate-recovery-${crypto.randomUUID()}`;
+    const object = env.RUNNER.get(env.RUNNER.idFromName(id));
+    const rotateMutation = `credential-rotate-${crypto.randomUUID()}`;
+    const begin = async (mutationId: string) => {
+      const path = "/begin-policy-mutation", body = JSON.stringify({ runner_id: id, mutation_id: mutationId });
+      const headers = await internalHeaders("test-internal-control-secret-not-for-production", "POST", path, body);
+      return object.fetch(new Request(`https://runner.internal${path}`, { method: "POST", headers, body }));
+    };
+    expect((await begin(rotateMutation)).status).toBe(204);
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    await runInDurableObject(registry, instance => {
+      const now = Date.now();
+      expect(instance.addRunner(id, "Never connected rotate", now, undefined, "dedicated_user")).toBeDefined();
+      expect(instance.invalidateRunnerCredential(id, now + 1, rotateMutation)).toBe(true);
+      expect(instance.getRunnerMutationState(id, rotateMutation)).toMatchObject({
+        runner_exists: true, mutation_committed: true, credential_mutation_kind: "credential_rotate",
+        credential_mutation_committed: true, credential_version: 1, runner_state: "offline"
+      });
+    });
+    expect((await begin(`runner-delete-${crypto.randomUUID()}`)).status).toBe(204);
+  });
+
   it("reports uncertain deletion when RunnerDO rejects transport cleanup", async () => {
     const id = `delete-transport-${crypto.randomUUID()}`;
     const runnerToken = "abcdef0123456789abcdef0123456789";

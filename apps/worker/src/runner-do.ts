@@ -988,21 +988,23 @@ export class RunnerDO {
     if (state.enrollment_mutation_committed === true && state.credential_mutation_committed === false) {
       return (await this.releasePolicyNeutralMutation(expected, state)).ok;
     }
-    // A credential revocation or initial Runner creation may have committed
-    // before its transport cleanup response was lost. A committed runner_create
-    // is recoverable only while the Runner is still at its synthetic pre-
-    // enrollment credential generation; Registry stops reporting that marker
-    // committed as soon as enrollment advances credentials. The original
-    // create flow also withholds its enrollment code until finalization, so a
-    // later mutation which recovers this proven owner cannot disclose a stale
-    // code. Uncommitted creation remains exclusive. Finalization rechecks exact
-    // ownership under the write queue.
-    if ((state.credential_mutation_kind === "credential_revoke" || state.credential_mutation_kind === "runner_create")
+    // A committed credential mutation may have lost its transport cleanup
+    // response before Runner hello/reconciliation completed. Registry exposes
+    // these markers as committed only for the exact current lifecycle and
+    // credential generation, so a later mutation may finalize that proven
+    // owner before taking a new fence. runner_delete is intentionally excluded:
+    // its recovery path is the tombstone branch above. A committed runner_create
+    // remains recoverable only at its synthetic pre-enrollment generation;
+    // Registry stops reporting that marker committed once credentials advance.
+    if (["credential_revoke", "credential_enroll", "credential_rotate", "runner_create"].includes(String(state.credential_mutation_kind))
       && state.credential_mutation_committed === true
       && typeof state.lifecycle_id === "string" && validLifecycleId(state.lifecycle_id)
       && this.mutationLifecycleMatches(expected, state.lifecycle_id)) {
-      return await this.finalizeOwnedMutation(expected.mutationId,
-        state.credential_mutation_kind === "runner_create" ? "runner created" : "credentials revoked") === "ok";
+      const reason = state.credential_mutation_kind === "runner_create" ? "runner created"
+        : state.credential_mutation_kind === "credential_enroll" ? "credentials enrolled"
+        : state.credential_mutation_kind === "credential_rotate" ? "credentials rotated"
+        : "credentials revoked";
+      return await this.finalizeOwnedMutation(expected.mutationId, reason) === "ok";
     }
     if (typeof state.lifecycle_id !== "string" || !validLifecycleId(state.lifecycle_id) || state.lifecycle_id !== expected.lifecycleId) return false;
     const desiredRevision = state.desired_revision;
