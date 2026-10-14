@@ -65,10 +65,31 @@ it.each([
   { inputSchema: { type: "object", $ref: "file:///secret" } },
   { inputSchema: { type: "object", $dynamicRef: "#a" } },
   { inputSchema: { type: "object", properties: { a: { type: "string", "x-mcp-header": "Authorization" } } } },
-  { name: "bad tool" }, { annotations: { readOnlyHint: "true" } }, { _meta: { grant: "admin" } },
+  { name: "bad tool" }, { annotations: { readOnlyHint: "true" } }, { unsupportedMetadata: { grant: "admin" } },
   { description: "a".repeat(8193) }, { inputSchema: { type: "object", anyOf: [] } },
 ])("W04 unsupported/invalid tool contracts are rejected without partial publication: %j", change => {
   expect(parseRemoteTool({ ...catalogDefinition(), ...change })).toBeUndefined();
+});
+
+it("W04 admits the bounded Cloudflare whoami identity pattern without opening arbitrary regular expressions", () => {
+  const definition = catalogDefinition("whoami");
+  const tool = { ...definition,
+    outputSchema: { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object",
+      properties: { id: { type: "string", minLength: 1, pattern: "\\S" }, name: { type: "string" }, email: { type: "string" } },
+      required: ["id"], additionalProperties: false },
+    _meta: { "openai/profile": true, securitySchemes: [{ type: "oauth2", scopes: ["user:read", "account:read"] }] },
+  };
+  expect(parseRemoteTool(tool)).toEqual({ ...definition, outputSchema: tool.outputSchema });
+  expect(parseRemoteTool({ ...tool, outputSchema: { type: "object", properties: { id: { type: "string", pattern: "(a+)+$" } } } })).toBeUndefined();
+});
+
+it("W04 projects standard non-authoritative MCP tool metadata out of the published catalog", () => {
+  const definition = catalogDefinition();
+  expect(parseRemoteTool({ ...definition,
+    _meta: { grant: "admin", "openai/outputTemplate": "ui://widget/profile.html" },
+    execution: { taskSupport: "optional" },
+    icons: [{ src: "https://cdn.example/icon.svg", mimeType: "image/svg+xml", sizes: ["any"], theme: "light" }],
+  })).toEqual(definition);
 });
 
 it("W04 supports bounded local refs without confusing property names or JSON data with keywords", () => {

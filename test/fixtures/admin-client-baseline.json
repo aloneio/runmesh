@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "a3afc2a6aa08cfaa1fbe599be7b361e5d5a3060930afbf9831508041b97990be",
+      "sha256": "d88cedffdf68cf2b9bea7aea822d9d9d3bbf87cd883ef4f8536ece0069960649",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -12,7 +12,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "09823913f9ee022555fa09022bd1e8a894a52f20803d1ceab042c2b75ef5fc3e",
+      "sha256": "f7e08d52df0aa28d74ec7cdba9d2ae6852ec6bd8e8639b25b59f8e1594dcb022",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -616,5 +616,34 @@
     "source_base": "31ee9c9db106d9e371ba72c14984aea33f15b0ad",
     "reviewed_change": "Switch only server-authored enrollment-result text in place while preserving one-time commands, platform selection and form values. Replacing only the inline browser script with its previous source reproduces every prior hash and byte count.",
     "non_script_markup_unchanged": true
+  },
+  "mcp_relay_compatibility_review": {
+    "source_base": "84c5bb732cba2443abd6481d4b256be823b242c8",
+    "reviewed_change": "Accept current standard MCP tool metadata only after bounded validation and project it out of the shared Runmesh catalog. Ordinary MCP library loads no longer rediscover unpublished services; automatic recovery is scoped to the exact OAuth callback connection until that attempt settles.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "a3afc2a6aa08cfaa1fbe599be7b361e5d5a3060930afbf9831508041b97990be"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "09823913f9ee022555fa09022bd1e8a894a52f20803d1ceab042c2b75ef5fc3e"
+      }
+    ]
+  },
+  "oauth_preregistered_client_review": {
+    "source_base": "4b6c75d2903d13cf87aa1cf4c0c81f0ee0613183",
+    "reviewed_change": "OAuth MCP cards and creation flow accept optional pre-registered client credentials, keep secrets in password fields and send them only to the OAuth begin operation. Failure guidance distinguishes providers that require client registration, while ordinary reconnects can reuse encrypted client information.",
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "c99e4799c92eb68254561b5a3a16eeb347ea27f61ad6b90f073341d48e115e09"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "c7678b74dc8a4bd9753bcb8ab8dc498a44fb258bafe6a382c3f9ae472aaa1fa6"
+      }
+    ]
   }
 }

@@ -26,6 +26,26 @@ Use `doctor` for local configuration and service state, the dashboard for Runner
 
 After dependency recovery, retry a read to verify access. For an edit, command, input or cancellation with an uncertain result, inspect the original operation before retrying.
 
+## Separate transport, observation and authority
+
+A compatible Runner negotiates an independent text `ping`/`pong` keepalive after its authenticated welcome. It probes every 25 seconds with at most one outstanding probe and retires an unanswered transport after 75 seconds. Cloudflare's WebSocket auto-response handles this probe without a Registry request. A pong proves transport reachability only: it does not prove current credentials, policy, persistence or permission to execute.
+
+The same welcome negotiates a 120-second heartbeat persistence interval. Older Workers keep the Runner's 30-second compatibility cadence; an updated Worker also coalesces healthy 30-second heartbeats from older Runners before calling Registry. Only a completed Registry `204` receipt advances the persistence clock. The clock and bounded retry metadata survive Durable Object hibernation through the socket attachment, without adding SQL, KV or maintenance-alarm writes to each incoming frame.
+
+Registry snapshots expire after 180 seconds without a persisted heartbeat. This is an observation-freshness window, not a guarantee that the WebSocket is connected or authorized. `stale` can mean persistence is unavailable while the transport remains attached. Public Runner reads compute that observation without writing a stale transition; independent maintenance may persist it later. Failed or stale observations never grant permission to dispatch.
+
+An established connection is retained during temporary heartbeat, session-check, policy-acknowledgment and optional history dependency failures. Every affected frame stops at its own authorization boundary: unverified replies are not delivered, new protected work remains denied, and a policy is not treated as applied without its real acknowledgment and admission reconciliation. Explicit credential rejection, session replacement, invalid identity and protocol errors retain their close behavior. Initial authentication and hello admission must still complete successfully before a session is usable.
+
+Optional Job history uses separate bounded retry lanes and does not emit a successful upload acknowledgment for a skipped or failed request. MCP audit fetch and body reads have a 750-millisecond observation budget, independent of the longer mandatory authorization budget. A missing audit receipt is reported as `audit_status: "unknown"`, not as recorded, and cannot replace an already verified tool result. Do not repeat a command merely to obtain an audit receipt.
+
+## Roll out without weakening authorization
+
+Update the Worker first, validate an older Runner against it, and then update a development Runner to verify keepalive and the negotiated heartbeat cadence. A newer Runner connecting to an older Worker must remain on the 30-second fallback. Retain existing Runner identity, credentials and Job receipts throughout the rollout.
+
+The optional emergency `RUNMESH_HEARTBEAT_FAILURE_MODE=reconnect` switch restores heartbeat-failure reconnect behavior only. It does not bypass authorization, promise recovery from exhausted storage, or undo the low-frequency persistence cadence. Prefer reverting the reviewed Worker/Runner candidate when a complete rollout rollback is needed; do not change credentials to work around an unavailable dependency.
+
+Run the heartbeat persistence, heartbeat budget, transport outage, read-only presence, optional audit and Runner keepalive regressions before promotion. Local simulated-time SQLite measurements are development evidence, not a provider billing export or proof of production stability. Collect live usage and reconnect evidence separately as described in the [cost baseline](cost-baseline.md).
+
 ## Allow time for automatic recovery
 
 Runners with the extended recovery behavior retry ordinary network failures with increasing delays up to 30 seconds. Service outages start at about 30 seconds and increase to five minutes; a server `Retry-After` can extend a wait to fifteen minutes. Logs report the failure class and planned delay. A connection must remain stable for at least one minute before this retry escalation resets.

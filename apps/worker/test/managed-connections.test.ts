@@ -488,6 +488,110 @@ it("OAuth revalidates admission after the service challenge before discovery or 
     authorize: async () => { if (!allowed) throw new Error("revoked"); } })).rejects.toThrow("revoked");
   expect(send).toHaveBeenCalledTimes(1);
 });
+it("OAuth identifies providers that require a pre-registered client instead of reporting a generic outage", async () => {
+  const send = vi.fn(async (url: string | URL, init?: RequestInit) => {
+    const address = String(url);
+    if (address === endpoint) return new Response(null, { status: 401 });
+    if ((init?.method ?? "GET") === "GET" && address.includes("oauth-protected-resource"))
+      return Response.json({ resource: endpoint, authorization_servers: [issuer] });
+    if ((init?.method ?? "GET") === "GET" && address.includes("oauth-authorization-server"))
+      return Response.json({ issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token",
+        response_types_supported: ["code"], code_challenge_methods_supported: ["S256"] });
+    throw new Error("unexpected request: " + address);
+  });
+  const protocol = createManagedOAuthProtocol(send);
+  await expect(protocol.begin({ endpoint, origin, state: randomBase64Url(), signal: new AbortController().signal,
+    authorize: async () => undefined })).rejects.toMatchObject({ code: "client_registration_required" });
+  expect(send.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+});
+
+it("pre-registered OAuth clients bypass dynamic registration and keep client secrets in POST token authentication", async () => {
+  const client = { client_id: "fixture-pre-registered-client", client_secret: "fixture-pre-registered-secret", token_endpoint_auth_method: "client_secret_post" };
+  const send = vi.fn(async (url: string | URL, init?: RequestInit) => {
+    const address = String(url), method = init?.method ?? "GET";
+    if (address === endpoint) return new Response(null, { status: 401 });
+    if (method === "GET" && address.includes("oauth-protected-resource")) return Response.json({ resource: endpoint, authorization_servers: [issuer] });
+    if (method === "GET" && address.includes("oauth-authorization-server")) return Response.json({ issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token",
+      response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], authorization_response_iss_parameter_supported: true });
+    if (address === issuer + "/token" && method === "POST") {
+      const headers = new Headers(init?.headers), body = new URLSearchParams(String(init?.body));
+      expect(headers.has("authorization")).toBe(false); expect(body.get("client_id")).toBe(client.client_id); expect(body.get("client_secret")).toBe(client.client_secret);
+      expect(body.get("code_verifier")).toBeTruthy();
+      return Response.json({ access_token: "synthetic-pre-registered-access", token_type: "Bearer", expires_in: 3600 });
+    }
+    throw new Error("unexpected request: " + address);
+  });
+  const protocol = createManagedOAuthProtocol(send), state = randomBase64Url(), signal = new AbortController().signal;
+  const started = await protocol.begin({ endpoint, origin, state, signal, authorize: async () => undefined, client });
+  expect(new URL(started.authorization_url).searchParams.get("client_id")).toBe(client.client_id);
+  expect(send.mock.calls.some(([url]) => String(url).endsWith("/register"))).toBe(false);
+  await expect(protocol.complete({ endpoint, origin, signal, authorize: async () => undefined, beforeTokenRequest: () => undefined,
+    discovery: started.discovery, client: started.client, verifier: started.verifier, code: "synthetic-code", issuer })).resolves.toMatchObject({ access_token: "synthetic-pre-registered-access" });
+});
+it("managed OAuth validates, encrypts and forwards a pre-registered client without exposing its secret", async () => {
+  let observed: unknown;
+  const protocol: ManagedOAuthProtocol = {
+    begin: async input => { observed = input.client; return { authorization_url: issuer + "/authorize?state=" + input.state, discovery: { provider_version: 1 }, client: input.client!, verifier: "fixture-verifier" }; },
+    complete: async () => ({ access_token: "unused", token_type: "Bearer" }), refresh: async () => ({ access_token: "unused", token_type: "Bearer" }),
+  };
+  const f = oauthFixture(false, origin, protocol), secret = "fixture-admin-entered-secret";
+  const started = await f.service().run(f.hash, "begin", { ...f.selection, oauth_client: { client_id: "fixture-admin-client", client_secret: secret } });
+  expect(started.state).toBe("started");
+  expect(observed).toEqual({ client_id: "fixture-admin-client", client_secret: secret, token_endpoint_auth_method: "client_secret_post" });
+  expect(JSON.stringify(f.record())).not.toContain(secret);
+  expect(await storedOAuthValue(f, "client")).toMatchObject({ value: observed });
+  expect(await f.service().run(f.hash, "begin", { ...f.selection, oauth_client: { client_secret: secret } })).toMatchObject({ state: "failed", code: "invalid_request" });
+});
+
+it("a failed OAuth handoff retains the encrypted pre-registered client for an explicit retry", async () => {
+  const observed: unknown[] = []; let attempts = 0;
+  const protocol: ManagedOAuthProtocol = {
+    begin: async input => {
+      observed.push(input.client); attempts++;
+      if (attempts === 1) throw new Error("synthetic provider outage");
+      return { authorization_url: issuer + "/authorize?state=" + input.state, discovery: { provider_version: 1 }, client: input.client!, verifier: "fixture-verifier" };
+    },
+    complete: async () => ({ access_token: "unused", token_type: "Bearer" }), refresh: async () => ({ access_token: "unused", token_type: "Bearer" }),
+  };
+  const f = oauthFixture(false, origin, protocol), secret = "fixture-retry-secret";
+  const client = { client_id: "fixture-retry-client", client_secret: secret, token_endpoint_auth_method: "client_secret_post" };
+  expect(await f.service().run(f.hash, "begin", { ...f.selection, oauth_client: { client_id: client.client_id, client_secret: secret } }))
+    .toMatchObject({ state: "failed", code: "unavailable" });
+  expect(JSON.stringify(f.record())).not.toContain(secret);
+  expect(await storedOAuthValue(f, "client")).toMatchObject({ value: client });
+  expect(await f.service().run(f.hash, "begin", f.selection)).toMatchObject({ state: "started" });
+  expect(observed).toEqual([client, client]);
+});
+
+it("OAuth does not forward a stored client into a changed profile revision", async () => {
+  const observed: unknown[] = []; let attempts = 0;
+  const protocol: ManagedOAuthProtocol = {
+    begin: async input => {
+      observed.push(input.client); attempts++;
+      if (attempts === 1) throw new Error("synthetic provider outage");
+      return { authorization_url: issuer + "/authorize?state=" + input.state, discovery: { provider_version: 1 },
+        client: input.client ?? { client_id: "replacement-client" }, verifier: "fixture-verifier" };
+    },
+    complete: async () => ({ access_token: "unused", token_type: "Bearer" }), refresh: async () => ({ access_token: "unused", token_type: "Bearer" }),
+  };
+  const f = oauthFixture(false, origin, protocol), client = { client_id: "fixture-revision-client", client_secret: "fixture-revision-secret" };
+  expect(await f.service().run(f.hash, "begin", { ...f.selection, oauth_client: client })).toMatchObject({ state: "failed", code: "unavailable" });
+  f.pause(); const current = f.resume();
+  expect(await f.service().run(f.hash, "begin", { profile_id: current.profile_id, expected_revision: current.revision })).toMatchObject({ state: "started" });
+  expect(observed[0]).toMatchObject({ ...client, token_endpoint_auth_method: "client_secret_post" });
+  expect(observed[1]).toBeUndefined();
+});
+
+it("OAuth reconnect reuses the encrypted client registration instead of registering again", async () => {
+  const f = oauthFixture(), first = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(first))).toMatchObject({ state: "linked" });
+  expect(f.state.registration).toBe(1);
+  const second = await f.begin();
+  expect(f.state.registration).toBe(1);
+  expect(await f.service().run(f.hash, "complete", f.callback(second))).toMatchObject({ state: "linked" });
+  expect(f.state.registration).toBe(1);
+});
+
 it.each([false, true])("OAuth discovers provider and registers automatically (CIMD=%s), survives restart and binds the browser session", async cimd => {
   const f = oauthFixture(cimd), state = await f.begin();
   expect(f.state.registration).toBe(cimd ? 0 : 1); expect(JSON.stringify(f.record())).not.toContain("fixture-client");

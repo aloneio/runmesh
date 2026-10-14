@@ -28,14 +28,17 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
     if (!client || typeof client.client_id !== 'string' || !client.client_id) return fault('invalid_callback');
     return { ...client, issuer: credentialIssuer(client.issuer, discovery) } as StoredOAuthClientInformation;
   }
-  function provider(base: string, state?: string, saved?: { discovery: OAuthDiscoveryState; client: StoredOAuthClientInformation; verifier: string }) {
+  function provider(base: string, state?: string, saved?: { discovery?: OAuthDiscoveryState; client?: StoredOAuthClientInformation; verifier?: string }) {
     let discovery = saved?.discovery, client = saved?.client;
     let verifier = saved?.verifier;
     let tokens: StoredOAuthTokens | undefined, redirect: string | undefined;
     const value: OAuthClientProvider = {
       redirectUrl: connectionClientMetadata(base).redirect_uris[0]!, clientMetadata: connectionClientMetadata(base),
       clientMetadataUrl: base + "/admin/central/connections/client-metadata",
-      state: () => state ?? fault("invalid_callback"), clientInformation: () => client, tokens: () => undefined,
+      state: () => state ?? fault("invalid_callback"), clientInformation: context => {
+        if (client && client.issuer === undefined && typeof context?.issuer === "string") client = { ...client, issuer: context.issuer };
+        return client;
+      }, tokens: () => undefined,
       saveClientInformation: value => { client = value; },
       saveTokens: value => { tokens = value; },
       saveCodeVerifier: value => { verifier = value; }, codeVerifier: () => verifier ?? fault("invalid_callback"),
@@ -56,15 +59,26 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
 
   return {
     async begin(input) {
-      const p = provider(input.origin, input.state);
+      const configured = input.client === undefined ? undefined : catalogObject(input.client);
+      if (input.client !== undefined && (!configured || typeof configured.client_id !== "string" || !configured.client_id)) return fault("invalid_request");
+      const p = provider(input.origin, input.state, configured === undefined ? undefined : { client: configured as unknown as StoredOAuthClientInformation });
       const challenge = extractWWWAuthenticateParams(await managedOAuthChallenge(input.endpoint, { signal: input.signal, authorize: input.authorize, origin: input.origin, ...(send ? { send } : {}) }));
       if ((challenge.resourceMetadataUrl && publicOAuthUrl(challenge.resourceMetadataUrl.href, input.origin) === undefined)
         || (challenge.scope !== undefined && challenge.scope.length > 2048)) return fault("provider_unsupported");
-      const result = await auth(p.value, { serverUrl: input.endpoint, forceReauthorization: true,
-        ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: challenge.resourceMetadataUrl } : {}),
-        ...(challenge.scope ? { scope: challenge.scope } : {}),
-        fetchFn: managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
-          discovery: p.discovery, phase: 'begin', ...(send ? { send } : {}) }) });
+      let result: Awaited<ReturnType<typeof auth>>;
+      try {
+        result = await auth(p.value, { serverUrl: input.endpoint, forceReauthorization: true,
+          ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: challenge.resourceMetadataUrl } : {}),
+          ...(challenge.scope ? { scope: challenge.scope } : {}),
+          fetchFn: managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
+            discovery: p.discovery, phase: 'begin', ...(send ? { send } : {}) }) });
+      } catch (error) {
+        const metadata = p.discovery()?.authorizationServerMetadata;
+        if (input.client === undefined && metadata !== undefined && metadata.client_id_metadata_document_supported !== true
+          && !metadata.registration_endpoint && error instanceof Error && error.message.includes("does not support dynamic client registration"))
+          return fault("client_registration_required");
+        throw error;
+      }
       if (result !== 'REDIRECT' || !p.redirect() || !p.client() || !p.verifier() || !p.discovery()) return fault('provider_unsupported');
       return { authorization_url: p.redirect()!, discovery: { ...p.discovery()! }, client: p.client()!, verifier: p.verifier()! };
     },

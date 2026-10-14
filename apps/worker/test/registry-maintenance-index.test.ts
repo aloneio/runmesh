@@ -1,3 +1,4 @@
+import { RUNNER_PRESENCE_TIMEOUT_MS } from "../src/contracts/runner-selection.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, type RunnerMetadata } from "@aloneio/runmesh-protocol";
 import { expect, it, vi } from "vitest";
@@ -32,9 +33,9 @@ const deadlineCases: readonly { name: string; runners: readonly (readonly [strin
   { name: "empty", runners: [], delay: 60_000 },
   { name: "offline and stale only", runners: [["offline", null], ["stale", -500]], delay: 60_000 },
   { name: "online missing heartbeat", runners: [["online", null], ["online", 0]], delay: 1_000 },
-  { name: "mixed states", runners: [["offline", -10_000], ["online", 0], ["stale", -5_000], ["online", -500]], delay: 44_500 },
-  { name: "duplicate earliest heartbeat", runners: [["online", -500], ["online", 100], ["online", -500]], delay: 44_500 },
-  { name: "exact liveness boundary", runners: [["online", -45_000]], delay: 1_000 },
+  { name: "mixed states", runners: [["offline", -10_000], ["online", 0], ["stale", -5_000], ["online", -500]], delay: Math.min(RUNNER_PRESENCE_TIMEOUT_MS - 500, 60_000) },
+  { name: "duplicate earliest heartbeat", runners: [["online", -500], ["online", 100], ["online", -500]], delay: Math.min(RUNNER_PRESENCE_TIMEOUT_MS - 500, 60_000) },
+  { name: "exact liveness boundary", runners: [["online", -RUNNER_PRESENCE_TIMEOUT_MS]], delay: 1_000 },
 ];
 
 it.each(deadlineCases)("preserves the maintenance deadline for $name", async ({ runners, delay }) => {
@@ -60,8 +61,8 @@ it("reconstructs an existing store with an indexed constant-size deadline read a
         SELECT printf('r-%04d',x), 'Runner', 'synthetic', CASE WHEN x%2=1 THEN 'online' ELSE 'offline' END, printf('life-%04d',x), ?+x, ? FROM n`, now, now);
       sql.exec(`DROP INDEX ${indexName}`);
       expect(registrySchemaIsCurrent(sql)).toBe(true);
-      const old = sql.exec<{ next_ms: number }>("SELECT MIN(COALESCE(last_heartbeat_ms, 0) + ?) AS next_ms FROM runners WHERE state = 'online'", 45_000);
-      expect(old.one().next_ms).toBe(now + 45_001);
+      const old = sql.exec<{ next_ms: number }>("SELECT MIN(COALESCE(last_heartbeat_ms, 0) + ?) AS next_ms FROM runners WHERE state = 'online'", RUNNER_PRESENCE_TIMEOUT_MS);
+      expect(old.one().next_ms).toBe(now + (RUNNER_PRESENCE_TIMEOUT_MS + 1));
       expect(old.rowsRead).toBeGreaterThanOrEqual(1000);
       const original = sql.exec.bind(sql), reads: { readonly rowsRead: number }[] = [];
       const spy = vi.spyOn(sql, "exec").mockImplementation((query: string, ...args: any[]) => {
@@ -76,7 +77,8 @@ it("reconstructs an existing store with an indexed constant-size deadline read a
         expect(reads).toHaveLength(2);
         expect(reads.every(cursor => cursor.rowsRead <= 2)).toBe(true);
       } finally { spy.mockRestore(); }
-      expect(await state.storage.getAlarm()).toBe(now + 45_001);
+      // The nonce expires before the low-frequency presence observation.
+      expect(await state.storage.getAlarm()).toBe(now + Math.min(RUNNER_PRESENCE_TIMEOUT_MS + 1, 60_000));
       expect(sql.exec("SELECT COUNT(*) AS total FROM runners").one().total).toBe(1000);
       expect(sql.exec("SELECT SUM(last_heartbeat_ms-?) AS total FROM runners", now).one().total).toBe(500_500);
       let written = 0;
@@ -108,7 +110,7 @@ it("keeps existing data and maintenance available when optional index creation f
       try {
         const next = await reconstruct(state);
         expect((await consumeNonce(next, now)).status).toBe(204);
-        expect(await state.storage.getAlarm()).toBe(now + 45_000);
+        expect(await state.storage.getAlarm()).toBe(now + Math.min(RUNNER_PRESENCE_TIMEOUT_MS, 60_000));
       } finally { fault.mockRestore(); }
       expect(sql.exec("SELECT * FROM runners WHERE runner_id='preserved'").one()).toEqual(before);
       expect(sql.exec("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?", indexName).toArray()).toHaveLength(0);

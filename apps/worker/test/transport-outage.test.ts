@@ -25,7 +25,7 @@ function socket(kind: string) {
 }
 
 const failures = [429, 500, 502, 503, 504].flatMap((status) => sessionFrames.map((kind) => ({ status, kind })));
-it.each(failures)("uses retryable close 1013 for $kind with upstream $status", async ({ status, kind }) => {
+it.each(failures)("preserves established $kind transport but denies unverified frames with upstream $status", async ({ status, kind }) => {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`outage-transport-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_existing, state) => {
     const request = vi.fn().mockResolvedValue(new Response("private upstream error", { status }));
@@ -34,7 +34,8 @@ it.each(failures)("uses retryable close 1013 for $kind with upstream $status", a
     const f = socket(kind);
     try {
       await instance.webSocketMessage(f.ws, encodeWireFrame(frame(kind)));
-      expect(f.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+      if (kind === "hello") expect(f.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+      else expect(f.close).not.toHaveBeenCalled();
       expect(f.send).not.toHaveBeenCalled();
     } finally { request.mockRestore(); }
   });
@@ -97,7 +98,7 @@ it.each([429, 500, 502, 503, 504, 401, 403, 200])("does not turn an authenticati
   });
 });
 
-it.each([undefined, 409, 401, 403])("rejects pending RPC replies when the session cannot be verified (%s)", async (status) => {
+it.each([undefined, 429, 503, 409, 401, 403])("rejects pending RPC replies when the session cannot be verified (%s)", async (status) => {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`outage-reply-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_existing, state) => {
     const request = status === undefined ? vi.fn().mockRejectedValue(new Error("storage unavailable"))
@@ -112,8 +113,11 @@ it.each([undefined, 409, 401, 403])("rejects pending RPC replies when the sessio
       expect(resolve).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(resolve.mock.calls)).not.toContain("RESULT_MUST_NOT_BE_DELIVERED");
       expect(resolve.mock.calls[0]?.[0].type).toBe("rpc.error");
-      expect(f.close).toHaveBeenCalledWith(status === undefined ? 1013 : status === 409 ? 4000 : 4001,
-        status === undefined ? "control plane temporarily unavailable" : status === 409 ? "stale runner session" : "runner credentials rejected");
+      if (status === undefined || status === 429 || status === 503) {
+        expect(f.close).not.toHaveBeenCalled();
+        expect(resolve.mock.calls[0]?.[0].error).toMatchObject({ code: "control_plane_unavailable", operation_state: "unknown" });
+      } else expect(f.close).toHaveBeenCalledWith(status === 409 ? 4000 : 4001,
+        status === 409 ? "stale runner session" : "runner credentials rejected");
     } finally { clearTimeout(timer); request.mockRestore(); }
   });
 });
@@ -127,7 +131,8 @@ it.each(sessionFrames)("releases the discarded Registry response when a %s frame
     const instance = new RunnerDO(state, env, { registryRequest: request });
     const f = socket(kind);
     await instance.webSocketMessage(f.ws, encodeWireFrame(frame(kind)));
-    expect(f.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+    if (kind === "hello") expect(f.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+    else expect(f.close).not.toHaveBeenCalled();
     expect(f.send).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
     expect(cancel).toHaveBeenCalledOnce();
@@ -173,7 +178,7 @@ it.each(["pending", "rejected"] as const)("keeps the original frame failure when
       const instance = new RunnerDO(state, env, { registryRequest: request });
       const f = socket("heartbeat");
       await instance.webSocketMessage(f.ws, encodeWireFrame(frame("heartbeat")));
-      expect(f.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+      expect(f.close).not.toHaveBeenCalled();
       expect(request).toHaveBeenCalledOnce();
       expect(cancel).toHaveBeenCalledOnce();
     });
@@ -305,7 +310,8 @@ it.each([401, 403, 409])("releases rejected policy receipt %s before a failed ad
       put.mockImplementationOnce(async () => { events.push("write"); throw new Error("synthetic admission storage failure"); });
       await instance.webSocketMessage(ws, encodeWireFrame(frame("policy")));
       expect(put).toHaveBeenCalledOnce();
-      expect(ws.close).toHaveBeenCalledExactlyOnceWith(1013, "control plane temporarily unavailable");
+      expect(ws.close).toHaveBeenCalledExactlyOnceWith(status === 409 ? 4000 : 4001,
+        status === 409 ? "stale runner session" : "runner credentials rejected");
       expect(ws.send).toHaveBeenCalledOnce();
       expect(resolve).toHaveBeenCalledOnce();
       expect(resolve.mock.calls[0]?.[0]).toMatchObject({ type: "rpc.error" });

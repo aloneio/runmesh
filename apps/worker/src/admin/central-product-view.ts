@@ -29,6 +29,12 @@ export function centralProductView(csrf: string, skills: boolean): string {
             <label>MCP URL<input name="endpoint" type="url" required maxlength="2048" placeholder="https://mcp.example.com/mcp" autocomplete="url"></label>
             <label>Authentication<select name="authentication"><option value="none">No authentication</option><option value="oauth">OAuth</option></select></label>
             <label>MCP name (optional)<input name="name" maxlength="64" placeholder="e.g. Team documentation"></label>
+            <details class="central-file-preview oauth-client-settings">
+              <summary>OAuth client settings (optional)</summary>
+              <p class="muted">Use credentials from an OAuth app registered with the provider when automatic client registration is unavailable.</p>
+              <label>Client ID<input name="oauth_client_id" maxlength="2048" autocomplete="off" spellcheck="false"></label>
+              <label>Client secret<input name="oauth_client_secret" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false"></label>
+            </details>
             <div class="form-submit-wrap actions"><button type="submit" class="button">Connect</button><button type="button" class="button secondary" data-service-check>Check connection</button></div>
           </form>
           <details class="central-file-preview" data-registry-import data-max-bytes="${MCP_REGISTRY_LIMITS.bytes}">

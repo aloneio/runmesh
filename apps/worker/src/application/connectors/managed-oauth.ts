@@ -10,6 +10,14 @@ import { isAdminSessionDigest } from '../../contracts/admin-session.js';
 
 const fault = (code: ConstructorParameters<typeof OAuthFault>[0]): never => { throw new OAuthFault(code); };
 const context = (record: ManagedOAuthRecord, kind: string) => `connection:${record.profile_id}:${record.state_hash}:${kind}`;
+const visibleAscii = (value: unknown, max: number): value is string => typeof value === "string" && value.length >= 1 && value.length <= max && /^[\x21-\x7e]+$/u.test(value);
+function configuredClient(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  const client = catalogObject(value);
+  if (!client || !catalogKeys(client, ["client_id", "client_secret"]) || !visibleAscii(client.client_id, 2_048)
+    || (client.client_secret !== undefined && !visibleAscii(client.client_secret, 4_096))) return fault("invalid_request");
+  return { client_id: client.client_id, ...(client.client_secret === undefined ? {} : { client_secret: client.client_secret, token_endpoint_auth_method: "client_secret_post" }) };
+}
 
 /** Owns account authorization, state claims and credential leases through narrow
  * ports. Construction performs no I/O; the protocol adapter owns SDK details. */
@@ -65,19 +73,29 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
       expires: ports.now() + Math.floor((raw.expires_in ?? 3600) * 1000) };
   };
   async function begin(hash: string, input: Record<string, unknown>, signal: AbortSignal, requestOrigin?: string): Promise<ManagedConnectionResult> {
-    if (!catalogKeys(input, ["profile_id", "expected_revision"]) || !isCapabilityIdentifier(input.profile_id) || !Number.isSafeInteger(input.expected_revision)) return fault("invalid_request");
-    const selected = profile(input.profile_id, input.expected_revision as number), base = origin(requestOrigin);
+    if (!catalogKeys(input, ["profile_id", "expected_revision", "oauth_client"]) || !isCapabilityIdentifier(input.profile_id) || !Number.isSafeInteger(input.expected_revision)) return fault("invalid_request");
+    const selected = profile(input.profile_id, input.expected_revision as number), base = origin(requestOrigin), suppliedClient = configuredClient(input.oauth_client);
     await admin(hash, signal);
     // Check credential encryption before registering a client.
     try { await ports.cipher.seal("connection-readiness", { ready: true }); }
     catch { return fault("configuration_required"); }
-    const state = ports.random(), stateHash = await ports.hash(state); await admin(hash, signal); profile(selected.profile_id, selected.revision);
     const old = ports.repository.read(selected.profile_id);
+    let reusableClient: unknown = suppliedClient;
+    // A previously registered client is account-independent. Reuse it on an
+    // ordinary reconnect so providers are not asked to register a new client.
+    if (reusableClient === undefined && old?.client && old.profile_revision === selected.revision)
+      reusableClient = await ports.cipher.open(context(old, 'client'), old.client);
+    const state = ports.random(), stateHash = await ports.hash(state); await admin(hash, signal); profile(selected.profile_id, selected.revision);
     let record: ManagedOAuthRecord = { profile_id: selected.profile_id, profile_revision: selected.revision, revision: (old?.revision ?? 0) + 1,
       state: "starting", session_hash: hash, state_hash: stateHash, origin: base, expires_at: ports.now() + 600_000, token_expires_at: 0 };
+    // Preserve the chosen client across a failed provider handoff. The ciphertext
+    // is rebound to this state so an explicit retry can reuse the registration
+    // without exposing or asking for the client secret again.
+    if (reusableClient !== undefined) record = { ...record, client: await ports.cipher.seal(context(record, 'client'), reusableClient) };
     if (!ports.repository.replace(record, old?.revision ?? 0)) return fault("conflict");
     const authorize = async () => { await admin(hash, signal); if (!current(record)) return fault("conflict"); };
-    const result = await ports.protocol.begin({ endpoint: selected.endpoint, origin: base, state, signal, authorize });
+    const result = await ports.protocol.begin({ endpoint: selected.endpoint, origin: base, state, signal, authorize,
+      ...(reusableClient === undefined ? {} : { client: reusableClient }) });
     const client = await ports.cipher.seal(context(record, 'client'), result.client);
     const verifier = await ports.cipher.seal(context(record, 'verifier'), result.verifier);
     record = await commit(record, { state: 'pending', discovery: result.discovery, client, verifier }, authorize);
@@ -125,7 +143,7 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
         if (old && !ports.repository.replace({ ...old, revision: old.revision + 1, state: "revoked", tokens: undefined, client: undefined, verifier: undefined, discovery: undefined }, old.revision)) return fault("conflict");
         return { state: "revoked", profile_id: input.profile_id };
       } catch (error) {
-        const code = error instanceof OAuthFault && ["invalid_request", "denied", "conflict", "invalid_callback", "provider_unsupported", "reauthorization_required", "configuration_required"].includes(error.code) ? error.code : "unavailable";
+        const code = error instanceof OAuthFault && ["invalid_request", "denied", "conflict", "invalid_callback", "provider_unsupported", "client_registration_required", "reauthorization_required", "configuration_required"].includes(error.code) ? error.code : "unavailable";
         // A failure category cannot establish whether the one-use code was
         // consumed. Keep the protocol's dispatch boundary in the receipt.
         const uncertain = action === "complete" ? exchangeClaimed : code === "unavailable";
