@@ -14,8 +14,9 @@ const names = (value: unknown): value is string[] => Array.isArray(value) && val
 
 /** Reviewed 2020-12 metadata subset, not an argument validator. The caller bounds
  * the complete JSON first. No regex compilation, remote lookup or ref expansion.
- * Unknown keywords/dialects, patterns, formats, dynamic headers and recursive refs
- * are unsupported rather than silently discarded. The graph retains each child
+ * Unknown keywords/dialects, arbitrary patterns, formats, dynamic headers and recursive refs
+ * are unsupported rather than silently discarded. A fixed linear \S pattern is
+ * admitted for standards-compliant identity schemas. The graph retains each child
  * and resolved ref edge once; consumers can bound expanded work without walking
  * keywords or decoding pointers again. Argument validation still needs an evaluator. */
 export function catalogSchemaGraph(value: unknown, input: boolean): ReadonlyMap<string, readonly string[]> | undefined {
@@ -40,7 +41,12 @@ export function catalogSchemaGraph(value: unknown, input: boolean): ReadonlyMap<
       else if (count.has(key)) { if (!Number.isSafeInteger(field) || (field as number) < 0) return false; }
       else if (numeric.has(key)) { if (typeof field !== "number" || !Number.isFinite(field) || (key === "multipleOf" && field <= 0)) return false; }
       else if (key === "$schema") { if (path !== "" || field !== "https://json-schema.org/draft/2020-12/schema") return false; }
-      else if (key === "type") {
+      else if (key === "pattern") {
+        // Do not admit arbitrary regular expressions into the Worker-side JSON
+        // Schema interpreter. This single linear primitive is required by the
+        // Cloudflare MCP identity contract and cannot trigger regex backtracking.
+        if (field !== "\\S") return false;
+      } else if (key === "type") {
         if (typeof field === "string" ? !types.has(field) : !Array.isArray(field) || field.length === 0
           || new Set(field).size !== field.length || field.some(kind => typeof kind !== "string" || !types.has(kind))) return false;
       } else if (key === "required") { if (!names(field)) return false; }

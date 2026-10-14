@@ -269,6 +269,14 @@ it("W05 disallowed destinations never load credentials or make network requests"
   expect(secret).not.toHaveBeenCalled(); expect(http).not.toHaveBeenCalled();
 });
 
+it("W05 validates the fixed Cloudflare identity pattern while keeping arbitrary regex schemas outside the admitted subset", () => {
+  const validator = new BoundedRemoteValidator();
+  const schema = { type: "object", properties: { id: { type: "string", minLength: 1, pattern: "\\S" } }, required: ["id"], additionalProperties: false };
+  expect(validator.validate(schema, { id: "user:abc" })).toBe(true);
+  expect(validator.validate(schema, { id: "   " })).toBe(false);
+  expect(validator.validate({ type: "object", properties: { id: { type: "string", pattern: "(a+)+$" } } }, { id: "a" })).toBe(false);
+});
+
 it("W05 JSON schema validation is non-coercing, bounded and supports approved local references", () => {
   const validator = new BoundedRemoteValidator();
   const schema = { type: "object", properties: { value: { $ref: "#/$defs/count" } }, required: ["value"], additionalProperties: false,
