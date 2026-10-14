@@ -203,14 +203,17 @@ it("W05 a lost response is unknown at the public MCP boundary and never causes a
   } finally { f.network.mockRestore(); }
 });
 
-it.each([401, 403])("W05 upstream HTTP %s preserves authorization guidance and uncertain effects across public boundaries", async status => {
+it.each([
+  { status: 401, discoveryStatus: 200, discoveryBody: { state: "authorization_required" }, code: "remote_authorization_required" },
+  { status: 403, discoveryStatus: 403, discoveryBody: { error: { code: "remote_permission_denied", operation_state: "not_started" } }, code: "remote_permission_denied" },
+])("W05 upstream HTTP $status preserves authentication versus permission guidance and uncertain effects across public boundaries", async ({ status, discoveryStatus, discoveryBody, code }) => {
   const f = await fixture();
   try {
     const http = f.network.getMockImplementation()!;
     f.network.mockImplementation(async () => new Response("untrusted upstream rejection", { status }));
     const discovery = await f.discover();
-    expect(discovery.status).toBe(200);
-    expect(await discovery.json()).toEqual({ state: "authorization_required" });
+    expect(discovery.status).toBe(discoveryStatus);
+    expect(await discovery.json()).toEqual(discoveryBody);
     expect(f.network).toHaveBeenCalledOnce(); expect(f.execute).not.toHaveBeenCalled();
     expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ state: "empty" });
     f.network.mockImplementation(http);
@@ -221,7 +224,7 @@ it.each([401, 403])("W05 upstream HTTP %s preserves authorization guidance and u
     });
     const response = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_call", arguments: command });
     expect(response.result.isError).toBe(true);
-    expect(JSON.parse(response.result.content[0].text)).toMatchObject({ error: { code: "remote_authorization_required",
+    expect(JSON.parse(response.result.content[0].text)).toMatchObject({ error: { code,
       failure_class: "authorization", operation_state: "unknown", next_action: "inspect_upstream_state" } });
     expect(JSON.stringify(response)).not.toContain("untrusted upstream rejection");
     expect(f.execute).toHaveBeenCalledOnce(); expect(f.methods.filter(method => method === "tools/call")).toHaveLength(1);

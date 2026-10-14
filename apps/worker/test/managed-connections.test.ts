@@ -135,7 +135,7 @@ it.each([401, 403, 429, 500, 302, 307])("direct MCP retains HTTP %s discovery fa
     return new Response(new ReadableStream({ cancel: cancelled }), { status, headers: { location: "https://other.provider.com/mcp" } });
   } });
   await expect(connector.open(base, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({
-    code: status === 401 || status === 403 ? "authorization_required" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
+    code: status === 401 ? "authorization_required" : status === 403 ? "permission_denied" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
   });
   expect(seen).toEqual(["server/discover"]); expect(cancelled).toHaveBeenCalledOnce();
 });

@@ -125,7 +125,7 @@ it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch prese
   try {
     const tools = await session.listTools();
     await expect(session.callTool(tools[0]!, { value: 1 }, async () => undefined)).rejects.toMatchObject({
-      code: status === 401 || status === 403 ? "authorization_required" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
+      code: status === 401 ? "authorization_required" : status === 403 ? "permission_denied" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
     });
     expect(attempts).toHaveBeenCalledOnce(); expect(sent).toHaveBeenCalledOnce();
   } finally { await session.close(); }
@@ -176,7 +176,7 @@ it("W05 valid provider InternalError after tools/call is availability evidence a
   } finally { await session.close(); }
 });
 
-it.each([401, 403])("W05 HTTP %s during connection and discovery requests requires authorization without dispatch", async status => {
+it.each([401, 403])("W05 HTTP %s during connection and discovery preserves authentication versus permission denial", async status => {
   for (const protocol of ["2025-11-25", "2026-07-28"] as const) {
     for (const method of [protocol === "2025-11-25" ? "initialize" : "server/discover", "tools/list"]) {
       const remote = upstream(), attempts = vi.fn(), sent = vi.fn(), cancelled = vi.fn();
@@ -190,10 +190,10 @@ it.each([401, 403])("W05 HTTP %s during connection and discovery requests requir
         } });
       if (method === "tools/list") {
         const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
-        try { await expect(session.listTools()).rejects.toMatchObject({ code: "authorization_required" }); }
+        try { await expect(session.listTools()).rejects.toMatchObject({ code: status === 401 ? "authorization_required" : "permission_denied" }); }
         finally { await session.close(); }
       } else {
-        await expect(connector.open(profile, new AbortController().signal, sent, async () => undefined)).rejects.toMatchObject({ code: "authorization_required" });
+        await expect(connector.open(profile, new AbortController().signal, sent, async () => undefined)).rejects.toMatchObject({ code: status === 401 ? "authorization_required" : "permission_denied" });
       }
       expect(attempts).toHaveBeenCalledOnce(); expect(cancelled).toHaveBeenCalledOnce();
       expect(sent).not.toHaveBeenCalled(); expect(remote.invoked).not.toHaveBeenCalled();

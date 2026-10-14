@@ -14,6 +14,7 @@ const messages = {
   "refreshTheLibraryBeforeMakingAnotherChange": ["Refresh before making another change.", "请刷新后再修改。"],
   "thisItemChangedRefreshAndReviewItAgainBefore": ["This item has changed. Refresh before saving.", "内容已更新，请刷新后再保存。"],
   "accessWasDeniedSignInAgainOrCheckThe": ["Access denied. Sign in again or check the MCP authorization.", "访问被拒绝，请重新登录或检查 MCP 授权。"],
+  "mcpPermissionDenied": ["The MCP provider denied access. Check provider-side MCP availability, permissions, and group or project access.", "MCP 服务提供方拒绝访问。请检查服务端的 MCP 可用性、权限以及群组或项目访问权限。"],
   "checkServiceNameAndPublicMcpUrl": ["Check the MCP name and enter a public HTTPS MCP URL.", "请检查 MCP 名称，并填写公网 HTTPS MCP 地址。"],
   "checkSkillFilesRequireNameAndDescription": ["Check the Skill files. SKILL.md requires name and description frontmatter.", "请检查 Skill 文件。SKILL.md 需要 name 和 description 元数据。"],
   "invalidActionRefreshLibrary": ["Could not complete this action. Refresh and try again.", "操作未完成，请刷新后重试。"],
