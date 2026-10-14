@@ -36,7 +36,7 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, r
     }
   });
   const services = createServiceWorkflow({ app, api: client.request, view, t, refresh: refreshProfiles,
-    run: runService, getProfiles: () => profiles,
+    run: runService, getProfiles: () => profiles, origin: location.origin,
     navigate: url => { if (isCurrent()) navigate(url); } });
   const skillWorkflow = createSkillWorkflow({ app, api: client.request, view: skillView, t,
     refresh: refreshSkills, run: runSkill, getSkills: () => skills });
