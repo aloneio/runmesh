@@ -3,6 +3,10 @@ import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
+import { RunnerHeartbeatPersistence } from "./platform/runner-heartbeat.js";
+import { RunnerOptionalPersistence } from "./platform/runner-optional-persistence.js";
+import { RunnerPolicyRecovery } from "./platform/runner-policy-recovery.js";
+import { heartbeatRetryActive, isTemporaryHeartbeatFailure, nextHeartbeatRetry } from "./domain/heartbeat-retry.js";
 import { consumeInternalNonceStatus } from "./platform/control-plane.js";
 import { appliedPolicyIdentity } from "./contracts/runner-selection.js";
 import { RunnerUpdateMaintenance, type MaintenanceConnection } from "./platform/runner-update-maintenance.js";
@@ -36,6 +40,8 @@ interface ConnectionAttachment extends RunnerConnectionIdentity {
   epoch: number;
   protocolVersion: number;
   authenticated: boolean;
+  /** Absent only on attachments created by older Workers. */
+  helloCompleted?: boolean;
   readonly helloDeadlineMs: number;
   queueProtocol?: 1;
   historyProtocol?: 2;
@@ -59,6 +65,9 @@ function preDispatchError(code: string, message: string, status: number, headers
 export class RunnerDO {
   private readonly replies: BridgeReplyPort;
   private readonly requestRegistry: RegistryRequestPort;
+  private readonly heartbeats: RunnerHeartbeatPersistence;
+  private readonly optionalPersistence: RunnerOptionalPersistence;
+  private readonly policyRecovery = new RunnerPolicyRecovery();
   /** Guards duplicate/concurrent hello frames on one hibernating socket. */
   private readonly helloInFlight = new WeakSet<WebSocket>();
   private admissionState: AdmissionState | undefined;
@@ -71,6 +80,9 @@ export class RunnerDO {
     dependencies: RunnerDoDependencies = {},
   ) {
     this.env = resolveRuntimeConfiguration(env);
+    this.heartbeats = new RunnerHeartbeatPersistence({ active: heartbeatRetryActive, next: nextHeartbeatRetry,
+      temporaryFailure: isTemporaryHeartbeatFailure }, this.env.RUNMESH_HEARTBEAT_FAILURE_MODE === "reconnect");
+    this.optionalPersistence = new RunnerOptionalPersistence({ active: heartbeatRetryActive, next: nextHeartbeatRetry, temporaryFailure: isTemporaryHeartbeatFailure });
     this.replies = dependencies.replies ?? new BridgeReplies();
     this.requestRegistry = dependencies.registryRequest ?? ((runnerId, action, init) => requestRunnerRegistry(this.env, runnerId, action, init));
     this.updateMaintenance = new RunnerUpdateMaintenance({ storage: ctx.storage, registry: this.requestRegistry,
@@ -244,6 +256,7 @@ export class RunnerDO {
       lifecycleId: authBody.lifecycle_id,
       protocolVersion: 0,
       authenticated: true,
+      helloCompleted: false,
       helloDeadlineMs: Date.now() + HELLO_DEADLINE_MS,
     };
     server.serializeAttachment(attachment);
@@ -262,11 +275,16 @@ export class RunnerDO {
     }
   }
 
-  private closeForRegistryFailure(ws: WebSocket, response: Response): void {
+  private closeForRegistryFailure(ws: WebSocket, response: Response, established = false): void {
     cancelBody(response);
     const { code, reason } = registrySessionClose(response);
+    if (established && isTemporaryHeartbeatFailure(response.status)) {
+      this.rejectBridgeWaiters(ws, reason, "control_plane_unavailable");
+      reportControlPlaneFailure("runner_session", "unexpected_status", undefined, response.status);
+      return;
+    }
     this.rejectBridgeWaiters(ws, reason);
-    ws.close(code, reason);
+    try { ws.close(code, reason); } catch { /* The peer may already be closed. */ }
   }
 
   private async handleWebSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
@@ -359,6 +377,9 @@ export class RunnerDO {
         protocolVersion: negotiation.protocolVersion, requestId: message.request_id,
         sessionId: attachment.sessionId, workerId: this.env.WORKER_ID ?? "runmesh", workerVersion: PRODUCT_VERSION,
       });
+      const latest = ws.deserializeAttachment() as ConnectionAttachment;
+      latest.helloCompleted = true;
+      ws.serializeAttachment(latest);
       try { ws.send(encodeWireFrame(welcome)); welcomeSent = true; } catch {
         // A concurrent revoke/delete may close the socket after the Registry
         // handshake but before the welcome is published. Treat that as a
@@ -375,6 +396,20 @@ export class RunnerDO {
       }
       return;
     }
+    if (this.helloInFlight.has(ws) || attachment.helloCompleted === false) {
+      ws.close(4000, "runner session not established");
+      return;
+    }
+    try { await this.handleEstablishedMessage(ws, attachment, message); }
+    catch (error) {
+      // Abort this frame and every unverified reply, not the established
+      // transport. Handshake exceptions still reach the fail-closed outer catch.
+      reportControlPlaneFailure("runner_message", "exception", error);
+      this.rejectBridgeWaiters(ws, "control plane temporarily unavailable", "control_plane_unavailable");
+    }
+  }
+
+  private async handleEstablishedMessage(ws: WebSocket, attachment: ConnectionAttachment, message: WireMessage): Promise<void> {
     // These frames are either fully fenced by their Registry mutation or are
     // deliberately dropped. Avoid a second `/session` round trip for them; the
     // extra probe used to multiply idle traffic and could even turn unbounded
@@ -392,7 +427,7 @@ export class RunnerDO {
       ws.close(attachment.epoch === 0 ? 4000 : 1002, reason);
       return;
     }
-    if (requiresSessionProbe && !(await this.verifySocketSession(ws, attachment))) return;
+    if (requiresSessionProbe && !(await this.verifySocketSession(ws, attachment, false, true))) return;
     if (message.type === "rpc.response" || message.type === "rpc.error") {
       const latest = ws.deserializeAttachment() as ConnectionAttachment;
       latest.pendingUpdateRpcIds = (latest.pendingUpdateRpcIds ?? []).filter(id => id !== message.request_id);
@@ -431,27 +466,30 @@ export class RunnerDO {
       return;
     }
     if (message.type === "job.started" || message.type === "job.status" || message.type === "job.completed") {
-      const response = await this.registryRequest(attachment.runnerId, "/event", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), message, now_ms: Date.now() }) });
-      if (!response.ok) this.closeForRegistryFailure(ws, response);
-      else cancelBody(response);
+      const response = await this.optionalPersistence.request(ws, "event", () => this.registryRequest(attachment.runnerId, "/event", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), message, now_ms: Date.now() }) }), receipt => this.closeForRegistryFailure(ws, receipt));
+      if (response !== undefined) cancelBody(response);
       return;
     }
     if (message.type === "runner.heartbeat") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
-      const response = await this.registryRequest(attachment.runnerId, "/heartbeat", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), now_ms: Date.now() }) });
-      if (!response.ok) this.closeForRegistryFailure(ws, response);
-      else cancelBody(response);
+      // A heartbeat is telemetry, not an authorization grant. Keep transport
+      // alive on temporary persistence failures without changing any RPC fence.
+      const persisted = await this.heartbeats.record(ws, () => this.registryRequest(attachment.runnerId, "/heartbeat", {
+        method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), now_ms: Date.now() }),
+      }), response => this.closeForRegistryFailure(ws, response));
+      if (persisted) await this.policyRecovery.retry(ws, () => this.requestPolicyReconfirmation(ws, attachment));
       return;
     }
     if (message.type === "runner.policy_ack") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
+      const recoveryGeneration = this.policyRecovery.begin(ws);
       const expectedAdmission = { ...(await this.admission()) };
       const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
       if (!response.ok) {
         // Release the receipt even if persisting the admission fence fails.
-        cancelBody(response);
+        this.closeForRegistryFailure(ws, response, true);
+        // An admission write failure must never mask an explicit 401/403/409.
         if (registryRejectedSession(response) && expectedAdmission.mutationPhase === "precommit") await this.markInvalidAdmission(attachment, expectedAdmission);
-        this.closeForRegistryFailure(ws, response);
         return;
       }
       const responseBody = response.ok ? await response.json() as { ack_result?: unknown } : undefined;
@@ -463,12 +501,18 @@ export class RunnerDO {
       if (ackResult === "stale") return;
       if (ackResult === "applied") await this.reconcileAdmission(attachment, expectedAdmission);
       else await this.markInvalidAdmission(attachment, expectedAdmission);
+      const current = this.admissionState;
+      if (current !== undefined && sameRunnerConnection(current, attachment)
+        && (ackResult === "invalid" && current.mutationPhase === "invalid"
+          || ackResult === "applied" && !current.fenced && current.reconciled)) {
+        this.policyRecovery.complete(ws, recoveryGeneration);
+      }
       return;
     }
     if (message.type === "runner.sync") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
-      const response = await this.registryRequest(attachment.runnerId, "/sync", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), message, now_ms: Date.now() }) });
-      if (!response.ok) { this.closeForRegistryFailure(ws,response); return; }
+      const response = await this.optionalPersistence.request(ws, "sync", () => this.registryRequest(attachment.runnerId, "/sync", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), message, now_ms: Date.now() }) }), receipt => this.closeForRegistryFailure(ws, receipt));
+      if (response === undefined) return;
       if (message.extensions?.runmesh_history_ack === true) {
         let result: unknown;
         try { result = await response.json(); } catch { result = undefined; }
@@ -676,10 +720,10 @@ export class RunnerDO {
     return reply.type === "rpc.response" ? Response.json(reply) : Response.json(reply, { status: reply.error.code === "timeout" ? 504 : reply.error.code === "request_too_large" ? 413 : 502 });
   }
 
-  private rejectBridgeWaiters(socket: WebSocket, message: string): void {
+  private rejectBridgeWaiters(socket: WebSocket, message: string, code: "runner_offline" | "control_plane_unavailable" = "runner_offline"): void {
     this.replies.reject(socket, (requestId, currentSocket) => {
       const attachment = currentSocket.deserializeAttachment() as ConnectionAttachment | null;
-      return { type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code: "runner_offline", message, ...failureMetadata("runner_offline", "unknown") } };
+      return { type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code, message, ...failureMetadata(code, "unknown") } };
     });
   }
 
@@ -944,14 +988,23 @@ export class RunnerDO {
     if (state.enrollment_mutation_committed === true && state.credential_mutation_committed === false) {
       return (await this.releasePolicyNeutralMutation(expected, state)).ok;
     }
-    // A revocation may have committed before its transport cleanup response
-    // was lost. Finalize only this proven owner before accepting a delete;
-    // an uncommitted operation or a creation still issuing enrollment stays
-    // exclusive. Finalization rechecks ownership under the write queue.
-    if (state.credential_mutation_kind === "credential_revoke" && state.credential_mutation_committed === true
+    // A committed credential mutation may have lost its transport cleanup
+    // response before Runner hello/reconciliation completed. Registry exposes
+    // these markers as committed only for the exact current lifecycle and
+    // credential generation, so a later mutation may finalize that proven
+    // owner before taking a new fence. runner_delete is intentionally excluded:
+    // its recovery path is the tombstone branch above. A committed runner_create
+    // remains recoverable only at its synthetic pre-enrollment generation;
+    // Registry stops reporting that marker committed once credentials advance.
+    if (["credential_revoke", "credential_enroll", "credential_rotate", "runner_create"].includes(String(state.credential_mutation_kind))
+      && state.credential_mutation_committed === true
       && typeof state.lifecycle_id === "string" && validLifecycleId(state.lifecycle_id)
       && this.mutationLifecycleMatches(expected, state.lifecycle_id)) {
-      return await this.finalizeOwnedMutation(expected.mutationId, "credentials revoked") === "ok";
+      const reason = state.credential_mutation_kind === "runner_create" ? "runner created"
+        : state.credential_mutation_kind === "credential_enroll" ? "credentials enrolled"
+        : state.credential_mutation_kind === "credential_rotate" ? "credentials rotated"
+        : "credentials revoked";
+      return await this.finalizeOwnedMutation(expected.mutationId, reason) === "ok";
     }
     if (typeof state.lifecycle_id !== "string" || !validLifecycleId(state.lifecycle_id) || state.lifecycle_id !== expected.lifecycleId) return false;
     const desiredRevision = state.desired_revision;
@@ -1170,6 +1223,25 @@ export class RunnerDO {
     await this.persistAdmissionIfCurrent(before, next);
   }
 
+  private async requestPolicyReconfirmation(ws: WebSocket, attachment: ConnectionAttachment): Promise<void> {
+    // No cached ACK is replayed. Re-deliver the current immutable desired policy
+    // and let the Runner validate and acknowledge it through the normal fence.
+    const receipt = await boundedJsonResponse(signal => this.registryRequest(attachment.runnerId, "/desired-policy", { method: "GET", signal }));
+    if (receipt?.status !== 200 || !isRecord(receipt.value)) return;
+    const { mutation_id: mutationId, ...policy } = receipt.value;
+    if (!isRunnerPolicy(policy) || policy.runner_id !== attachment.runnerId) return;
+    if (!await this.verifySocketSession(ws, attachment, true, true)) return;
+    const current = await this.admission();
+    if (!sameRunnerConnection(current, attachment) || current.mutationPhase === "precommit"
+      || current.desiredRevision !== null && (current.desiredRevision !== policy.revision || current.desiredChecksum !== policy.checksum)
+      || current.mutationId !== null && current.mutationId !== RESTART_RECONCILE_MUTATION_ID && current.mutationId !== mutationId
+      || !this.ctx.getWebSockets("runner").includes(ws)) return;
+    // No await between the local identity/mutation fence and this policy-only send.
+    try { ws.send(encodeWireFrame({ type: "runner.policy_update", protocol_version: attachment.protocolVersion,
+      request_id: `policy-recovery-${crypto.randomUUID()}`, runner_id: attachment.runnerId, policy })); }
+    catch { /* Keep the marker; transport cleanup or a later turn decides recovery. */ }
+  }
+
   private async currentRunnerSocket(): Promise<WebSocket | undefined> {
     const admission = await this.admission();
     for (const socket of this.ctx.getWebSockets("runner")) {
@@ -1212,10 +1284,10 @@ export class RunnerDO {
     });
   }
 
-  private async verifySocketSession(ws: WebSocket, attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
+  private async verifySocketSession(ws: WebSocket, attachment: ConnectionAttachment, requireOnline = false, established = false): Promise<boolean> {
     const response = await this.sessionResponse(attachment, requireOnline);
     if (response.status === 204) return true;
-    this.closeForRegistryFailure(ws, response);
+    this.closeForRegistryFailure(ws, response, established);
     return false;
   }
 

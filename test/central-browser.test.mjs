@@ -294,6 +294,13 @@ for (const locale of ["en", "zh-CN"]) test("OAuth deployment configuration failu
   assert.equal(api.requests.length, 1);
 });
 
+for (const locale of ["en", "zh-CN"]) test("OAuth providers without automatic client registration give actionable " + locale + " guidance", async t => {
+  const translate = createCentralTranslator(locale);
+  const api = client(t, () => Response.json({ error: { code: "oauth_client_registration_required", operation_state: "not_started" } }, { status: 503 }), translate);
+  await assert.rejects(api.request("connections/begin", { profile_id: "service", expected_revision: 1 }), { message: translate("oauthClientRegistrationRequired") });
+  assert.equal(api.requests.length, 1);
+});
+
 for (const locale of ["en", "zh-CN"]) for (const path of ["connection-check", "discovery/service"])
 for (const state of ["not_started", "unknown"]) for (const [code, key] of [
   ["remote_upstream_unavailable", "mcpServiceUnavailable"],
@@ -821,6 +828,7 @@ function oauthHandoffFixture(t, send = async () => undefined, read = async () =>
   workflow.render(profiles);
   const nodes = node => [node, ...node.children.flatMap(nodes)];
   return { profiles, requests, errors, destinations, status, render: () => workflow.render(profiles),
+    resumePending: (connected, mayPresent) => workflow.resumePending(profiles, connected, mayPresent),
     click(id, label) {
       const card = list.children.find(item => item.children.some(child => child.tag === 'h3' && child.textContent === id));
       const button = nodes(card).find(node => node.tag === 'button' && node.textContent === label);
@@ -828,6 +836,17 @@ function oauthHandoffFixture(t, send = async () => undefined, read = async () =>
     },
     create() { form.dispatch('submit', { preventDefault() {}, currentTarget: form }); return pending; } };
 }
+
+test('ordinary MCP page loads do not rediscover unpublished services without a callback marker', async t => {
+  const ui = oauthHandoffFixture(t);
+  await ui.resumePending(null);
+  assert.deepEqual(ui.requests, [], 'An idle page load must not probe enabled MCPs with missing catalogs');
+
+  await ui.resumePending('a');
+  assert.deepEqual(ui.requests.map(request => request.path), ['catalogs/a', 'discovery/a'],
+    'OAuth recovery is targeted to the exact callback connection');
+  assert.equal(ui.requests.some(request => request.path.includes('/b')), false);
+});
 
 for (const result of ['older-first', 'newer-first', 'older-fails', 'newer-fails'])
   test('OAuth keeps the latest connection intent when ' + result, async t => {

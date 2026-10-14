@@ -1,7 +1,10 @@
 export type RunnerConnectionState = "online" | "offline" | "stale";
-export const RUNNER_PRESENCE_TIMEOUT_MS = 45_000;
+// This contract must remain import-free. The presence window is the shared
+// 120s persistence cadence plus a 60s scheduling margin, not an authorization
+// or WebSocket lease. A regression test guards the relationship to protocol.
+export const RUNNER_PRESENCE_TIMEOUT_MS = 180_000;
 
-/** Read-time presence remains accurate when the maintenance alarm is delayed. */
+/** A stale observation does not prove disconnection; dispatch still needs live session and policy checks. */
 export function observedRunnerState(state: RunnerConnectionState, lastHeartbeatMs: number | null, nowMs: number): RunnerConnectionState {
   return state === "online" && (lastHeartbeatMs === null || lastHeartbeatMs < nowMs - RUNNER_PRESENCE_TIMEOUT_MS)
     ? "stale" : state;

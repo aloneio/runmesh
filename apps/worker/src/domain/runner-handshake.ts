@@ -1,4 +1,4 @@
-import { negotiateProtocolVersion, PROTOCOL_MIN_VERSION, PROTOCOL_CURRENT_VERSION, RunnerPolicySchema, runnerPolicyChecksum, validatePermissionSet, type RunnerHello, type RunnerWelcome, type RunnerPolicy } from "@aloneio/runmesh-protocol";
+import { RUNNER_HEARTBEAT_PERSISTENCE_INTERVAL_MS, negotiateProtocolVersion, PROTOCOL_MIN_VERSION, PROTOCOL_CURRENT_VERSION, RunnerPolicySchema, runnerPolicyChecksum, validatePermissionSet, type RunnerHello, type RunnerWelcome, type RunnerPolicy } from "@aloneio/runmesh-protocol";
 import { record } from "../values.js";
 
 /** Pure handshake decisions; socket, Registry and admission ownership stay in RunnerDO. */
@@ -36,7 +36,7 @@ export function parseRegistryHelloReceipt(value: unknown, hello: RunnerHello): R
     ...(historyProtocol ? { historyProtocol: 2 as const } : {}),
     // Registry JSON has already been decoded by the transport. Preserve the
     // negotiated extension payload for the shared wire encoder to validate.
-    extensions: { ...(history === undefined ? {} : { runmesh_job_history: history as never }), ...(queueProtocol ? { runmesh_job_queue: 1 } : {}), ...(historyProtocol ? { runmesh_job_reporting: 2 } : {}) },
+    extensions: { ...(history === undefined ? {} : { runmesh_job_history: history as never }), ...(queueProtocol ? { runmesh_job_queue: 1 } : {}), ...(historyProtocol ? { runmesh_job_reporting: 2 } : {}), ...(capabilities.labels.transport_ping_protocol === "1" ? { runmesh_transport_ping: 1, runmesh_heartbeat_interval_ms: RUNNER_HEARTBEAT_PERSISTENCE_INTERVAL_MS } : {}) },
     ...(isRunnerPolicy(body.desired_policy) ? { desiredPolicy: body.desired_policy } : {}),
   };
 }

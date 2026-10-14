@@ -631,3 +631,31 @@ it("bounds snapshot captures across repeated replacement sockets and recovers on
     expect(syncs).toHaveLength(1);
   } finally { release(); connection.stop(); await started; }
 });
+
+
+it.each([false, true])("negotiates low-frequency heartbeats without slowing transport probes: %s", async negotiated => {
+  vi.useFakeTimers();
+  const { connection, socket } = setup();
+  socket.send.mockImplementation(value => {
+    if (value === "ping") socket.emit("message", Buffer.from("pong"), false);
+  });
+  const running = connection.start();
+  const heartbeatCount = () => socket.send.mock.calls.filter(([value]) => {
+    if (value === "ping") return false;
+    return decodeWireFrame(value as string).type === "runner.heartbeat";
+  }).length;
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    socket.open();
+    socket.emit("message", Buffer.from(encodeWireFrame({ ...welcome,
+      ...(negotiated ? { extensions: { runmesh_transport_ping: 1, runmesh_heartbeat_interval_ms: 120000 } } : {}) })), false);
+    const initial = heartbeatCount();
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(heartbeatCount() - initial).toBe(negotiated ? 0 : 1);
+    if (negotiated) expect(socket.send.mock.calls.filter(([value]) => value === "ping").length).toBeGreaterThanOrEqual(2);
+    else expect(socket.send.mock.calls.some(([value]) => value === "ping")).toBe(false);
+    await vi.advanceTimersByTimeAsync(90000);
+    expect(heartbeatCount() - initial).toBe(negotiated ? 1 : 4);
+    expect(socket.terminate).not.toHaveBeenCalled();
+  } finally { connection.stop(); await running; }
+});

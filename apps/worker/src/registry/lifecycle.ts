@@ -1,5 +1,4 @@
 import type { RunnerConnectionState } from "../contracts/runner-selection.js";
-import { observedRunnerState, RUNNER_PRESENCE_TIMEOUT_MS } from "../contracts/runner-selection.js";
 import type { RunnerMetadata } from "@aloneio/runmesh-protocol";
 import { constantTimeEqual } from "../security.js";
 import { isConfiguredSecret } from "../security.js";
@@ -444,13 +443,13 @@ export class RegistryLifecycle {
 
   public getRunner(runnerId: string): RunnerRecord | undefined {
     const nowMs = Date.now();
-    const row = this.currentRunnerRow(runnerId, nowMs);
+    const row = this.currentRunnerRow(runnerId);
     return row === undefined ? undefined : decodeRunner(row, nowMs);
   }
 
   public getRunnerExecutionState(runnerId: string): { readonly runner: RunnerRecord; readonly lifecycle_id: string; readonly session_id: string | null } | undefined {
     const nowMs = Date.now();
-    const row = this.currentRunnerRow(runnerId, nowMs);
+    const row = this.currentRunnerRow(runnerId);
     return row === undefined || !validLifecycleId(row.lifecycle_id) ? undefined : { runner: decodeRunner(row, nowMs), lifecycle_id: row.lifecycle_id, session_id: row.session_id };
   }
 
@@ -459,17 +458,11 @@ export class RegistryLifecycle {
     return this.storage.sql.exec<RunnerRow>("SELECT * FROM runners ORDER BY display_name, runner_id").toArray().map(row => decodeRunner(row, nowMs));
   }
 
-  private currentRunnerRow(runnerId: string, nowMs: number): RunnerRow | undefined {
-    const staleBefore = nowMs - RUNNER_PRESENCE_TIMEOUT_MS;
-    let row = this.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
-    // Read first so healthy control-plane lookups do not execute a write
-    // statement that matches zero rows on every request. Only persist the
-    // transition when the snapshot is actually stale.
-    if (row?.state === "online" && row.last_heartbeat_ms !== null && observedRunnerState(row.state, row.last_heartbeat_ms, nowMs) === "stale") {
-      this.storage.sql.exec("UPDATE runners SET state = 'stale', updated_at_ms = ? WHERE runner_id = ? AND state = 'online' AND last_heartbeat_ms < ?", nowMs, runnerId, staleBefore);
-      row = this.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
-    }
-    return row;
+  private currentRunnerRow(runnerId: string): RunnerRow | undefined {
+    // Public reads project freshness in decodeRunner; they must never depend
+    // on a successful write or mutate the authoritative session identity.
+    // The maintenance lane owns persisted stale transitions independently.
+    return this.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
   }
 
   public consumedEnrollmentMutation(mutationId: string, verifier: string): (RunnerMutationRow & { runner_id: string }) | undefined {

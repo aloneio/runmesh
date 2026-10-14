@@ -11,8 +11,11 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "0a6483245562b6387d2adb579539b46b41a1fbb5572445a890c9f1ef7b632fd2",
-      "bytes": 187677,
+      "sha256": "f8f8212ab3418d3d38c5cb2cfba0095466907dcb9858173807cdf2c159aa1376",
+      "bytes": 190427,
+      "pre_mcp_relay_sha256": "0a6483245562b6387d2adb579539b46b41a1fbb5572445a890c9f1ef7b632fd2",
+      "pre_mcp_relay_bytes": 187677,
+      "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -35,8 +38,11 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "56d9298c83d590d413eb7c589b853078ed0b872da4b0d6bc7c6f0c1df89c39d3",
-      "bytes": 188337,
+      "sha256": "80ed5fed7c660c26c1e09c123500b5386356dd0146018919d57f4d0acb6bde48",
+      "bytes": 191087,
+      "pre_mcp_relay_sha256": "56d9298c83d590d413eb7c589b853078ed0b872da4b0d6bc7c6f0c1df89c39d3",
+      "pre_mcp_relay_bytes": 188337,
+      "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -56,8 +62,11 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "2e9f336f95e1e5a1bc89cf3f551123c85c20762898d53a82c25f8d6315bea6a0",
-      "bytes": 190634,
+      "sha256": "ce027152e943d50e33ec1e355dca49f1bf976f7ba097a7409fee22b4e30291e5",
+      "bytes": 193384,
+      "pre_mcp_relay_sha256": "2e9f336f95e1e5a1bc89cf3f551123c85c20762898d53a82c25f8d6315bea6a0",
+      "pre_mcp_relay_bytes": 190634,
+      "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -429,8 +438,11 @@
           }
         ]
       ],
-      "sha256": "83a6789b7acb712713274551956933f747f289a902235f24540fb3b4b31e3f8b",
-      "bytes": 190983,
+      "sha256": "6c29674e71a373cd4b5e425fe9e57742a16ee4fb4b51b96da4fffee63d9fe523",
+      "bytes": 193733,
+      "pre_mcp_relay_sha256": "83a6789b7acb712713274551956933f747f289a902235f24540fb3b4b31e3f8b",
+      "pre_mcp_relay_bytes": 190983,
+      "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -586,6 +598,16 @@
   "skill_upload_review": {
     "source_base": "bfccf9278288e5674da23ad3a9be5f2abc9d4218",
     "reviewed_change": "Raise Skill uploads to 256 files, 1 MiB per file and 8 MiB per canonical package. Form limits come from the server contract. Bilingual DOM tests cover actual folder selection, oversized selections, JSON escaping and retry after confirmed HTTP 413. No screenshots."
+  },
+  "oauth_preregistered_client_review": {
+    "source_base": "4b6c75d2903d13cf87aa1cf4c0c81f0ee0613183",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Support pre-registered OAuth clients for providers without CIMD or dynamic client registration. Client secrets stay in encrypted managed OAuth state, reconnect reuses the saved client, and the browser exposes explicit bilingual recovery guidance. Replacing only the reviewed browser bundle reproduces the prior four render hashes and byte counts."
   },
   "oauth_reconnect_review": {
     "source_base": "04c751c0ecda6d76fcb1a73a6cbce01278cb9d80",

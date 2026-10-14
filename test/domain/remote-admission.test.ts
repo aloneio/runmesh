@@ -162,6 +162,21 @@ it("W05 successful discovery publishes complete tool definitions without a separ
   expect(publish).toHaveBeenCalledOnce(); expect(f.repository.stage).not.toHaveBeenCalled(); expect(f.invoked).not.toHaveBeenCalled();
 });
 
+it("W05 refresh publishes the four-tool Cloudflare Code Mode catalog including whoami", async () => {
+  const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.repository.publish = publish;
+  const whoami = { ...catalogDefinition("whoami"), inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    outputSchema: { type: "object", properties: { id: { type: "string", minLength: 1, pattern: "\\S" },
+      name: { type: "string" }, email: { type: "string" } }, required: ["id"], additionalProperties: false } };
+  f.listTools.mockResolvedValue([catalogDefinition("docs"), catalogDefinition("search"), catalogDefinition("execute"), whoami]);
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
+  expect(publish).toHaveBeenCalledOnce();
+  const snapshot = publish.mock.calls[0]![0];
+  expect(snapshot.tools.map(tool => tool.definition.name)).toEqual(["docs", "execute", "search", "whoami"]);
+});
+
 it.each(["session", "profile", "catalog"])("discovery cannot publish after the %s changes while listing tools", async changed => {
   const f = await fixture();
   let allowed = true;

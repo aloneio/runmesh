@@ -1,3 +1,4 @@
+export { RUNNER_HEARTBEAT_PERSISTENCE_INTERVAL_MS } from "./transport-timing.js";
 import {
   MAX_FRAME_BYTES,
   LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
