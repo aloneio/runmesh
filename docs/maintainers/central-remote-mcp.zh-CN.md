@@ -103,7 +103,7 @@ POST `/admin/central/registry-preview` 接受 `{entry}`，内容为一份 server
 [控制端管理界面](central-administration.zh-CN.md)。客户端仍需连接凭据，中央发布不授予机器权限。
 
 发现接口不接受调用方提供 URL、token、请求头或命令。分页不完整、重复工具、
-不支持的 schema、超时和上游失败不会覆盖旧的已审核目录。实际调用会再次获取
+超时和上游失败不会覆盖旧的已审核目录。实际调用会再次获取
 上游工具定义；所选工具的说明、schema 或注解变化后停止派发，需刷新工具，刷新成功后直接发布。
 调用本身不改写目录，也不会每次请求都创建新目录版本。
 
@@ -140,12 +140,12 @@ tools/call 派发前检查权限和档案代次；新 tools/list 将所选定义
 | --- | --- |
 | 单次所有者操作 | 20 秒 |
 | 每所有者／每客户端活跃操作 | 2／1，不排队 |
-| 出站请求／单响应 | 64 KiB／1 MiB |
-| 累计响应 | 2 MiB |
-| HTTP 请求／目录分页 | 12／8 |
-| 完整目录工具数量 | 128，同时遵循[目录的字节和节点预算](../central-catalog.zh-CN.md#存储预算与恢复) |
-| 响应片段／SSE 事件 | 4,096／256 |
-| 返回内容块 | 32 |
+| 出站请求／单响应 | 64 KiB／2 MiB |
+| 累计响应 | 8 MiB |
+| HTTP 请求／目录分页 | 40／32 |
+| 完整目录工具数量 | 512，同时遵循[目录的字节和节点预算](../central-catalog.zh-CN.md#存储预算与恢复) |
+| 响应片段／SSE 事件 | 8,192／256 |
+| 返回内容块 | 128 |
 | 出站端点策略 | 64 项／16 KiB |
 
 这些是准入上限，不是吞吐量或费用承诺；单次预算包含连接、目录检查、验证和执行。
@@ -167,3 +167,9 @@ DO／SQLite 和 Registry 权限链，以及模拟上游服务。覆盖两种协�
 [Cloudflare 公网 fetch 配置](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public)、
 [workerd 公网与 DNS 过滤规则](https://github.com/cloudflare/workerd/blob/main/src/workerd/server/workerd.capnp)、
 [Cloudflare JSON Schema 解释器](https://github.com/cfworker/cfworker/tree/main/packages/json-schema)。
+
+## 托管服务兼容与隔离
+
+展示元数据和执行约束分离；GitLab toolset、图标、版本等扩展不再导致目录整体失败。
+不支持的单个工具隔离并提示，非空目录全部不支持时保留旧目录。不会删除正则或其他约束
+来制造校验成功。详见 [兼容性矩阵](../mcp-compatibility.zh-CN.md)。

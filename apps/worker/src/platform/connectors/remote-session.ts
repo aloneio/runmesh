@@ -1,4 +1,4 @@
-import { RemoteFault, type RemoteEgressRule } from "../../contracts/remote.js";
+import { REMOTE_LIMITS, RemoteFault, type RemoteEgressRule } from "../../contracts/remote.js";
 import { reflectsRemoteSecret } from "./remote-response.js";
 
 /** An upstream HTTP session belongs to exactly one operation/credential. No
@@ -17,7 +17,7 @@ export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
     response(response: Response, method: string): Response {
       const next = response.headers.get("mcp-session-id");
       if (next === null && !(method === "initialize" && rule.session === "ephemeral")) return response;
-      if ((rule.session !== "ephemeral" && rule.session !== "optional") || (rule.session !== "optional" && rule.protocol !== "2025-11-25") || next === null || !/^[\x21-\x7e]{1,128}$/u.test(next)
+      if ((rule.session !== "ephemeral" && rule.session !== "optional") || (rule.session !== "optional" && rule.protocol !== "2025-11-25") || next === null || (next.length > REMOTE_LIMITS.session_id_bytes || !/^[\x21-\x7e]+$/u.test(next))
         || (id === undefined ? method !== "initialize" && method !== "server/discover" : next !== id)) {
         void response.body?.cancel().catch(() => undefined); throw new RemoteFault("upstream_protocol_error");
       }

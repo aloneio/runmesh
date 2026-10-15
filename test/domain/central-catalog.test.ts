@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { CATALOG_LIMITS } from "../../apps/worker/src/contracts/catalog.js";
 import { catalogJson } from "../../apps/worker/src/contracts/catalog-json.js";
 import { catalogSchemaGraph } from "../../apps/worker/src/contracts/catalog-schema.js";
 import { parseCatalogCommand, parseRemoteTool, parseCatalogSnapshot, parseCatalogTool } from "../../apps/worker/src/contracts/catalog-values.js";
@@ -152,9 +153,9 @@ it("W04 supports bounded local refs without confusing property names or JSON dat
 
 it("W04 enforces aggregate/count/depth budgets and accepts a genuine empty catalog", async () => {
   const stage = (tools: unknown) => parseCatalogCommand({ action: "stage", profile_id: "docs", expected_revision: 0, tools });
-  expect(stage(Array.from({ length: 129 }, (_, i) => catalogDefinition(`tool${i}`)))).toBeUndefined();
+  expect(stage(Array.from({ length: CATALOG_LIMITS.tools + 1 }, (_, i) => catalogDefinition(`tool${i}`)))).toBeUndefined();
   expect(stage([catalogDefinition(), catalogDefinition()])).toBeUndefined();
-  expect(stage(Array.from({ length: 70 }, (_, i) => catalogDefinition(`tool${i}`, "文".repeat(3000))))).toBeUndefined();
+  expect(stage(Array.from({ length: Math.ceil(CATALOG_LIMITS.snapshot_bytes / 9_000) + 1 }, (_, i) => catalogDefinition(`tool${i}`, "文".repeat(3000))))).toBeUndefined();
   let schema: unknown = { type: "string" };
   for (let i = 0; i < 30; i++) schema = { type: "object", properties: { next: schema } };
   expect(parseRemoteTool({ ...catalogDefinition(), inputSchema: schema })).toBeUndefined();

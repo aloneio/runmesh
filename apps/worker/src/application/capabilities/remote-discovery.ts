@@ -1,5 +1,5 @@
-import type { CatalogAdminPorts, CatalogMutation } from "../../contracts/catalog.js";
-import { RemoteFault, type RemoteConnector, type RemoteFailure, type RemoteSession } from "../../contracts/remote.js";
+import type { CatalogAdminPorts } from "../../contracts/catalog.js";
+import { RemoteFault, type RemoteConnector, type RemoteSession, type RemoteDiscoveryResult } from "../../contracts/remote.js";
 import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
 import { catalogRevision } from "../../contracts/catalog-json.js";
 import { parseProfile } from "../../contracts/connector-values.js";
@@ -9,10 +9,10 @@ import { remoteDeadline } from "./remote-deadline.js";
 /** Complete, bounded discovery publishes every tool in one transaction. Partial
  * pages and failed observations leave the previously published state intact. */
 export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly connector: RemoteConnector }) {
-  return async (profileId: string, expectedRevision: number, parent: AbortSignal): Promise<CatalogMutation | RemoteFailure> => {
+  return async (profileId: string, expectedRevision: number, parent: AbortSignal): Promise<RemoteDiscoveryResult> => {
     if (!isCapabilityIdentifier(profileId) || !catalogRevision(expectedRevision, true)) return { state: "invalid" };
     let publishing = false;
-    return remoteDeadline<CatalogMutation | RemoteFailure>(parent, () => ({ state: publishing ? "unknown" : "unavailable" }), async (signal, expired) => {
+    return remoteDeadline<RemoteDiscoveryResult>(parent, () => ({ state: publishing ? "unknown" : "unavailable" }), async (signal, expired) => {
       let session: RemoteSession | undefined;
       try {
         const admission = await ports.authorize(signal);
@@ -31,7 +31,7 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
             || (ports.repository.readHead(profileId)?.revision ?? 0) !== expectedRevision) throw new RemoteFault("stale_catalog");
         };
         session = await ports.connector.open(profile, signal, () => { throw new RemoteFault("upstream_protocol_error"); }, fence);
-        const tools = await session.listTools();
+        const tools = await session.listTools(), excluded = session.issues?.() ?? [];
         if (expired()) return { state: "unavailable" };
         // Publication changes the catalog revision used by session cleanup.
         // Close first, then revalidate admission after that asynchronous wait.
@@ -47,7 +47,8 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
           return current?.revision === profile.revision && current.enabled && current.endpoint === profile.endpoint ? current : undefined;
         } });
         publishing = true;
-        return await manager.mutate({ action: "publish", profile_id: profileId, expected_revision: expectedRevision, tools }, signal, expired);
+        const result = await manager.mutate({ action: "publish", profile_id: profileId, expected_revision: expectedRevision, tools }, signal, expired);
+        return result.state === "written" && excluded.length ? { ...result, excluded_tools: excluded } : result;
       } catch (error) {
         return { state: "failed", code: error instanceof RemoteFault ? error.code : "dependency_unavailable", operation_state: publishing ? "unknown" : "not_started" };
       } finally { await session?.close().catch(() => undefined); }

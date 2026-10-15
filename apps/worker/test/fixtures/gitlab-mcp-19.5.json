@@ -1,0 +1,58 @@
+{
+  "source_revision": "135fb0218a7aa9cc54a5c2b4033d2f0e7d9b4e0b",
+  "kind": "source-derived synthetic fixture, not an authenticated capture",
+  "source_paths": [
+    "lib/api/mcp/handlers/list_tools.rb",
+    "app/services/mcp/tools/get_server_version_service.rb",
+    "app/services/mcp/tools/repositories/get_repository_file_service.rb"
+  ],
+  "tools": [
+    {
+      "name": "get_mcp_server_version",
+      "description": "Get the current version of MCP server.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "toolset": "meta"
+      },
+      "icons": [
+        {
+          "src": "https://gitlab.com/assets/gitlab_logo.png",
+          "mimeType": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "get_repository_file",
+      "description": "Read a repository file at a given ref.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "toolset": "repository"
+      }
+    }
+  ]
+}

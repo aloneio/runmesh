@@ -1,6 +1,7 @@
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/client/validators/cf-worker";
 import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
-import { catalogSchemaGraph, safeCatalogPattern } from "../../contracts/catalog-schema.js";
+import { catalogSchemaGraph, safeCatalogPattern, catalogPatternCost } from "../../contracts/catalog-schema.js";
+import { CATALOG_LIMITS } from "../../contracts/catalog.js";
 import { REMOTE_LIMITS } from "../../contracts/remote.js";
 import type { JsonSchemaType, JsonSchemaValidator, jsonSchemaValidator } from "@modelcontextprotocol/client";
 
@@ -22,29 +23,25 @@ const validationKeywords = new Set(["$schema", "$id", "id", "$anchor", "$ref", "
  * provider-side contract change still changes its catalog digest. */
 function normalizeCompatibilitySchema(root: Record<string, unknown>): void {
   const declared = typeof root.$schema === "string" ? root.$schema.replace(/#$/u, "") : undefined;
-  const explicitLegacy = declared?.includes("draft-07") === true || declared?.includes("draft-06") === true;
+  const draft4 = declared?.includes("draft-04") === true;
+  const explicitLegacy = draft4 || declared?.includes("draft-07") === true || declared?.includes("draft-06") === true;
   const compatibilityDialect = declared !== undefined && compatibilityDialects.has(declared);
   // Draft-04 and vendor/OpenAPI dialect URIs are common in generated tool
   // schemas but are outside the Workerd validator's native dispatch. Treat
   // them as compatibility input and validate the standard subset after the
   // normalizations below; the provider remains authoritative for extensions.
-  if (compatibilityDialect) delete root.$schema;
+  if (compatibilityDialect) { if (draft4) root.$schema = "http://json-schema.org/draft-07/schema#"; else delete root.$schema; }
   const walk = (schema: unknown): void => {
     const item = catalogObject(schema);
     if (item === undefined) return;
     if (item.nullable === true) {
       if (typeof item.type === "string" && item.type !== "null") item.type = [item.type, "null"];
       else if (Array.isArray(item.type) && !item.type.includes("null")) item.type = [...item.type, "null"];
-      if (Array.isArray(item.enum) && !item.enum.includes(null)) item.enum = [...item.enum, null];
+      // nullable widens only type; enum and other constraints still apply.
     }
-    if (typeof item.pattern === "string" && !safeCatalogPattern(item.pattern)) delete item.pattern;
+    if (typeof item.pattern === "string" && !safeCatalogPattern(item.pattern)) throw new Error("unsupported_pattern");
     const patternProperties = catalogObject(item.patternProperties);
-    if (patternProperties !== undefined) {
-      let removed = false;
-      for (const pattern of Object.keys(patternProperties)) if (!safeCatalogPattern(pattern)) { delete patternProperties[pattern]; removed = true; }
-      if (removed && item.additionalProperties === false) item.additionalProperties = true;
-      if (Object.keys(patternProperties).length === 0) delete item.patternProperties;
-    }
+    if (patternProperties && Object.keys(patternProperties).some(pattern => !safeCatalogPattern(pattern))) throw new Error("unsupported_pattern");
     for (const [exclusive, inclusive] of [["exclusiveMinimum", "minimum"], ["exclusiveMaximum", "maximum"]] as const) {
       if (typeof item[exclusive] !== "boolean") continue;
       if (item[exclusive] === true && typeof item[inclusive] === "number") item[exclusive] = item[inclusive];
@@ -121,28 +118,64 @@ function nodes(value: unknown): number {
   return 1 + Object.values(value).reduce<number>((sum, child) => sum + nodes(child), 0);
 }
 
+type Prepared = { evaluate: JsonSchemaValidator<unknown>; cost: number; quadratic: boolean; patterns: readonly string[] };
+const formats = new Set(["date", "time", "date-time", "duration", "uri", "uri-reference", "uri-template", "url", "email", "hostname",
+  "ipv4", "ipv6", "regex", "uuid", "json-pointer", "json-pointer-uri-fragment", "relative-json-pointer"]);
+
 export class BoundedRemoteValidator implements jsonSchemaValidator {
-  public getValidator<T>(schema: JsonSchemaType) {
-    const encoded = catalogJson(schema, 32_768);
-    const copy = encoded === undefined ? undefined : parseInstance(encoded);
-    if (catalogObject(copy) !== undefined) normalizeCompatibilitySchema(copy as Record<string, unknown>);
-    const cost = copy === undefined ? Infinity : prepareSchema(copy);
-    // Construction is also bounded: never instantiate an unsupported schema.
-    // Let the SDK select 2020-12, 2019-09 or draft-06/07 from `$schema`;
-    // forcing 2020-12 silently drops older dependency/tuple semantics.
-    let evaluate: JsonSchemaValidator<T> | undefined;
-    if (cost <= REMOTE_LIMITS.validation_cost) {
-      try { evaluate = new CfWorkerJsonSchemaValidator({ shortcircuit: true }).getValidator<T>(copy as JsonSchemaType); }
-      catch { evaluate = undefined; }
-    }
+  private readonly cache = new Map<string, Prepared | undefined>();
+  private prepare(schema: JsonSchemaType): Prepared | undefined {
+    const encoded = catalogJson(schema, CATALOG_LIMITS.tool_bytes);
+    if (encoded === undefined) return undefined;
+    if (this.cache.has(encoded)) return this.cache.get(encoded);
+    let prepared: Prepared | undefined;
+    try {
+      const copy = parseInstance(encoded);
+      if (catalogSchemaGraph(copy, false) === undefined && catalogSchemaGraph(copy, true) === undefined) return undefined;
+      normalizeCompatibilitySchema(copy as Record<string, unknown>);
+      const cost = prepareSchema(copy), graph = catalogSchemaGraph(copy, false);
+      if (graph === undefined || cost > REMOTE_LIMITS.validation_cost) return undefined;
+      const patterns: string[] = []; let quadratic = false;
+      for (const path of graph.keys()) {
+        const item = catalogObject(path === "" ? copy : path.slice(1).split("/").reduce<unknown>(
+          (value, part) => (value as Record<string, unknown>)[part.replaceAll("~1", "/").replaceAll("~0", "~")], copy));
+        if (!item) continue;
+        quadratic ||= item.uniqueItems === true;
+        if (typeof item.pattern === "string") patterns.push(item.pattern);
+        const properties = catalogObject(item.patternProperties);
+        if (properties) patterns.push(...Object.keys(properties));
+        // Unknown formats are annotations, not callable keys on the interpreter's format object.
+        if (typeof item.format === "string" && !formats.has(item.format)) delete item.format;
+      }
+      const evaluate = new CfWorkerJsonSchemaValidator({ shortcircuit: true }).getValidator(copy as JsonSchemaType);
+      prepared = { evaluate, cost, quadratic, patterns };
+    } catch { prepared = undefined; }
+    if (this.cache.size >= 16) this.cache.delete(this.cache.keys().next().value!);
+    this.cache.set(encoded, prepared); return prepared;
+  }
+  public supports(schema: JsonSchemaType): boolean { return this.prepare(schema) !== undefined; }
+  public getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
+    const prepared = this.prepare(schema);
     return (value: unknown) => {
       try {
         const body = catalogJson(value, REMOTE_LIMITS.response_bytes);
-        if (body === undefined || evaluate === undefined) return { valid: false as const, data: undefined, errorMessage: "remote_schema_budget" };
+        if (body === undefined || prepared === undefined) return { valid: false as const, data: undefined, errorMessage: "remote_schema_budget" };
         const clean = parseInstance(body), size = nodes(clean);
-        if (cost * size * size > REMOTE_LIMITS.validation_cost) return { valid: false as const, data: undefined, errorMessage: "remote_schema_budget" };
-        const result = evaluate(clean);
-        return result.valid ? result : { valid: false as const, data: undefined, errorMessage: "remote_schema_invalid" };
+        let work = prepared.cost * size * (prepared.quadratic ? size : 1);
+        const strings: number[] = [];
+        const lengths = (v: unknown): void => {
+          if (typeof v === "string") strings.push(v.length);
+          else if (Array.isArray(v)) v.forEach(lengths);
+          else if (v !== null && typeof v === "object") for (const [key, child] of Object.entries(v)) { strings.push(key.length); lengths(child); }
+        };
+        if (prepared.patterns.length) lengths(clean);
+        for (const pattern of prepared.patterns) for (const length of strings) {
+          work += catalogPatternCost(pattern, length);
+          if (work > REMOTE_LIMITS.validation_cost) return { valid: false as const, data: undefined, errorMessage: "remote_schema_budget" };
+        }
+        if (work > REMOTE_LIMITS.validation_cost) return { valid: false as const, data: undefined, errorMessage: "remote_schema_budget" };
+        const result = prepared.evaluate(clean);
+        return result.valid ? { valid: true as const, data: result.data as T, errorMessage: undefined } : { valid: false as const, data: undefined, errorMessage: "remote_schema_invalid" };
       } catch { return { valid: false as const, data: undefined, errorMessage: "remote_schema_invalid" }; }
     };
   }

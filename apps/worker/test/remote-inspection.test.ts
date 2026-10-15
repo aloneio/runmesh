@@ -147,14 +147,14 @@ it("RM10 rejects a repeated page cursor instead of reporting a partial tool coun
 
 it("RM10 retains the tool count and per-tool byte budgets during inspection", async () => {
   const tooMany = fixture([{ tools: Array.from({ length: CATALOG_LIMITS.tools + 1 }, (_, i) => definition(`tool_${i}`)) }]);
-  expect(await tooMany.run()).toEqual(protocolError);
+  expect(await tooMany.run()).toEqual({ state: "unavailable", code: "catalog_limit_exceeded" });
   const tooLarge = fixture([{ tools: [{ ...definition(), _meta: { description: "x".repeat(CATALOG_LIMITS.tool_bytes) } }] }]);
-  expect(await tooLarge.run()).toEqual(protocolError);
+  expect(await tooLarge.run()).toEqual({ state: "unavailable", code: "catalog_limit_exceeded" });
 });
 
 it("RM10 bounds the complete descriptor set even when every tool fits its individual byte budget", async () => {
-  const tools = Array.from({ length: 18 }, (_, i) => ({ ...definition(`tool_${i}`), _meta: { description: "x".repeat(30_000) } }));
-  expect(await fixture([{ tools: tools.slice(0, 9), nextCursor: "page-two" }, { tools: tools.slice(9) }]).run()).toEqual(protocolError);
+  const tools = Array.from({ length: Math.ceil(CATALOG_LIMITS.snapshot_bytes / 30_000) + 1 }, (_, i) => ({ ...definition(`tool_${i}`), _meta: { description: "x".repeat(30_000) } }));
+  expect(await fixture([{ tools: tools.slice(0, 36), nextCursor: "page-two" }, { tools: tools.slice(36) }]).run()).toEqual(protocolError);
 });
 
 it.each([false, true])("RM10 enforces the pagination limit when continuation is %s", async continues => {

@@ -9,7 +9,9 @@ import { parseRemoteTool } from "../src/contracts/catalog-values.js";
 import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
 import { buildCatalogSnapshot } from "../src/domain/capabilities/catalog.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
-import { RemoteFault, type RemoteConnector, type RemoteProtocol } from "../src/contracts/remote.js";
+import gitlabFixture from "./fixtures/gitlab-mcp-19.5.json";
+import { CATALOG_LIMITS } from "../src/contracts/catalog.js";
+import { REMOTE_LIMITS, RemoteFault, type RemoteConnector, type RemoteProtocol } from "../src/contracts/remote.js";
 import type { ConnectionProfile } from "../src/contracts/connectors.js";
 
 const endpoint = "https://remote.example.com/mcp";
@@ -88,7 +90,7 @@ it("W05 forwards only SDK-derived SEP-2243 Mcp-Param headers for GitHub-style to
   } finally { await session.close(); }
 });
 
-it.each([null, ""])("W05 accepts GitLab-style extensions and terminal nextCursor %j in tools/list", async terminalCursor => {
+it("W05 accepts GitLab-style annotation and presentation extensions in tools/list", async () => {
   const remote = upstream();
   const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
     fetch: async (input, init) => {
@@ -99,7 +101,6 @@ it.each([null, ""])("W05 accepts GitLab-style extensions and terminal nextCursor
       reply.result.tools[0] = { ...reply.result.tools[0], version: "0.1.0", providerMetadata: { provider: "gitlab" },
         annotations: { readOnlyHint: true, toolset: "repository" },
         icons: [{ src: "https://gitlab.com/assets/gitlab_logo.png", mimeType: "image/png", theme: "dark", cacheKey: "v1" }] };
-      reply.result.nextCursor = terminalCursor;
       return Response.json(reply);
     } });
   const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
@@ -341,8 +342,8 @@ it("W05 normalizes an empty 204 initialized notification response for legacy HTT
 
 it.each(["length", "stream", "depth", "utf8", "empty-fragments"])("W05 rejects %s overflow and cancels the untrusted response", async reason => {
   const stopped = vi.fn(), encoder = new TextEncoder(); let response: Response;
-  if (reason === "length") response = new Response(new ReadableStream({ cancel: stopped }), { headers: { "content-type": "application/json", "content-length": "1048577" } });
-  else if (reason === "stream") response = new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(1048577)); }, cancel: stopped }), { headers: { "content-type": "application/json" } });
+  if (reason === "length") response = new Response(new ReadableStream({ cancel: stopped }), { headers: { "content-type": "application/json", "content-length": String(REMOTE_LIMITS.response_bytes + 1) } });
+  else if (reason === "stream") response = new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(REMOTE_LIMITS.response_bytes + 1)); }, cancel: stopped }), { headers: { "content-type": "application/json" } });
   else if (reason === "depth") response = new Response('{"jsonrpc":"2.0","id":1,"result":' + '['.repeat(40) + '0' + ']'.repeat(40) + '}', { headers: { "content-type": "application/json" } });
   else if (reason === "utf8") response = new Response(new Uint8Array([255]), { headers: { "content-type": "application/json" } });
   else response = new Response(new ReadableStream({ pull(c) { c.enqueue(encoder.encode("")); }, cancel: stopped }), { headers: { "content-type": "text/event-stream" } });
@@ -360,8 +361,8 @@ it("discovery HTTP evidence retains the response byte and fragment budgets", asy
   for (const declared of [true, false]) {
     const cancelled = vi.fn(), account = vi.fn();
     const response = new Response(new ReadableStream<Uint8Array>({
-      start(controller) { controller.enqueue(new Uint8Array(1_048_577)); }, cancel: cancelled,
-    }), { status: 400, headers: declared ? { "content-length": "1048577" } : {} });
+      start(controller) { controller.enqueue(new Uint8Array(REMOTE_LIMITS.response_bytes + 1)); }, cancel: cancelled,
+    }), { status: 400, headers: declared ? { "content-length": String(REMOTE_LIMITS.response_bytes + 1) } : {} });
     await expect(guardedRemoteResponse(response, 1, new AbortController().signal, account, true)).rejects.toMatchObject({ code: "upstream_protocol_error" });
     expect(cancelled).toHaveBeenCalledOnce(); expect(account).toHaveBeenCalledTimes(declared ? 0 : 1);
   }
@@ -400,14 +401,14 @@ it("W05 accepts SEP-2243 MCP parameter annotations without weakening schema vali
   expect(parseRemoteTool({ name: "bad_header_location", inputSchema: { type: "object", properties: { values: { type: "array", items: { type: "string", "x-mcp-header": "item" } } } } })).toBeUndefined();
 });
 
-it("W05 enforces safe regexes while delegating unsafe provider patterns to the upstream server", () => {
+it("W05 enforces safe regexes without silently dropping unsafe provider constraints", () => {
   const validator = new BoundedRemoteValidator();
   const schema = { type: "object", properties: { id: { type: "string", minLength: 1, pattern: "\\S" } }, required: ["id"], additionalProperties: false };
   expect(validator.validate(schema, { id: "user:abc" })).toBe(true);
   expect(validator.validate(schema, { id: "   " })).toBe(false);
   const unsafe = { type: "object", properties: { id: { type: "string", pattern: "(a+)+$", providerConstraint: { opaque: true } } } };
   expect(parseRemoteTool({ name: "unsafe_pattern", inputSchema: unsafe })).toBeDefined();
-  expect(validator.validate(unsafe, { id: "provider-validates-this" })).toBe(true);
+  expect(validator.validate(unsafe, { id: "provider-validates-this" })).toBe(false);
   expect(validator.validate(unsafe, { id: 7 })).toBe(false);
 });
 
@@ -444,7 +445,7 @@ it("W05 JSON schema validation is non-coercing, bounded and supports approved lo
   expect(validator.validate(schema, { value: "2" })).toBe(false);
   expect(validator.validate(schema, { value: 0 })).toBe(false);
   expect(validator.validate(schema, { value: 2, extra: true })).toBe(false);
-  expect(validator.validate({ type: "string", pattern: "(a+)+$" }, "a")).toBe(true);
+  expect(validator.validate({ type: "string", pattern: "(a+)+$" }, "a")).toBe(false);
   expect(validator.validate({ type: "object", $ref: "https://unvisited.example.com/schema" }, {})).toBe(false);
 });
 
@@ -580,5 +581,128 @@ it.each(["2025-11-25", "2026-07-28"] as const)("W05 %s calls a discovered tool w
     expect(tools).toHaveLength(1);
     expect(await session.callTool(tools[0]!, { value: 2 }, authorize)).toMatchObject({ isError: false, structuredContent: { value: 3 } });
     expect(remote.invoked).toHaveBeenCalledOnce(); expect(dispatched).toHaveBeenCalledOnce();
+  } finally { await session.close(); }
+});
+
+// Derived from the pinned GitLab source listed in the fixture; not a live login.
+it.each(["2025-03-26", "2025-06-18", "2025-11-25"])("MCP-PORTABILITY negotiates GitLab-style legacy %s and accepts annotated tools", async selectedVersion => {
+  const sent: string[] = [];
+  const connector = createHttpRemoteConnector({ rules: () => [{ endpoint, protocol: "2025-11-25", session: "optional", negotiate: true }],
+    credential: async () => ({ kind: "bearer", token }), fetch: async (_url, init) => {
+      const request = JSON.parse(String(init?.body)); sent.push(request.method);
+      if (!["server/discover", "initialize"].includes(request.method)) expect(new Headers(init?.headers).get("mcp-protocol-version")).toBe(selectedVersion);
+      if (request.method === "server/discover") return Response.json({ jsonrpc: "2.0", id: request.id,
+        error: { code: -32601, message: "Method not found", data: { method: "server/discover" } } }, { status: 404 });
+      if (request.method === "initialize") return Response.json({ jsonrpc: "2.0", id: request.id, result: {
+        protocolVersion: selectedVersion, capabilities: { tools: {} }, serverInfo: { name: "GitLab", version: "19.5.0-pre" } } });
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 });
+      if (request.method === "tools/list") return Response.json({ jsonrpc: "2.0", id: request.id, result: { tools: gitlabFixture.tools } });
+      if (request.method === "tools/call") return Response.json({ jsonrpc: "2.0", id: request.id,
+        result: { content: [{ type: "text", text: "19.5.0-pre" }], structuredContent: { version: "19.5.0-pre" }, isError: false } });
+      throw new Error("unexpected request");
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools(); expect(tools).toHaveLength(2); expect(session.issues?.()).toEqual([]);
+    expect(tools[0]!.annotations).toEqual({ readOnlyHint: true });
+    await expect(session.callTool(tools[0]!, {}, async () => undefined)).resolves.toMatchObject({ structuredContent: { version: "19.5.0-pre" } });
+    expect(sent).toEqual(["server/discover", "initialize", "notifications/initialized", "tools/list", "tools/call"]);
+  } finally { await session.close(); }
+});
+
+it("MCP-PORTABILITY quarantines unsupported tools without relaxing their constraints", async () => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (url, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method !== "tools/list") return remote.http(url, init);
+      return Response.json({ jsonrpc: "2.0", id: request.id, result: { tools: [
+        { name: "usable", inputSchema: { properties: { value: { type: "string" } } }, annotations: { toolset: "core" } },
+        { name: "unsafe_regex", inputSchema: { type: "object", properties: { value: { type: "string", pattern: "(a+)+$" } } } },
+        { name: "invalid_header", inputSchema: { type: "object", properties: { value: { type: "number", "x-mcp-header": "value" } } } },
+        { name: "task_only", inputSchema: { type: "object" }, execution: { taskSupport: "required" } },
+      ] } });
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    expect((await session.listTools()).map(tool => tool.name)).toEqual(["usable"]);
+    expect(session.issues?.()).toEqual([{ name: "unsafe_regex", code: "schema_unsupported" },
+      { name: "invalid_header", code: "invalid_tool" }, { name: "task_only", code: "interaction_required" }]);
+  } finally { await session.close(); }
+});
+
+it.each([undefined, "application/problem+json", "application/vnd.mcp+json", "text/plain"])("MCP-PORTABILITY accepts bounded JSON-RPC MIME variants: %s", async mime => {
+  const response = new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { headers: mime ? { "content-type": mime } : {} });
+  if (!mime) response.headers.delete("content-type");
+  const result = await guardedRemoteResponse(response, 1, new AbortController().signal, () => undefined);
+  expect(await result.json()).toMatchObject({ result: {} });
+});
+
+it("MCP-PORTABILITY ignores bounded notifications but never executes server requests", async () => {
+  const notification = { jsonrpc: "2.0", method: "notifications/tools/list_changed" };
+  const final = { jsonrpc: "2.0", id: 1, result: {} };
+  const wire = "data: \n\ndata: " + JSON.stringify(notification) + "\n\ndata: " + JSON.stringify(final) + "\n\n";
+  const result = await guardedRemoteResponse(new Response(wire, { headers: { "content-type": "text/event-stream" } }), 1, new AbortController().signal, () => undefined);
+  expect(await result.json()).toEqual(final);
+  await expect(guardedRemoteResponse(Response.json({ ...notification, id: 2 }), 1, new AbortController().signal, () => undefined))
+    .rejects.toMatchObject({ code: "unsupported_interaction" });
+});
+
+it("MCP-PORTABILITY preserves nullable enums and bounds potentially expensive regexes", () => {
+  const validator = new BoundedRemoteValidator();
+  expect(validator.validate({ type: "object", properties: { value: { type: "string", nullable: true, enum: ["yes"] } } }, { value: null })).toBe(false);
+  expect(validator.validate({ type: "object", $vocabulary: { "https://untrusted.invalid/constraints": true } }, {})).toBe(false);
+  expect(validator.validate({ type: "object", properties: { value: { type: "string", pattern: "a*a*a*a*$" } } }, { value: "a".repeat(10_000) + "!" })).toBe(false);
+});
+
+it("MCP-PORTABILITY admits 200 tools independently of direct-tool capacity", async () => {
+  expect(CATALOG_LIMITS.tools).toBeGreaterThanOrEqual(200);
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (url, init) => {
+      const request = JSON.parse(String(init?.body));
+      return request.method === "tools/list" ? Response.json({ jsonrpc: "2.0", id: request.id,
+        result: { tools: Array.from({ length: 200 }, (_, i) => ({ name: "tool_" + i, inputSchema: { type: "object" } })) } }) : remote.http(url, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try { expect(await session.listTools()).toHaveLength(200); } finally { await session.close(); }
+});
+
+it("MCP-PORTABILITY preserves long operation-local session IDs used by hosted .NET servers", async () => {
+  const remote = upstream(), sessionId = "s".repeat(800), sessions: (string | null)[] = [];
+  const connector = createHttpRemoteConnector({ rules: () => [{ endpoint, protocol: "2025-11-25", session: "optional" }],
+    credential: async () => ({ kind: "bearer", token }), fetch: async (url, init) => {
+      const id = new Headers(init?.headers).get("mcp-session-id"); sessions.push(id);
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      const request = JSON.parse(String(init?.body)), response = await remote.http(url, init);
+      if (request.method !== "initialize") return response;
+      const headers = new Headers(response.headers); headers.set("mcp-session-id", sessionId);
+      return new Response(response.body, { status: response.status, headers });
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try { expect(await session.listTools()).toHaveLength(1); } finally { await session.close(); }
+  expect(sessions[0]).toBeNull(); expect(sessions.slice(1).every(id => id === sessionId)).toBe(true);
+});
+
+it.each([null, ""])("W05 accepts GitLab-style extensions and terminal nextCursor %j in tools/list", async terminalCursor => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method !== "tools/list") return remote.http(input, init);
+      const response = await remote.http(input, init);
+      const reply = await (await guardedRemoteResponse(response, request.id, new AbortController().signal, () => undefined)).json() as any;
+      reply.result.tools[0] = { ...reply.result.tools[0], version: "0.1.0", providerMetadata: { provider: "gitlab" },
+        annotations: { readOnlyHint: true, toolset: "repository" },
+        icons: [{ src: "https://gitlab.com/assets/gitlab_logo.png", mimeType: "image/png", theme: "dark", cacheKey: "v1" }] };
+      reply.result.nextCursor = terminalCursor;
+      return Response.json(reply);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ name: "increment", annotations: { readOnlyHint: true } });
+    expect(tools[0]).not.toHaveProperty("version");
   } finally { await session.close(); }
 });

@@ -5,9 +5,9 @@ import type { CentralObservation, CentralReceipt } from "./central-audit.js";
 import type { RemoteServerInfo } from "./remote-server.js";
 
 /** Per-operation safety bounds, not advertised production capacity. */
-export const REMOTE_LIMITS = Object.freeze({ operation_ms: 20_000, request_bytes: 65_536, response_bytes: 1_048_576,
-  aggregate_bytes: 2_097_152, fragments: 4096, events: 256, requests: 12, pages: 8, content_items: 32,
-  active: 2, per_client: 1, validation_cost: 1_000_000 });
+export const REMOTE_LIMITS = Object.freeze({ operation_ms: 20_000, request_bytes: 65_536, response_bytes: 2_097_152,
+  aggregate_bytes: 8_388_608, fragments: 8192, events: 256, requests: 40, pages: 32, content_items: 128,
+  session_id_bytes: 4096, active: 2, per_client: 1, validation_cost: 1_000_000 });
 export type RemoteProtocol = "2026-07-28" | "2025-11-25";
 export interface RemoteEgressRule { readonly endpoint: string; readonly protocol: RemoteProtocol; readonly session?: "ephemeral" | "optional"; readonly negotiate?: true }
 export interface RemoteCall {
@@ -22,11 +22,11 @@ export interface RemoteResult {
   readonly isError: boolean;
 }
 export const REMOTE_CODES = Object.freeze(["invalid_request", "invalid_arguments", "permission_denied", "authorization_required", "stale_catalog",
-  "dependency_unavailable", "egress_denied", "upstream_unavailable", "upstream_protocol_error",
+  "schema_unsupported", "catalog_limit_exceeded", "dependency_unavailable", "egress_denied", "upstream_unavailable", "upstream_protocol_error",
   "unsupported_interaction", "result_invalid", "result_withheld", "result_unconfirmed", "operation_timed_out", "busy"] as const);
 export type RemoteCode = (typeof REMOTE_CODES)[number];
 const remoteClasses: Readonly<Record<RemoteCode, string>> = Object.freeze({ invalid_request: "validation", invalid_arguments: "validation",
-  permission_denied: "authorization", authorization_required: "authorization", stale_catalog: "conflict", dependency_unavailable: "availability", egress_denied: "authorization",
+  schema_unsupported: "unsupported", catalog_limit_exceeded: "capacity", permission_denied: "authorization", authorization_required: "authorization", stale_catalog: "conflict", dependency_unavailable: "availability", egress_denied: "authorization",
   upstream_unavailable: "availability", upstream_protocol_error: "protocol", unsupported_interaction: "unsupported",
   result_invalid: "protocol", result_withheld: "authorization", result_unconfirmed: "unknown", operation_timed_out: "availability", busy: "capacity" });
 
@@ -48,6 +48,9 @@ export type RemoteFailure = { readonly state: "failed"; readonly code: RemoteCod
   readonly operation_state: "not_started" | "completed" | "unknown" };
 export type RemoteOutcome = ({ readonly state: "completed"; readonly operation_state: "completed"; readonly result: RemoteResult } | RemoteFailure) & { readonly receipt?: CentralReceipt };
 
+export interface RemoteToolIssue { readonly name: string | null; readonly code: "invalid_tool" | "schema_unsupported" | "interaction_required" }
+export type RemoteDiscoveryResult = (CatalogMutation & { readonly excluded_tools?: readonly RemoteToolIssue[] }) | RemoteFailure;
+
 /** No URLs, headers, tokens, sessions, Runner selection or SDK types in the call port. */
 export interface RemoteSession {
   describe?(): RemoteServerInfo;
@@ -56,6 +59,7 @@ export interface RemoteSession {
   /** Synchronous credential/egress validity of observed data, including after close. */
   current(): boolean;
   listTools(): Promise<readonly RemoteToolDefinition[]>;
+  issues?(): readonly RemoteToolIssue[];
   callTool(tool: RemoteToolDefinition, args: { [key: string]: CatalogJson }, beforeDispatch: () => Promise<void>): Promise<RemoteResult>;
   close(): Promise<void>;
 }
@@ -68,7 +72,7 @@ export interface CentralRemote {
   listRemoteProfiles(principal: CapturedIdentity): Promise<SharedProfiles>;
   listCatalog(principal: CapturedIdentity, query: unknown): Promise<CatalogPage>;
   callRemote(principal: CapturedIdentity, command: unknown): Promise<RemoteOutcome>;
-  discoverRemote(sessionHash: string, profileId: string, expectedRevision: number): Promise<CatalogMutation | RemoteFailure>;
+  discoverRemote(sessionHash: string, profileId: string, expectedRevision: number): Promise<RemoteDiscoveryResult>;
 }
 
 /** Fixed codes only. Untrusted exception messages are never carried across ports. */

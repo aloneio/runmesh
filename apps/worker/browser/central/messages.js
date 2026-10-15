@@ -1,4 +1,9 @@
 const messages = {
+  "serviceToolsPartiallyReady": ["Compatible tools are ready. {count} tool(s) were excluded because their schema or interaction is unsupported.", "兼容的工具已就绪；{count} 个工具因 Schema 或交互方式不受支持而被隔离。"],
+  "mcpSchemaUnsupported": ["No safely supported tools were found. The saved catalog was not replaced. Check the provider's tool schemas or required interactive features.", "未找到可安全支持的工具，原工具目录未替换。请检查服务方的 Schema 或必需的交互功能。"],
+  "mcpSchemaUnsupportedUnconfirmed": ["The upstream schema is unsupported. The action may have run; inspect provider state before retrying.", "上游 Schema 不受支持；操作可能已执行，重试前请检查服务方状态。"],
+  "mcpCatalogLimit": ["The MCP catalog exceeds the configured capacity. Use the provider's toolset filters; the saved catalog was not replaced.", "MCP 工具目录超过容量上限，原目录未替换。请使用服务方的工具集筛选功能。"],
+  "mcpCatalogLimitUnconfirmed": ["The MCP catalog exceeds capacity. Inspect provider state before retrying an uncertain action.", "MCP 目录超过容量；重试结果不明的操作前请检查服务方状态。"],
   "skillSourceBusy": ["An import is running. Try again when it finishes.", "有一项导入正在进行，请在完成后重试。"],
   "centralSetupRequired": ["Ask your administrator to finish MCP and Skill setup for this control plane.", "请联系管理员完成此控制端的 MCP 和 Skill 配置。"],
   "mcpBusy": ["This MCP is busy. Wait briefly, then refresh and try again.", "此 MCP 正忙，请稍后刷新重试。"],

@@ -1642,3 +1642,25 @@ for (const trigger of ["refresh", "uncertain write"]) test("Invalidation reaches
   assert.equal(requests.length, afterInvalidation, "Old history/source actions cannot send another request after invalidation");
   assert.equal(serviceForm.elements.endpoint.value, endpoint, "An old Registry candidate cannot fill the form after invalidation");
 });
+
+test("partial MCP discovery shows excluded tools instead of claiming every tool is ready", async t => {
+  const tool = { definition: { name: "read", inputSchema: { type: "object" } } };
+  const catalog = { state: "found", head: { approved_digest: "a", approved_names: ["read"] }, snapshot: { digest: "a", tools: [tool] } };
+  const ui = oauthHandoffFixture(t, async path => {
+    if (path.startsWith("catalogs/")) return catalog;
+    if (path.startsWith("discovery/")) return { state: "written", excluded_tools: [{ name: "unsafe_regex", code: "schema_unsupported" }] };
+  });
+  await ui.click("a", "Refresh tools");
+  assert.deepEqual(ui.errors, []);
+  assert.match(ui.status.textContent, /1 tool\(s\) were excluded/);
+  assert.match(ui.status.textContent, /unsafe_regex: schema_unsupported/);
+  assert.deepEqual(ui.destinations, []);
+});
+
+test("malformed MCP exclusion receipts never claim successful publication", async t => {
+  const ui = oauthHandoffFixture(t, async path => path.startsWith("discovery/")
+    ? { state: "written", excluded_tools: [{ name: "bad\nname", code: "schema_unsupported" }] } : undefined);
+  await ui.click("a", "Refresh tools");
+  assert.equal(ui.errors.length, 1);
+  assert.match(ui.errors[0].message, /unexpected response/i);
+});

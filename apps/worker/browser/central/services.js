@@ -143,15 +143,22 @@ export function createServiceWorkflow({
       if (authorize && profile.authentication === 'oauth') return connectOAuth(profile, authorization);
       throw new Error(t('signInToThisServiceAgainUsingReconnect'));
     }
+    const excluded = result.excluded_tools;
+    if (excluded !== undefined && (!Array.isArray(excluded) || excluded.length > 512 || excluded.some(item => !item
+      || !(item.name === null || typeof item.name === 'string' && /^[A-Za-z0-9_.-]{1,128}$/.test(item.name))
+      || !['invalid_tool', 'schema_unsupported', 'interaction_required'].includes(item.code))))
+      throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
     var currentProfiles = await refresh({ background }),
       current = currentProfiles.find(item => item.profile_id === profile.profile_id);
     if (!current || !current.enabled) throw new Error(t('serviceNoLongerEnabled'));
     var published = background ? await api('catalogs/' + id, undefined, true) : await showTools(current, undefined, selection);
     if (!isPublished(published)) throw new Error(t('toolsNotReadyRefreshToConnect'));
+    const readyMessage = excluded?.length ? t('serviceToolsPartiallyReady', { count: excluded.length }) + '\n'
+      + excluded.slice(0, 8).map(item => (item.name || '?') + ': ' + item.code).join('\n') : t('serviceConnectedToolsReady');
+    recoveryMessage(profile.profile_id, readyMessage, Boolean(excluded?.length));
     if (background) {
-      recoveryMessage(profile.profile_id, t('serviceConnectedToolsReady'));
-      if (mayPresent()) { await showTools(current, published); say(t('serviceConnectedToolsReady')); }
-    } else if (selection === toolsGeneration) say(t('serviceConnectedToolsReady'));
+      if (mayPresent()) { await showTools(current, published); say(readyMessage); }
+    } else if (selection === toolsGeneration) say(readyMessage);
     return currentProfiles;
   }
   async function resumePending(profiles, connected, mayPresent = () => false) {
