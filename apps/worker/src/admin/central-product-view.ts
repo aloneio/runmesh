@@ -3,12 +3,13 @@ import { SKILL_LIMITS } from "../contracts/skills.js";
 import { SKILL_SOURCE_LIMITS } from "../contracts/skill-source.js";
 import { MCP_REGISTRY_LIMITS } from "../contracts/mcp-registry.js";
 
-export function centralProductView(csrf: string, skills: boolean): string {
+export function centralProductView(csrf: string, skills: boolean, oauthCallbackUrl?: string): string {
+  const callback = oauthCallbackUrl === undefined ? "" : ` data-oauth-callback-url="${escapeHtml(oauthCallbackUrl)}"`;
   return `<section class="page-heading">
     <div><p class="eyebrow">YOUR AI WORKSPACE</p><h1>MCP &amp; Skill</h1><p class="lede">Connect an MCP or install a Skill.</p></div>
     <a class="button secondary" href="/admin/clients#add-client">Connect an AI client</a>
   </section>
-  <div data-central-product data-csrf="${escapeHtml(csrf)}" data-skills="${String(skills)}" data-source-timeout-ms="${SKILL_SOURCE_LIMITS.operation_ms + 2000}">
+  <div data-central-product data-csrf="${escapeHtml(csrf)}" data-skills="${String(skills)}" data-source-timeout-ms="${SKILL_SOURCE_LIMITS.operation_ms + 2000}"${callback}>
     <div class="central-toolbar">
       <nav class="central-tabs" aria-label="MCP and Skill tabs">
         <button type="button" class="button" data-central-tab="services" aria-pressed="true" aria-controls="central-mcp-panel">MCP</button>

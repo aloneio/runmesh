@@ -11,7 +11,7 @@ export function createServiceWorkflow({
   run,
   getProfiles,
   navigate,
-  origin
+  oauthCallbackUrl
 }) {
   const {
     el,
@@ -20,8 +20,8 @@ export function createServiceWorkflow({
     clear
   } = view;
   const recoveryMessages = new Map(), messageNodes = new Map();
-  const oauthCallbackUrl = (typeof origin === 'string' && origin ? origin : '') + '/admin/central/connections/callback';
-  app.querySelectorAll?.('[data-oauth-client-callback]').forEach(node => { node.textContent = t('oauthClientCallback', { url: oauthCallbackUrl }); });
+  const callbackUrl = typeof oauthCallbackUrl === 'string' ? oauthCallbackUrl : '';
+  app.querySelectorAll?.('[data-oauth-client-callback]').forEach(node => { node.textContent = t('oauthClientCallback', { url: callbackUrl }); });
   function oauthClientInput(clientId, clientSecret) {
     const client_id = (clientId?.value ?? '').trim(), client_secret = clientSecret?.value ?? '';
     if (!client_id && !client_secret) return undefined;
@@ -30,7 +30,7 @@ export function createServiceWorkflow({
   }
   function oauthClientSettings() {
     const details = el('details', undefined, 'central-file-preview oauth-client-settings'), summary = el('summary', t('oauthClientSettings')),
-      help = el('p', t('oauthClientSettingsHelp'), 'muted'), callback = el('p', t('oauthClientCallback', { url: oauthCallbackUrl }), 'muted'),
+      help = el('p', t('oauthClientSettingsHelp'), 'muted'), callback = el('p', t('oauthClientCallback', { url: callbackUrl }), 'muted'),
       form = el('div', undefined, 'connection-form'), idLabel = el('label', t('oauthClientId')), secretLabel = el('label', t('oauthClientSecret')),
       clientId = el('input'), clientSecret = el('input');
     clientId.type = 'text'; clientId.maxLength = 2048; clientId.autocomplete = 'off'; clientId.spellcheck = false;

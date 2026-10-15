@@ -50,6 +50,32 @@ it("direct public connections and Skill installation are available without deplo
   expect(markup).not.toContain('INTERNAL_CONTROL_SECRET');
 });
 
+it("renders the OAuth callback from the active deployment origin instead of a product-owned hostname", async () => {
+  const admin = await session();
+  const request = new Request("https://tenant.example.net/admin/central", {
+    headers: { ...admin.headers, host: "tenant.example.net", origin: "https://tenant.example.net" },
+  });
+  const config = { ...configured(), RUNMESH_PUBLIC_ORIGIN: undefined };
+  const response = await handleBrowserAdmin(request, config, new URL(request.url));
+  expect(response.status).toBe(200);
+  const markup = await response.text();
+  expect(markup).toContain('data-oauth-callback-url="https://tenant.example.net/admin/central/connections/callback"');
+  expect(markup).not.toContain("runmesh.aloneio");
+});
+
+it("renders the configured canonical OAuth callback when the deployment has an explicit public origin", async () => {
+  const admin = await session();
+  const request = new Request("https://edge.example.net/admin/central", {
+    headers: { ...admin.headers, host: "edge.example.net", origin: "https://edge.example.net" },
+  });
+  const config = { ...configured(), RUNMESH_PUBLIC_ORIGIN: "https://canonical.example.net" };
+  const response = await handleBrowserAdmin(request, config, new URL(request.url));
+  expect(response.status).toBe(200);
+  const markup = await response.text();
+  expect(markup).toContain('data-oauth-callback-url="https://canonical.example.net/admin/central/connections/callback"');
+  expect(markup).not.toContain('data-oauth-callback-url="https://edge.example.net/admin/central/connections/callback"');
+});
+
 it("client handoff opens the shared library without putting its credential in the link", () => {
   const page = secretCreatedPage('MCP client created', 'https://worker.test/synthetic-secret/mcp', 'client-product');
   expect(page).toContain('href="/admin/central"');

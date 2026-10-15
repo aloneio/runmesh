@@ -35,8 +35,9 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, r
       (scope === 'skills' ? skillView : view).invalidate(scope);
     }
   });
+  const oauthCallbackUrl = app.getAttribute('data-oauth-callback-url') || '';
   const services = createServiceWorkflow({ app, api: client.request, view, t, refresh: refreshProfiles,
-    run: runService, getProfiles: () => profiles, origin: location.origin,
+    run: runService, getProfiles: () => profiles, oauthCallbackUrl,
     navigate: url => { if (isCurrent()) navigate(url); } });
   const skillWorkflow = createSkillWorkflow({ app, api: client.request, view: skillView, t,
     refresh: refreshSkills, run: runSkill, getSkills: () => skills });

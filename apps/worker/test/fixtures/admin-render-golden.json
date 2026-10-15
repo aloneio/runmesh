@@ -11,8 +11,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "0b42841c580962a4f65924697e763af70f361a06cec7683336669d0b364e460f",
-      "bytes": 193420,
+      "sha256": "872f33fea86ff4b6ae02be7c1eaf256577c375ec3bf6073eb6e0f1e261f92664",
+      "bytes": 193456,
       "pre_mcp_relay_sha256": "0a6483245562b6387d2adb579539b46b41a1fbb5572445a890c9f1ef7b632fd2",
       "pre_mcp_relay_bytes": 187677,
       "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
@@ -40,8 +40,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "223c40c2d84a6efd82e00db0f34f3d5a62dfebf3776e739b967d9798db7648cd",
-      "bytes": 194080,
+      "sha256": "1f0c3451f489fcae45f3fa4dac23110a922d47ee48c1c00bb61d62f0b2de484c",
+      "bytes": 194116,
       "pre_mcp_relay_sha256": "56d9298c83d590d413eb7c589b853078ed0b872da4b0d6bc7c6f0c1df89c39d3",
       "pre_mcp_relay_bytes": 188337,
       "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
@@ -66,8 +66,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "c1222f3901c883026a70054c6bbf2043e79aa0b064874d6583827b5ddafc4562",
-      "bytes": 196377,
+      "sha256": "546fb191274da49ee3f01d2f48ff56295325b5dca536725f8a4d67d104661b51",
+      "bytes": 196413,
       "pre_mcp_relay_sha256": "2e9f336f95e1e5a1bc89cf3f551123c85c20762898d53a82c25f8d6315bea6a0",
       "pre_mcp_relay_bytes": 190634,
       "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
@@ -444,8 +444,8 @@
           }
         ]
       ],
-      "sha256": "54ae82954c04b0857667bc1d3e8053f7fc1e343ce7bb1c12ff72e5224f692c5d",
-      "bytes": 196726,
+      "sha256": "d45323f14f9b3ddd6386907d018ae749460c8e31bfba31375824c2db2c3026cd",
+      "bytes": 196762,
       "pre_mcp_relay_sha256": "83a6789b7acb712713274551956933f747f289a902235f24540fb3b4b31e3f8b",
       "pre_mcp_relay_bytes": 190983,
       "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
@@ -1619,6 +1619,38 @@
         "name": "admin-document",
         "sha256": "a4ade81aebaacba38bb728919317324d3ceb1fe3e1c3e59a77d1e1e3b0d1cdfd",
         "bytes": 194351
+      }
+    ]
+  },
+  "oauth_callback_origin_review": {
+    "source_base": "7103bda9cfc55d7eaecc5378d22915dab98ef77c",
+    "reviewed_change": "Render the OAuth callback URL from the same server-resolved public origin used by managed OAuth. The shared browser bundle no longer rebuilds redirect_uri from window.location.origin; no non-script markup changes in these four renderers.",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "previous": [
+      {
+        "name": "login",
+        "sha256": "0b42841c580962a4f65924697e763af70f361a06cec7683336669d0b364e460f",
+        "bytes": 193420
+      },
+      {
+        "name": "setup",
+        "sha256": "223c40c2d84a6efd82e00db0f34f3d5a62dfebf3776e739b967d9798db7648cd",
+        "bytes": 194080
+      },
+      {
+        "name": "secret",
+        "sha256": "c1222f3901c883026a70054c6bbf2043e79aa0b064874d6583827b5ddafc4562",
+        "bytes": 196377
+      },
+      {
+        "name": "admin-document",
+        "sha256": "54ae82954c04b0857667bc1d3e8053f7fc1e343ce7bb1c12ff72e5224f692c5d",
+        "bytes": 196726
       }
     ]
   }

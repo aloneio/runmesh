@@ -5,6 +5,7 @@ import { ADMIN_CSRF_COOKIE } from "./constants.js";
 import { ADMIN_SESSION_COOKIE } from "./constants.js";
 import { adminDocument } from "../admin/layout.js";
 import { centralPage } from "../admin/central-view.js";
+import { centralOAuthCallbackUrl } from "./central-oauth-origin.js";
 import { adminError } from "./responses.js";
 import { adminClientError, adminRunnerError, adminSectionError, adminUpstreamError, adminUpstreamRedirect } from "./responses.js";
 import { boundedJsonResponse } from "../bounded-json.js";
@@ -68,7 +69,9 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (request.method === "GET" && url.pathname === "/admin/central") {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    return html(adminDocument("MCP & Skill", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1"), "central"));
+    let oauthCallbackUrl: string | undefined;
+    try { oauthCallbackUrl = centralOAuthCallbackUrl(request, env.RUNMESH_PUBLIC_ORIGIN); } catch { oauthCallbackUrl = undefined; }
+    return html(adminDocument("MCP & Skill", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1", oauthCallbackUrl), "central"));
   }
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
