@@ -716,3 +716,34 @@ it("MCP-PORTABILITY budgets unanchored top-level regex alternatives before execu
   expect(Number.isFinite(catalogPatternCost("^(?:fixed|a+a+a+a+b)$", 0))).toBe(true);
   expect(validator.validate({ type: "object", properties: { value: { type: "string", pattern: "^[a|b]+$" } } }, { value: "a|b" })).toBe(true);
 });
+
+it.each(["2025-11-25", "2026-07-28"] as const)("MCP-PORTABILITY isolates output schemas by negotiated wire version %s", async protocol => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy(protocol), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (url, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "tools/list") return Response.json({ jsonrpc: "2.0", id: request.id, result: { ...(protocol === "2026-07-28" ? { resultType: "complete", ttlMs: 0, cacheScope: "private" } : {}), tools: [
+        { name: "increment", inputSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
+          outputSchema: { properties: { value: { type: "integer" } }, required: ["value"] } },
+        { name: "array_output", inputSchema: { type: "object" }, outputSchema: { type: "array", items: { type: "string" } } },
+      ] } });
+      if (request.method === "tools/call" && request.params.name === "array_output") return Response.json({ jsonrpc: "2.0", id: request.id,
+        result: { resultType: "complete", content: [{ type: "text", text: "[]" }], structuredContent: ["ok"], isError: false } });
+      return remote.http(url, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    if (protocol === "2025-11-25") {
+      expect(tools.map(tool => tool.name)).toEqual(["increment"]);
+      expect(tools[0]!.outputSchema?.type).toBe("object");
+      expect(session.issues?.()).toEqual([{ name: "array_output", code: "schema_unsupported" }]);
+      await expect(session.callTool(tools[0]!, { value: 2 }, async () => undefined)).resolves.toMatchObject({ structuredContent: { value: 3 } });
+    } else {
+      expect(tools.map(tool => tool.name)).toEqual(["increment", "array_output"]);
+      expect(tools[0]!.outputSchema?.type).toBeUndefined();
+      expect(session.issues?.()).toEqual([]);
+      await expect(session.callTool(tools[1]!, {}, async () => undefined)).resolves.toMatchObject({ structuredContent: ["ok"] });
+    }
+  } finally { await session.close(); }
+});

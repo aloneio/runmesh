@@ -200,8 +200,17 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
                   if (catalogJson(raw, CATALOG_LIMITS.tool_bytes) === undefined) throw new RemoteFault("catalog_limit_exceeded");
                   accepted.push(raw); continue;
                 }
-                const tool = parseRemoteTool(raw);
+                let tool = parseRemoteTool(raw);
                 if (tool === undefined) { excluded.push({ name, code: "invalid_tool" }); continue; }
+                // Frozen pre-2026 MCP wire schemas require object-shaped
+                // structured output. Check this per tool, before the SDK parses
+                // the whole page, so one modern-only descriptor cannot poison
+                // otherwise usable legacy tools. A missing type is redundant
+                // only within that legacy protocol's object-only envelope.
+                if (protocol !== "2026-07-28" && tool.outputSchema !== undefined) {
+                  if (tool.outputSchema.type === undefined) tool = { ...tool, outputSchema: { ...tool.outputSchema, type: "object" } };
+                  else if (tool.outputSchema.type !== "object") { excluded.push({ name, code: "schema_unsupported" }); continue; }
+                }
                 if (catalogObject(descriptor?.execution)?.taskSupport === "required") {
                   excluded.push({ name, code: "interaction_required" }); continue;
                 }
