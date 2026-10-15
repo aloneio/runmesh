@@ -4,6 +4,15 @@ Generated from `tool-examples.json` and checked locally against the tool input s
 
 示例来自 `tool-examples.json`，通过工具参数 Schema 的本地校验。使用时请替换为自己有权访问的工作区、任务和内容，并在执行前核对写入操作。实际调用会检查当前权限。
 
+## bootstrap — schema accepts / 参数有效
+
+```json
+{
+  "name": "bootstrap",
+  "arguments": {}
+}
+```
+
 ## runner-list — schema accepts / 参数有效
 
 ```json

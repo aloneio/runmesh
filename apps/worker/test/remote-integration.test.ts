@@ -137,7 +137,7 @@ it.each(["docs", "docs:reference"])("W05 admin discovery immediately enables cli
     const command = await f.toolCommand();
     const list = await rpc(f.config, f.current.secret, "tools/list", {});
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain("remote_call");
-    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_profiles', 'remote_search', 'remote_tools']);
+    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['bootstrap', 'remote_call', 'remote_profiles', 'remote_search', 'remote_tools']);
     const count = f.methods.length;
     const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: id } });
     expect(JSON.parse(page.result.content[0].text).tools[0].tool_id).toBe(command.tool_id);
@@ -274,9 +274,9 @@ it("W05 unavailable central state retains native tools when no deployment endpoi
   const current = await client(true), get = vi.fn(() => { throw new Error("must not resolve"); });
   const config = { ...env, CAPABILITIES: { idFromName: get, get } } as unknown as WorkerEnv;
   const response = await rpc(config, current.secret, "tools/list", {});
-  expect(response.result.tools).toHaveLength(10); expect(get).toHaveBeenCalledWith("central");
+  expect(response.result.tools).toHaveLength(11); expect(get).toHaveBeenCalledWith("central");
   const centralOnly = await client();
-  expect((await rpc(config, centralOnly.secret, 'tools/list', {})).result.tools).toEqual([]);
+  expect((await rpc(config, centralOnly.secret, 'tools/list', {})).result.tools.map((tool: { name: string }) => tool.name)).toEqual(['bootstrap']);
   expect(get).toHaveBeenCalledTimes(2);
 });
 

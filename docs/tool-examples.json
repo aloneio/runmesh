@@ -1,5 +1,12 @@
 [
   {
+    "id": "bootstrap",
+    "tool": "bootstrap",
+    "action": "bootstrap",
+    "accepts": true,
+    "arguments": {}
+  },
+  {
     "id": "runner-list",
     "tool": "runner_list",
     "action": "list",

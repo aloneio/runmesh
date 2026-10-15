@@ -19,8 +19,8 @@ it("R01 public catalog identity is available even when every storage binding is 
   expect((await result.json() as any).mcp_catalog).toEqual(MCP_CATALOG_SUMMARY);
 });
 
-it("catalog has a reproducible bounded fingerprint without creating new public tools", () => {
-  expect(MCP_CATALOG_SUMMARY.tool_count).toBe(10);
+it("catalog has a reproducible bounded fingerprint for the reviewed public tools", () => {
+  expect(MCP_CATALOG_SUMMARY.tool_count).toBe(11);
   expect(MCP_CATALOG_SUMMARY.sha256).toBe(sha256Hex(canonicalJson(catalogContract())));
   expect(MCP_CATALOG_SUMMARY.tool_names).toEqual(Object.keys(TOOL_SPECS));
   expect(MCP_ACTION_REQUIREMENTS).toHaveLength(26);

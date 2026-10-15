@@ -116,6 +116,7 @@ export const SafeOutputSchema = z.object({}).strict();
 export { ReadOutputSchema, ContextOutputSchema } from "./output-contracts.js";
 
 export const TOOL_SPECS = {
+  bootstrap: { description: "Read RunMesh's compact machine-readable capability and routing manifest. Use it once when RunMesh is unfamiliar or after manifest.sha256 changes. No Runner is required; it never grants permissions or loads full remote tool schemas.", inputSchema: emptySchema, outputSchema: TOOL_OUTPUT_SCHEMAS.bootstrap, annotations: readAnnotations },
   runner_list: { scope: "coding:read", description: "List runners this client can read, with safe IDs, display names, and last-known connection state. Credentials and workspace roots are never returned.", inputSchema: emptySchema, outputSchema: TOOL_OUTPUT_SCHEMAS.runner_list, annotations: readAnnotations },
   runner_current: { scope: "coding:read", description: "Return this MCP client's sticky runner selection, or null. An unavailable selection never falls back to another runner.", inputSchema: emptySchema, outputSchema: TOOL_OUTPUT_SCHEMAS.runner_current, annotations: readAnnotations },
   runner_select: { scope: "coding:read", description: "Select this MCP client's active runner. Initial selection is immediate; changing a selection requires confirm_switch=true.", inputSchema: runnerSelectSchema, outputSchema: TOOL_OUTPUT_SCHEMAS.runner_select, annotations: writeAnnotations },

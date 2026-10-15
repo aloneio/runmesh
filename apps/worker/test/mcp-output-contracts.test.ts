@@ -17,8 +17,8 @@ it("AR05 every Runner action has an output contract", () => {
   }
 });
 describe("AR05 handler completeness", () => {
-  it("has exactly the existing ten tools with explicit output contracts", () => {
-    expect(REGISTERED_TOOL_NAMES).toHaveLength(10);
+  it("has exactly the existing eleven tools with explicit output contracts", () => {
+    expect(REGISTERED_TOOL_NAMES).toHaveLength(11);
     expect(Object.keys(TOOL_OUTPUT_SCHEMAS)).toEqual(REGISTERED_TOOL_NAMES);
     const registered = defineToolHandlers(handlers());
     expect(Object.isFrozen(registered)).toBe(true);
@@ -109,7 +109,7 @@ describe("AR05 successful output boundaries", () => {
     expect(validateToolOutput(c.tool, c.input, { ...(c.value as object), unexpected: "must-not-leak" })).toBe(false);
   });
   it.each(REGISTERED_TOOL_NAMES)("does not accept an empty success for %s", name => expect(validateToolOutput(name, {}, {})).toBe(false));
-  it.each(REGISTERED_TOOL_NAMES)("preserves the explicit bounded truncation envelope for %s", name => {
+  it.each(REGISTERED_TOOL_NAMES.filter(name => name !== "bootstrap"))("preserves the explicit bounded truncation envelope for %s", name => {
     expect(validateToolOutput(name, {}, { truncated: true, data: "bounded JSON fragment", recovery_hint: "Use a smaller page." })).toBe(true);
     expect(validateToolOutput(name, {}, { truncated: true, data: "fragment" })).toBe(false);
   });

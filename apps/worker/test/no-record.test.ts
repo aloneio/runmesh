@@ -169,7 +169,7 @@ it("R01 diagnoses implementation capabilities with one existing RPC and no Job o
   } }));
   const result = (await f.call("inspect", {action:"diagnostics",workspace_id:"w"})).body.result;
   expect(result.isError).not.toBe(true);
-  expect(result.structuredContent.capabilities).toMatchObject({report_state:"reported",contract_match:true,host_catalog_state:"not_observed",runner:{runner_version:"0.1.3",max_concurrent_jobs:2},worker_catalog:{tool_count:10,action_count:26}});
+  expect(result.structuredContent.capabilities).toMatchObject({report_state:"reported",contract_match:true,host_catalog_state:"not_observed",runner:{runner_version:"0.1.3",max_concurrent_jobs:2},worker_catalog:{tool_count:11,action_count:26}});
   expect(result.structuredContent.job_scheduler).toEqual({ waiting: 3, limit: 32, per_client_limit: 8, running: 2, max_concurrent_jobs: 2, available_slots: 0 });
   expect(f.forwarded.map(call => call.method)).toEqual(["env.info"]);
   for (const secret of ["private-machine", "/private/workspace", "private-token", "do-not-publish"]) expect(JSON.stringify(result)).not.toContain(secret);

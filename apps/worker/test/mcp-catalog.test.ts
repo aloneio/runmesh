@@ -4,7 +4,7 @@ import { SUPPORTED_SCOPES, TOOL_SPECS } from "../src/mcp/catalog.js";
 describe("MCP tool catalog", () => {
   it("keeps the stable public tool surface in one catalog", () => {
     expect(Object.keys(TOOL_SPECS).sort()).toEqual([
-      "context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list",
+      "bootstrap", "context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list",
     ]);
     for (const [name, spec] of Object.entries(TOOL_SPECS)) {
       expect(spec.description, name).toBeTruthy();

@@ -18,6 +18,8 @@ const status = z.enum(["queued", "running", "cancelling", "cancelled", "succeede
 const exit = ProcessExitCodeSchema.nullable();
 const permissions = z.object({ read: z.boolean(), edit: z.boolean(), shell: z.boolean(), job_control: z.boolean() }).strict();
 const runnerContext = z.object({ runner_id: id.optional(), state: z.enum(["online", "offline", "stale", "unavailable"]).optional(), available: z.boolean().optional(), updated_at_ms: count.nullable().optional(), automatic_selection: z.boolean().optional() }).strict();
+const runtimeCapability = z.object({ supported: z.literal(true), authorization: z.literal("runtime") }).strict();
+const bootstrapDirectoryState = z.enum(["ready", "empty", "disabled", "unavailable"]);
 
 // The bounded truncation envelope is an explicit compatibility alternative,
 // not permission to insert arbitrary new fields into a successful result.
@@ -52,6 +54,55 @@ const shell = {
   stdout: LogOutputSchema.optional(), stderr: LogOutputSchema.optional(),
 };
 export const RunnerListOutputSchema = z.object({ ...common, runners: z.array(z.object({ runner_id: id, display_name: text(256), state: z.enum(["online", "offline", "stale", "unavailable"]), available: z.boolean(), updated_at_ms: count.nullable() }).strict()).optional() }).strict();
+export const BootstrapOutputSchema = z.object({
+  schema_version: z.literal(1),
+  product: z.object({ name: z.literal("RunMesh"), purpose: text(512), version: text(64) }).strict(),
+  usage: z.object({
+    recommended_call: z.literal("once_per_session_or_manifest_change"),
+    cache_key: z.literal("manifest.sha256"),
+    full_remote_schemas_included: z.literal(false),
+  }).strict(),
+  capabilities: z.object({
+    runners: runtimeCapability, workspaces: runtimeCapability, read: runtimeCapability, edit: runtimeCapability,
+    shell: runtimeCapability, jobs: runtimeCapability, context: runtimeCapability, skills: runtimeCapability, remote_mcp: runtimeCapability,
+  }).strict(),
+  routing: z.object({
+    machine_operations: z.object({ start_with: z.literal("runner_list"), select_with: z.literal("runner_select"), workspaces_with: z.literal("workspace_list") }).strict(),
+    workspace_operations: z.object({ inspect_with: z.literal("inspect"), read_with: z.literal("read"), edit_with: z.literal("edit") }).strict(),
+    long_running_operations: z.object({ start_with: z.literal("shell"), continue_with: z.literal("job") }).strict(),
+    external_services: z.object({
+      strategy: z.literal("search_then_load_then_call"), list_services: z.literal("remote_profiles"), search: z.literal("remote_search"),
+      load_schema: z.literal("remote_tools"), invoke: z.literal("remote_call"),
+    }).strict(),
+    reusable_workflows: z.object({ list: z.literal("skill_list"), read: z.literal("skill_read") }).strict(),
+    handoff_context: z.object({ tool: z.literal("context"), bootstrap_action: z.literal("bootstrap") }).strict(),
+  }).strict(),
+  authorization: z.object({ source: z.literal("runtime"), bootstrap_grants_permissions: z.literal(false) }).strict(),
+  rules: z.array(text(256)).max(16),
+  current: z.object({
+    runner: z.object({
+      selection: z.enum(["none", "selected", "unavailable"]),
+      state: z.enum(["online", "offline", "stale", "unavailable"]).nullable(),
+      available: z.boolean(),
+    }).strict(),
+  }).strict(),
+  directory: z.object({
+    remote_mcp: z.object({
+      state: bootstrapDirectoryState,
+      discover_with: z.literal("remote_search"),
+      profile_count: count.optional(),
+      profiles: z.array(z.object({ profile_id: id, name: text(128) }).strict()).max(16).optional(),
+      profiles_truncated: z.boolean().optional(),
+    }).strict(),
+    skills: z.object({
+      state: bootstrapDirectoryState,
+      discover_with: z.literal("skill_list"),
+      page_count: count.optional(),
+      has_more: z.boolean().optional(),
+    }).strict(),
+  }).strict(),
+  manifest: z.object({ revision: z.literal(1), sha256: hash, digest_scope: z.literal("static_contract") }).strict(),
+}).strict();
 export const RunnerCurrentOutputSchema = z.object({ ...common, active_runner_id: id.nullable().optional(), active_runner_updated_at_ms: count.nullable().optional(), active_runner: runnerContext.nullable().optional() }).strict();
 export const RunnerSelectOutputSchema = RunnerCurrentOutputSchema.extend({ changed: z.boolean().optional() });
 export const WorkspaceListOutputSchema = z.object({ ...common, ...snapshot, runner_id: id.optional(), revision: count.optional(), checksum: hash.optional(), workspaces: z.array(z.object({ workspace_id: id, enabled: z.boolean(), permissions }).strict()).optional() }).strict();
@@ -117,4 +168,4 @@ export const ContextOutputSchema = z.object({
   query: text(512).optional(), next_cursor: cursor.nullable().optional(), context: contextRecord.nullable().optional(), results: z.array(contextIndex).max(50).optional(),
 }).strict();
 
-export const TOOL_OUTPUT_SCHEMAS = Object.freeze({ runner_list: RunnerListOutputSchema, runner_current: RunnerCurrentOutputSchema, runner_select: RunnerSelectOutputSchema, workspace_list: WorkspaceListOutputSchema, inspect: InspectOutputSchema, read: ReadOutputSchema, edit: EditOutputSchema, shell: ShellOutputSchema, job: JobOutputSchema, context: ContextOutputSchema });
+export const TOOL_OUTPUT_SCHEMAS = Object.freeze({ bootstrap: BootstrapOutputSchema, runner_list: RunnerListOutputSchema, runner_current: RunnerCurrentOutputSchema, runner_select: RunnerSelectOutputSchema, workspace_list: WorkspaceListOutputSchema, inspect: InspectOutputSchema, read: ReadOutputSchema, edit: EditOutputSchema, shell: ShellOutputSchema, job: JobOutputSchema, context: ContextOutputSchema });
