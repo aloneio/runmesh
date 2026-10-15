@@ -37,16 +37,18 @@ function validPattern(value: unknown): value is string {
 export function catalogPatternCost(value: unknown, length: number): number {
   if (!validPattern(value) || /\\(?:[1-9]|k<)/u.test(value) || /\(\?(?!:)/u.test(value)
     || /\)(?:[*+?]|\{\d+(?:,\d*)?\})/u.test(value)) return Infinity;
-  let choices = 1, powers = value.startsWith("^") ? 0 : 1, inClass = false;
+  let choices = 1, powers = 0, inClass = false, groupDepth = 0, topLevelAlternative = false;
   for (let i = 0; i < value.length; i++) {
     const c = value[i];
     if (c === "\\") { i++; continue; }
     if (c === "[") { inClass = true; continue; }
     if (c === "]" && inClass) { inClass = false; continue; }
     if (inClass) continue;
-    if (c === "*" || c === "+") powers++;
+    if (c === "(") groupDepth++;
+    else if (c === ")") groupDepth--;
+    else if (c === "*" || c === "+") powers++;
     else if (c === "?" && value[i - 1] !== "(" && !["*", "+", "?", "}"].includes(value[i - 1] ?? "")) choices *= 2;
-    else if (c === "|") choices *= 2;
+    else if (c === "|") { choices *= 2; topLevelAlternative ||= groupDepth === 0; }
     else if (c === "{") {
       const end = value.indexOf("}", i), quantifier = value.slice(i + 1, end);
       if (end < 0 || !/^\d+(?:,\d*)?$/u.test(quantifier)) return Infinity;
@@ -57,6 +59,10 @@ export function catalogPatternCost(value: unknown, length: number): number {
     }
     if (powers > 4 || choices > 4096) return Infinity;
   }
+  // A leading anchor applies only to the first top-level alternative. Other
+  // alternatives may search at every input offset and need that extra factor.
+  if (!value.startsWith("^") || topLevelAlternative) powers++;
+  if (powers > 4) return Infinity;
   return choices * (value.length + 1) * Math.pow(length + 1, Math.max(1, powers));
 }
 
