@@ -94,8 +94,8 @@ it.each([
   }, { route: "/mcp", legacy: "stateless" });
   const seen: string[] = [];
   let data: unknown = null;
-  if (shape === "depth") for (let i = 0; i < 17; i++) data = { child: data };
-  else data = Array.from({ length: 8192 }, () => 0);
+  if (shape === "depth") for (let i = 0; i < 40; i++) data = { child: data };
+  else data = Array.from({ length: 32_768 }, () => 0);
   const connector = createHttpRemoteConnector({ rules: connectionPolicy, credential: async () => null, fetch: async (url, init) => {
     const request = JSON.parse(String(init?.body)); seen.push(request.method);
     if (request.method === "server/discover") {

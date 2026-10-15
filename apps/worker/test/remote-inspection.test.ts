@@ -4,6 +4,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { createConnectorInspection } from "../src/application/connectors/inspection.js";
 import { CATALOG_LIMITS } from "../src/contracts/catalog.js";
+import { parseRemoteTool } from "../src/contracts/catalog-values.js";
 import type { ConnectionProfile } from "../src/contracts/connectors.js";
 import { REMOTE_LIMITS } from "../src/contracts/remote.js";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
@@ -92,13 +93,16 @@ it.each(extensions.slice(0, 3))("RM10 safely projects lawful $label instead of r
   expect(publication.methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
 });
 
-it.each(extensions.slice(3))("RM10 inspection can observe unsupported $label without publishing an unsafe schema", async ({ tool }) => {
+it.each(extensions.slice(3))("RM10 inspection and publication accept supported $label", async ({ tool }) => {
   const inspection = fixture([{ tools: [tool] }]);
   expect(await inspection.run()).toEqual(observed());
   const publication = fixture([{ tools: [tool] }], false), dispatched = vi.fn();
   const session = await publication.connector.open(profile, new AbortController().signal, dispatched, async () => undefined);
-  try { await expect(session.listTools()).rejects.toMatchObject({ code: "upstream_protocol_error" }); }
-  finally { await session.close(); }
+  try {
+    const expected = parseRemoteTool(tool);
+    expect(expected).toBeDefined();
+    expect(await session.listTools()).toEqual([expected]);
+  } finally { await session.close(); }
   expect(dispatched).not.toHaveBeenCalled();
 });
 

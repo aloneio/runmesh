@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
-import { guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
+import { boundedWireJson, guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
 import { BoundedRemoteValidator } from "../src/platform/connectors/remote-validation.js";
 import { parseRemoteTool } from "../src/contracts/catalog-values.js";
 import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
@@ -94,6 +94,24 @@ it.each(["synthetic-upstream-secret", 'synthetic"upstream-secret', "synthetic\\u
       expect(remote.requests.filter(request => request.method === "tools/call")).toHaveLength(1);
     } finally { await session.close(); }
   }
+});
+
+
+it("W05 accepts a bounded GitHub-sized tools/list envelope with deep output schemas", () => {
+  const leaf = { type: "string", format: "date-time" };
+  let nested: unknown = leaf;
+  for (let i = 0; i < 8; i++) nested = { type: "object", properties: { next: nested }, additionalProperties: false };
+  const tool = { name: "fixture", inputSchema: { type: "object" }, outputSchema: nested };
+  const tools = Array.from({ length: 93 }, (_, i) => ({ ...tool, name: `fixture_${i}`, description: "x".repeat(256) }));
+  const raw = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools } });
+  expect(raw.length).toBeLessThan(1_048_576);
+  expect(boundedWireJson(raw)).toMatchObject({ result: { tools: expect.any(Array) } });
+});
+
+it("W05 wire JSON still rejects catalogs beyond the explicit structural budget", () => {
+  let nested: unknown = "leaf";
+  for (let i = 0; i < 40; i++) nested = { next: nested };
+  expect(() => boundedWireJson(JSON.stringify({ jsonrpc: "2.0", id: 1, result: nested }))).toThrow();
 });
 
 it("W05 partial SSE frames preserve Unicode and stop at the final response before EOF", async () => {

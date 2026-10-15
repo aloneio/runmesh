@@ -1,5 +1,6 @@
 import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
 import { REMOTE_LIMITS, RemoteFault } from "../../contracts/remote.js";
+import { JSON_LIMITS } from "../../contracts/json.js";
 
 /** The response guard reserializes JSON before this check. Match its string
  * encoding so opaque quote/backslash characters cannot hide direct reflection. */
@@ -13,7 +14,7 @@ export function boundedWireJson(text: string): Record<string, unknown> {
   for (const char of text) {
     if (quoted) { if (escaped) escaped = false; else if (char === "\\") escaped = true; else if (char === '"') quoted = false; }
     else if (char === '"') quoted = true;
-    else if (char === "{" || char === "[") { if (++depth > 16) throw new RemoteFault("upstream_protocol_error"); }
+    else if (char === "{" || char === "[") { if (++depth > JSON_LIMITS.depth) throw new RemoteFault("upstream_protocol_error"); }
     else if (char === "}" || char === "]") { if (--depth < 0) throw new RemoteFault("upstream_protocol_error"); }
   }
   if (quoted || depth !== 0) throw new RemoteFault("upstream_protocol_error");
