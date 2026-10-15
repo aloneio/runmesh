@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { parseDocument } from "yaml";
-import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, githubReportUpload, gitlabReportArtifacts, GITLAB_EVENTS } from "./ci-contract.mjs";
+import { CI_CHECKS, CHECK_IDS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, checkCommand, githubReportUpload, gitlabReportArtifacts, GITLAB_EVENTS, GITLAB_PRIVACY_EVENTS } from "./ci-contract.mjs";
 import { GITHUB_JOB_NAMES, NATIVE_RUNNER_PLATFORMS, RUNNER_LTS_VERSIONS, VERIFY_REPORT_INITIALIZATION_COMMAND } from "./ci-contract.mjs";
 
 export function parseCi(source) {
@@ -18,9 +18,9 @@ function hardJob(job, label) {
   // Dynamic failure expressions are not statically equivalent to false.
   for (const key of ["continue-on-error", "allow_failure"]) assert.ok(job[key] === undefined || job[key] === false, `${label} soft failure forbidden`);
 }
-function rules(value, label) {
-  assert.ok(Array.isArray(value) && value.length === GITLAB_EVENTS.length + 1, `${label} needs explicit supported events`);
-  for (const [index, expression] of GITLAB_EVENTS.entries()) eq(value[index], { if: expression }, `${label} event rule changed`);
+function rules(value, label, events = GITLAB_EVENTS) {
+  assert.ok(Array.isArray(value) && value.length === events.length + 1, `${label} needs explicit supported events`);
+  for (const [index, expression] of events.entries()) eq(value[index], { if: expression }, `${label} event rule changed`);
   eq(value.at(-1), { when: "never" }, `${label} must deny other events`);
 }
 function requiredStep(steps, command, condition) {
@@ -108,7 +108,13 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   assert.equal(aggregate.steps[0].run, Object.keys(env).map(key => `test "$${key}" = success`).join(" && "), "aggregate cannot mask failed dependencies");
   requiredStep(aggregate.steps, aggregate.steps[0].run);
   hardJob(gl.verify, "GitLab verify"); hardJob(gl.browser, "GitLab browser");
-  rules(gl.workflow?.rules, "GitLab workflow"); rules(gl.verify.rules, "GitLab verify"); rules(gl.browser.rules, "GitLab browser");
+  rules(gl.workflow?.rules, "GitLab workflow", GITLAB_PRIVACY_EVENTS); rules(gl.verify.rules, "GitLab verify"); rules(gl.browser.rules, "GitLab browser");
+  const privacy = gl["privacy-policy"]; hardJob(privacy, "GitLab privacy");
+  assert.equal(privacy?.stage, ".pre", "Privacy gate must run before build and tests");
+  assert.equal(privacy?.variables?.GIT_DEPTH, "0", "Privacy gate requires complete ancestry");
+  assert.equal(privacy?.timeout, "2m", "Privacy gate runtime budget");
+  eq(privacy?.script, ["node scripts/check-git-privacy.mjs --ci"], "Privacy gate must execute the checked-in validator");
+  rules(privacy?.rules, "GitLab privacy", GITLAB_PRIVACY_EVENTS);
   for (const name of ["verify", "browser"]) {
     assert.ok(gl[name].extends === undefined && gl[name].when === undefined, "unreviewed inherited/manual " + name);
     eq(gl[name].artifacts, gitlabReportArtifacts(), `GitLab ${name} must preserve only the reviewed reports after failure`);

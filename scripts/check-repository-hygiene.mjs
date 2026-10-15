@@ -19,6 +19,20 @@ const forbiddenNames = /(?:^|\/)(?:npm-debug\.log|.*\.(?:log|trace)|.*\.test-res
 const pathViolations = tracked.filter(path => forbiddenPaths.some(rule => rule.test(path)) || forbiddenNames.test(path));
 assert.deepEqual(pathViolations, [], `Non-source artifacts tracked in Git:\n${pathViolations.join("\n")}`);
 
+const privateSourceViolations = [];
+const privateHome = /(?:\/home\/xwzy(?:\/|\b)|[A-Z]:\\Users\\xwzy\b)/iu;
+const personalMailbox = /[A-Za-z0-9._%+-]+@(?:hotmail|gmail|outlook|yahoo|qq|163|126)\.com/iu;
+const credentialPrefixes = /(?:github_pat_[A-Za-z0-9_]{30,}|gh[pousr]_[A-Za-z0-9]{25,}|glpat-[A-Za-z0-9_-]{15,}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{25,}|(?:AKIA|ASIA)[0-9A-Z]{16})/u;
+for (const path of tracked) {
+  const bytes = readFileSync(path);
+  if (bytes.includes(0)) continue;
+  const text = bytes.toString("utf8");
+  if (privateHome.test(text) || credentialPrefixes.test(text)
+    || (!/^(?:apps\/runner\/THIRD_PARTY_NOTICES\.md|LICENSE(?:_HISTORY)?(?:\.zh-CN)?\.md)$/u.test(path) && personalMailbox.test(text)))
+    privateSourceViolations.push(path);
+}
+assert.deepEqual(privateSourceViolations, [], `Private identifiers or high-confidence credentials in source files: \n${privateSourceViolations.join("\n")}`);
+
 const contentViolations = [];
 for (const path of tracked) {
   if (path.startsWith("docs/") && path.endsWith(".md")) {

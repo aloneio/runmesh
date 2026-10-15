@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
-import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand } from "../scripts/ci-contract.mjs";
+import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, WINDOWS_TRANSPORT_STEP, WINDOWS_REPORT_INITIALIZATION_STEP, LTS_COMMANDS, BROWSER_COMMANDS, GITLAB_EVENTS, GITLAB_PRIVACY_EVENTS, UPLOAD_ACTION, githubReportUpload, gitlabReportArtifacts, checkCommand } from "../scripts/ci-contract.mjs";
 import { VERIFY_REPORT_INITIALIZATION_COMMAND } from "../scripts/ci-contract.mjs";
 import { gateEvidence, gateJUnit, sourceObservation, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
@@ -148,7 +148,8 @@ function fixture() {
     "verify-all": { if: "always()", needs: [...AGGREGATE_JOBS], steps: [{ env, run: Object.keys(env).map(key => `test "$${key}" = success`).join(" && ") }] },
   } };
   const rules = [...GITLAB_EVENTS.map(expression => ({ if: expression })), { when: "never" }];
-  const gl = { workflow: { rules }, verify: { timeout: "30m", script: [VERIFY_REPORT_INITIALIZATION_COMMAND, "npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], rules,
+  const privacyRules = [...GITLAB_PRIVACY_EVENTS.map(expression => ({ if: expression })), { when: "never" }];
+  const gl = { workflow: { rules: privacyRules }, "privacy-policy": { stage: ".pre", timeout: "2m", variables: { GIT_DEPTH: "0" }, script: ["node scripts/check-git-privacy.mjs --ci"], rules: privacyRules }, verify: { timeout: "30m", script: [VERIFY_REPORT_INITIALIZATION_COMMAND, "npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], rules,
     artifacts: gitlabReportArtifacts() },
     browser: { rules, script: [...BROWSER_COMMANDS], artifacts: gitlabReportArtifacts() } };
   return { pkg, gh, gl };

@@ -43,7 +43,7 @@ Cloudflare manages build-connection authentication. The deployment wrapper check
 
 For candidate commits on `main`, Workers Builds completes these checks and keeps the active production Worker in place. Its log records `production_preserved` and `uploaded: false` while the signed release is prepared and verified. Pushing the reviewed release activation then deploys that source automatically with its commit tag. A manual production deployment requires the activated release record.
 
-If you deploy through a GitLab mirror, configure `scripts/sync-gitlab-dev.mjs` on your automation host with the required authentication and schedule. It copies a dev commit after that commit passes GitHub `verify-all`; the connected Cloudflare Worker then builds the GitLab push. Resolve any branch divergence before resuming synchronization.
+GitLab is the authoritative repository for deployment. Push reviewed development changes to GitLab `dev`, run the required GitLab checks, and promote the exact commit to protected `main` through a same-project `dev` to `main` merge request. Do not synchronize the deployment branches from GitHub. Keep the Cloudflare build connections bound to their respective GitLab branches.
 
 ## Provision resources and secrets
 

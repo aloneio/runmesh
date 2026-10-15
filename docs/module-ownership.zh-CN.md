@@ -178,10 +178,10 @@ Vitest 配置显式指定根目录和收集范围。`check:verification` 从仓�
 基线回归覆盖十个 MCP 工具的 Schema、说明、注解和线协议字节。针对候选 SHA
 执行受影响的认证 Worker、竞态／恢复、安装包、原生平台和 Chromium 检查。
 
-开发目标为 `runmeshdev`，生产目标为 `runmesh`。Cloudflare 连接 GitLab 时，
-在准确 SHA 的 GitHub `verify-all` 通过后快进 GitLab `dev`；可以使用单独配置的
-`sync-gitlab-dev.mjs` 宿主桥接，也可手动快进。部署脚本上传前核对分支、环境、
-配置和 `WRANGLER_CI_OVERRIDE_NAME`，再显式指定 Worker 名称，详见[部署参考](deployment.md)。
+开发目标为 `runmeshdev`，生产目标为 `runmesh`。GitLab `dev` 是唯一权威的开发部署来源；
+提升到受保护的 GitLab `main` 必须经过同项目的 `dev` 合并请求和 GitLab 验证。
+部署脚本上传前核对分支、环境、配置和 `WRANGLER_CI_OVERRIDE_NAME`，
+再显式指定 Worker 名称，详见[部署参考](deployment.md)。
 开发安装要求存在可发现、已验签的不可变预发布包。
 
 保留兼容 facade 和有状态协调者，将操作逐步移到窄接口后面。

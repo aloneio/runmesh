@@ -228,11 +228,11 @@ Baseline regressions cover all ten MCP tool schemas, descriptions and annotation
 plus wire-schema bytes. Run the affected authenticated Worker, race/recovery,
 installed-package, native-platform and Chromium checks against the candidate SHA.
 
-Development deploys to `runmeshdev`; production deploys to `runmesh`. With a
-GitLab-connected Cloudflare build, fast-forward GitLab `dev` after that SHA passes
-GitHub `verify-all`. Use the separately configured `sync-gitlab-dev.mjs` host
-bridge or perform the fast-forward manually. Before upload, the wrapper checks
-branch/environment, configuration and `WRANGLER_CI_OVERRIDE_NAME`, then supplies
+Development deploys to `runmeshdev`; production deploys to `runmesh`. GitLab
+`dev` is the authoritative development source; promotion to protected GitLab
+`main` requires the same-project `dev` merge request and successful GitLab
+checks. Before upload, the wrapper checks branch/environment, configuration and
+`WRANGLER_CI_OVERRIDE_NAME`, then supplies
 the explicit Worker name. See [deployment](deployment.md). Development installation
 requires a discoverable, verified immutable prerelease.
 

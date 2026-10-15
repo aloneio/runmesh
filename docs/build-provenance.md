@@ -64,7 +64,7 @@ After any successful retry, run the source comparison above.
 
 ## Provider setup and source records
 
-For a GitLab mirror, configure synchronization and the Cloudflare build connection as described in [deployment](deployment.md). Record the commit selected by that deployment, then compare it with the live Worker using the command above.
+Use GitLab as the authoritative Cloudflare build source, with separate connections for `dev` and `main` as described in [deployment](deployment.md). Record the exact deployed commit and compare it with the live Worker using the command above.
 
 The health field `attestation=self_reported` means the build host recorded the Git source. Use a trusted build environment and retain its CI results. Keep the Worker commit, Cloudflare version ID and installed Runner version together in your upgrade record; verify the Runner package signature during installation.
 

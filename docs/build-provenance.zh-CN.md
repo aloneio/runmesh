@@ -64,7 +64,7 @@ npm run check:deployment -- https://your-worker.example <实际40位提交> main
 
 ## 提供商配置与来源记录
 
-使用 GitLab 镜像时，按[部署说明](deployment.md)配置同步程序和 Cloudflare 构建连接。记录该次部署选用的提交，再用上面的命令与线上 Worker 比较。
+使用 GitLab 作为权威部署仓库，按照[部署说明](deployment.md)分别连接 `dev` 和 `main` 的 Cloudflare 构建。记录部署选用的准确提交，再用上面的命令与线上 Worker 比较。
 
 健康记录中的 `attestation=self_reported` 表示 Git 来源由构建主机记录。使用可信的构建环境并保留 CI 结果。在升级记录中一并保存 Worker 提交、Cloudflare 版本 ID 和已安装 Runner 的版本，安装时核验 Runner 包的签名。
 

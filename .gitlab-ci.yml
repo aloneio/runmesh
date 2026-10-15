@@ -6,6 +6,7 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"
     - when: never
 image: node:22.23.2-bookworm@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d
 variables:
@@ -16,6 +17,25 @@ cache:
       - package-lock.json
   paths:
     - .npm/
+privacy-policy:
+  stage: .pre
+  variables:
+    GIT_DEPTH: "0"
+  cache: []
+  dependencies: []
+  needs: []
+  allow_failure: false
+  interruptible: false
+  timeout: 2m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"
+    - when: never
+  script:
+    - node scripts/check-git-privacy.mjs --ci
 verify:
   stage: verify
   variables:

@@ -31,7 +31,7 @@ Exercise domain rules through public APIs and keep adapter integration in its de
 
 ## Read CI results
 
-GitHub runs verification for pushes to `dev` and `main`, and for pull requests. GitLab runs full verification for merge requests, pushes to `main`, manual runs and schedules. To verify the development branch there, choose `dev` under **New pipeline**. This keeps routine development checks on GitHub while providing an independent GitLab result for cross-forge acceptance.
+GitLab is the authoritative deployment source. Direct `dev` pushes run the lightweight blocking privacy policy; same-project merge requests, `main` pushes, manual pipelines and scheduled pipelines run the complete GitLab verification and browser suites. To execute the full suite against `dev`, choose that branch under **New pipeline**. Independent GitHub checks remain available for its separate release workflow; they do not update GitLab deployment branches.
 
 | Job | Main checks |
 | --- | --- |
