@@ -15,7 +15,7 @@ Runmesh relays bounded remote tool discovery and calls, not arbitrary server cod
 | JSON Schema | 2020-12, 2019-09, draft-07/06; conservative draft-04/OpenAPI normalization; composition, dependencies, tuples and local acyclic refs/anchors |
 | Regex constraints | Structural/input-work budgets; unsafe constraints quarantine tools, never silently relax validation |
 | Parameter headers | SDK-derived Mcp-Param-* from string/integer/boolean input bindings |
-| Results | Text, image, audio, embedded resources, links, structured JSON and tool errors |
+| Results | Text, image, audio, embedded resources, links, structured JSON and tool errors; non-object structured outputs require the modern wire version |
 | Authentication | Existing managed OAuth: CIMD, DCR, pre-registered clients; encrypted credentials and issuer/PKCE/state binding |
 | Tool isolation | Supported siblings publish with exclusions; all-unsupported nonempty catalogs preserve the old publication |
 | Large libraries | 512 tools per catalog; remote_search/remote_tools/remote_call avoid direct-menu overload |
