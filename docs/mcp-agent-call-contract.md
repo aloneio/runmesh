@@ -50,6 +50,8 @@ read the full definition and `inputSchema` through `remote_tools`. Call
 `remote_call` with the returned `profile_id`, `tool_id`, `version` and schema-valid
 `arguments`. A changed catalog requires a fresh definition and version.
 
+If `remote_search` returns no relevant tools, treat that as an inconclusive discovery result rather than proof that the service lacks the capability. For a known service, inspect its published definitions with `remote_tools`; otherwise use `remote_profiles` to identify the service first, then `remote_tools`. This fallback is required for general-purpose MCPs whose small public tool set fronts a much larger provider API.
+
 Shared remote calls use their own upstream session and do not create a Runner Job.
 Runmesh remote errors use `remote_` codes and operation states `not_started`,
 `completed` or `unknown`. A completed upstream action can have its result withheld

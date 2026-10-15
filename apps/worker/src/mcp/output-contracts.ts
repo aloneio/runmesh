@@ -71,8 +71,13 @@ export const BootstrapOutputSchema = z.object({
     workspace_operations: z.object({ inspect_with: z.literal("inspect"), read_with: z.literal("read"), edit_with: z.literal("edit") }).strict(),
     long_running_operations: z.object({ start_with: z.literal("shell"), continue_with: z.literal("job") }).strict(),
     external_services: z.object({
-      strategy: z.literal("search_then_load_then_call"), list_services: z.literal("remote_profiles"), search: z.literal("remote_search"),
+      strategy: z.literal("search_then_profile_fallback_then_call"), list_services: z.literal("remote_profiles"), search: z.literal("remote_search"),
       load_schema: z.literal("remote_tools"), invoke: z.literal("remote_call"),
+      fallback: z.object({
+        when_search_returns_no_relevant_tools: z.literal("inspect_profile_tools_before_unavailable"),
+        known_service: z.literal("remote_tools"),
+        unknown_service: z.literal("remote_profiles_then_remote_tools"),
+      }).strict(),
     }).strict(),
     reusable_workflows: z.object({ list: z.literal("skill_list"), read: z.literal("skill_read") }).strict(),
     handoff_context: z.object({ tool: z.literal("context"), bootstrap_action: z.literal("bootstrap") }).strict(),
@@ -101,7 +106,7 @@ export const BootstrapOutputSchema = z.object({
       has_more: z.boolean().optional(),
     }).strict(),
   }).strict(),
-  manifest: z.object({ revision: z.literal(1), sha256: hash, digest_scope: z.literal("static_contract") }).strict(),
+  manifest: z.object({ revision: z.literal(2), sha256: hash, digest_scope: z.literal("static_contract") }).strict(),
 }).strict();
 export const RunnerCurrentOutputSchema = z.object({ ...common, active_runner_id: id.nullable().optional(), active_runner_updated_at_ms: count.nullable().optional(), active_runner: runnerContext.nullable().optional() }).strict();
 export const RunnerSelectOutputSchema = RunnerCurrentOutputSchema.extend({ changed: z.boolean().optional() });

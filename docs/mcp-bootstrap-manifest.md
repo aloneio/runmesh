@@ -46,7 +46,11 @@ External-service tasks use lazy discovery:
 
 `bootstrap -> remote_search -> remote_tools -> remote_call`
 
-`remote_profiles` remains available when service-oriented browsing is more appropriate than keyword search.
+If `remote_search` returns no relevant tools, do not conclude that the service lacks the capability. General-purpose MCPs may expose broad tools such as `search` or `execute` whose internal API surface is not represented in the published tool name or description. For a known service, inspect that profile with `remote_tools`; if the service is not yet known, use `remote_profiles -> remote_tools` before deciding the capability is unavailable.
+
+The effective external-service flow is therefore:
+
+`bootstrap -> remote_search -> [remote_tools | remote_profiles -> remote_tools] -> remote_call`
 
 Reusable workflows use:
 

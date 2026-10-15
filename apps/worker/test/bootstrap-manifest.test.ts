@@ -30,6 +30,14 @@ describe("bootstrap manifest", () => {
     expect(result.directory.remote_mcp).toMatchObject({ profile_count: profiles.length, profiles_truncated: true });
     expect(result.authorization.bootstrap_grants_permissions).toBe(false);
     expect(result.usage.full_remote_schemas_included).toBe(false);
+    expect(result.routing.external_services).toMatchObject({
+      strategy: "search_then_profile_fallback_then_call",
+      fallback: {
+        when_search_returns_no_relevant_tools: "inspect_profile_tools_before_unavailable",
+        known_service: "remote_tools",
+        unknown_service: "remote_profiles_then_remote_tools",
+      },
+    });
   });
 
   it("keeps the response compact when optional directories are unavailable", async () => {
