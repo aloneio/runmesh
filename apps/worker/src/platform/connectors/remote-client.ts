@@ -162,7 +162,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           }
           const guarded = await guardedRemoteResponse(response, message.id as string | number, signal, account,
             rule.negotiate === true && method === "server/discover");
-          const text = await guarded.text();
+          let text = await guarded.text();
           if (!credentialCurrent() || !egressCurrent()) throw new RemoteFault("result_withheld");
           // Detect direct reflection of our bearer; this is not a general DLP promise.
           if (reflectsRemoteSecret(text, credential?.token)) throw new RemoteFault("result_invalid");
@@ -170,12 +170,17 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           if (method === "tools/list") {
             const reply = boundedWireJson(text), result = catalogObject(reply.result);
             if (result !== undefined) {
+              // A number of otherwise conforming hosted servers serialize an
+              // exhausted optional cursor as null or an empty string. Normalize
+              // those terminal sentinels to omission before the strict SDK sees
+              // the result; non-empty cursors remain strictly bounded/unique.
+              if (result.nextCursor === null || result.nextCursor === "") { delete result.nextCursor; text = JSON.stringify(reply); }
               // The SDK ends aggregation on a repeated response cursor. Reject
               // that incomplete walk before it can look like a complete catalog.
               if (!Array.isArray(result.tools) || (totalTools += result.tools.length) > CATALOG_LIMITS.tools
                 || result.tools.some(tool => catalogJson(tool, CATALOG_LIMITS.tool_bytes) === undefined
                   || (!ports.inspection && parseRemoteTool(tool) === undefined))
-                || (result.nextCursor !== undefined && (typeof result.nextCursor !== "string" || !result.nextCursor || result.nextCursor.length > 2048 || cursors.has(result.nextCursor))))
+                || (result.nextCursor !== undefined && (typeof result.nextCursor !== "string" || result.nextCursor.length > 2048 || cursors.has(result.nextCursor))))
                 throw new RemoteFault("upstream_protocol_error");
             }
           }

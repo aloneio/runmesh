@@ -88,6 +88,29 @@ it("W05 forwards only SDK-derived SEP-2243 Mcp-Param headers for GitHub-style to
   } finally { await session.close(); }
 });
 
+it.each([null, ""])("W05 accepts GitLab-style extensions and terminal nextCursor %j in tools/list", async terminalCursor => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method !== "tools/list") return remote.http(input, init);
+      const response = await remote.http(input, init);
+      const reply = await (await guardedRemoteResponse(response, request.id, new AbortController().signal, () => undefined)).json() as any;
+      reply.result.tools[0] = { ...reply.result.tools[0], version: "0.1.0", providerMetadata: { provider: "gitlab" },
+        annotations: { readOnlyHint: true, toolset: "repository" },
+        icons: [{ src: "https://gitlab.com/assets/gitlab_logo.png", mimeType: "image/png", theme: "dark", cacheKey: "v1" }] };
+      reply.result.nextCursor = terminalCursor;
+      return Response.json(reply);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ name: "increment", annotations: { readOnlyHint: true } });
+    expect(tools[0]).not.toHaveProperty("version");
+  } finally { await session.close(); }
+});
+
 it.each(["2025-11-25", "2026-07-28"] as const)("RM10 inspection accepts resource-only servers in %s while ordinary tool connections require tools", async protocol => {
   const methods: string[] = [];
   const handler = createMcpHandler(() => {
@@ -377,12 +400,40 @@ it("W05 accepts SEP-2243 MCP parameter annotations without weakening schema vali
   expect(parseRemoteTool({ name: "bad_header_location", inputSchema: { type: "object", properties: { values: { type: "array", items: { type: "string", "x-mcp-header": "item" } } } } })).toBeUndefined();
 });
 
-it("W05 validates the fixed Cloudflare identity pattern while keeping arbitrary regex schemas outside the admitted subset", () => {
+it("W05 enforces safe regexes while delegating unsafe provider patterns to the upstream server", () => {
   const validator = new BoundedRemoteValidator();
   const schema = { type: "object", properties: { id: { type: "string", minLength: 1, pattern: "\\S" } }, required: ["id"], additionalProperties: false };
   expect(validator.validate(schema, { id: "user:abc" })).toBe(true);
   expect(validator.validate(schema, { id: "   " })).toBe(false);
-  expect(validator.validate({ type: "object", properties: { id: { type: "string", pattern: "(a+)+$" } } }, { id: "a" })).toBe(false);
+  const unsafe = { type: "object", properties: { id: { type: "string", pattern: "(a+)+$", providerConstraint: { opaque: true } } } };
+  expect(parseRemoteTool({ name: "unsafe_pattern", inputSchema: unsafe })).toBeDefined();
+  expect(validator.validate(unsafe, { id: "provider-validates-this" })).toBe(true);
+  expect(validator.validate(unsafe, { id: 7 })).toBe(false);
+});
+
+it("W05 compatibility-normalizes draft-04 and OpenAPI 3.1 dialect markers without external resolution", () => {
+  const validator = new BoundedRemoteValidator();
+  const draft4 = { $schema: "http://json-schema.org/draft-04/schema#", type: "object",
+    properties: { value: { type: "number", minimum: 1, exclusiveMinimum: true } }, required: ["value"], additionalProperties: false };
+  expect(validator.validate(draft4, { value: 2 })).toBe(true);
+  expect(validator.validate(draft4, { value: 1 })).toBe(false);
+  const openapi = { $schema: "https://spec.openapis.org/oas/3.1/dialect/base", type: "object",
+    properties: { value: { type: ["string", "null"] } }, required: ["value"], additionalProperties: false };
+  expect(validator.validate(openapi, { value: null })).toBe(true);
+  expect(validator.validate(openapi, { value: "ok" })).toBe(true);
+  expect(validator.validate(openapi, { value: 3 })).toBe(false);
+});
+
+it("W05 validates draft-07 dependencies and normalizes common OpenAPI nullable schemas", () => {
+  const validator = new BoundedRemoteValidator();
+  const draft7 = { $schema: "http://json-schema.org/draft-07/schema#", type: "object",
+    properties: { id: { type: "string", pattern: "^[A-Za-z0-9_.-]+$" }, note: { type: "string" } },
+    dependencies: { id: ["note"] }, additionalProperties: false };
+  expect(validator.validate(draft7, { id: "abc", note: "ok" })).toBe(true);
+  expect(validator.validate(draft7, { id: "abc" })).toBe(false);
+  const openApi = { type: "object", properties: { note: { type: "string", nullable: true } }, required: ["note"], additionalProperties: false };
+  expect(parseRemoteTool({ name: "openapi_nullable", inputSchema: openApi })).toBeDefined();
+  expect(validator.validate(openApi, { note: null })).toBe(true);
 });
 
 it("W05 JSON schema validation is non-coercing, bounded and supports approved local references", () => {
@@ -393,7 +444,7 @@ it("W05 JSON schema validation is non-coercing, bounded and supports approved lo
   expect(validator.validate(schema, { value: "2" })).toBe(false);
   expect(validator.validate(schema, { value: 0 })).toBe(false);
   expect(validator.validate(schema, { value: 2, extra: true })).toBe(false);
-  expect(validator.validate({ type: "string", pattern: "(a+)+$" }, "a")).toBe(false);
+  expect(validator.validate({ type: "string", pattern: "(a+)+$" }, "a")).toBe(true);
   expect(validator.validate({ type: "object", $ref: "https://unvisited.example.com/schema" }, {})).toBe(false);
 });
 
