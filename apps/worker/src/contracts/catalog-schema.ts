@@ -3,6 +3,8 @@ import { catalogObject } from "./catalog-json.js";
 const types = new Set(["null", "boolean", "object", "array", "number", "integer", "string"]);
 const text = new Set(["title", "description", "$comment"]);
 const flag = new Set(["readOnly", "writeOnly", "deprecated", "uniqueItems"]);
+const formats = new Set(["date", "time", "date-time", "duration", "uri", "uri-reference", "uri-template", "url",
+  "email", "hostname", "ipv4", "ipv6", "uuid", "json-pointer", "json-pointer-uri-fragment", "relative-json-pointer"]);
 const count = new Set(["minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties", "minContains", "maxContains"]);
 const numeric = new Set(["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"]);
 const single = new Set(["additionalProperties", "unevaluatedProperties", "items", "contains", "not", "if", "then", "else"]);
@@ -14,8 +16,9 @@ const names = (value: unknown): value is string[] => Array.isArray(value) && val
 
 /** Reviewed 2020-12 metadata subset, not an argument validator. The caller bounds
  * the complete JSON first. No regex compilation, remote lookup or ref expansion.
- * Unknown keywords/dialects, arbitrary patterns, formats, dynamic headers and recursive refs
- * are unsupported rather than silently discarded. A fixed linear \S pattern is
+ * Unknown keywords/dialects, arbitrary patterns, unknown formats, dynamic headers and recursive refs
+ * are unsupported rather than silently discarded. Standard deterministic formats
+ * implemented by the Worker validator are admitted. A fixed linear \S pattern is
  * admitted for standards-compliant identity schemas. The graph retains each child
  * and resolved ref edge once; consumers can bound expanded work without walking
  * keywords or decoding pointers again. Argument validation still needs an evaluator. */
@@ -41,6 +44,7 @@ export function catalogSchemaGraph(value: unknown, input: boolean): ReadonlyMap<
       else if (count.has(key)) { if (!Number.isSafeInteger(field) || (field as number) < 0) return false; }
       else if (numeric.has(key)) { if (typeof field !== "number" || !Number.isFinite(field) || (key === "multipleOf" && field <= 0)) return false; }
       else if (key === "$schema") { if (path !== "" || field !== "https://json-schema.org/draft/2020-12/schema") return false; }
+      else if (key === "format") { if (typeof field !== "string" || !formats.has(field)) return false; }
       else if (key === "pattern") {
         // Do not admit arbitrary regular expressions into the Worker-side JSON
         // Schema interpreter. This single linear primitive is required by the
