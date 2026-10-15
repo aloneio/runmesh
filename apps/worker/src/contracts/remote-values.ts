@@ -33,7 +33,7 @@ export function parseRemoteResult(value: unknown): RemoteResult | undefined {
   if (item === undefined || (item.resultType !== undefined && item.resultType !== "complete")
     || item.task !== undefined || item.inputRequests !== undefined || !Array.isArray(item.content)
     || item.content.length > REMOTE_LIMITS.content_items || (item.isError !== undefined && typeof item.isError !== "boolean")
-    || (item.structuredContent !== undefined && catalogObject(item.structuredContent) === undefined)) return undefined;
+    || (item.structuredContent !== undefined && catalogJson(item.structuredContent, REMOTE_LIMITS.response_bytes) === undefined)) return undefined;
   const content: { [key: string]: import("./catalog.js").CatalogJson }[] = [];
   for (const raw of item.content) {
     const block = catalogObject(raw);

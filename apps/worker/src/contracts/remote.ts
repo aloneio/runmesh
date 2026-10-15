@@ -18,7 +18,7 @@ export interface RemoteCall {
 }
 export interface RemoteResult {
   readonly content: readonly { [key: string]: CatalogJson }[];
-  readonly structuredContent?: { [key: string]: CatalogJson };
+  readonly structuredContent?: CatalogJson;
   readonly isError: boolean;
 }
 export const REMOTE_CODES = Object.freeze(["invalid_request", "invalid_arguments", "permission_denied", "authorization_required", "stale_catalog",

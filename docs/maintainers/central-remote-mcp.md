@@ -135,11 +135,37 @@ clients; the connection requires no additional review or approval in the
 publication grants no Runner permissions.
 
 The discovery endpoint permits no caller URL, token, HTTP headers or command.
-Partial pages, duplicate tools, unsupported schemas, timeouts and failed upstream
+Partial pages, duplicate tools, unsafe/unresolvable schema graphs, timeouts and failed upstream
 observations leave the previously reviewed catalog intact. An actual change in
 the selected tool's description/schema/annotations blocks invocation until the
 catalog is refreshed, which publishes all current tools. The call does not publish changes
 or create a new catalog revision for every request.
+
+### Hosted MCP catalog compatibility
+
+Discovery treats a provider tool descriptor as an extensible MCP envelope rather
+than an exact Runmesh-owned object. Standard executable fields are validated and
+projected; bounded provider/presentation fields (for example GitLab `version` and
+annotation extensions, MCP `icons`/`execution` additions, and `_meta`) do not make
+the complete catalog invalid. Unknown annotation values are never promoted into
+Runmesh authorization or risk decisions.
+
+Tool schemas accept the current JSON Schema 2020-12 default, 2019-09, draft-07
+and draft-06 dialects, plus compatibility normalization for draft-04/OpenAPI
+generated schemas. Common OpenAPI `nullable`, legacy `dependencies`/tuple items,
+standard composition/object/array keywords, local JSON Pointers and anchors,
+custom formats and bounded extension keywords are accepted. Unknown validation
+annotations and regex constraints that are unsafe to execute locally are retained
+in the catalog but omitted from the private Worker-side validation copy; the
+upstream provider remains authoritative for those constraints. Safe constraints
+continue to gate dispatch and structured results.
+
+External `$ref` resolution is deliberately disabled, as required for a network-
+isolated client by default. Dynamic/recursive reference graphs, malformed known
+keywords, cycles, excessive depth/node work, oversized descriptors and invalid
+SEP-2243 `x-mcp-header` annotations remain hard failures. This compatibility
+policy lets hosted servers evolve metadata without weakening transport, secret,
+header or computational boundaries.
 
 ## Trust and execution boundaries
 
