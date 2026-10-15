@@ -64,7 +64,7 @@ it.each([
   { inputSchema: { type: "object", $ref: "https://private.invalid/schema" } },
   { inputSchema: { type: "object", $ref: "file:///secret" } },
   { inputSchema: { type: "object", $dynamicRef: "#a" } },
-  { inputSchema: { type: "object", properties: { a: { type: "string", "x-mcp-header": "Authorization" } } } },
+  { inputSchema: { type: "object", properties: { a: { type: "string", "x-mcp-header": "bad header" } } } },
   { name: "bad tool" }, { annotations: { readOnlyHint: "true" } }, { unsupportedMetadata: { grant: "admin" } },
   { description: "a".repeat(8193) }, { inputSchema: { type: "object", anyOf: [] } },
 ])("W04 unsupported/invalid tool contracts are rejected without partial publication: %j", change => {
