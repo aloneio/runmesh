@@ -8,7 +8,10 @@ import type { JsonSchemaType, jsonSchemaValidator } from "@modelcontextprotocol/
  * interpreter. This rejects expensive-but-legal schemas instead of timing out
  * synchronous evaluation or enabling eval/new Function in a Worker. */
 function prepareSchema(schema: unknown): number {
-  const graph = catalogSchemaGraph(schema, false);
+  // Validation semantics ignore SEP-2243 x-mcp-header annotations. Tool
+  // admission has already checked whether such annotations are legal input
+  // metadata, so accept either an output-shaped schema or an input-shaped one.
+  const graph = catalogSchemaGraph(schema, false) ?? catalogSchemaGraph(schema, true);
   if (graph === undefined) return Infinity;
   // The interpreter omits contains' default minimum when maxContains is set.
   // Only visit admitted schema locations, never const/default/example data.

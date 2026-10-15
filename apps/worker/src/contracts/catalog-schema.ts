@@ -3,6 +3,8 @@ import { catalogObject } from "./catalog-json.js";
 const types = new Set(["null", "boolean", "object", "array", "number", "integer", "string"]);
 const text = new Set(["title", "description", "$comment"]);
 const flag = new Set(["readOnly", "writeOnly", "deprecated", "uniqueItems"]);
+const mcpHeaderToken = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
+const mcpHeaderTypes = new Set(["string", "integer", "boolean", "number"]);
 const formats = new Set(["date", "time", "date-time", "duration", "uri", "uri-reference", "uri-template", "url",
   "email", "hostname", "ipv4", "ipv6", "uuid", "json-pointer", "json-pointer-uri-fragment", "relative-json-pointer"]);
 const count = new Set(["minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties", "minContains", "maxContains"]);
@@ -16,30 +18,38 @@ const names = (value: unknown): value is string[] => Array.isArray(value) && val
 
 /** Reviewed 2020-12 metadata subset, not an argument validator. The caller bounds
  * the complete JSON first. No regex compilation, remote lookup or ref expansion.
- * Unknown keywords/dialects, arbitrary patterns, unknown formats, dynamic headers and recursive refs
- * are unsupported rather than silently discarded. Standard deterministic formats
- * implemented by the Worker validator are admitted. A fixed linear \S pattern is
+ * Unknown keywords/dialects, arbitrary patterns, unknown formats and recursive refs
+ * are unsupported rather than silently discarded. SEP-2243 x-mcp-header annotations
+ * are admitted only on statically reachable primitive input properties; all emitted HTTP
+ * headers retain the fixed Mcp-Param-* prefix. Standard deterministic formats implemented
+ * by the Worker validator are admitted. A fixed linear \S pattern is
  * admitted for standards-compliant identity schemas. The graph retains each child
  * and resolved ref edge once; consumers can bound expanded work without walking
  * keywords or decoding pointers again. Argument validation still needs an evaluator. */
 export function catalogSchemaGraph(value: unknown, input: boolean): ReadonlyMap<string, readonly string[]> | undefined {
   const root = catalogObject(value);
   if (root === undefined || (input && root.type !== "object")) return undefined;
-  const graph = new Map<string, string[]>(), refs: Array<[string, string]> = [];
+  const graph = new Map<string, string[]>(), refs: Array<[string, string]> = [], mcpHeaders = new Set<string>();
   let nodes = 0;
-  const walk = (schema: unknown, path: string, depth: number): boolean => {
+  const walk = (schema: unknown, path: string, depth: number, headerReachable: boolean): boolean => {
     if (++nodes > 2048 || depth > 12) return false;
     graph.set(path, []);
     if (typeof schema === "boolean") return true;
     const item = catalogObject(schema);
     if (item === undefined) return false;
-    const child = (next: unknown, suffix: string): boolean => {
+    const child = (next: unknown, suffix: string, reachable = false): boolean => {
       const nextPath = path + suffix;
       graph.get(path)!.push(nextPath);
-      return walk(next, nextPath, depth + 1);
+      return walk(next, nextPath, depth + 1, reachable);
     };
     for (const [key, field] of Object.entries(item)) {
       if (text.has(key)) { if (typeof field !== "string") return false; }
+      else if (key === "x-mcp-header") {
+        const type = typeof item.type === "string" ? item.type : undefined;
+        if (!input || !headerReachable || path === "" || typeof field !== "string" || field.length > 128
+          || !mcpHeaderToken.test(field) || type === undefined || !mcpHeaderTypes.has(type)) return false;
+        const lower = field.toLowerCase(); if (mcpHeaders.has(lower)) return false; mcpHeaders.add(lower);
+      }
       else if (flag.has(key)) { if (typeof field !== "boolean") return false; }
       else if (count.has(key)) { if (!Number.isSafeInteger(field) || (field as number) < 0) return false; }
       else if (numeric.has(key)) { if (typeof field !== "number" || !Number.isFinite(field) || (key === "multipleOf" && field <= 0)) return false; }
@@ -61,16 +71,17 @@ export function catalogSchemaGraph(value: unknown, input: boolean): ReadonlyMap<
       else if (key === "dependentRequired") {
         const object = catalogObject(field);
         if (object === undefined || Object.values(object).some(value => !names(value))) return false;
-      } else if (single.has(key)) { if (!child(field, "/" + key)) return false; }
+      } else if (single.has(key)) { if (!child(field, "/" + key, false)) return false; }
       else if (maps.has(key)) {
         const object = catalogObject(field);
         if (object === undefined) return false;
         for (const [name, next] of Object.entries(object)) {
-          if (name.length > 256 || !child(next, "/" + key + "/" + pointer(name))) return false;
+          const reachable = key === "properties" ? headerReachable : false;
+          if (name.length > 256 || !child(next, "/" + key + "/" + pointer(name), reachable)) return false;
         }
       } else if (lists.has(key)) {
         if (!Array.isArray(field) || field.length === 0 || field.length > 32) return false;
-        for (const [i, next] of field.entries()) if (!child(next, "/" + key + "/" + i)) return false;
+        for (const [i, next] of field.entries()) if (!child(next, "/" + key + "/" + i, false)) return false;
       } else if (key === "$ref") {
         if (typeof field !== "string" || field.length > 1024) return false;
         let target: string;
@@ -81,7 +92,7 @@ export function catalogSchemaGraph(value: unknown, input: boolean): ReadonlyMap<
     }
     return true;
   };
-  if (!walk(root, "", 0)) return undefined;
+  if (!walk(root, "", 0, true)) return undefined;
   for (const [from, to] of refs) {
     if (!graph.has(to)) return undefined;
     graph.get(from)!.push(to);
