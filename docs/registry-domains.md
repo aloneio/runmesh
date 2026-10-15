@@ -33,13 +33,13 @@ SQL is grouped by business responsibility. Atomic operations such as deletion, c
 
 The facade owns HMAC/HTTP route ordering, DO bootstrap, maintenance scheduling, feature-health coordination and D1 boundary handling. Keep cross-domain transactions with that storage owner when changing module boundaries.
 
-## Regression evidence
+## Regression contract
 
 [Registry domain regression tests](../apps/worker/test/registry-domains.test.ts) compare 40 deterministic operations against the recorded extraction baseline. The golden fixture records ordered SQL/argument hashes, transaction begin/commit order, actual SQLite cursor rows read/written and public receipts. It covers session/password changes, nonce replay, Runner registration and retry, policy changes/acknowledgement, final authorization, heartbeat replay, Job snapshots and no-record mode, client rotation and revoked/stale transport. Fixture values are synthetic.
 
 The same test injects a policy-storage exception during registration and verifies that Runner, credential-ledger and policy rows all roll back. Domain-boundary tests separately construct all four services with inaccessible collaborators, verify the synchronous storage adapter and exercise narrow SQL-only operations without a full DO fixture.
 
-The original AR06 extraction was compared against `ca511cf0fa9411b85a52ba78547aeab7e4b27dec`. For each later change, run the affected credential, enrollment, scope, policy-generation, revocation, quota, hibernation, history and MCP integration regressions against the new candidate.
+For each change, run the affected credential, enrollment, scope, policy-generation, revocation, quota, hibernation, history and MCP integration regressions against the candidate source.
 
 Both providers' architecture gate checks the dependency direction: domains use foundations and narrow ports; the facade composes domains with HTTP and external history adapters. Domain imports of the facade, concrete peers, MCP/UI handlers or external history adapters fail this check.
 

@@ -6,7 +6,7 @@ RunMesh should be usable by an unfamiliar agent without requiring that agent to 
 
 The bootstrap manifest is deliberately not a second permission system and not a full tool catalog.
 
-## Phase 1 scope
+## Version 1 scope
 
 Version 1 adds one native read-only MCP tool: `bootstrap`.
 
@@ -104,30 +104,11 @@ The serialized v1 response targets a maximum of 8 KiB.
 
 Central summary calls are bounded independently so a slow directory cannot turn bootstrap into a long-running initialization request. Remote services are summarized, not expanded into full tool schemas.
 
-## Implementation plan
+## Implementation contract
 
-### Phase 1 — Bootstrap v1
+Version 1 is implemented as a strict public output schema, native read-only `bootstrap` handler, static routing/authorization contract, bounded Runner/remote-MCP/Skill summaries, and a static manifest revision plus digest. The tool remains visible to authenticated clients without coding scope, and its degradation, pagination, size and authorization boundaries are covered by the ordinary test inventory.
 
-- define a strict public output schema;
-- add the native `bootstrap` tool and handler;
-- add the static capability, routing, authorization, and safety contract;
-- add bounded Runner, remote MCP, and Skill summaries;
-- add static manifest revision and digest;
-- keep bootstrap visible to authenticated clients with no coding scope;
-- update native catalog compatibility tests;
-- add degradation, pagination, size, and authorization-boundary tests.
-
-### Phase 2 — User preferences
-
-Add a separate user-owned configuration model for safe defaults such as preferred Runner, response language, Git identity, and workflow preferences. User configuration must never grant runtime authority.
-
-### Phase 3 — Workspace guidance
-
-Add workspace-scoped machine-readable configuration and optional `AGENTS.md` discovery. Markdown guidance remains advisory and cannot expand scopes or permissions.
-
-### Phase 4 — Effective guidance
-
-Define a deterministic precedence model across system defaults, organization policy, user preferences, workspace configuration, advisory project guidance, and the current user request.
+Future personalization or workspace-guidance features are not part of this source contract. Track them separately from shipped protocol documentation.
 
 ## Acceptance criteria
 

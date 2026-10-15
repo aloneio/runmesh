@@ -17,12 +17,9 @@ import { jobTable, historyJobTable, mcpCallTable } from "../src/admin/tables.js"
 import type { HistoryView } from "../src/history-ui.js";
 import { PRODUCT_VERSION } from "../src/generated-version.js";
 
-// Hashes were captured by evaluating the pre-refactor renderers at the fixed
-// baseline. Reviewed i18n annotations and login copy changes retain their
-// original hashes in the fixture; all unrelated markup remains unchanged.
-// No production state.
+// Golden cases contain only the current deterministic rendering contract; historical review metadata is kept outside source.
 const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage, clientsPage, clientDetailPage, runnersPage, runnerDetailPage, adminDocument };
-describe("AR04 rendering compatibility", () => {
+describe("rendering compatibility", () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(fixtures.clock_ms); });
   afterEach(() => vi.useRealTimers());
   it("keeps malformed stored dates from interrupting task and audit lists", () => {
@@ -61,7 +58,7 @@ describe("AR04 rendering compatibility", () => {
       expect(markup).toContain("unlinked-job"); expect(markup).toContain("bad/job");
     }
   });
-  for (const fixture of fixtures.cases) it(`preserves reviewed ${fixture.name} markup (origin ${fixtures.baseline.slice(0, 7)})`, () => {
+  for (const fixture of fixtures.cases) it(`preserves ${fixture.name} markup`, () => {
     const args: unknown[] = [...fixture.args];
     if (fixture.fn === "runnersPage") {
       const presentation = (fixture as unknown as { presentation: { configuredModes: Record<string, string | null>; maxValidityDays: number } }).presentation;

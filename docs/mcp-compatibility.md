@@ -44,16 +44,9 @@ business calls and is not a guarantee every schema can execute.
 
 ## Verification
 
-Tests include a source-derived synthetic GitLab fixture pinned to
-`135fb0218a7aa9cc54a5c2b4033d2f0e7d9b4e0b`, GitHub parameter headers,
-legacy/modern SDKs, version downgrade headers, hostile schemas and publication
-isolation. The GitLab fixture is not an authenticated user-session capture.
+Tests include a source-derived synthetic GitLab fixture, GitHub parameter headers, legacy/modern SDKs, version downgrade headers, hostile schemas and publication isolation. Synthetic fixtures are not authenticated user-session captures.
 
-On 2026-10-15 the patched adapter on oci0 completed handshake, tools/list and one
-read-only call each against public Microsoft Learn, DeepWiki and Cloudflare
-Documentation MCP. All returned `isError: false`; none were installed or published.
-This does not validate private GitLab OAuth credentials or future provider versions.
-Production GitLab acceptance requires refreshing the existing authorized connection.
+Live-provider acceptance must use an explicitly authorized connection and store its bounded receipt outside source control. A successful public-provider probe does not certify private OAuth credentials or future provider versions.
 
 References: [MCP transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports),
 [GitLab MCP](https://docs.gitlab.com/user/model_context_protocol/mcp_server/),

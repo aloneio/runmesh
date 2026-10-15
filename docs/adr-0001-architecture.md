@@ -26,27 +26,16 @@ The dashboard renders installation commands and service manifests for an operato
 
 Protocol additions must remain explicit. The dashboard uses nonces for its application script; inline styles still require `style-src 'unsafe-inline'`. Deployed quota behavior, edge-log redaction and external MCP-client compatibility need environment-specific acceptance checks.
 
-## Security contract recorded for 0.1.4
+## Security contract
 
-First administrator setup is CSRF-protected, same-origin and atomic first-success-wins. Complete it before exposing the instance to untrusted visitors. In 0.1.4, the default Runner
-was `dedicated_user` and the default new MCP client was `coding:read`. Existing
-permissions are unchanged. Requested tool content is relayed to its authorized
-client but excluded from durable MCP audit. Audit reads have a seven-day visibility window and each store has a 1,000-entry cap per Runner; physical cleanup can lag. See the [security model](security.md) and [history retention](quota-resilience.md) for storage and deletion limits.
+First administrator setup is CSRF-protected, same-origin and atomic first-success-wins. Complete it before exposing the instance to untrusted visitors. New Runner installation defaults to `dedicated_user`; native MCP scopes are granted explicitly while shared MCP/Skill capabilities follow the central capability model. Requested tool content is returned only to the authorized client and is excluded from durable MCP audit payloads. See the [security model](security.md), [permission model](permission-model.md) and [history retention](quota-resilience.md).
 
-Hosted installer commands include the single-use enrollment code for one-copy
-setup. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitting
-the code allows a hidden prompt in an interactive terminal. On Windows, also remove `-NonInteractive` from the copied command. The downstream Runner receives
-standard input. The complete convenience
-command is credential material and may be recorded in command history or
-process arguments. The reviewed 0.1.4 activation enables stable hosted distribution in source after independent signed-asset
-verification. Development selects only its separately verified dev prereleases. See [release status](release-readiness.md) for the current distribution state.
+Hosted enrollment commands contain a single-use enrollment code and therefore are credential material that may be recorded in command history or process arguments. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitting the code permits an interactive hidden prompt where supported. Stable distribution uses the currently activated signed release, while development uses its separately verified prerelease channel.
 
-## Amendment — 2026-09-14: optional history isolation
+## Optional history isolation
 
-The quota work adds D1 for optional metadata audit while Registry retains credential and current-authorization authority. The v2 Registry gains additive retention counters/indexes and per-client recording preferences. The amendment preserves outbound transport, local Job authority and immutable Runner assets. See [recording and retention](quota-resilience.md) for recording semantics, quota limits and migration details.
+Optional Job/audit metadata uses bounded D1 storage while Registry retains credential and current-authorization authority. Retention counters, indexes and per-client recording preferences do not change local Job authority or immutable Runner assets. See [recording and retention](quota-resilience.md) for current semantics and limits.
 
-## Amendment — 2026-10-05: client display contracts
+## Client display contracts
 
-With central sharing enabled, a new MCP client defaults to **MCP and Skills**, with an empty native scope list. Choosing **MCP, Skills and computer access** exposes the native permission choices. The default Runner execution mode remains `dedicated_user`.
-
-Administration queries decode Registry responses into display contracts before rendering. Client lists and details share one projection; pages consume the resulting type directly. This keeps storage fields separate from presentation and gives malformed responses the same unavailable-data handling as a failed read.
+With central sharing enabled, a new MCP client defaults to shared MCP and Skills with no native computer scopes. Choosing computer access exposes explicit native permissions; the computer-permission form initially selects `coding:read` and requires explicit selection for `coding:write` or `coding:exec`. Administration queries decode Registry responses into display contracts before rendering; client lists and details share the same projection, keeping storage fields outside presentation.

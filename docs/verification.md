@@ -62,7 +62,6 @@ The local report describes a test build with `signed: false`, `published: false`
 
 ## Check documentation and examples
 
-`docs/current-facts.md` is generated from the package, protocol, MCP catalog, resource bindings and reviewed release state. `docs/tool-examples.md` comes from `docs/tool-examples.json`. The documentation check validates each example against its real Zod schema, including cross-field constraints, and checks expected rejection cases. Examples use synthetic commands, IDs and hashes; substitute values for your authorized environment when following a guide.
 
 After changing a source contract or example, run `npm run generate:facts` and review the diff. Run `npm run check:docs` to validate the generated documents and registered examples. Review prose and any examples outside that registry against the relevant implementation as part of the change.
 

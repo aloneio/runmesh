@@ -59,7 +59,7 @@ export async function projectDocuments(root) {
       history_bindings: config.d1_databases.map(db => db.binding),
       reviewed_release_record: { version: release.version, state: release.state, commit: release.release_commit, manifest_sha256: release.manifest_sha256 },
       observations: { test_execution: "not_run", signed_assets: "not_run", deployed_worker: "not_run", installed_runner: "not_run", account_quotas: "not_run", host_catalog: "not_run" } };
-    return { "docs/current-facts.md": renderFacts(facts), "docs/tool-examples.md": renderExamples(examples) };
+    return { "docs/tool-examples.md": renderExamples(examples) };
   } finally { await rm(temp, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 }); }
 }
 

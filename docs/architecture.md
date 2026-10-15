@@ -1,6 +1,6 @@
 # Runmesh architecture
 
-Use this reference to locate the owner of a behavior before changing it. It describes the current source checkout. [Current facts](current-facts.md) and [tool examples](tool-examples.md) are checked by `check:docs`; [verification layers](verification.md) explains how to validate a change.
+Use this reference to locate the owner of a behavior before changing it. It describes the current source checkout. [Tool examples](tool-examples.md) are checked by `check:docs`; [verification layers](verification.md) explains how to validate a change.
 
 ## Deployment and authority
 
@@ -26,7 +26,7 @@ Each MCP client has an independently revocable secret URL and a persisted Runner
 | Context adapters | `apps/runner/src/context/` | Storage/recovery and retention planning; execution revalidates paths and authorization |
 | Shared protocol | `packages/protocol/src/` | Wire contracts, permissions, operation requirements, pagination and failure metadata |
 
-Cross-table transactions remain within one Registry. The dependency gate checks application, domain and foundation imports in both CI systems, reporting runtime and type-inclusive cycles separately. See [module boundaries](architecture-remediation.md) for the role matrix and compatibility interfaces.
+Cross-table transactions remain within one Registry. The dependency gate checks application, domain and foundation imports in both CI systems, reporting runtime and type-inclusive cycles separately. See [module boundaries](module-ownership.md) for the role matrix and compatibility interfaces.
 
 Managed MCP account connections follow the same boundaries.
 `application/connectors/managed-oauth.ts` owns session authorization, state claims,
@@ -67,7 +67,7 @@ Jobs persist across MCP response closure and ordinary transport disconnection. A
 
 Production uses independent, stable `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER` values. `ADMIN_TOKEN` supports the optional programmatic administration API. The public origin comes from a validated routed HTTPS request, with a proxy override when needed. Hosted installation uses the reviewed release record, fixed artifact URLs and signature checks. See [runtime configuration](runtime-config.md) and [portable installation](portable-runner-installation.md).
 
-During normal updates, preserve Worker names, v2 namespaces, D1 bindings, credentials and registered services. Investigate incompatible schemas against the target revision and use the [upgrade guide](upgrading.md). The [legacy migration](migration.md) procedure applies to its named pre-v2 boundary.
+During normal updates, preserve Worker names, v2 namespaces, D1 bindings, credentials and registered services. Investigate incompatible schemas against the target revision and use the [upgrade guide](upgrading.md). The [legacy migration](legacy-migration.md) procedure applies to its named pre-v2 boundary.
 
 New Runners default to `dedicated_user`; privileged host execution requires an explicit choice. With the shared library enabled, new control-panel MCP clients default to **MCP and Skills**. Selecting computer access initially selects `coding:read`; the administrator can choose further scopes and workspace permissions. First administrator setup uses CSRF, same-origin and atomic first-success-wins checks; initialize the instance before opening it to untrusted visitors. Shell processes run with the service account's operating-system privileges, so workspace policy must be paired with appropriate host permissions.
 

@@ -136,7 +136,7 @@ Follow `shell` receipts with the original Job ID and workspace ID. A foreground 
 
 Set cloud recording and retention through [history settings](batched-job-history.md) and [quota isolation](quota-resilience.md). Production defaults to a five-minute upload window and bounded recent metadata. Retrieve output from retained Runner logs; discarded output is permanently lost.
 
-For compatible upgrades, preserve Worker/database identities, secrets and Runner state. Rehearse recovery, pause new submissions, drain or reconcile Jobs, deploy the Worker and update each Runner explicitly, then complete [acceptance checks](upgrading.md). Use [legacy migration](migration.md) only when its stated older data boundary applies.
+For compatible upgrades, preserve Worker/database identities, secrets and Runner state. Rehearse recovery, pause new submissions, drain or reconcile Jobs, deploy the Worker and update each Runner explicitly, then complete [acceptance checks](upgrading.md). Use [legacy migration](legacy-migration.md) only when its stated older data boundary applies.
 
 For removal, use [complete uninstall](runner-uninstall.md) from a local console or SSH session. Revoking access blocks new work; inspect already-running host processes as part of shutdown.
 

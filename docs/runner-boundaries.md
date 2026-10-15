@@ -36,4 +36,4 @@ Keep each private state directory under one Runner owner. In-process coordinatio
 
 Job metadata/logs have count and byte limits, and optional day-based retention can remove terminal data. Cloud history is a bounded recent snapshot. Keep independent backups for anything you must preserve. See [history settings](batched-job-history.md) and the [security model](security.md).
 
-Source-level module responsibilities are described in [modular architecture](architecture-remediation.md).
+Source-level module responsibilities are described in [modular architecture](module-ownership.md).

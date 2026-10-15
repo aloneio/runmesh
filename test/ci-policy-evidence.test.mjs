@@ -349,17 +349,6 @@ test("CI02 native provenance regressions remain a mandatory cross-platform comma
   github.jobs["native-runner"].steps = github.jobs["native-runner"].steps.filter(step => step.run !== command);
   assert.throws(() => validateCiWiring(pkg, stringify(github), gitlab));
 });
-test("CI02 current old configuration is rejected rather than silently upgraded", async () => {
-  const base = new URL("../", import.meta.url);
-  const read = path => readFile(new URL(path, base), "utf8");
-  const gh = await read(".github/workflows/ci.yml");
-  // This assertion only applies before integration; the seven mutations above
-  // continue to guard the replacement independently of its delivery phase.
-  const pkg = JSON.parse(await read("package.json")), gl = await read(".gitlab-ci.yml");
-  if (!gh.includes(checkCommand("unit"))) assert.throws(() => validateCiWiring(pkg, gh, gl));
-  else validateCiWiring(pkg, gh, gl);
-});
-
 const source = { commit: "a".repeat(40), tree: "b".repeat(40), state: "clean", secret: "must-not-export" };
 test("CI08 reports gate outcomes, not fictional test counts or private diagnostics", () => {
   const report = gateEvidence("unit", "failed", 123, 7, source);

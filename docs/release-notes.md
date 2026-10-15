@@ -118,4 +118,4 @@ The original signed package remains available under its fixed release identity. 
 
 0.1.2 introduced batched recent Job metadata, manual history loading and independently controlled retention. 0.1.1 added maintenance and inspection improvements over the signed portable Runner and protocol-v2 foundation in 0.1.0.
 
-[Archived release notes](maintainers/release-history.md) retain details of earlier releases and their specific migration procedures.
+Earlier immutable releases remain available through their release tags and assets; source documentation does not retain per-release audit archives.

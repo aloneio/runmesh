@@ -10,9 +10,9 @@
 
 入口负责组装 HTTP 适配器和应用用例。网页与 API 共用 Runner 删除流程，使授权和变更顺序集中在一处维护。
 
-## 兼容性证据
+## 兼容性契约
 
-`apps/worker/test/fixtures/admin-render-golden.json` 保存从 `88b119782d26316d68eeaa98a47d71dbe4382193` 提取的十三组旧版呈现结果及源文件 SHA-256。新旧函数使用相同固定时钟。`admin-view-contracts.test.ts` 对照精确 UTF-8 字节数与哈希，同时测试转义和响应安全头。原有认证页面、注册、CSRF 和语言测试继续保留。
+`apps/worker/test/fixtures/admin-render-golden.json` 只保存当前确定性的呈现输入及固定时钟下的字节数／哈希期望。`admin-view-contracts.test.ts` 校验这些输出、转义和响应安全头；认证页面、注册、CSRF 与语言测试提供外围行为覆盖。
 
 `test/admin-navigation.test.mjs` 检查显式 no-store 导航、旧 DOM 清除、页面所有权、控件绑定和语言稳定性。`test/central-browser.test.mjs` 覆盖 MCP 与 Skill 工作流、操作准入和响应收据。
 

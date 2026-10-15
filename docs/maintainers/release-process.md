@@ -6,13 +6,13 @@
 
 Keep package and lockfile versions, installer identity and release notes aligned at the selected version. Promote reviewed changes from `dev` to protected `main` through the [main promotion policy](../main-promotion-policy.md).
 
-Prepare publication notes in `docs/releases/<version>.md`, starting with `# Runmesh <version>`. The release workflow uses these versioned notes. Use the [deployment checklist](../central-rollout.md) for real-client and MCP provider checks, and keep their results with the release verification record.
+Prepare publication notes in `docs/releases/<version>.md`, starting with `# Runmesh <version>`. The release workflow uses these versioned notes. Use the [deployment checklist](../central-rollout.md) for real-client and MCP provider checks, and store their results as bounded CI artifacts or in the dedicated access-controlled release evidence store; do not commit receipts to source.
 
 ## Verify and publish
 
 The exact main source must pass GitHub `verify-all`, native-platform, Node LTS and browser verification, plus the required cross-provider checks. Execute the security regressions for that source, verify the exact portable archive end to end, and bind the signed manifest and annotated tag to the same reviewed commit. The protected GitHub and GitLab main branches must point to that source before signing.
 
-Independently verify draft and public assets before recording the release as `released`. Keep existing immutable releases intact. Retain the source commit, gate results and asset checksums with the publication record.
+Independently verify draft and public assets before recording the release as `released`. Keep existing immutable releases intact. Retain the source commit in immutable release metadata; keep gate results and asset checksums in CI/release artifacts outside the source tree.
 
 ## Activate and check the installation
 
@@ -45,8 +45,8 @@ The publication commit identifies the signed Runner package and remains in `rele
 
 Runmesh uses the existing `INTERNAL_CONTROL_SECRET` for OAuth encryption and `RUNNER_TOKEN_PEPPER` for Runner credentials. Preserve both values during upgrades. For a new deployment, follow the [runtime configuration guide](../runtime-config.md) to initialize them.
 
-Record development deployment, signed publication and production acceptance with their corresponding source commits and verification results.
+Record deployment, signed publication and production acceptance in the external release evidence store, bound to their source commits.
 
 ## Release-specific verification
 
-For each release, verify maintenance responses and release artifact reads when the complete body arrives before stream close or EOF. The completion path checks the signal immediately before recording success, so a cancellation remains visible to the caller and the operation can be retried safely. Record the full test matrix, signed asset checksums, protected branch promotion and production acceptance with the publication record.
+For each release, verify maintenance responses and release artifact reads when the complete body arrives before stream close or EOF. The completion path checks the signal immediately before recording success, so a cancellation remains visible to the caller and the operation can be retried safely. Store the full test matrix, signed asset checksums, protected branch promotion and production acceptance as external release evidence.

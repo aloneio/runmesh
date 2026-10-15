@@ -1,20 +1,8 @@
-# Historical release transitions
+# Legacy v1-to-v2 transition
 
-> This historical reference covers the named early development and pre-v2 transitions. For a current v2 installation, use the [upgrade guide](upgrading.md) to preserve namespaces, D1, secrets, profiles and enrollment.
+Use this procedure only for installations that predate the current protocol-v2 data boundary. Current v2 installations must use the [upgrade guide](upgrading.md) instead.
 
-## Compatible dev.3 to dev.4 v2 upgrade
-
-The dev.4 candidate preserves the existing v2 namespace, administrator settings,
-sessions, Runner records, policies and Jobs. It adds the source-throttle table
-when missing and runs a one-time metadata-only audit migration which deletes
-old MCP audit history. It does not import retired namespaces or rewrite core
-schemas. Confirm migration completion and review provider backup/PITR copies
-after deployment; do not restore content-bearing history without cleanup.
-First setup has no additional bootstrap token and is not reopened for existing
-instances. Publish a new immutable signed dev.4 Runner before activating its
-empty production distribution gate. Host upgrades remain separately authorized.
-
-## Earlier clean-break transition into v2
+## Data boundary
 
 This release starts a new data, profile, and Runner/Worker protocol boundary. It does not inspect, import, repair, or translate data from an earlier layout. The `v2` Durable Object migration binds the Worker to fresh `RegistryDOv2` and `RunnerDOv2` classes; any retired namespace remains isolated and is never upgraded in place.
 
@@ -22,7 +10,7 @@ Local profiles, state directories, and service manifests are likewise release-sp
 
 ## Required transition
 
-1. Record and protect the previous deployment and host data separately. A backup is for audit or archival purposes; it is not an input to an automatic migration.
+1. Record and protect the previous deployment and host data separately. A backup is for independent recovery only; it is not an input to an automatic migration.
 2. Apply the checked-in `v2` Durable Object migration during deployment (it provisions fresh Registry/Runner storage) and configure the two required secrets: `RUNNER_TOKEN_PEPPER` and `INTERNAL_CONTROL_SECRET`. `ADMIN_TOKEN` is optional for programmatic administration. Current OAuth credential encryption also uses `INTERNAL_CONTROL_SECRET`; preserve it during compatible upgrades.
 3. Complete first-time administrator setup.
 4. Create each Runner in the Admin Panel with an explicit `execution_mode`, generate a one-time enrollment code, and enroll the current Runner package.

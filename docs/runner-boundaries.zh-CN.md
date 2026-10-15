@@ -36,4 +36,4 @@ Prune 先预览，再使用返回的清单哈希显式执行。每次删除前�
 
 Job 元数据和日志有数量、字节上限，可选按天保留还会删除终态数据。云端历史用于有限的近期快照；需要长期保存的内容应另行备份。详见[任务记录设置](batched-job-history.md)和[安全模型](security.md)。
 
-源码模块职责见[模块化架构](architecture-remediation.zh-CN.md)。
+源码模块职责见[模块化架构](module-ownership.zh-CN.md)。

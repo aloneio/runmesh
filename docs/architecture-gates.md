@@ -18,7 +18,7 @@ Add both allowed and forbidden fixtures for a new boundary. Keep examples for ty
 
 External SDK imports are checked against Worker roles. HTTP/MCP adapters can load their reviewed server SDKs; domain, contract, presentation and browser modules use their own narrower dependencies. Node classification uses the runtime `isBuiltin` predicate. New Job, Context, Patch and Connection files default to the pure role; register platform adapters explicitly.
 
-Connection submodules depend on narrow ports, while the connection coordinator owns runtime, policy and Job integration. Release models and selection stay separate from release I/O and installer rendering. Patch data contracts use `path-contracts.ts`. See [the ownership reference](architecture-remediation.md#ar09ar14-platform-boundaries-and-failure-seams) for the corresponding roles.
+Connection submodules depend on narrow ports, while the connection coordinator owns runtime, policy and Job integration. Release models and selection stay separate from release I/O and installer rendering. Patch data contracts use `path-contracts.ts`. See [the ownership reference](module-ownership.md#ar09ar14-platform-boundaries-and-failure-seams) for the corresponding roles.
 
 Runner admission decisions live in `domain/runner-admission.ts`. They consume state snapshots and session identities; RunnerDO owns storage ordering and transport. The gate checks synchronous execution and keeps clocks, HTTP, sockets and storage in the owner. Pure regressions cover restart recovery, mutation ownership and stale writers alongside the Worker integration suite.
 

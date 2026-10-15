@@ -25,10 +25,8 @@ Use these references when developing Runmesh, integrating its APIs or preparing 
 - [Deploy and verify MCP connections and Skills](../central-rollout.md)
 - [MCP reauthorization](../mcp-reauthorization.md) and [cost measurement](../cost-baseline.md)
 
-## Historical records
+## Legacy compatibility
 
-- [Archived release notes](release-history.md)
-- [Verification records and archive](release-evidence.md)
-- [Early-version migration](../migration.md)
+- [Early-version migration](../legacy-migration.md)
 
-Historical records describe the versions and dates named in each document. For an existing installation, follow the current [upgrade guide](../upgrading.md) and [release status](../release-readiness.md).
+Legacy migration guidance applies only to the explicitly named old data boundary. For current installations, follow the current upgrade guide and release status.

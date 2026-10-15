@@ -1,8 +1,6 @@
 {
-  "baseline": "88b119782d26316d68eeaa98a47d71dbe4382193",
   "clock_ms": 1900000000000,
   "product_version": "0.1.7",
-  "baseline_file_sha256": "a9f2a3653c0de403a83fb7fe1fc1da92501ddd7dd11b697e57fd551c71673ed2",
   "cases": [
     {
       "name": "login",
@@ -12,26 +10,7 @@
         "fixture-csrf-<>&\""
       ],
       "sha256": "872f33fea86ff4b6ae02be7c1eaf256577c375ec3bf6073eb6e0f1e261f92664",
-      "bytes": 193456,
-      "pre_mcp_relay_sha256": "0a6483245562b6387d2adb579539b46b41a1fbb5572445a890c9f1ef7b632fd2",
-      "pre_mcp_relay_bytes": 187677,
-      "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
-      "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
-      "original_bytes": 86099,
-      "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
-      "pre_central_sha256": "fa50e8e91a72151f9e0e1d85023484851e5d2dd10ef516408d50f743510c93db",
-      "pre_central_bytes": 86069,
-      "pre_product_sha256": "a9bfcaa7468d7ea6836f9169d56ef09907e1559cf4f044f4b5f97a12f424c7f9",
-      "pre_product_bytes": 88591,
-      "pre_product_recovery_sha256": "907d8c8bc932b5a61596a99ee9d381364b2c0df6626d238e91dccbe4ae85c7a4",
-      "pre_product_recovery_bytes": 108669,
-      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots.",
-      "pre_controller_split_sha256": "9d07f1413b4f8f2619d7a2b9e570e8f4163644c1d64cd75823517ff027642621",
-      "pre_controller_split_bytes": 125356,
-      "pre_enrollment_locale_sha256": "e2c3b6f8a292c5556f198801533e0b6c7f39fbaaa62b86f333eaac9680fbf499",
-      "pre_enrollment_locale_bytes": 186129,
-      "pre_mcp_portability_sha256": "19a9b76a6c4f7ffd8935e1313ef263fe2a9d8859101780fd57ac237f6cefafdb",
-      "pre_mcp_portability_bytes": 191409
+      "bytes": 193456
     },
     {
       "name": "setup",
@@ -41,23 +20,7 @@
         "fixture-csrf-<>&\""
       ],
       "sha256": "1f0c3451f489fcae45f3fa4dac23110a922d47ee48c1c00bb61d62f0b2de484c",
-      "bytes": 194116,
-      "pre_mcp_relay_sha256": "56d9298c83d590d413eb7c589b853078ed0b872da4b0d6bc7c6f0c1df89c39d3",
-      "pre_mcp_relay_bytes": 188337,
-      "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
-      "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
-      "pre_central_bytes": 86657,
-      "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
-      "pre_product_bytes": 89179,
-      "pre_product_recovery_sha256": "a355bbea6b0a6de46d476bf1d992125a1443995b4de8b670d6b0626bad820887",
-      "pre_product_recovery_bytes": 109257,
-      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots.",
-      "pre_controller_split_sha256": "818c3917787be5ee5a70170ffd5dfbd59f7668a3d1056cca849ecc7841fb7761",
-      "pre_controller_split_bytes": 125944,
-      "pre_enrollment_locale_sha256": "16dda42880e70760a463eaa1ccbb49c4e9de4017d3d31d84cf5d7ab975f97a48",
-      "pre_enrollment_locale_bytes": 186789,
-      "pre_mcp_portability_sha256": "8d4a300bca48d29c1a0e787b3e9eaf36fac8427bab5c9b711f523b95002ac4d0",
-      "pre_mcp_portability_bytes": 192069
+      "bytes": 194116
     },
     {
       "name": "secret",
@@ -67,23 +30,7 @@
         "https://example.test/fixture-no-credential"
       ],
       "sha256": "546fb191274da49ee3f01d2f48ff56295325b5dca536725f8a4d67d104661b51",
-      "bytes": 196413,
-      "pre_mcp_relay_sha256": "2e9f336f95e1e5a1bc89cf3f551123c85c20762898d53a82c25f8d6315bea6a0",
-      "pre_mcp_relay_bytes": 190634,
-      "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
-      "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
-      "pre_central_bytes": 87739,
-      "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
-      "pre_product_bytes": 90306,
-      "pre_product_recovery_sha256": "110d36e91fe8b8fa1b9a6520175942a5c58bde7365804947ec53f15558918b04",
-      "pre_product_recovery_bytes": 110384,
-      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots.",
-      "pre_controller_split_sha256": "975b82a2f50bae641d2a4037ec889ff67b3e082a57539833268c2397f8722b7f",
-      "pre_controller_split_bytes": 127092,
-      "pre_enrollment_locale_sha256": "11f37c8c1691848594b476e0ead15eb897ec96fe8517b3a14d7efe16977e9bed",
-      "pre_enrollment_locale_bytes": 189086,
-      "pre_mcp_portability_sha256": "4d68c56a6b5c50618692326153532aaa68a2b5fcae168714183d77ba11a3db7c",
-      "pre_mcp_portability_bytes": 194366
+      "bytes": 196413
     },
     {
       "name": "overview-empty",
@@ -109,7 +56,7 @@
           "clients": [
             {
               "client_id": "client-fixture",
-              "label": "<img src=x onerror=alert(1)> 客户端",
+              "label": "<img src=x onerror=alert(1)> \u5ba2\u6237\u7aef",
               "active_runner_id": "runner-fixture",
               "active_runner_updated_at_ms": 2,
               "scopes": [
@@ -124,7 +71,7 @@
           "runners": [
             {
               "runner_id": "runner-fixture",
-              "display_name": "<b>Runner 中文 & \"name\"</b>",
+              "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
               "state": "offline",
               "public_info": {
                 "platform": "linux",
@@ -150,13 +97,7 @@
         "fixture-csrf-<>&\""
       ],
       "sha256": "6c4b375d2c3591f8a4509790acef4a170a364e5334e6c4779835622179a496ef",
-      "bytes": 3803,
-      "original_sha256": "b94fb8d802373820755732a807fc8cdc9d4f579a0d40b21cafdcac121ff7a957",
-      "original_bytes": 3219,
-      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
-      "pre_presence_bytes": 3245,
-      "pre_presence_sha256": "04d006936232ee5cc13cdb1566b5e898bb484bd49c58608e87c68c3ed8d63a18",
-      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256."
+      "bytes": 3803
     },
     {
       "name": "settings",
@@ -181,15 +122,7 @@
         "fixture-csrf-<>&\""
       ],
       "sha256": "b879d6618d05273a12453ebe52d26bdfd2dc8323d57b39f658c97479b07b2324",
-      "bytes": 2675,
-      "pre_presence_bytes": 1658,
-      "pre_presence_sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
-      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
-      "pre_product_sha256": "a1dfbb8e9e6c76e1b83b95e79c6f47cb2a9aae8d00b004b85898ea6c89bffe45",
-      "pre_product_bytes": 1767,
-      "pre_product_recovery_sha256": "29d7c4a208d8f75657405598b8f966392f2ee1fdf818e0fb8b73297c2a23bb0c",
-      "pre_product_recovery_bytes": 2187,
-      "product_recovery_change": "Reviewed setup readiness, AI connection handoff, published Skill selection, credential rotation and product navigation; behavior covered by product browser and central admin tests."
+      "bytes": 2675
     },
     {
       "name": "clients-populated",
@@ -199,7 +132,7 @@
           "clients": [
             {
               "client_id": "client-fixture",
-              "label": "<img src=x onerror=alert(1)> 客户端",
+              "label": "<img src=x onerror=alert(1)> \u5ba2\u6237\u7aef",
               "active_runner_id": "runner-fixture",
               "active_runner_updated_at_ms": 2,
               "scopes": [
@@ -214,7 +147,7 @@
           "runners": [
             {
               "runner_id": "runner-fixture",
-              "display_name": "<b>Runner 中文 & \"name\"</b>",
+              "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
               "state": "offline",
               "public_info": {
                 "platform": "linux",
@@ -240,18 +173,7 @@
         "fixture-csrf-<>&\""
       ],
       "sha256": "84e6d63076aced0351a585247c97ad4599289b87cf9764f746593f1147b5aa0a",
-      "bytes": 6079,
-      "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
-      "original_bytes": 4110,
-      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
-      "pre_presence_bytes": 4096,
-      "pre_presence_sha256": "1041ebda357b2c49560e9a894a8de702e622a2c7d67d2eb8e366c0bd4a4c4bb5",
-      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
-      "pre_product_sha256": "c3a3be6562e9e2f58e9cbfcdbf961bdbf638bd345fb9a718b486df51005456fa",
-      "pre_product_bytes": 4215,
-      "pre_product_recovery_sha256": "4ec80c3ae95ee6ce8f4f34f3cdd7af7e2b03caa38f7145aefb2f3e84c105b4f4",
-      "pre_product_recovery_bytes": 4635,
-      "product_recovery_change": "Reviewed setup readiness, AI connection handoff, published Skill selection, credential rotation and product navigation; behavior covered by product browser and central admin tests."
+      "bytes": 6079
     },
     {
       "name": "client-detail",
@@ -259,7 +181,7 @@
       "args": [
         {
           "client_id": "client-fixture",
-          "label": "<img src=x onerror=alert(1)> 客户端",
+          "label": "<img src=x onerror=alert(1)> \u5ba2\u6237\u7aef",
           "active_runner_id": "runner-fixture",
           "active_runner_updated_at_ms": 2,
           "scopes": [
@@ -273,7 +195,7 @@
         [
           {
             "runner_id": "runner-fixture",
-            "display_name": "<b>Runner 中文 & \"name\"</b>",
+            "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
             "state": "offline",
             "public_info": {
               "platform": "linux",
@@ -296,13 +218,7 @@
         "fixture-csrf-<>&\""
       ],
       "sha256": "9cff359b35e30c0d225a81d9de21a636205a450a223afc070864dfa6f8f8f074",
-      "bytes": 6701,
-      "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
-      "original_bytes": 6638,
-      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
-      "pre_presence_bytes": 6677,
-      "pre_presence_sha256": "a1f10c2ac6f89b96980b6d734c045edac5fc9c472451921343c517ec50fb7219",
-      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256."
+      "bytes": 6701
     },
     {
       "name": "runners-empty",
@@ -332,7 +248,7 @@
           "clients": [
             {
               "client_id": "client-fixture",
-              "label": "<img src=x onerror=alert(1)> 客户端",
+              "label": "<img src=x onerror=alert(1)> \u5ba2\u6237\u7aef",
               "active_runner_id": "runner-fixture",
               "active_runner_updated_at_ms": 2,
               "scopes": [
@@ -347,7 +263,7 @@
           "runners": [
             {
               "runner_id": "runner-fixture",
-              "display_name": "<b>Runner 中文 & \"name\"</b>",
+              "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
               "state": "offline",
               "public_info": {
                 "platform": "linux",
@@ -379,10 +295,7 @@
           "runner-fixture": null
         },
         "maxValidityDays": 3650
-      },
-      "original_sha256": "f2fa21e5b826c1aef0f866540ddf4a52a314932387772960f5c7849037cc0436",
-      "original_bytes": 6864,
-      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
+      }
     },
     {
       "name": "runner-detail",
@@ -390,7 +303,7 @@
       "args": [
         {
           "runner_id": "runner-fixture",
-          "display_name": "<b>Runner 中文 & \"name\"</b>",
+          "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
           "state": "offline",
           "public_info": {
             "platform": "linux",
@@ -424,10 +337,7 @@
         "reportedMode": "dedicated_user",
         "maxValidityDays": 3650,
         "dayMs": 86400000
-      },
-      "pre_enrollment_status_sha256": "f401b75e00befcb1f93eff48de92c0be60737ce471d9a2f271c768faad104c09",
-      "pre_enrollment_status_bytes": 13866,
-      "reviewed_change": "Enrollment detail only displays timing metadata; direct users to generate a new single-use code instead of asking them to save a code absent from this page. Consumed-state labels are separately verified in both locales."
+      }
     },
     {
       "name": "admin-document",
@@ -445,1213 +355,7 @@
         ]
       ],
       "sha256": "d45323f14f9b3ddd6386907d018ae749460c8e31bfba31375824c2db2c3026cd",
-      "bytes": 196762,
-      "pre_mcp_relay_sha256": "83a6789b7acb712713274551956933f747f289a902235f24540fb3b4b31e3f8b",
-      "pre_mcp_relay_bytes": 190983,
-      "mcp_relay_change": "Reviewed targeted OAuth recovery and idle MCP library behavior; ordinary page loads no longer trigger remote discovery, while explicit refresh and callback recovery remain available.",
-      "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
-      "pre_central_bytes": 88098,
-      "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
-      "pre_product_bytes": 90665,
-      "pre_product_recovery_sha256": "35235a669d34c99a0fd1b737d0f58f38a5ac76ca5ba21e8137da291c119846b7",
-      "pre_product_recovery_bytes": 110743,
-      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots.",
-      "pre_controller_split_sha256": "dad8609aa36e4856106dab38292d082bca4219bea2aaf18b702ff530f86b164a",
-      "pre_controller_split_bytes": 127441,
-      "pre_enrollment_locale_sha256": "250a1e4bd590ab1dbe7df44292c74344ec5fdc815f1aa3afd4c0c2e932fc35d8",
-      "pre_enrollment_locale_bytes": 189435,
-      "pre_mcp_portability_sha256": "453f00be72cce0e443f6ed8e28a32b4d4bfdb1e938b28751f2986b3937f0a4b5",
-      "pre_mcp_portability_bytes": 194715
+      "bytes": 196762
     }
-  ],
-  "i18n_review": {
-    "source_base": "a07087baddce88417a4ee3d08b2c214c9f7f24a1",
-    "changed_cases": 4,
-    "allowed_changes": [
-      "no-translation markers",
-      "accessible rename label"
-    ],
-    "command_variants_unchanged": 8
-  },
-  "central_review": {
-    "source_base": "ab95550dba862f78fa00b8aac99c1310412205f0",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "allowed_changes": [
-      "Explicit central administration submit handler in the shared browser asset",
-      "Central navigation entry on authenticated pages"
-    ],
-    "native_view_bodies_unchanged": true
-  },
-  "product_review": "Customer-facing MCP and Skill management with concise tool cards, responsive layout, and optional computer access.",
-  "browser_module_review": {
-    "source_base": "d7f5a181d3694ebab97e6481cc37d45a9f26a285",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "allowed_change": "Bundled central browser modules. Replacing the bundle with the prior source exactly reproduces every previous page hash and byte count.",
-    "native_view_bodies_unchanged": true
-  },
-  "browser_lifecycle_review": {
-    "source_base": "6fb6b5901b361b7417897a3cfffc40cd188a1181",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "allowed_change": "Fence detached central browser workflows and require operation-specific receipts. DOM regressions cover late OAuth responses after navigation, malformed write receipts, refresh-required no-replay behavior and unchanged MCP/Skill product flows; no screenshots.",
-    "non_script_markup_unchanged": true
-  },
-  "direct_connection_review": {
-    "source_base": "49ca444348aa26644f384232f0635dd8727f697e",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "allowed_change": "The saved service is rendered before OAuth handoff so a failed provider setup retains its visible recovery controls. The controller still owns lifecycle, shared admission and busy state. DOM regression verifies persisted service visibility and no automatic replay after failed handoff. No screenshots.",
-    "non_script_markup_unchanged": true
-  },
-  "mcp_skill_presentation_review": {
-    "source_base": "62239e1475b40c59bfd9235a57701fbef21631ba",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "clients-empty",
-      "clients-populated",
-      "admin-document"
-    ],
-    "allowed_change": "Rename customer navigation to MCP and Skill; show tool names and descriptions as plain cards with a count. Remove repeated sharing explanations and parameter/schema dumps. DOM regressions retain automatic connection, OAuth recovery, Skill installation and safe text rendering. No screenshots.",
-    "unrelated_markup_unchanged": true
-  },
-  "tool_layout_review": {
-    "source_base": "d8b877812873d86c8f937ced694b7cecb075d17f",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "allowed_change": "Scope wrapping to the MCP tool panel heading so 64-character names remain visible on mobile; preserve upstream tool title casing. Removing only the two CSS rules reproduces every prior hash. Browser checks measure actual header bounds without screenshots.",
-    "unrelated_markup_unchanged": true
-  },
-  "library_content_layout_review": {
-    "source_base": "8ee71c7ec4f926d32b09900d9d70ee9ee8de4fce",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "allowed_change": "Wrap user-provided text within the MCP/Skill product surface, including Skill names, descriptions, file paths and installation status. Preserve original casing of all library card names. Reverting only these two CSS changes reproduces every prior hash. Valid Skill fixtures and DOM dimensions cover mobile and desktop without screenshots.",
-    "unrelated_markup_unchanged": true
-  },
-  "runner_action_review": {
-    "source_base": "549d01c3e3887f0971d4281f8634a32515980441",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "allowed_change": "Runner delete/revoke form feedback and scoped browser workflow. Failed actions retain the console; duplicate POSTs are blocked and uncertain writes are never replayed. Reversing only the reviewed form markup and bundle reproduces all prior hashes.",
-    "unrelated_markup_unchanged": true
-  },
-  "controller_review": {
-    "source_base": "f20286f27d938881b590cba4d1def8d60b18804e",
-    "reviewed_change": "Separate locale, shared idempotent controls, page mounting and navigation from the composition entry. Preserve markup outside the script byte-for-byte. Public DOM and port-based regressions verify initial/dynamic controls, fresh navigation and Runner actions; no screenshots."
-  },
-  "runner_action_deadline_review": {
-    "source_base": "4811e50cd1f75b1151d40a5db2899c3673b810d0",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Bound Runner delete/revoke response headers and body reads with one 25-second deadline. Stalled-response browser regressions retain session and page, restore controls, and never replay writes. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
-    "non_script_markup_unchanged": true
-  },
-  "ui_copy_review": {
-    "source_base": "21a775ca291d04f68f4f1957fe3c03da51462a7d",
-    "reviewed_change": "Natural English and Chinese interface copy; remove duplicate warnings and developer terminology. Exact reviewed substitutions reproduce all 20 rendered cases. Installer commands, CSS blocks, protected user data, form actions and permission controls are unchanged. No screenshots.",
-    "rendered_cases": 20
-  },
-  "browser_error_copy_review": {
-    "source_base": "e1911d63260b6737d89766b94ed3f4be9c80d369",
-    "reviewed_change": "Localize native Skill file-read, UTF-8, network and malformed-response failures in English and Chinese. Browser regressions reject invalid files without requests and recover through reselection, preserving text. Uncertain writes still require refresh and are never replayed. All non-script markup remains byte-for-byte unchanged. No screenshots.",
-    "rendered_cases": 20
-  },
-  "navigation_deadline_review": {
-    "source_base": "e6cfe1755e8a467a5a3a0225ef2377c177ead489",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Bound navigation response headers and body with one 25-second deadline. Full-page fallbacks preserve the latest queued destination without extra requests. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
-    "non_script_markup_unchanged": true
-  },
-  "skill_upload_review": {
-    "source_base": "bfccf9278288e5674da23ad3a9be5f2abc9d4218",
-    "reviewed_change": "Raise Skill uploads to 256 files, 1 MiB per file and 8 MiB per canonical package. Form limits come from the server contract. Bilingual DOM tests cover actual folder selection, oversized selections, JSON escaping and retry after confirmed HTTP 413. No screenshots."
-  },
-  "oauth_preregistered_client_review": {
-    "source_base": "4b6c75d2903d13cf87aa1cf4c0c81f0ee0613183",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Support pre-registered OAuth clients for providers without CIMD or dynamic client registration. Client secrets stay in encrypted managed OAuth state, reconnect reuses the saved client, and the browser exposes explicit bilingual recovery guidance. Replacing only the reviewed browser bundle reproduces the prior four render hashes and byte counts."
-  },
-  "oauth_reconnect_review": {
-    "source_base": "04c751c0ecda6d76fcb1a73a6cbce01278cb9d80",
-    "reviewed_change": "Reconnect reconciles saved profiles before beginning OAuth, recovers failed discovery without a manual refresh, and checks current enabled state and revision. Missing or invalid vault readiness gets a specific bilingual configuration error. Regression covers fresh revisions, failed reconciliation, concurrent pause and preserved account state. No screenshots."
-  },
-  "oauth_discovery_review": {
-    "source_base": "6cb19d4d4989c426deed4ac6f2c5262a06fdd2d8",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Represent an undiscovered catalog and pending authorization as explicit states. Reuse the initial catalog read during interrupted OAuth recovery. Browser regressions preserve reconnect guidance and publication checks. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
-    "non_script_markup_unchanged": true
-  },
-  "oauth_handoff_review": {
-    "source_base": "750a09d2e286c787b3f5e5878df549ec037bcdb4",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "User-triggered MCP discovery starts OAuth automatically when authorization is required. Reconnect preserves sign-in progress through internal refresh; callback recovery never starts a new authorization. Replacing only the browser bundle reproduces every prior render hash and byte count. No screenshots.",
-    "non_script_markup_unchanged": true
-  },
-  "client_lifecycle_review": {
-    "source_base": "acfa7fe5eeefa9004efbb878109401b8fb12b5df",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "clients-populated",
-      "client-detail",
-      "admin-document"
-    ],
-    "allowed_change": "Shared revoke/delete forms on MCP client list and details, including central-only clients, plus the reviewed deletion confirmation script. Other renderers remain unchanged."
-  },
-  "navigation_superseded_review": {
-    "source_base": "4238be3840a6da34b7c74acfa59401fe3e5d7a4e",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Discard a superseded navigation response before mounting controllers or updating history. The final queued page owns its URL and content; existing failure and locale fallbacks are unchanged. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
-    "non_script_markup_unchanged": true
-  },
-  "navigation_layout_review": {
-    "source_base": "a4213f95816afc2f5a13730da6f301f20e8594eb",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Restore fragment focus and scrolling below the sticky header after soft navigation; move newly opened pages to their heading while preserving same-page refresh position. Let mounted pages use their content height instead of retaining the previous page height. Reset measured command-panel heights before resize. Reset the mobile enrollment action form flex basis. Describe OAuth recovery with direct next steps in both languages. Independently rebuilding and substituting only the prior bundle and style block reproduces every original hash and byte count.",
-    "other_markup_unchanged": true
-  },
-  "client_layout_review": {
-    "source_base": "b03254512e2feda19140c6572121716d45ba9cd9",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "client-detail",
-      "admin-document"
-    ],
-    "reviewed_change": "Constrain client Runner selectors and long values to their table cells. Give recording preferences an independent single-column form. Replacing only the reviewed CSS and recording form class reproduces all 20 prior rendered hashes and byte counts.",
-    "other_markup_unchanged": true
-  },
-  "permission_controls_review": {
-    "source_base": "e240c5c5c65c1e373b79f5a845bc526f5a13c1ac",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "client-detail",
-      "runner-detail",
-      "admin-document"
-    ],
-    "reviewed_change": "Permission selectors expose dependencies derived from the shared protocol and use one browser controller for Runner, workspace and client override forms. Workspace presets share the submitted-form definition and update displayed values; manual field edits choose Custom. Version guidance describes selecting a target, installing on the Runner host and restarting the service. Restoring only the previous bundle, dependency/preset attributes and version sentence reproduces every prior rendered hash and byte count.",
-    "other_markup_unchanged": true
-  },
-  "clipboard_failure_review": {
-    "source_base": "ad6b82112a9ce8e917b1e4a4cbf3714f6f725d31",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Report failed clipboard writes with short English and Chinese retry labels, keep manual-copy guidance in the button title, announce copy status with a polite live region, remove temporary clipboard content on every outcome, and allow explicit retry. Replacing only the new browser bundle with the independently rebuilt source-base bundle reproduces every prior rendered hash and byte count.",
-    "non_script_markup_unchanged": true
-  },
-  "skill_capacity_review": {
-    "source_base": "ac4e2b8de2e0eeeb1f151b5e00b5fd6be78f0ca3",
-    "reviewed_change": "Confirmed Skill installation capacity rejections show a localized limit message and leave the form ready for an explicit next operation. Unknown outcomes and unrelated HTTP 429 errors retain refresh admission. Replacing only the updated browser bundle reproduces each previous rendered hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ]
-  },
-  "navigation_lifetime_review": {
-    "source_base": "7b11a86864e3684b4e29c25abd1c691c9280e8b8",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Retire page actions when navigation begins and inject the current-page guard into MCP and Runner controllers. Late OAuth and Runner responses preserve the chosen destination; discarded Runner responses release their unread body. Substituting the independently rebuilt prior browser bundle reproduces all 13 prior rendered hashes and byte counts and both script wrapper hashes.",
-    "non_script_markup_unchanged": true
-  },
-  "full_navigation_handoff_review": {
-    "source_base": "f7203b871eadfb0afd93dbc3e7e302ebc9d157cb",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Route language, OAuth and Runner full-page destinations through the navigation owner. Native page departure retires controllers, aborts pending soft navigation and clears queued destinations. Independently rebuilding and substituting the prior browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes.",
-    "non_script_markup_unchanged": true
-  },
-  "fragment_navigation_review": {
-    "source_base": "0c9390dbe5050da749a415ef2be0f4e501f28952",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Preserve forms and controller lifetimes for settled same-page fragment history. Pending or cross-page restoration continues through the existing navigation owner. Independently rebuilding and substituting the prior browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes.",
-    "non_script_markup_unchanged": true
-  },
-  "oauth_navigation_review": {
-    "source_base": "3aaa3cf10348cae03f0e61e4ef336694f8f4754f",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Route OAuth callback URL cleanup through the existing navigation and page-view owners so rendered page keys match native history. Same-page history preserves live forms; pending and cross-page navigation retains its lifecycle. Independently rebuilding and substituting the prior browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes.",
-    "non_script_markup_unchanged": true
-  },
-  "mutation_receipt_review": {
-    "source_base": "3480fee2acf91999f57b9483a9983e83660ad8db",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "reviewed_change": "Validate the fields consumed from successful profile, OAuth and Skill mutation receipts before continuing. Incomplete receipts use the existing refresh-required recovery without replaying writes. Independently rebuilding the source-base browser bundle reproduces all 13 prior renderer hashes and byte counts and both script wrapper hashes; substituting only that bundle restores every prior output.",
-    "non_script_markup_unchanged": true
-  },
-  "runner_remote_update_review": {
-    "reviewed_change": "Queue immutable signed version operations, accept exact development versions, display localized host-manager progress and preserve operation identity in the version form. Only runner-detail markup changes.",
-    "previous": [
-      {
-        "name": "runner-detail",
-        "previous_bytes": 14238,
-        "previous_sha256": "3afab9d73c58fd93a0d3d69a8fb08d048d7863edf8f303c97c7f4f483331570d"
-      }
-    ]
-  },
-  "runner_remote_update_copy_review": {
-    "reviewed_change": "Use the Runner version heading and one sentence describing latest or exact version selection. Substituting only these two text changes reproduces the previous byte count and hash.",
-    "previous_bytes": 14469,
-    "previous_sha256": "28c90562dbf06051deeb22e8fbbd6313aa0a0b5cf3136d18b7ec69c394fc116a"
-  },
-  "console_ui_review": {
-    "source_base": "1414824e3ee71acefd558e553e31f615a438ffea",
-    "reviewed_change": "Reviewed persistent sidebar navigation, shared style modules, resource-first lists, grouped management actions, prioritized Runner version controls, accessible table headings and two-line timestamps. Existing form actions, fields, CSRF and translation annotations were compared by renderer and browser checks.",
-    "previous": [
-      {
-        "name": "login",
-        "bytes": 136013,
-        "sha256": "6febec1cb83a2292135e9d635e677a4f59c1039d461e18d74c87a5098c32ce9d"
-      },
-      {
-        "name": "setup",
-        "bytes": 136601,
-        "sha256": "7fdf33344aaa59c76e2f34fd6dd9dda8d5760a10a0ec5f87262d4947945b2d2f"
-      },
-      {
-        "name": "secret",
-        "bytes": 137749,
-        "sha256": "edf1981eb2f7d1b0433f2157b398e3553df07f11d529e8ed806c540257e1430e"
-      },
-      {
-        "name": "overview-empty",
-        "bytes": 2065,
-        "sha256": "78bd5604b1ee384d37945e130fda94c5b30b2069e2c971796dcf814155e3e53f"
-      },
-      {
-        "name": "overview-populated",
-        "bytes": 3196,
-        "sha256": "1b0e675c5e2f1bdba0c966779a0370c6e2da363f9cd3f894e1f89af090f56371"
-      },
-      {
-        "name": "clients-empty",
-        "bytes": 1999,
-        "sha256": "209ac6830d6fd1c86aef6bd8ae7446c7242e0a6f42cbaadaa3e120339b5e558e"
-      },
-      {
-        "name": "clients-populated",
-        "bytes": 4738,
-        "sha256": "e93e35d3ae5f68d0ccfc78bd4c1af2851e4e29a22ee7a886edab9df427cfe41f"
-      },
-      {
-        "name": "client-detail",
-        "bytes": 7170,
-        "sha256": "face56acc8c36fcc28b5a6bbc105881920c50e4bebdd0db367c9b521e034152d"
-      },
-      {
-        "name": "runners-empty",
-        "bytes": 3200,
-        "sha256": "59e21717a2a06e07ab125f4348bf1ff7e92399efbfc88c33d27dd84471a4a74d"
-      },
-      {
-        "name": "runners-populated",
-        "bytes": 6852,
-        "sha256": "ef01b4d6eb79d546e439f3549a337d9c36df526e52ed8c808560fa7143b6eba6"
-      },
-      {
-        "name": "runner-detail",
-        "bytes": 14332,
-        "sha256": "12061f03e8747210f22afeee4a357432700caeaafa6af233e56ba5728f15513d"
-      },
-      {
-        "name": "admin-document",
-        "bytes": 138098,
-        "sha256": "a9d78455154bf06d9183931567f2f3c1e7e012315848c7bc20958bd27207dc2f"
-      }
-    ]
-  },
-  "maintainability_review": {
-    "source_base": "70ee2619999794b8703907981a1d774cc00af792",
-    "reviewed_change": "Reviewed shared table column definitions for headings, localized mobile labels and cell order. Semantic column keys replace positional CSS. Empty rows use the column count without mobile labels; existing forms, fields, CSRF and dynamic value escaping are retained.",
-    "previous": [
-      {
-        "name": "login",
-        "bytes": 134309,
-        "sha256": "73acd0cd43f2f3a54eaa2ddf9c0d940aee19b85891e83c33ad66dac643cdb2d9"
-      },
-      {
-        "name": "setup",
-        "bytes": 134897,
-        "sha256": "ba98d71e3a4310d4d4adaaaef710c3681ebfc4ec86927a45d4b2aadd7b3f1599"
-      },
-      {
-        "name": "secret",
-        "bytes": 137259,
-        "sha256": "5cfc950ecb81698f6daeb36c5060665f096f0a91d1698da812c54d9d6071ca2e"
-      },
-      {
-        "name": "clients-empty",
-        "bytes": 2542,
-        "sha256": "a217ca10d2d96f7f489cbf91724511c759f1ff8d672bd369e177600a44c7be2c"
-      },
-      {
-        "name": "clients-populated",
-        "bytes": 5568,
-        "sha256": "0b5c90bd200d5775433e45205688f3d96cd15445fd7147aa13cb4a8e1b1ff867"
-      },
-      {
-        "name": "runners-empty",
-        "bytes": 3479,
-        "sha256": "c9042eb621c6444b78480febb1e64215bc9c405f0f6765d36e1a08b539d21848"
-      },
-      {
-        "name": "runners-populated",
-        "bytes": 7269,
-        "sha256": "fbb37a0a2b39e2dd433d4205f6e9827c196903d6049821cf6c024a8e0f715ee6"
-      },
-      {
-        "name": "admin-document",
-        "bytes": 137608,
-        "sha256": "d5e78511d5a3e3e5b5cfa6c986d7f10c2a15ce59dac1212c0b055705b13dd479"
-      }
-    ]
-  },
-  "implementation_plan_review": {
-    "source_base": "97561adf8faeaebd1d68d14bfd09a853da37dade",
-    "reviewed_change": "Reviewed modular Skill lifecycle controls for version history, comparison, rollback, retention and cleanup; pinned GitHub source preview and installation; MCP connection inspection; and Registry server.json preview that fills the connection form. Frontend receipt validation, state invalidation and source deadlines remain in their dedicated modules. Independently rebuilt the starting browser source and verified every renderer against its previous hash and byte count by replacing only the owned inline script; all non-script markup remains unchanged.",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "96682c11209a14126997d4f96af86ea1f8d675555cac7627145568f05da5e709",
-        "bytes": 132674
-      },
-      {
-        "name": "setup",
-        "sha256": "fae96851c5bb443e06abf512f127497f64f30658ac8820beb26a6bd4e93b2303",
-        "bytes": 133262
-      },
-      {
-        "name": "secret",
-        "sha256": "11bbff975827aca2a9d49f829e80d1b646eea53c253426cbb86ea7f3f9b0901a",
-        "bytes": 135624
-      },
-      {
-        "name": "admin-document",
-        "sha256": "fd57bc0bdc9d4a7fcff1e0d6d4a43973fe6c513f39b10e300385f5bd2ccec00d",
-        "bytes": 135973
-      }
-    ]
-  },
-  "module_review": {
-    "source_baseline": "79780c1b99ef7b519c89bf14c3af00f070d4b9b7e2562b906964d06cbdbd95b5",
-    "reviewed_change": "Disable connection inspection for paused MCP profiles; describe unpinning independently of cleanup eligibility; preserve the selected Skill version for file viewing and re-enabling, with an explicit latest-upload entry. Rebuilt the prior browser bundle from the verified Linux source copy and restored all prior renderer hashes by replacing only the inline bundle.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "89458bd6f44aa45b3cf21e2efe214d3364824638e214b47258cce27265b71ac5",
-        "bytes": 169710
-      },
-      {
-        "name": "setup",
-        "sha256": "f7adf6dcce1fd502b9ba000878387bc8be5c2c020a50a0f3c321ad0b179938e3",
-        "bytes": 170298
-      },
-      {
-        "name": "secret",
-        "sha256": "669f39cf0ac7c288bab1f137fbfc4fa4a83141b688099aec8d32d63640bffd20",
-        "bytes": 172660
-      },
-      {
-        "name": "admin-document",
-        "sha256": "a4bae31b9d22e77f8de186ff0aec8ecb17508ccb43c1e3fb4487c788f745d057",
-        "bytes": 173009
-      }
-    ]
-  },
-  "decoupling_review": {
-    "source_baseline": "d02df6adc8899e8ebf1251c16eade42df925142105e7ed504f348f869db72c8a",
-    "reviewed_change": "Extract Central error classification into a pure module while preserving message keys, error metadata, refresh admission and branch order. Rebuilt the previously verified browser source archive and restored every prior renderer hash and byte count by replacing only the inline bundle.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "c7fee5f2a5fa08fdbd35a87d733cfabf020ad0b859315a84362661bd77957c62",
-        "bytes": 170094
-      },
-      {
-        "name": "setup",
-        "sha256": "3932d1c026f655d80014b72e16a0f4e5f291e95657995d08833744d8605f61e3",
-        "bytes": 170682
-      },
-      {
-        "name": "secret",
-        "sha256": "d969667406b7e8447794c42afa5c1c1c1d610b345764dd74bc6bce5142b77496",
-        "bytes": 173044
-      },
-      {
-        "name": "admin-document",
-        "sha256": "22b7a2b2c222e557f174bc92042ebdbfeb460ffb35828f2dc28c68d2ed1b378d",
-        "bytes": 173393
-      }
-    ]
-  },
-  "decoupling_followup_review": {
-    "source_baseline": "e3ac58ebf278464bc5e787fd7ec21affb3fac6fa7c66b5559e6a8ee9c14a7d1a",
-    "reviewed_change": "Move feature panel cleanup to its owning workflow; view invalidation only broadcasts. Preserve markup, labels and request behavior. Rebuilt the prior verified browser source and restored every renderer hash and byte count by replacing only the inline bundle.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "1ea820db835178dfaed9ae5f0e0b2fbbef5fb1bcbd9ac446038abbabe2217baf",
-        "bytes": 170129
-      },
-      {
-        "name": "setup",
-        "sha256": "2b748889bda4fb353dc19d244b46458d8770bd9e031b49f35a20c7fe0156b9d8",
-        "bytes": 170717
-      },
-      {
-        "name": "secret",
-        "sha256": "4b19d824a777efb3ff137929dec0c72461cb8ec15d6dc5f94635431de48b2769",
-        "bytes": 173079
-      },
-      {
-        "name": "admin-document",
-        "sha256": "123113569b24b7a8c1c9c3b8f3f74263b34213053d245a46f0af94aca72e5cce",
-        "bytes": 173428
-      }
-    ]
-  },
-  "scoped_central_recovery_review": {
-    "reviewed_change": "Scope central operations and uncertain-write reconciliation by MCP connection and Skill workflow; background recovery preserves independent operations. Native log selectors gain localized labels, outside these render cases.",
-    "renderer_source_matches_frozen_manifest": true,
-    "bundle_bytes": 108196,
-    "delta_bytes": 8648,
-    "changed": [
-      {
-        "name": "login",
-        "previous": {
-          "bytes": 170189,
-          "sha256": "c980b54cb7f23c3352d4130495e9b15351624e4d72ac3083fd194dd9d4fcc7ea"
-        },
-        "next": {
-          "bytes": 178837,
-          "sha256": "d2b16dbb9baaabe60f0302648b3ea6471e5745d07a66fb6d3e650ccdc98513b7"
-        }
-      },
-      {
-        "name": "setup",
-        "previous": {
-          "bytes": 170777,
-          "sha256": "21e9ddd97e6fd48247a199c21e15c0949ec1208f6fabe6f8302328deff171115"
-        },
-        "next": {
-          "bytes": 179425,
-          "sha256": "1c51024eb2b08d7094314f2121a1bff938a78d249b2f6eb0370108c842954538"
-        }
-      },
-      {
-        "name": "secret",
-        "previous": {
-          "bytes": 173139,
-          "sha256": "2731609f602619e8a275561a9bd4fd59ae93b7409ac33180d0d12964853521a6"
-        },
-        "next": {
-          "bytes": 181787,
-          "sha256": "f1e2285821a686db8305201d1b2e2960fdcf195f88c86d3cc974aa37c05e5c7f"
-        }
-      },
-      {
-        "name": "admin-document",
-        "previous": {
-          "bytes": 173488,
-          "sha256": "422ed7aac0c3c134b805457dd44e36ce4eb2e1b6dcf302bb0af5a30f6c9171e9"
-        },
-        "next": {
-          "bytes": 182136,
-          "sha256": "eda04e1107e7d83c65affaca2ddba645a8e14c541c0a498152947e06438ca28e"
-        }
-      }
-    ]
-  },
-  "oauth_and_raw_data_review": {
-    "reviewed_change": "OAuth handoff is owned by the latest foreground authorization intent. Runner machine values receive data-no-i18n annotations; labels and layout retain their prior content. Every previous fixture is independently reproduced from the frozen R2 source archive.",
-    "prior_manifest": "historical-baseline-reviewed-offline",
-    "changes": [
-      {
-        "name": "login",
-        "previous": {
-          "bytes": 178837,
-          "sha256": "d2b16dbb9baaabe60f0302648b3ea6471e5745d07a66fb6d3e650ccdc98513b7"
-        },
-        "next": {
-          "bytes": 179730,
-          "sha256": "e5fc59a84d30b2dd49237352979dc0badc520b58c30f97c73493a70cdfbe39a3"
-        },
-        "script_only": true
-      },
-      {
-        "name": "setup",
-        "previous": {
-          "bytes": 179425,
-          "sha256": "1c51024eb2b08d7094314f2121a1bff938a78d249b2f6eb0370108c842954538"
-        },
-        "next": {
-          "bytes": 180318,
-          "sha256": "4347ec8136c0fb813706015499ea9bddb4d0a787ab7d9d3a69afce3199c35e66"
-        },
-        "script_only": true
-      },
-      {
-        "name": "secret",
-        "previous": {
-          "bytes": 181787,
-          "sha256": "f1e2285821a686db8305201d1b2e2960fdcf195f88c86d3cc974aa37c05e5c7f"
-        },
-        "next": {
-          "bytes": 182680,
-          "sha256": "f2e46ab0b08f2a59dbbb36ed6c0e9ababa9c7e3d6227ecf6b906a6dbfb31ce47"
-        },
-        "script_only": true
-      },
-      {
-        "name": "runner-detail",
-        "previous": {
-          "bytes": 14727,
-          "sha256": "c5f62420ef4d8d42437700bec9427b4b82315515d7e4fa3d7dce8b7e68956b40"
-        },
-        "next": {
-          "bytes": 14896,
-          "sha256": "9cc1345006b38095e9c9d014334d9e6ffbdb2cb111a7362f988e1b0e4949dea4"
-        },
-        "script_only": false
-      },
-      {
-        "name": "admin-document",
-        "previous": {
-          "bytes": 182136,
-          "sha256": "eda04e1107e7d83c65affaca2ddba645a8e14c541c0a498152947e06438ca28e"
-        },
-        "next": {
-          "bytes": 183029,
-          "sha256": "20046c702d17de0a052e2419477b5915991996d69020742ae02a713fb6a09f7d"
-        },
-        "script_only": true
-      }
-    ],
-    "scriptChanges": [
-      {
-        "nonce": null,
-        "previous_sha256": "b7b81932b55e63de76b9787272863291a39da97bf5b888da3bb8b65f1045e2c6",
-        "sha256": "c6abdc0271999f48636f216d9636d0a4ebde87c8e196b23fd175378a2ea4e976"
-      },
-      {
-        "nonce": "test-nonce",
-        "previous_sha256": "17bb71802b057065fd4b0a0457591de4e4a0c95012ac435c4e005cb05e1235b1",
-        "sha256": "370064df3f0f08f531cb4b5fe7af366ca4314a9de32e04eb375fe3e64fbda90f"
-      }
-    ]
-  },
-  "identifier_input_review": {
-    "reviewed_change": "Use one Unicode-sets-compatible identifier input pattern matching the server length bound; preserve raw workspace IDs in deletion placeholders. Reversing only these changes reproduces each prior byte count and hash.",
-    "changes": [
-      {
-        "name": "runners-empty",
-        "previous": {
-          "bytes": 3615,
-          "sha256": "b14cdb9d3d33608deca974bbfd99f71e7bfda34b57f2c8cdf0e0c336a664de72"
-        },
-        "next": {
-          "bytes": 3622,
-          "sha256": "eb7a0de4d6766c12291872adfd0584f85b479a0a157e95342cf5d8733e73880b"
-        }
-      },
-      {
-        "name": "runners-populated",
-        "previous": {
-          "bytes": 7830,
-          "sha256": "5804285d2503ba0f7bcfa14a96a27fed7066c74a4c56e7f2bd82a26146d4f4b4"
-        },
-        "next": {
-          "bytes": 7844,
-          "sha256": "90105c7dea0185abfa03c754d9b0a9b7d9be16eaa4ae4cfb937eb8e7886c9203"
-        }
-      },
-      {
-        "name": "runner-detail",
-        "previous": {
-          "bytes": 14896,
-          "sha256": "9cc1345006b38095e9c9d014334d9e6ffbdb2cb111a7362f988e1b0e4949dea4"
-        },
-        "next": {
-          "bytes": 14903,
-          "sha256": "748d2f9e8c0b7db7356b6bcf50f1584ae39a32cc5f2700957c6e0a51f18f2531"
-        }
-      }
-    ]
-  },
-  "request_contract_review": {
-    "source_baseline": "74d4ca566f2cc1ab18be170859dc1360800cdf7bd33d615b29b1649e66a0ea88",
-    "reviewed_change": "Centralize request recovery scopes, read/write classification and successful receipt states in a pure browser contract. Workflows no longer import DOM operation admission for scope values; controller API callbacks receive only resource scopes. Binding ownership uses a module WeakSet. Independently rebuilding the accepted source archive and substituting only its browser bundle reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "e5fc59a84d30b2dd49237352979dc0badc520b58c30f97c73493a70cdfbe39a3",
-        "bytes": 179730
-      },
-      {
-        "name": "setup",
-        "sha256": "4347ec8136c0fb813706015499ea9bddb4d0a787ab7d9d3a69afce3199c35e66",
-        "bytes": 180318
-      },
-      {
-        "name": "secret",
-        "sha256": "f2e46ab0b08f2a59dbbb36ed6c0e9ababa9c7e3d6227ecf6b906a6dbfb31ce47",
-        "bytes": 182680
-      },
-      {
-        "name": "admin-document",
-        "sha256": "20046c702d17de0a052e2419477b5915991996d69020742ae02a713fb6a09f7d",
-        "bytes": 183029
-      }
-    ]
-  },
-  "header_brand_review": {
-    "reviewed_change": "The shared control-panel logo opens the project repository in a separate tab, preserving the current console form. A visible product-version badge reads the generated product version and stacks below the logo on small screens. Changes are limited to the header and its shared CSS; all other markup and the browser bundle are byte-for-byte unchanged.",
-    "unrelated_markup_and_browser_bundle_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "975fc2586a5e33a82788ae100bed0cc8b8525be5a53655a70f488c22c83aa11c",
-        "bytes": 179884
-      },
-      {
-        "name": "setup",
-        "sha256": "85698f63ff3c652bffb2c93416b3754bde9b4263ef173747634a05af50cb7328",
-        "bytes": 180472
-      },
-      {
-        "name": "secret",
-        "sha256": "fb36583d06fa5cb4dad94b1da82a41a68375527e1e29c99386b08e67eb5f45ec",
-        "bytes": 182834
-      },
-      {
-        "name": "admin-document",
-        "sha256": "a0b0bafcc156abae25e5203bc9d8d83acf05847eb0395f93682290e31870c920",
-        "bytes": 183183
-      }
-    ]
-  },
-  "collection_contract_review": {
-    "source_baseline": "d7ada633823a72665d3dd1b2d766f3913cef4df9",
-    "reviewed_change": "The existing request contract owns collection response keys. Paginated reads require array items and explicit null or nonempty string cursors, and stop on empty pages with continuation cursors. The controller cannot reconcile an uncertain write from an incomplete collection. Independently rebuilding the committed browser modules and substituting only their bundle reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "d0ef13ea1e53df1c50ace8aa3c758519faba3f680e95bb490b9c7720a86599a0",
-        "bytes": 180216
-      },
-      {
-        "name": "setup",
-        "sha256": "ea70e9360e8ee05e21b6635b2689c12140b3968b92b1fc69862bd8b57d70c971",
-        "bytes": 180804
-      },
-      {
-        "name": "secret",
-        "sha256": "a4918eb31c77e567a4e23d17b6d0e020131a717e981df54924af664a2ffc5cdd",
-        "bytes": 183279
-      },
-      {
-        "name": "admin-document",
-        "sha256": "94f3b27fff7ec033412e28681e291ea25c14f65c2b463491e822a72d69c68e91",
-        "bytes": 183628
-      }
-    ]
-  },
-  "quota_error_classification_review": {
-    "source_baseline": "17328b5541b3102443f0811fdc9b3c847d2b4770",
-    "reviewed_change": "Central failure copy distinguishes server setup, busy, timeout and session verification errors using fixed status and code categories. Mutation admission and unknown-result recovery remain separate. Rebuilding the committed browser bundle and substituting only that bundle reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "9b6a04e2c621018487a7fad2149a3c4b83b20c03bccd3295a37ec5dfdf4e81ea",
-        "bytes": 180795
-      },
-      {
-        "name": "setup",
-        "sha256": "15d4d55a33954c8a194ef08e055834ba5b0adbfe36264b72d1737140831f0e99",
-        "bytes": 181383
-      },
-      {
-        "name": "secret",
-        "sha256": "6a44813b27735beaf6a02646d60fc4880b3998b3196af80d3d58b9d78ebbb30d",
-        "bytes": 183858
-      },
-      {
-        "name": "admin-document",
-        "sha256": "0ac635a4acfd75e61e9d51deb24d772bf7275653d2912ae5a94a66f5acc3a092",
-        "bytes": 184207
-      }
-    ]
-  },
-  "request_receipt_ownership_review": {
-    "source_baseline": "82dad6ffa82e690f183a55a0ca4dae6b9bd3c0b6",
-    "reviewed_change": "Central request classification owns route metadata for success receipts and failure categories; existing feature receipt modules own content validation. HTTP, mutation admission and unknown-result recovery retain their prior behavior. Rebuilding the committed browser bundle and substituting only that bundle reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "aff4113855f5ba73fd76e64f69842f33220f15f1b0a86c38696ef7c107cf6c5c",
-        "bytes": 182029
-      },
-      {
-        "name": "setup",
-        "sha256": "6285ed13235c0a05cb84af68e52bd27c38d6f77a4511fb8e525ccae6b3750824",
-        "bytes": 182617
-      },
-      {
-        "name": "secret",
-        "sha256": "a532c7bf0af9923548ed662256eaba79ae062ef21ed6ab795add8b19cbee41e0",
-        "bytes": 185092
-      },
-      {
-        "name": "admin-document",
-        "sha256": "e1d08cc34f04605bc83bce3334d0912af986a7dab1e4b6455bda00d77dd84b19",
-        "bytes": 185441
-      }
-    ]
-  },
-  "localized_controls_interpolation_review": {
-    "source_baseline": "2a51a0bec5d4e12600b118928e3f628d460c0721",
-    "reviewed_change": "Password and submit controls receive localized attributes from rendered markup; form submission stays native. Central translation performs named interpolation once with literal user values. Restoring the prior browser bundle and removing only the three new localized data attributes reproduces every prior renderer hash and byte count.",
-    "markup_changes": [
-      "data-password-show",
-      "data-password-hide",
-      "data-submit-pending"
-    ],
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "367d870e3c5e90ac5c20dcf6c3eecadfbe414186b1dfa3876df492f74bafba10",
-        "bytes": 182603
-      },
-      {
-        "name": "setup",
-        "sha256": "4c559c151efcb603563afb947a7554a7ee38d16ec89a1c7073d30193bd250d48",
-        "bytes": 183191
-      },
-      {
-        "name": "secret",
-        "sha256": "4fd3785ed11799441ace9e7d92266942e9b156a5a14e27e4f4395cc66b4832c3",
-        "bytes": 185666
-      },
-      {
-        "name": "admin-document",
-        "sha256": "aaffd670511a307d835896ee8b4ce3850f608f68727556b0479b70cdfb27aba7",
-        "bytes": 186015
-      }
-    ]
-  },
-  "copy_feedback_ownership_review": {
-    "source_baseline": "0fcb629b27e995e2549be57821d16074361e600e",
-    "reviewed_change": "Each copy button owns the latest click feedback. Late clipboard completion cannot overwrite the latest attempt or another button. Replacing only the browser bundle with the committed baseline reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "8ea40e2ade46644c4852f73315dad288cdd0b5c4227952bbe22c9bc59fe963e4",
-        "bytes": 182345
-      },
-      {
-        "name": "setup",
-        "sha256": "dc4fe2b0226c54cae143197dc7cec849d0ea1a5ce353c8b6757fc1d41e5f4433",
-        "bytes": 183005
-      },
-      {
-        "name": "secret",
-        "sha256": "e96dd8a1dd931eeea8aae52e7e2f27a20cd2d56be0e8f12f9c9a7e8681e5603c",
-        "bytes": 185302
-      },
-      {
-        "name": "admin-document",
-        "sha256": "cc68f4c5541baa56b0395c417360af2187608619f195e4de954cc90511ca668c",
-        "bytes": 185651
-      }
-    ]
-  },
-  "central_retired_response_review": {
-    "source_baseline": "38b093175f47393094d6a2e4bc1484b01b179ee4",
-    "reviewed_change": "Central API cancels an unread response body when its page has retired before headers arrive. Public API tests cover late read and OAuth responses without follow-up work. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "2b0faaa42a4ccaaecf759a5cab781ba46700ba92cd238ef9f8eae1a30a20f129",
-        "bytes": 182509
-      },
-      {
-        "name": "setup",
-        "sha256": "a1aa3f5944910e61d915b7d80231356d9cf38e578dcca8d8a7a4171d87f3d1fb",
-        "bytes": 183169
-      },
-      {
-        "name": "secret",
-        "sha256": "8468d57286a8f3bad7979120072295d33074648d5a642a2f4b7b01565fc82eab",
-        "bytes": 185466
-      },
-      {
-        "name": "admin-document",
-        "sha256": "d79e0480cdf4719e02f6c471ca9920f903f00e6c17f4d063d531a26a6e23f7fa",
-        "bytes": 185815
-      }
-    ]
-  },
-  "navigation_failure_review": {
-    "source_baseline": "7df59a11fa34635f21332cd6dd4e9e9987c0a603",
-    "reviewed_change": "Pending navigation reuses one request for the latest identical destination and preserves history intent. MCP failure receipts retain specific localized guidance without changing write reconciliation. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "d00ca57d27fb5a14a4aed65d8169173ba09b041c8611a378b614d69b4d05175d",
-        "bytes": 182634
-      },
-      {
-        "name": "setup",
-        "sha256": "9a724a50dff6c90c0c983daa3ffbcbd5166694ba58426591371e1a0f39d5a0df",
-        "bytes": 183294
-      },
-      {
-        "name": "secret",
-        "sha256": "5f1119c49be42e727252f3e11a55c4c38b8434375d58cfd80eb9532102f11bdd",
-        "bytes": 185591
-      },
-      {
-        "name": "admin-document",
-        "sha256": "36b2c07d6b1fadcd21674bb368d894058c451e2bd119d8709d53500348a30321",
-        "bytes": 185940
-      }
-    ]
-  },
-  "library_refresh_ownership_review": {
-    "source_baseline": "a73bbf9181fb16b4aa57a0aa6cb5b4b1df39dd14",
-    "reviewed_change": "Library refresh retains its operation lock until both collection reads settle, preserving the first failure and preventing duplicate refresh work behind a pending read. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "1d9d63e2e5d7c5ea136fc3f6135aa8d334a353a840cf0ea0af251d3bc0036e25",
-        "bytes": 184861
-      },
-      {
-        "name": "setup",
-        "sha256": "6c8f00df200ac2aaef01ae742ee1d7cb30bad6f74f6e9e9b02dd1aeaae0ad07d",
-        "bytes": 185521
-      },
-      {
-        "name": "secret",
-        "sha256": "27965bbfa57089f61471c64510aec69a98bfe4ba9d03b96bca892ffa780b19a4",
-        "bytes": 187818
-      },
-      {
-        "name": "admin-document",
-        "sha256": "53320d2734cab5ef2c308692e226f634cf0daf34d72dd348bb544a45a2e458ca",
-        "bytes": 188167
-      }
-    ]
-  },
-  "login_navigation_handoff_review": {
-    "source_baseline": "4f3e84a1288b3e96100817629ae5fdbbdc58363f",
-    "reviewed_change": "Navigation hands redirected login documents to full navigation without treating normal session expiry as a missing admin root. The latest queued destination remains authoritative, redirected external documents stay outside the admin DOM, and ordinary same-origin admin redirects retain soft mounting. Rebuilding the committed browser source reproduces both prior script hashes; replacing only the inline bundle reproduces every prior renderer hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "60487e7741abdc3e3b1e76d8e7c4a59123da83047a2085bbf0cfeda7aa8d03b2",
-        "bytes": 184996
-      },
-      {
-        "name": "setup",
-        "sha256": "44cdcfcea07202a2ae0ef21c52726e019eacbfc260836e4e534f9a954b8de9e2",
-        "bytes": 185656
-      },
-      {
-        "name": "secret",
-        "sha256": "4076051038c3b444ee9dfa3bc15ddba44fc68f79b33c7314ae6faaab1992b924",
-        "bytes": 187953
-      },
-      {
-        "name": "admin-document",
-        "sha256": "f92f5b5a74aa0bf0eba713222b49a406f3c442b8fcb92da0ac350e1f5af852dc",
-        "bytes": 188302
-      }
-    ]
-  },
-  "version_channel_form_review": {
-    "source_baseline": "fd756d7adeb82f1ee5634f368a14d1b216c9cacc",
-    "reviewed_change": "Runner version fields follow their selected channel: the latest environment release disables the unused exact-version field, while a pinned release requires it. Binding runs once per mounted control, preserves typed values across changes, and keeps native form validation and submission. Rebuilding the committed browser source reproduces both previous script hashes; replacing only that bundle and removing the new version input attribute reproduces every previous renderer hash and byte count.",
-    "non_script_markup_changes": [
-      {
-        "fixture": "runner-detail",
-        "field": "desired_runner_version",
-        "added": "disabled"
-      }
-    ],
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "fdf32a5a21d7da42eec63f46f5f93c29d59d05aa0ef8084e936bc5c88fb67490",
-        "bytes": 185386
-      },
-      {
-        "name": "setup",
-        "sha256": "8e61cc1f1eee4be623ef17392dec28e9850dd1689c5edbfcf45a2cf7fdf6532a",
-        "bytes": 186046
-      },
-      {
-        "name": "secret",
-        "sha256": "52229615b8541493ed0073d7ff012adf4f311c224794ce55bf2c6ec6b65e0f6d",
-        "bytes": 188343
-      },
-      {
-        "name": "runner-detail",
-        "sha256": "748d2f9e8c0b7db7356b6bcf50f1584ae39a32cc5f2700957c6e0a51f18f2531",
-        "bytes": 14903
-      },
-      {
-        "name": "admin-document",
-        "sha256": "9867c038a4ca91708d0e239a2a4a2ae0615d79ecf05fae2cdb85f0b1a3dbb82f",
-        "bytes": 188692
-      }
-    ]
-  },
-  "skill_source_error_review": {
-    "source_baseline": "cadff022601a4658d9abeeadf642ec5420705bcf",
-    "reviewed_change": "Skill source failures use the same string and own-key lookup rule as remote failures. Unknown error codes retain localized guidance and write reconciliation. Rebuilding the prior browser source reproduces both prior script hashes; restoring only that bundle reproduces every prior rendered hash and byte count.",
-    "non_script_markup_unchanged": true,
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "b77e3cd7cb5e541c198085e3e8aed1ffb5a59bd8f814ec123adae003a73aa6b0",
-        "bytes": 186012
-      },
-      {
-        "name": "setup",
-        "sha256": "8c12b6d1aecefb8ae7d049e02d2a9a47afa1417a340727028a93b58a6099640f",
-        "bytes": 186672
-      },
-      {
-        "name": "secret",
-        "sha256": "a86dcc66f8ae333992a9bbf2f7a00c8675e8b7d5da5204aa47474f72b96562a2",
-        "bytes": 188969
-      },
-      {
-        "name": "admin-document",
-        "sha256": "451745aba1fe6847866ea813bd9099046184c952277fa50d487ed9c5ec0e49a2",
-        "bytes": 189318
-      }
-    ]
-  },
-  "enrollment_locale_review": {
-    "source_base": "31ee9c9db106d9e371ba72c14984aea33f15b0ad",
-    "reviewed_change": "Switch only server-authored enrollment-result text in place while preserving one-time commands, platform selection and form values. Replacing only the inline browser script with its previous source reproduces every prior hash and byte count.",
-    "non_script_markup_unchanged": true
-  },
-  "oauth_registration_preflight_review": {
-    "source_base": "481077a8e8dbfa5e7d20432706d63b5c529a4b0c",
-    "reviewed_change": "Show the exact deployment-origin OAuth callback URL in pre-registered client settings while keeping all non-Central page markup unchanged apart from the reviewed shared browser bundle.",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "f8f8212ab3418d3d38c5cb2cfba0095466907dcb9858173807cdf2c159aa1376",
-        "bytes": 190427
-      },
-      {
-        "name": "setup",
-        "sha256": "80ed5fed7c660c26c1e09c123500b5386356dd0146018919d57f4d0acb6bde48",
-        "bytes": 191087
-      },
-      {
-        "name": "secret",
-        "sha256": "ce027152e943d50e33ec1e355dca49f1bf976f7ba097a7409fee22b4e30291e5",
-        "bytes": 193384
-      },
-      {
-        "name": "admin-document",
-        "sha256": "6c29674e71a373cd4b5e425fe9e57742a16ee4fb4b51b96da4fffee63d9fe523",
-        "bytes": 193733
-      }
-    ]
-  },
-  "mcp_permission_denial_review": {
-    "source_base": "70a619ea3e900043130c801264ecf6232a1633ac",
-    "reviewed_change": "The shared admin browser bundle now distinguishes upstream MCP HTTP 403 permission denial from HTTP 401 reauthorization. Only the four renderers that embed the shared bundle change; all server-rendered non-script markup remains unchanged.",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "c16620a39a4b1388604b739fef612752fd04490ee9ec8d3e20358cd0c82e0219",
-        "bytes": 191045
-      },
-      {
-        "name": "setup",
-        "sha256": "a9a488e795a4d27ae0c4121275e1f9cb61f0740f9fdb947a817f170b8bc3a2f0",
-        "bytes": 191705
-      },
-      {
-        "name": "secret",
-        "sha256": "1c52af725dcb978e16eb75cc235648e41bea906e0e3aa1282906a836fc96d15d",
-        "bytes": 194002
-      },
-      {
-        "name": "admin-document",
-        "sha256": "a4ade81aebaacba38bb728919317324d3ceb1fe3e1c3e59a77d1e1e3b0d1cdfd",
-        "bytes": 194351
-      }
-    ]
-  },
-  "oauth_callback_origin_review": {
-    "source_base": "7103bda9cfc55d7eaecc5378d22915dab98ef77c",
-    "reviewed_change": "Render the OAuth callback URL from the same server-resolved public origin used by managed OAuth. The shared browser bundle no longer rebuilds redirect_uri from window.location.origin; no non-script markup changes in these four renderers.",
-    "changed_cases": [
-      "login",
-      "setup",
-      "secret",
-      "admin-document"
-    ],
-    "previous": [
-      {
-        "name": "login",
-        "sha256": "0b42841c580962a4f65924697e763af70f361a06cec7683336669d0b364e460f",
-        "bytes": 193420
-      },
-      {
-        "name": "setup",
-        "sha256": "223c40c2d84a6efd82e00db0f34f3d5a62dfebf3776e739b967d9798db7648cd",
-        "bytes": 194080
-      },
-      {
-        "name": "secret",
-        "sha256": "c1222f3901c883026a70054c6bbf2043e79aa0b064874d6583827b5ddafc4562",
-        "bytes": 196377
-      },
-      {
-        "name": "admin-document",
-        "sha256": "54ae82954c04b0857667bc1d3e8053f7fc1e343ce7bb1c12ff72e5224f692c5d",
-        "bytes": 196726
-      }
-    ]
-  }
+  ]
 }

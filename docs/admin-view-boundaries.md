@@ -10,9 +10,9 @@ Use this reference when maintaining administrator pages. Page rendering, HTTP se
 
 The entrypoint assembles HTTP adapters and application use cases. Browser and API callers share the Runner deletion use case, keeping its authorization and mutation sequence in one place.
 
-## Compatibility evidence
+## Compatibility contract
 
-`apps/worker/test/fixtures/admin-render-golden.json` records thirteen render results generated from `88b119782d26316d68eeaa98a47d71dbe4382193`, including its source-file SHA-256. Both old and extracted views use the same fixed clock. `admin-view-contracts.test.ts` compares exact UTF-8 byte counts and hashes, verifies escaping and exercises the HTML security headers. Existing authenticated Worker UI, enrollment, CSRF and locale tests remain in place.
+`apps/worker/test/fixtures/admin-render-golden.json` contains only the current deterministic render inputs and expected byte/hash outputs under a fixed clock. `admin-view-contracts.test.ts` verifies those outputs, escaping and HTML security headers. Authenticated Worker UI, enrollment, CSRF and locale tests provide the surrounding behavior coverage.
 
 `test/admin-navigation.test.mjs` checks explicit no-store navigation, stale DOM removal, page ownership, control binding and stable language selection. `test/central-browser.test.mjs` covers MCP and Skill workflows, operation admission and response receipts.
 

@@ -64,7 +64,6 @@ CI 门禁报告、安装包验证与开发版发布检查共用源码观察模�
 
 ## 检查文档与示例
 
-`docs/current-facts.md` 根据源码包版本、协议、实际工具目录、绑定配置及已审阅发布记录生成。`docs/tool-examples.md` 根据 `docs/tool-examples.json` 生成；每个工具及映射动作都有有效示例，反例必须被实际 Zod Schema 拒绝，包含跨字段限制。
 
 示例使用合成 ID、命令和哈希；按指南操作时，替换为自己有权访问的环境值。修改源码约定或示例后，运行 `npm run generate:facts` 并审阅差异，再用 `npm run check:docs` 校验生成文档和已登记示例。正文及登记范围外的示例随改动人工对照相应实现。
 

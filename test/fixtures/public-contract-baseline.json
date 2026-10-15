@@ -1,6 +1,4 @@
 {
-  "source_commit": "8159b081a8d89c423add7bd492516262839e66bf",
-  "change_reason": "Refine bootstrap remote MCP discovery with an explicit remote_search fallback to profile tool inspection; the wire schema and maintenance v1 client remain unchanged.",
   "tools": [
     "bootstrap",
     "context",

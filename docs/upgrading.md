@@ -2,7 +2,7 @@
 
 [简体中文](upgrading.zh-CN.md) · [Documentation](README.md)
 
-For a compatible protocol-v2 upgrade, keep the current Worker, Durable Object namespaces, D1 database, secrets, Runner profiles and service layout. For earlier installations, check the starting version covered by [legacy migration](migration.md).
+For a compatible protocol-v2 upgrade, keep the current Worker, Durable Object namespaces, D1 database, secrets, Runner profiles and service layout. For earlier installations, check the starting version covered by [legacy migration](legacy-migration.md).
 
 ## Choose the target version
 

@@ -25,10 +25,8 @@
 - [部署与验证 MCP 连接和 Skill](../central-rollout.zh-CN.md)
 - [MCP 重新授权（英文）](../mcp-reauthorization.md)与[成本测量（英文）](../cost-baseline.md)
 
-## 历史记录
+## 旧版本兼容
 
-- [历史版本说明（英文）](release-history.md)
-- [验证记录与历史档案（英文）](release-evidence.md)
-- [早期版本迁移（英文）](../migration.md)
+- [早期版本迁移（英文）](../legacy-migration.md)
 
 历史记录对应各文档注明的版本与日期。更新现有实例时，按当前[升级指南](../upgrading.zh-CN.md)和[发行状态](../release-readiness.zh-CN.md)操作。

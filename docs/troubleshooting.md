@@ -15,7 +15,7 @@ Check the public HTTPS origin and deployment status. If you configured `RUNMESH_
 | Session expired after a password change | Sign in with the current password |
 | Data/schema mismatch | Preserve data, compare deployed code and resource bindings, and follow the [upgrade guide](upgrading.md) |
 
-Complete first administrator setup before exposing a new instance to untrusted visitors. Older data-boundary changes have their own [migration procedure](migration.md).
+Complete first administrator setup before exposing a new instance to untrusted visitors. Older data-boundary changes have their own [migration procedure](legacy-migration.md).
 
 ## Runner stays offline
 

@@ -2,7 +2,7 @@
 
 [English](upgrading.md) · [文档目录](README.zh-CN.md)
 
-兼容的协议 v2 升级保留现有 Worker、Durable Object 命名空间、D1 数据库、密钥、Runner 配置和服务布局。较早的安装请先核对[旧版本迁移](migration.md)说明中的适用版本。
+兼容的协议 v2 升级保留现有 Worker、Durable Object 命名空间、D1 数据库、密钥、Runner 配置和服务布局。较早的安装请先核对[旧版本迁移](legacy-migration.md)说明中的适用版本。
 
 ## 选择目标版本
 
