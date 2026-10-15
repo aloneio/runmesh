@@ -107,7 +107,21 @@ export async function guardedRemoteResponse(response: Response, id: string | num
           data.push(part);
         }
       }
-      if (chunk.done) throw new RemoteFault("upstream_protocol_error");
+      if (chunk.done) {
+        // Some Streamable HTTP implementations terminate the final SSE event
+        // immediately after its data line instead of writing a final newline or
+        // blank separator. Treat the remaining bounded buffer as the last line.
+        if (pending) {
+          const line = pending; pending = "";
+          if (line.startsWith("data:")) {
+            const part = line.slice(5).replace(/^ /u, ""); eventBytes += part.length;
+            if (eventBytes > REMOTE_LIMITS.response_bytes || data.length >= REMOTE_LIMITS.events * 16) throw new RemoteFault("upstream_protocol_error");
+            data.push(part);
+          }
+        }
+        if (data.length) { const value = frame(data.join("\n")); if (value !== undefined) return finish(value); }
+        throw new RemoteFault("upstream_protocol_error");
+      }
     }
   } finally { signal.removeEventListener("abort", abort); void reader.cancel().catch(() => undefined); }
 }

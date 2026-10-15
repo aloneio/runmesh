@@ -1,8 +1,10 @@
 import { RemoteFault, type RemoteEgressRule } from "../../contracts/remote.js";
 import { reflectsRemoteSecret } from "./remote-response.js";
 
-/** A legacy session belongs to exactly one operation/credential. No persistence,
- * session recovery, heartbeat or server-driven replacement is supported. */
+/** An upstream HTTP session belongs to exactly one operation/credential. No
+ * persistence, cross-operation sharing, recovery, heartbeat or server-driven
+ * replacement is supported. Both legacy initialize and modern server/discover
+ * may establish the first optional session identifier. */
 export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
   authorize: () => Promise<void>; current: () => boolean; token: string | undefined;
   protocol?: () => string; egressCurrent: () => boolean;
@@ -16,7 +18,7 @@ export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
       const next = response.headers.get("mcp-session-id");
       if (next === null && !(method === "initialize" && rule.session === "ephemeral")) return response;
       if ((rule.session !== "ephemeral" && rule.session !== "optional") || (rule.session !== "optional" && rule.protocol !== "2025-11-25") || next === null || !/^[\x21-\x7e]{1,128}$/u.test(next)
-        || (id === undefined ? method !== "initialize" : next !== id)) {
+        || (id === undefined ? method !== "initialize" && method !== "server/discover" : next !== id)) {
         void response.body?.cancel().catch(() => undefined); throw new RemoteFault("upstream_protocol_error");
       }
       id = next;

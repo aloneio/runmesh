@@ -154,7 +154,10 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           response = sessionState.response(response, method);
           if (method === "notifications/initialized") {
             void response.body?.cancel().catch(() => undefined);
-            if (response.status !== 202) throw new RemoteFault("upstream_protocol_error");
+            // 202 is the MCP response for accepted notifications. A number of
+            // otherwise compatible HTTP servers use the equivalent empty 204.
+            // Normalize either form before handing it back to the SDK.
+            if (response.status !== 202 && response.status !== 204) throw new RemoteFault("upstream_protocol_error");
             return new Response(null, { status: 202 });
           }
           const guarded = await guardedRemoteResponse(response, message.id as string | number, signal, account,

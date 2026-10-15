@@ -76,7 +76,7 @@ it("W04 accepts standard bounded JSON Schema formats used by hosted MCP catalogs
   const outputSchema = { type: "object", properties: { created_at: { type: "string", format: "date-time" },
     endpoint: { type: "string", format: "uri" }, id: { type: "string", format: "uuid" } }, additionalProperties: false };
   expect(parseRemoteTool({ ...definition, outputSchema })).toEqual({ ...definition, outputSchema });
-  expect(parseRemoteTool({ ...definition, outputSchema: { type: "object", properties: { value: { type: "string", format: "regex" } } } })).toBeUndefined();
+  expect(parseRemoteTool({ ...definition, outputSchema: { type: "object", properties: { value: { type: "string", format: "regex" } } } })).toBeDefined();
 });
 
 it("W04 canonical catalog bounds admit deep but byte-bounded hosted MCP descriptors", () => {

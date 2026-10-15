@@ -150,6 +150,12 @@ it("W05 wire JSON still rejects catalogs beyond the explicit structural budget",
   expect(() => boundedWireJson(JSON.stringify({ jsonrpc: "2.0", id: 1, result: nested }))).toThrow();
 });
 
+it("W05 accepts a complete final SSE data frame that ends at EOF without a blank separator", async () => {
+  const wire = 'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"content":[]}}';
+  const response = await guardedRemoteResponse(new Response(wire, { headers: { "content-type": "text/event-stream" } }), 1, new AbortController().signal, () => undefined);
+  await expect(response.json()).resolves.toMatchObject({ id: 1, result: { content: [] } });
+});
+
 it("W05 partial SSE frames preserve Unicode and stop at the final response before EOF", async () => {
   const encoder = new TextEncoder(), stopped = vi.fn();
   const wire = encoder.encode(': heartbeat\r\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":1,"progress":0}}\r\n\r\ndata: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"中文"}]}}\r\n\r\n');
@@ -274,6 +280,40 @@ it("W05 a session-bearing server is explicitly unsupported instead of sharing it
   const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: http });
   await expect(connector.open(profile, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({ code: "upstream_protocol_error" });
   expect(http).toHaveBeenCalledOnce();
+});
+
+it("W05 a negotiated modern MCP may establish one operation-scoped session during server/discover", async () => {
+  const remote = upstream(), seen: Array<{ method: string; session: string | null }> = [], sessionId = "modern-private-session";
+  const http = vi.fn(async (input: string | URL, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      seen.push({ method: "DELETE", session: new Headers(init.headers).get("mcp-session-id") });
+      return new Response(null, { status: 204 });
+    }
+    const request = JSON.parse(String(init?.body)), session = new Headers(init?.headers).get("mcp-session-id");
+    seen.push({ method: request.method, session });
+    const response = await remote.http(input, init), headers = new Headers(response.headers);
+    if (request.method === "server/discover" || session !== null) headers.set("mcp-session-id", sessionId);
+    return new Response(response.body, { status: response.status, headers });
+  });
+  const connector = createHttpRemoteConnector({ rules: () => [{ endpoint, protocol: "2025-11-25" as const, session: "optional" as const, negotiate: true as const }],
+    credential: async () => ({ kind: "bearer", token }), fetch: http });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try { expect((await session.listTools()).map(tool => tool.name)).toEqual(["increment"]); } finally { await session.close(); }
+  expect(seen[0]).toEqual({ method: "server/discover", session: null });
+  expect(seen.some(value => value.method === "tools/list" && value.session === sessionId)).toBe(true);
+  expect(seen.at(-1)).toEqual({ method: "DELETE", session: sessionId });
+});
+
+it("W05 normalizes an empty 204 initialized notification response for legacy HTTP servers", async () => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "notifications/initialized") { await remote.http(input, init); return new Response(null, { status: 204 }); }
+      return remote.http(input, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try { expect((await session.listTools()).map(tool => tool.name)).toEqual(["increment"]); } finally { await session.close(); }
 });
 
 it.each(["length", "stream", "depth", "utf8", "empty-fragments"])("W05 rejects %s overflow and cancels the untrusted response", async reason => {
