@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { CATALOG_LIMITS } from "../../apps/worker/src/contracts/catalog.js";
 import { catalogJson } from "../../apps/worker/src/contracts/catalog-json.js";
 import { catalogSchemaGraph } from "../../apps/worker/src/contracts/catalog-schema.js";
 import { parseCatalogCommand, parseRemoteTool, parseCatalogSnapshot, parseCatalogTool } from "../../apps/worker/src/contracts/catalog-values.js";
@@ -58,17 +59,46 @@ it("W04 property ordering and upstream list ordering do not change snapshot iden
 
 it.each([
   { inputSchema: null }, { inputSchema: { type: "string" } }, { inputSchema: { type: "object", required: ["a", "a"] } },
-  { inputSchema: { type: "object", $schema: "http://json-schema.org/draft-07/schema#" } },
-  { inputSchema: { type: "object", properties: { a: { type: "string", pattern: "(a+)+$" } } } },
-  { inputSchema: { type: "object", properties: { a: { type: "string", format: "private-opaque-format" } } } },
   { inputSchema: { type: "object", $ref: "https://private.invalid/schema" } },
   { inputSchema: { type: "object", $ref: "file:///secret" } },
   { inputSchema: { type: "object", $dynamicRef: "#a" } },
+  { inputSchema: { type: "object", $schema: "https://example.invalid/custom-dialect" } },
   { inputSchema: { type: "object", properties: { a: { type: "string", "x-mcp-header": "bad header" } } } },
-  { name: "bad tool" }, { annotations: { readOnlyHint: "true" } }, { unsupportedMetadata: { grant: "admin" } },
+  { name: "bad tool" }, { annotations: { readOnlyHint: "true" } },
   { description: "a".repeat(8193) }, { inputSchema: { type: "object", anyOf: [] } },
 ])("W04 unsupported/invalid tool contracts are rejected without partial publication: %j", change => {
   expect(parseRemoteTool({ ...catalogDefinition(), ...change })).toBeUndefined();
+});
+
+it("W04 accepts provider tool metadata extensions while projecting only trusted MCP fields", () => {
+  const definition = catalogDefinition("gitlab_tool");
+  const raw = { ...definition, version: "0.1.0", providerMetadata: { toolset: "repository" },
+    icons: [{ src: "https://gitlab.com/assets/gitlab_logo.png", mimeType: "image/png", theme: "dark", cacheKey: "v1" }],
+    annotations: { readOnlyHint: true, toolset: "repository", providerRisk: { source: "gitlab" } },
+    execution: { taskSupport: "optional", providerMode: "sync" }, _meta: { provider: "gitlab" } };
+  expect(parseRemoteTool(raw)).toEqual({ ...definition, annotations: { readOnlyHint: true } });
+});
+
+it("W04 admits bounded custom schema keywords and unsafe regexes without executing them during catalog parsing", () => {
+  expect(parseRemoteTool({ ...catalogDefinition("custom_keyword"), inputSchema: { type: "object",
+    properties: { value: { type: "string", providerConstraint: { policy: "opaque" }, pattern: "(a+)+$" } } } })).toBeDefined();
+});
+
+it("W04 accepts current JSON Schema dialects, opaque formats and common OpenAPI annotations", () => {
+  const schema = { $schema: "http://json-schema.org/draft-07/schema#", type: "object",
+    definitions: { id: { type: "string", pattern: "^[A-Za-z0-9_.-]+$", format: "provider-private-id" } },
+    properties: { id: { $ref: "#/definitions/id" }, note: { type: "string", nullable: true, example: "hello", "x-provider-ui": { multiline: true } } },
+    dependencies: { id: ["note"] }, patternProperties: { "^x-[a-z]+$": { type: "string" } }, additionalProperties: false };
+  expect(parseRemoteTool({ ...catalogDefinition("portable"), inputSchema: schema })).toBeDefined();
+});
+
+it("W04 accepts draft-04 and OpenAPI 3.1 compatibility dialects used by generated MCP schemas", () => {
+  const draft4 = { $schema: "http://json-schema.org/draft-04/schema#", type: "object",
+    properties: { value: { type: "number", minimum: 0, exclusiveMinimum: true } }, required: ["value"], additionalProperties: false };
+  const openapi = { $schema: "https://spec.openapis.org/oas/3.1/dialect/base", type: "object",
+    properties: { value: { type: ["string", "null"] } }, additionalProperties: false };
+  expect(parseRemoteTool({ ...catalogDefinition("draft4"), inputSchema: draft4 })).toBeDefined();
+  expect(parseRemoteTool({ ...catalogDefinition("openapi31"), inputSchema: openapi })).toBeDefined();
 });
 
 it("W04 accepts standard bounded JSON Schema formats used by hosted MCP catalogs", () => {
@@ -76,7 +106,7 @@ it("W04 accepts standard bounded JSON Schema formats used by hosted MCP catalogs
   const outputSchema = { type: "object", properties: { created_at: { type: "string", format: "date-time" },
     endpoint: { type: "string", format: "uri" }, id: { type: "string", format: "uuid" } }, additionalProperties: false };
   expect(parseRemoteTool({ ...definition, outputSchema })).toEqual({ ...definition, outputSchema });
-  expect(parseRemoteTool({ ...definition, outputSchema: { type: "object", properties: { value: { type: "string", format: "regex" } } } })).toBeUndefined();
+  expect(parseRemoteTool({ ...definition, outputSchema: { type: "object", properties: { value: { type: "string", format: "regex" } } } })).toBeDefined();
 });
 
 it("W04 canonical catalog bounds admit deep but byte-bounded hosted MCP descriptors", () => {
@@ -91,7 +121,7 @@ it("W04 canonical catalog bounds admit hosted tool lists above the legacy node c
   expect(catalogJson(nodeDense, 32_768)).toBeDefined();
 });
 
-it("W04 admits the bounded Cloudflare whoami identity pattern without opening arbitrary regular expressions", () => {
+it("W04 admits Cloudflare identity patterns and quarantines unsafe regex execution to the validator layer", () => {
   const definition = catalogDefinition("whoami");
   const tool = { ...definition,
     outputSchema: { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object",
@@ -100,7 +130,7 @@ it("W04 admits the bounded Cloudflare whoami identity pattern without opening ar
     _meta: { "openai/profile": true, securitySchemes: [{ type: "oauth2", scopes: ["user:read", "account:read"] }] },
   };
   expect(parseRemoteTool(tool)).toEqual({ ...definition, outputSchema: tool.outputSchema });
-  expect(parseRemoteTool({ ...tool, outputSchema: { type: "object", properties: { id: { type: "string", pattern: "(a+)+$" } } } })).toBeUndefined();
+  expect(parseRemoteTool({ ...tool, outputSchema: { type: "object", properties: { id: { type: "string", pattern: "(a+)+$" } } } })).toBeDefined();
 });
 
 it("W04 projects standard non-authoritative MCP tool metadata out of the published catalog", () => {
@@ -123,9 +153,9 @@ it("W04 supports bounded local refs without confusing property names or JSON dat
 
 it("W04 enforces aggregate/count/depth budgets and accepts a genuine empty catalog", async () => {
   const stage = (tools: unknown) => parseCatalogCommand({ action: "stage", profile_id: "docs", expected_revision: 0, tools });
-  expect(stage(Array.from({ length: 129 }, (_, i) => catalogDefinition(`tool${i}`)))).toBeUndefined();
+  expect(stage(Array.from({ length: CATALOG_LIMITS.tools + 1 }, (_, i) => catalogDefinition(`tool${i}`)))).toBeUndefined();
   expect(stage([catalogDefinition(), catalogDefinition()])).toBeUndefined();
-  expect(stage(Array.from({ length: 70 }, (_, i) => catalogDefinition(`tool${i}`, "文".repeat(3000))))).toBeUndefined();
+  expect(stage(Array.from({ length: Math.ceil(CATALOG_LIMITS.snapshot_bytes / 9_000) + 1 }, (_, i) => catalogDefinition(`tool${i}`, "文".repeat(3000))))).toBeUndefined();
   let schema: unknown = { type: "string" };
   for (let i = 0; i < 30; i++) schema = { type: "object", properties: { next: schema } };
   expect(parseRemoteTool({ ...catalogDefinition(), inputSchema: schema })).toBeUndefined();

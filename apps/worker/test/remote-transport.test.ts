@@ -6,10 +6,13 @@ import { createHttpRemoteConnector } from "../src/platform/connectors/remote-cli
 import { boundedWireJson, guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
 import { BoundedRemoteValidator } from "../src/platform/connectors/remote-validation.js";
 import { parseRemoteTool } from "../src/contracts/catalog-values.js";
+import { catalogPatternCost } from "../src/contracts/catalog-schema.js";
 import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
 import { buildCatalogSnapshot } from "../src/domain/capabilities/catalog.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
-import { RemoteFault, type RemoteConnector, type RemoteProtocol } from "../src/contracts/remote.js";
+import gitlabFixture from "./fixtures/gitlab-mcp-19.5.json";
+import { CATALOG_LIMITS } from "../src/contracts/catalog.js";
+import { REMOTE_LIMITS, RemoteFault, type RemoteConnector, type RemoteProtocol } from "../src/contracts/remote.js";
 import type { ConnectionProfile } from "../src/contracts/connectors.js";
 
 const endpoint = "https://remote.example.com/mcp";
@@ -88,6 +91,28 @@ it("W05 forwards only SDK-derived SEP-2243 Mcp-Param headers for GitHub-style to
   } finally { await session.close(); }
 });
 
+it("W05 accepts GitLab-style annotation and presentation extensions in tools/list", async () => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method !== "tools/list") return remote.http(input, init);
+      const response = await remote.http(input, init);
+      const reply = await (await guardedRemoteResponse(response, request.id, new AbortController().signal, () => undefined)).json() as any;
+      reply.result.tools[0] = { ...reply.result.tools[0], version: "0.1.0", providerMetadata: { provider: "gitlab" },
+        annotations: { readOnlyHint: true, toolset: "repository" },
+        icons: [{ src: "https://gitlab.com/assets/gitlab_logo.png", mimeType: "image/png", theme: "dark", cacheKey: "v1" }] };
+      return Response.json(reply);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ name: "increment", annotations: { readOnlyHint: true } });
+    expect(tools[0]).not.toHaveProperty("version");
+  } finally { await session.close(); }
+});
+
 it.each(["2025-11-25", "2026-07-28"] as const)("RM10 inspection accepts resource-only servers in %s while ordinary tool connections require tools", async protocol => {
   const methods: string[] = [];
   const handler = createMcpHandler(() => {
@@ -148,6 +173,12 @@ it("W05 wire JSON still rejects catalogs beyond the explicit structural budget",
   let nested: unknown = "leaf";
   for (let i = 0; i < 40; i++) nested = { next: nested };
   expect(() => boundedWireJson(JSON.stringify({ jsonrpc: "2.0", id: 1, result: nested }))).toThrow();
+});
+
+it("W05 accepts a complete final SSE data frame that ends at EOF without a blank separator", async () => {
+  const wire = 'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"content":[]}}';
+  const response = await guardedRemoteResponse(new Response(wire, { headers: { "content-type": "text/event-stream" } }), 1, new AbortController().signal, () => undefined);
+  await expect(response.json()).resolves.toMatchObject({ id: 1, result: { content: [] } });
 });
 
 it("W05 partial SSE frames preserve Unicode and stop at the final response before EOF", async () => {
@@ -276,10 +307,44 @@ it("W05 a session-bearing server is explicitly unsupported instead of sharing it
   expect(http).toHaveBeenCalledOnce();
 });
 
+it("W05 a negotiated modern MCP may establish one operation-scoped session during server/discover", async () => {
+  const remote = upstream(), seen: Array<{ method: string; session: string | null }> = [], sessionId = "modern-private-session";
+  const http = vi.fn(async (input: string | URL, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      seen.push({ method: "DELETE", session: new Headers(init.headers).get("mcp-session-id") });
+      return new Response(null, { status: 204 });
+    }
+    const request = JSON.parse(String(init?.body)), session = new Headers(init?.headers).get("mcp-session-id");
+    seen.push({ method: request.method, session });
+    const response = await remote.http(input, init), headers = new Headers(response.headers);
+    if (request.method === "server/discover" || session !== null) headers.set("mcp-session-id", sessionId);
+    return new Response(response.body, { status: response.status, headers });
+  });
+  const connector = createHttpRemoteConnector({ rules: () => [{ endpoint, protocol: "2025-11-25" as const, session: "optional" as const, negotiate: true as const }],
+    credential: async () => ({ kind: "bearer", token }), fetch: http });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try { expect((await session.listTools()).map(tool => tool.name)).toEqual(["increment"]); } finally { await session.close(); }
+  expect(seen[0]).toEqual({ method: "server/discover", session: null });
+  expect(seen.some(value => value.method === "tools/list" && value.session === sessionId)).toBe(true);
+  expect(seen.at(-1)).toEqual({ method: "DELETE", session: sessionId });
+});
+
+it("W05 normalizes an empty 204 initialized notification response for legacy HTTP servers", async () => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "notifications/initialized") { await remote.http(input, init); return new Response(null, { status: 204 }); }
+      return remote.http(input, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try { expect((await session.listTools()).map(tool => tool.name)).toEqual(["increment"]); } finally { await session.close(); }
+});
+
 it.each(["length", "stream", "depth", "utf8", "empty-fragments"])("W05 rejects %s overflow and cancels the untrusted response", async reason => {
   const stopped = vi.fn(), encoder = new TextEncoder(); let response: Response;
-  if (reason === "length") response = new Response(new ReadableStream({ cancel: stopped }), { headers: { "content-type": "application/json", "content-length": "1048577" } });
-  else if (reason === "stream") response = new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(1048577)); }, cancel: stopped }), { headers: { "content-type": "application/json" } });
+  if (reason === "length") response = new Response(new ReadableStream({ cancel: stopped }), { headers: { "content-type": "application/json", "content-length": String(REMOTE_LIMITS.response_bytes + 1) } });
+  else if (reason === "stream") response = new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(REMOTE_LIMITS.response_bytes + 1)); }, cancel: stopped }), { headers: { "content-type": "application/json" } });
   else if (reason === "depth") response = new Response('{"jsonrpc":"2.0","id":1,"result":' + '['.repeat(40) + '0' + ']'.repeat(40) + '}', { headers: { "content-type": "application/json" } });
   else if (reason === "utf8") response = new Response(new Uint8Array([255]), { headers: { "content-type": "application/json" } });
   else response = new Response(new ReadableStream({ pull(c) { c.enqueue(encoder.encode("")); }, cancel: stopped }), { headers: { "content-type": "text/event-stream" } });
@@ -297,8 +362,8 @@ it("discovery HTTP evidence retains the response byte and fragment budgets", asy
   for (const declared of [true, false]) {
     const cancelled = vi.fn(), account = vi.fn();
     const response = new Response(new ReadableStream<Uint8Array>({
-      start(controller) { controller.enqueue(new Uint8Array(1_048_577)); }, cancel: cancelled,
-    }), { status: 400, headers: declared ? { "content-length": "1048577" } : {} });
+      start(controller) { controller.enqueue(new Uint8Array(REMOTE_LIMITS.response_bytes + 1)); }, cancel: cancelled,
+    }), { status: 400, headers: declared ? { "content-length": String(REMOTE_LIMITS.response_bytes + 1) } : {} });
     await expect(guardedRemoteResponse(response, 1, new AbortController().signal, account, true)).rejects.toMatchObject({ code: "upstream_protocol_error" });
     expect(cancelled).toHaveBeenCalledOnce(); expect(account).toHaveBeenCalledTimes(declared ? 0 : 1);
   }
@@ -337,12 +402,40 @@ it("W05 accepts SEP-2243 MCP parameter annotations without weakening schema vali
   expect(parseRemoteTool({ name: "bad_header_location", inputSchema: { type: "object", properties: { values: { type: "array", items: { type: "string", "x-mcp-header": "item" } } } } })).toBeUndefined();
 });
 
-it("W05 validates the fixed Cloudflare identity pattern while keeping arbitrary regex schemas outside the admitted subset", () => {
+it("W05 enforces safe regexes without silently dropping unsafe provider constraints", () => {
   const validator = new BoundedRemoteValidator();
   const schema = { type: "object", properties: { id: { type: "string", minLength: 1, pattern: "\\S" } }, required: ["id"], additionalProperties: false };
   expect(validator.validate(schema, { id: "user:abc" })).toBe(true);
   expect(validator.validate(schema, { id: "   " })).toBe(false);
-  expect(validator.validate({ type: "object", properties: { id: { type: "string", pattern: "(a+)+$" } } }, { id: "a" })).toBe(false);
+  const unsafe = { type: "object", properties: { id: { type: "string", pattern: "(a+)+$", providerConstraint: { opaque: true } } } };
+  expect(parseRemoteTool({ name: "unsafe_pattern", inputSchema: unsafe })).toBeDefined();
+  expect(validator.validate(unsafe, { id: "provider-validates-this" })).toBe(false);
+  expect(validator.validate(unsafe, { id: 7 })).toBe(false);
+});
+
+it("W05 compatibility-normalizes draft-04 and OpenAPI 3.1 dialect markers without external resolution", () => {
+  const validator = new BoundedRemoteValidator();
+  const draft4 = { $schema: "http://json-schema.org/draft-04/schema#", type: "object",
+    properties: { value: { type: "number", minimum: 1, exclusiveMinimum: true } }, required: ["value"], additionalProperties: false };
+  expect(validator.validate(draft4, { value: 2 })).toBe(true);
+  expect(validator.validate(draft4, { value: 1 })).toBe(false);
+  const openapi = { $schema: "https://spec.openapis.org/oas/3.1/dialect/base", type: "object",
+    properties: { value: { type: ["string", "null"] } }, required: ["value"], additionalProperties: false };
+  expect(validator.validate(openapi, { value: null })).toBe(true);
+  expect(validator.validate(openapi, { value: "ok" })).toBe(true);
+  expect(validator.validate(openapi, { value: 3 })).toBe(false);
+});
+
+it("W05 validates draft-07 dependencies and normalizes common OpenAPI nullable schemas", () => {
+  const validator = new BoundedRemoteValidator();
+  const draft7 = { $schema: "http://json-schema.org/draft-07/schema#", type: "object",
+    properties: { id: { type: "string", pattern: "^[A-Za-z0-9_.-]+$" }, note: { type: "string" } },
+    dependencies: { id: ["note"] }, additionalProperties: false };
+  expect(validator.validate(draft7, { id: "abc", note: "ok" })).toBe(true);
+  expect(validator.validate(draft7, { id: "abc" })).toBe(false);
+  const openApi = { type: "object", properties: { note: { type: "string", nullable: true } }, required: ["note"], additionalProperties: false };
+  expect(parseRemoteTool({ name: "openapi_nullable", inputSchema: openApi })).toBeDefined();
+  expect(validator.validate(openApi, { note: null })).toBe(true);
 });
 
 it("W05 JSON schema validation is non-coercing, bounded and supports approved local references", () => {
@@ -489,5 +582,168 @@ it.each(["2025-11-25", "2026-07-28"] as const)("W05 %s calls a discovered tool w
     expect(tools).toHaveLength(1);
     expect(await session.callTool(tools[0]!, { value: 2 }, authorize)).toMatchObject({ isError: false, structuredContent: { value: 3 } });
     expect(remote.invoked).toHaveBeenCalledOnce(); expect(dispatched).toHaveBeenCalledOnce();
+  } finally { await session.close(); }
+});
+
+// Derived from the pinned GitLab source listed in the fixture; not a live login.
+it.each(["2025-03-26", "2025-06-18", "2025-11-25"])("MCP-PORTABILITY negotiates GitLab-style legacy %s and accepts annotated tools", async selectedVersion => {
+  const sent: string[] = [];
+  const connector = createHttpRemoteConnector({ rules: () => [{ endpoint, protocol: "2025-11-25", session: "optional", negotiate: true }],
+    credential: async () => ({ kind: "bearer", token }), fetch: async (_url, init) => {
+      const request = JSON.parse(String(init?.body)); sent.push(request.method);
+      if (!["server/discover", "initialize"].includes(request.method)) expect(new Headers(init?.headers).get("mcp-protocol-version")).toBe(selectedVersion);
+      if (request.method === "server/discover") return Response.json({ jsonrpc: "2.0", id: request.id,
+        error: { code: -32601, message: "Method not found", data: { method: "server/discover" } } }, { status: 404 });
+      if (request.method === "initialize") return Response.json({ jsonrpc: "2.0", id: request.id, result: {
+        protocolVersion: selectedVersion, capabilities: { tools: {} }, serverInfo: { name: "GitLab", version: "19.5.0-pre" } } });
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 });
+      if (request.method === "tools/list") return Response.json({ jsonrpc: "2.0", id: request.id, result: { tools: gitlabFixture.tools } });
+      if (request.method === "tools/call") return Response.json({ jsonrpc: "2.0", id: request.id,
+        result: { content: [{ type: "text", text: "19.5.0-pre" }], structuredContent: { version: "19.5.0-pre" }, isError: false } });
+      throw new Error("unexpected request");
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools(); expect(tools).toHaveLength(2); expect(session.issues?.()).toEqual([]);
+    expect(tools[0]!.annotations).toEqual({ readOnlyHint: true });
+    await expect(session.callTool(tools[0]!, {}, async () => undefined)).resolves.toMatchObject({ structuredContent: { version: "19.5.0-pre" } });
+    expect(sent).toEqual(["server/discover", "initialize", "notifications/initialized", "tools/list", "tools/call"]);
+  } finally { await session.close(); }
+});
+
+it("MCP-PORTABILITY quarantines unsupported tools without relaxing their constraints", async () => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (url, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method !== "tools/list") return remote.http(url, init);
+      return Response.json({ jsonrpc: "2.0", id: request.id, result: { tools: [
+        { name: "usable", inputSchema: { properties: { value: { type: "string" } } }, annotations: { toolset: "core" } },
+        { name: "unsafe_regex", inputSchema: { type: "object", properties: { value: { type: "string", pattern: "(a+)+$" } } } },
+        { name: "invalid_header", inputSchema: { type: "object", properties: { value: { type: "number", "x-mcp-header": "value" } } } },
+        { name: "task_only", inputSchema: { type: "object" }, execution: { taskSupport: "required" } },
+      ] } });
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    expect((await session.listTools()).map(tool => tool.name)).toEqual(["usable"]);
+    expect(session.issues?.()).toEqual([{ name: "unsafe_regex", code: "schema_unsupported" },
+      { name: "invalid_header", code: "invalid_tool" }, { name: "task_only", code: "interaction_required" }]);
+  } finally { await session.close(); }
+});
+
+it.each([undefined, "application/problem+json", "application/vnd.mcp+json", "text/plain"])("MCP-PORTABILITY accepts bounded JSON-RPC MIME variants: %s", async mime => {
+  const response = new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), { headers: mime ? { "content-type": mime } : {} });
+  if (!mime) response.headers.delete("content-type");
+  const result = await guardedRemoteResponse(response, 1, new AbortController().signal, () => undefined);
+  expect(await result.json()).toMatchObject({ result: {} });
+});
+
+it("MCP-PORTABILITY ignores bounded notifications but never executes server requests", async () => {
+  const notification = { jsonrpc: "2.0", method: "notifications/tools/list_changed" };
+  const final = { jsonrpc: "2.0", id: 1, result: {} };
+  const wire = "data: \n\ndata: " + JSON.stringify(notification) + "\n\ndata: " + JSON.stringify(final) + "\n\n";
+  const result = await guardedRemoteResponse(new Response(wire, { headers: { "content-type": "text/event-stream" } }), 1, new AbortController().signal, () => undefined);
+  expect(await result.json()).toEqual(final);
+  await expect(guardedRemoteResponse(Response.json({ ...notification, id: 2 }), 1, new AbortController().signal, () => undefined))
+    .rejects.toMatchObject({ code: "unsupported_interaction" });
+});
+
+it("MCP-PORTABILITY preserves nullable enums and bounds potentially expensive regexes", () => {
+  const validator = new BoundedRemoteValidator();
+  expect(validator.validate({ type: "object", properties: { value: { type: "string", nullable: true, enum: ["yes"] } } }, { value: null })).toBe(false);
+  expect(validator.validate({ type: "object", $vocabulary: { "https://untrusted.invalid/constraints": true } }, {})).toBe(false);
+  expect(validator.validate({ type: "object", properties: { value: { type: "string", pattern: "a*a*a*a*$" } } }, { value: "a".repeat(10_000) + "!" })).toBe(false);
+});
+
+it("MCP-PORTABILITY admits 200 tools independently of direct-tool capacity", async () => {
+  expect(CATALOG_LIMITS.tools).toBeGreaterThanOrEqual(200);
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (url, init) => {
+      const request = JSON.parse(String(init?.body));
+      return request.method === "tools/list" ? Response.json({ jsonrpc: "2.0", id: request.id,
+        result: { tools: Array.from({ length: 200 }, (_, i) => ({ name: "tool_" + i, inputSchema: { type: "object" } })) } }) : remote.http(url, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try { expect(await session.listTools()).toHaveLength(200); } finally { await session.close(); }
+});
+
+it("MCP-PORTABILITY preserves long operation-local session IDs used by hosted .NET servers", async () => {
+  const remote = upstream(), sessionId = "s".repeat(800), sessions: (string | null)[] = [];
+  const connector = createHttpRemoteConnector({ rules: () => [{ endpoint, protocol: "2025-11-25", session: "optional" }],
+    credential: async () => ({ kind: "bearer", token }), fetch: async (url, init) => {
+      const id = new Headers(init?.headers).get("mcp-session-id"); sessions.push(id);
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      const request = JSON.parse(String(init?.body)), response = await remote.http(url, init);
+      if (request.method !== "initialize") return response;
+      const headers = new Headers(response.headers); headers.set("mcp-session-id", sessionId);
+      return new Response(response.body, { status: response.status, headers });
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try { expect(await session.listTools()).toHaveLength(1); } finally { await session.close(); }
+  expect(sessions[0]).toBeNull(); expect(sessions.slice(1).every(id => id === sessionId)).toBe(true);
+});
+
+it.each([null, ""])("W05 accepts GitLab-style extensions and terminal nextCursor %j in tools/list", async terminalCursor => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy("2025-11-25"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method !== "tools/list") return remote.http(input, init);
+      const response = await remote.http(input, init);
+      const reply = await (await guardedRemoteResponse(response, request.id, new AbortController().signal, () => undefined)).json() as any;
+      reply.result.tools[0] = { ...reply.result.tools[0], version: "0.1.0", providerMetadata: { provider: "gitlab" },
+        annotations: { readOnlyHint: true, toolset: "repository" },
+        icons: [{ src: "https://gitlab.com/assets/gitlab_logo.png", mimeType: "image/png", theme: "dark", cacheKey: "v1" }] };
+      reply.result.nextCursor = terminalCursor;
+      return Response.json(reply);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ name: "increment", annotations: { readOnlyHint: true } });
+    expect(tools[0]).not.toHaveProperty("version");
+  } finally { await session.close(); }
+});
+
+it("MCP-PORTABILITY budgets unanchored top-level regex alternatives before execution", () => {
+  const pattern = "^fixed|a+a+a+a+b";
+  expect(catalogPatternCost(pattern, 0)).toBe(Infinity);
+  const validator = new BoundedRemoteValidator();
+  expect(validator.supports({ type: "object", properties: { value: { type: "string", pattern } } })).toBe(false);
+  expect(Number.isFinite(catalogPatternCost("^(?:fixed|a+a+a+a+b)$", 0))).toBe(true);
+  expect(validator.validate({ type: "object", properties: { value: { type: "string", pattern: "^[a|b]+$" } } }, { value: "a|b" })).toBe(true);
+});
+
+it.each(["2025-11-25", "2026-07-28"] as const)("MCP-PORTABILITY isolates output schemas by negotiated wire version %s", async protocol => {
+  const remote = upstream();
+  const connector = createHttpRemoteConnector({ rules: () => policy(protocol), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (url, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "tools/list") return Response.json({ jsonrpc: "2.0", id: request.id, result: { ...(protocol === "2026-07-28" ? { resultType: "complete", ttlMs: 0, cacheScope: "private" } : {}), tools: [
+        { name: "increment", inputSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
+          outputSchema: { properties: { value: { type: "integer" } }, required: ["value"] } },
+        { name: "array_output", inputSchema: { type: "object" }, outputSchema: { type: "array", items: { type: "string" } } },
+      ] } });
+      if (request.method === "tools/call" && request.params.name === "array_output") return Response.json({ jsonrpc: "2.0", id: request.id,
+        result: { resultType: "complete", content: [{ type: "text", text: "[]" }], structuredContent: ["ok"], isError: false } });
+      return remote.http(url, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    if (protocol === "2025-11-25") {
+      expect(tools.map(tool => tool.name)).toEqual(["increment"]);
+      expect(tools[0]!.outputSchema?.type).toBe("object");
+      expect(session.issues?.()).toEqual([{ name: "array_output", code: "schema_unsupported" }]);
+      await expect(session.callTool(tools[0]!, { value: 2 }, async () => undefined)).resolves.toMatchObject({ structuredContent: { value: 3 } });
+    } else {
+      expect(tools.map(tool => tool.name)).toEqual(["increment", "array_output"]);
+      expect(tools[0]!.outputSchema?.type).toBeUndefined();
+      expect(session.issues?.()).toEqual([]);
+      await expect(session.callTool(tools[1]!, {}, async () => undefined)).resolves.toMatchObject({ structuredContent: ["ok"] });
+    }
   } finally { await session.close(); }
 });

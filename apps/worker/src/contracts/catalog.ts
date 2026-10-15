@@ -5,8 +5,8 @@ import type { ConnectionProfile } from "./connectors.js";
 
 /** Import and retained-history budgets. Unreferenced snapshots are reclaimed
  * oldest-first at capacity; current observed/approved snapshots remain intact. */
-export const CATALOG_LIMITS = Object.freeze({ tools: 128, tool_bytes: 32_768, snapshot_bytes: 524_288,
-  request_bytes: 524_288, depth: JSON_LIMITS.depth, nodes: JSON_LIMITS.nodes, page_tools: 20, profiles: 200,
+export const CATALOG_LIMITS = Object.freeze({ tools: 512, tool_bytes: 65_536, snapshot_bytes: 2_097_152,
+  request_bytes: 2_097_152, depth: JSON_LIMITS.depth, nodes: JSON_LIMITS.nodes, page_tools: 20, profiles: 200,
   versions_per_profile: 32, snapshots: 512, storage_bytes: 16_777_216, cursor_bytes: 2_048, cursor_ttl_ms: 300_000 });
 export type CatalogJson = null | boolean | number | string | CatalogJson[] | { [key: string]: CatalogJson };
 export interface RemoteToolDefinition {

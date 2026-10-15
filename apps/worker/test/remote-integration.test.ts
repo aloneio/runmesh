@@ -137,7 +137,7 @@ it.each(["docs", "docs:reference"])("W05 admin discovery immediately enables cli
     const command = await f.toolCommand();
     const list = await rpc(f.config, f.current.secret, "tools/list", {});
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain("remote_call");
-    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_profiles', 'remote_search', 'remote_tools']);
+    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['bootstrap', 'remote_call', 'remote_profiles', 'remote_search', 'remote_tools']);
     const count = f.methods.length;
     const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: id } });
     expect(JSON.parse(page.result.content[0].text).tools[0].tool_id).toBe(command.tool_id);
@@ -274,9 +274,9 @@ it("W05 unavailable central state retains native tools when no deployment endpoi
   const current = await client(true), get = vi.fn(() => { throw new Error("must not resolve"); });
   const config = { ...env, CAPABILITIES: { idFromName: get, get } } as unknown as WorkerEnv;
   const response = await rpc(config, current.secret, "tools/list", {});
-  expect(response.result.tools).toHaveLength(10); expect(get).toHaveBeenCalledWith("central");
+  expect(response.result.tools).toHaveLength(11); expect(get).toHaveBeenCalledWith("central");
   const centralOnly = await client();
-  expect((await rpc(config, centralOnly.secret, 'tools/list', {})).result.tools).toEqual([]);
+  expect((await rpc(config, centralOnly.secret, 'tools/list', {})).result.tools.map((tool: { name: string }) => tool.name)).toEqual(['bootstrap']);
   expect(get).toHaveBeenCalledTimes(2);
 });
 
@@ -300,5 +300,32 @@ it('W08 direct tools preserve reviewed schemas and stale names cannot bypass a d
     const malformed = await rpc(config, f.current.secret, 'tools/list', {});
     expect(malformed.result.tools.some((t: { name: string }) => t.name === 'shell')).toBe(true);
     expect(malformed.result.tools.some((t: { name: string }) => t.name.startsWith('rm_'))).toBe(false);
+  } finally { f.network.mockRestore(); }
+});
+
+it("MCP-PORTABILITY publishes supported tools with exclusion receipts and preserves the catalog when none remain", async () => {
+  const f = await fixture();
+  try {
+    const original = f.network.getMockImplementation()!;
+    const valid = { name: "lookup", inputSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false } };
+    const unsupported = { name: "unsafe", inputSchema: { type: "object", properties: { value: { type: "string", pattern: "(a+)+$" } } } };
+    let tools: unknown[] = [valid, unsupported];
+    f.network.mockImplementation(async (url, init) => {
+      const message = JSON.parse(String(init?.body));
+      if (message.method !== "tools/list") return original(url, init);
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: { resultType: "complete", ttlMs: 0, cacheScope: "private", tools } });
+    });
+    const published = await f.discover();
+    const publishedBody = await published.json();
+    expect(published.status, JSON.stringify(publishedBody)).toBe(200);
+    expect(publishedBody).toMatchObject({ state: "written", excluded_tools: [{ name: "unsafe", code: "schema_unsupported" }] });
+    const before = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
+    expect(before).toMatchObject({ state: "found", head: { revision: 1, approved_names: ["lookup"] } });
+    tools = [unsupported];
+    const rejected = await f.discover(f.admin.headers, 1);
+    expect(rejected.status).toBe(503);
+    expect(await rejected.json()).toMatchObject({ error: { code: "remote_schema_unsupported", operation_state: "not_started" } });
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toEqual(before);
+    expect(f.execute).not.toHaveBeenCalled();
   } finally { f.network.mockRestore(); }
 });

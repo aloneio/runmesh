@@ -22,6 +22,9 @@ it("W05 result projection preserves standard data but never transport authentica
     { type: "resource_link", name: "document", uri: "https://unvisited.example.com/file" }];
   expect(parseRemoteResult({ content, structuredContent: { value: 1 }, isError: false, _meta: { auth: "private" } }))
     .toEqual({ content, structuredContent: { value: 1 }, isError: false });
+  expect(parseRemoteResult({ content: [{ type: "text", text: "scalar" }], structuredContent: [1, "two", null] }))
+    .toEqual({ content: [{ type: "text", text: "scalar" }], structuredContent: [1, "two", null], isError: false });
+  expect(parseRemoteResult({ content: [], structuredContent: null })).toEqual({ content: [], structuredContent: null, isError: false });
   expect(parseRemoteResult({ content: [{ type: "tool_use", name: "shell" }] })).toBeUndefined();
   expect(parseRemoteResult({ resultType: "input_required", content: [] })).toBeUndefined();
   expect(parseRemoteResult({ task: { taskId: "opaque" }, content: [] })).toBeUndefined();

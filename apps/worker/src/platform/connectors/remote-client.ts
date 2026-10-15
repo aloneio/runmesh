@@ -3,9 +3,9 @@ import { CATALOG_LIMITS, type RemoteToolDefinition } from "../../contracts/catal
 import type { ConnectionProfile, CredentialInput } from "../../contracts/connectors.js";
 import type { CredentialLease } from "../../contracts/oauth.js";
 import { parseCredential, parseProfile } from "../../contracts/connector-values.js";
-import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
+import { catalogJson, catalogObject, toolName } from "../../contracts/catalog-json.js";
 import { parseRemoteTool } from "../../contracts/catalog-values.js";
-import { REMOTE_LIMITS, RemoteFault, type RemoteConnector, type RemoteEgressRule } from "../../contracts/remote.js";
+import { REMOTE_LIMITS, RemoteFault, type RemoteConnector, type RemoteEgressRule, type RemoteToolIssue } from "../../contracts/remote.js";
 import { parseRemoteResult, publicMcpEndpoint } from "../../contracts/remote-values.js";
 import { guardedRemoteResponse, boundedWireJson, reflectsRemoteSecret } from "./remote-response.js";
 import { BoundedRemoteValidator } from "./remote-validation.js";
@@ -29,6 +29,8 @@ function remoteClientFault(error: unknown, fallback: "upstream_protocol_error" |
   // transport. Internal/server errors are availability failures and must not be
   // surfaced as "invalid response". Modern negotiation/header errors remain
   // protocol failures, while URL elicitation is deliberately unsupported here.
+  if (fallback === "result_invalid" && error.code === ProtocolErrorCode.InvalidParams) return new RemoteFault("invalid_arguments");
+  if (fallback === "result_invalid" && error.code === ProtocolErrorCode.MethodNotFound) return new RemoteFault("stale_catalog");
   if (error.code === ProtocolErrorCode.InternalError) return new RemoteFault("upstream_unavailable");
   if (error.code === ProtocolErrorCode.UrlElicitationRequired) return new RemoteFault("unsupported_interaction");
   if (error.code >= -32099 && error.code <= -32000 && ![-32020, -32021, -32022].includes(error.code))
@@ -80,7 +82,8 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
         token: credential?.token, protocol: () => protocol, egressCurrent, signal, send: (url, init) => (ports.fetch ?? fetch)(url, init) });
       let requests = 0, totalBytes = 0, totalTools = 0, callSent = false, lastFault: RemoteFault | undefined;
       let beforeCall: (() => Promise<void>) | undefined;
-      const ids = new Set<string | number>(), cursors = new Set<string>();
+      const ids = new Set<string | number>(), cursors = new Set<string>(), catalogNames = new Set<string>();
+      const excluded: RemoteToolIssue[] = [];
       const account = (bytes: number) => { if ((totalBytes += bytes) > REMOTE_LIMITS.aggregate_bytes) throw new RemoteFault("upstream_protocol_error"); };
       const guardedFetch: FetchLike = async (input, init) => {
         try {
@@ -154,26 +157,70 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           response = sessionState.response(response, method);
           if (method === "notifications/initialized") {
             void response.body?.cancel().catch(() => undefined);
-            if (response.status !== 202) throw new RemoteFault("upstream_protocol_error");
+            // 202 is the MCP response for accepted notifications. A number of
+            // otherwise compatible HTTP servers use the equivalent empty 204.
+            // Normalize either form before handing it back to the SDK.
+            if (response.status !== 202 && response.status !== 204) throw new RemoteFault("upstream_protocol_error");
             return new Response(null, { status: 202 });
           }
           const guarded = await guardedRemoteResponse(response, message.id as string | number, signal, account,
             rule.negotiate === true && method === "server/discover");
-          const text = await guarded.text();
+          let text = await guarded.text();
           if (!credentialCurrent() || !egressCurrent()) throw new RemoteFault("result_withheld");
           // Detect direct reflection of our bearer; this is not a general DLP promise.
           if (reflectsRemoteSecret(text, credential?.token)) throw new RemoteFault("result_invalid");
           if (sessionState.reflected(text)) throw new RemoteFault("result_invalid");
+          if (method === "initialize") {
+            const result = catalogObject(boundedWireJson(text).result);
+            const selected = result?.protocolVersion;
+            if (typeof selected !== "string" || !["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"].includes(selected))
+              throw new RemoteFault("upstream_protocol_error");
+            // The server may select an older supported version. Follow that
+            // version for initialized, tool calls and operation-local cleanup.
+            protocol = selected;
+          }
           if (method === "tools/list") {
             const reply = boundedWireJson(text), result = catalogObject(reply.result);
             if (result !== undefined) {
+              if (result.nextCursor === null || result.nextCursor === "") delete result.nextCursor;
               // The SDK ends aggregation on a repeated response cursor. Reject
               // that incomplete walk before it can look like a complete catalog.
-              if (!Array.isArray(result.tools) || (totalTools += result.tools.length) > CATALOG_LIMITS.tools
-                || result.tools.some(tool => catalogJson(tool, CATALOG_LIMITS.tool_bytes) === undefined
-                  || (!ports.inspection && parseRemoteTool(tool) === undefined))
-                || (result.nextCursor !== undefined && (typeof result.nextCursor !== "string" || !result.nextCursor || result.nextCursor.length > 2048 || cursors.has(result.nextCursor))))
+              if (!Array.isArray(result.tools)) throw new RemoteFault("upstream_protocol_error");
+              if ((totalTools += result.tools.length) > CATALOG_LIMITS.tools) throw new RemoteFault("catalog_limit_exceeded");
+              if (result.nextCursor !== undefined && (typeof result.nextCursor !== "string" || !result.nextCursor || result.nextCursor.length > 2048 || cursors.has(result.nextCursor)))
                 throw new RemoteFault("upstream_protocol_error");
+              const accepted: unknown[] = [];
+              for (const raw of result.tools) {
+                const descriptor = catalogObject(raw), name = toolName(descriptor?.name) ? descriptor.name : null;
+                if (name !== null) {
+                  if (catalogNames.has(name)) throw new RemoteFault("upstream_protocol_error");
+                  catalogNames.add(name);
+                }
+                if (ports.inspection) {
+                  if (catalogJson(raw, CATALOG_LIMITS.tool_bytes) === undefined) throw new RemoteFault("catalog_limit_exceeded");
+                  accepted.push(raw); continue;
+                }
+                let tool = parseRemoteTool(raw);
+                if (tool === undefined) { excluded.push({ name, code: "invalid_tool" }); continue; }
+                // Frozen pre-2026 MCP wire schemas require object-shaped
+                // structured output. Check this per tool, before the SDK parses
+                // the whole page, so one modern-only descriptor cannot poison
+                // otherwise usable legacy tools. A missing type is redundant
+                // only within that legacy protocol's object-only envelope.
+                if (protocol !== "2026-07-28" && tool.outputSchema !== undefined) {
+                  if (tool.outputSchema.type === undefined) tool = { ...tool, outputSchema: { ...tool.outputSchema, type: "object" } };
+                  else if (tool.outputSchema.type !== "object") { excluded.push({ name, code: "schema_unsupported" }); continue; }
+                }
+                if (catalogObject(descriptor?.execution)?.taskSupport === "required") {
+                  excluded.push({ name, code: "interaction_required" }); continue;
+                }
+                if (!validator.supports(tool.inputSchema) || tool.outputSchema !== undefined && !validator.supports(tool.outputSchema)) {
+                  excluded.push({ name, code: "schema_unsupported" }); continue;
+                }
+                accepted.push(tool);
+              }
+              result.tools = accepted;
+              text = JSON.stringify(reply);
             }
           }
           return new Response(text, { status: guarded.status, headers: { "content-type": guarded.headers.get("content-type")!, "cache-control": "no-store" } });
@@ -206,11 +253,12 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
               apps: extensions?.["io.modelcontextprotocol/ui"] !== undefined } };
         },
         current: () => !parent.aborted && credentialCurrent() && egressCurrent(),
+        issues: () => excluded.map(issue => ({ ...issue })),
         async countTools() {
           try {
             const response = await client.listTools({}, { signal, timeout: REMOTE_LIMITS.operation_ms });
             const names = new Set(response.tools.map(tool => tool.name));
-            if (response.tools.length !== totalTools || names.size !== response.tools.length
+            if (response.tools.length + excluded.length !== totalTools || names.size !== response.tools.length
               || catalogJson(response.tools, CATALOG_LIMITS.snapshot_bytes) === undefined) throw new RemoteFault("upstream_protocol_error");
             return response.tools.length;
           } catch (error) { throw lastFault ?? remoteClientFault(error, "upstream_protocol_error"); }
@@ -219,7 +267,9 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           try {
             const response = await client.listTools({}, { signal, timeout: REMOTE_LIMITS.operation_ms });
             const tools: RemoteToolDefinition[] = [], names = new Set<string>();
-            if (response.tools.length > CATALOG_LIMITS.tools) throw new RemoteFault("upstream_protocol_error");
+            if (response.tools.length + excluded.length !== totalTools) throw new RemoteFault("upstream_protocol_error");
+            if (response.tools.length === 0 && excluded.length !== 0) throw new RemoteFault("schema_unsupported");
+            if (response.tools.length > CATALOG_LIMITS.tools) throw new RemoteFault("catalog_limit_exceeded");
             for (const value of response.tools) {
               const tool = parseRemoteTool(value);
               if (tool === undefined || names.has(tool.name)) throw new RemoteFault("upstream_protocol_error");

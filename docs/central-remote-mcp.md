@@ -50,13 +50,20 @@ Runmesh connects to public HTTPS MCP endpoints using Streamable HTTP, including 
 
 | Item | Limit |
 | --- | --- |
-| Complete tool catalog | 128 tools |
+| Complete tool catalog | 512 tools |
 | Outbound request | 64 KiB |
-| One upstream response | 1 MiB |
-| Combined upstream responses in one operation | 2 MiB |
-| Returned content items | 32 |
+| One upstream response | 2 MiB |
+| Combined upstream responses in one operation | 8 MiB |
+| Returned content items | 128 |
 | Operation time | 20 seconds |
 
 For large outputs, use the provider's paginated or filtered tools. If a call times out after dispatch, check the result in the provider before repeating an action that changes data.
 
 For errors, see [troubleshooting](troubleshooting.md). Protocol and deployment details are in the [transport reference](maintainers/central-remote-mcp.md).
+
+## Partial tool compatibility
+
+A refresh can publish supported tools while listing exclusions for unsupported
+schemas or required interactive features. The exclusion warning is not an OAuth
+failure. If all tools are unsupported, the existing catalog is preserved. See
+[the compatibility matrix](mcp-compatibility.md) before changing credentials.

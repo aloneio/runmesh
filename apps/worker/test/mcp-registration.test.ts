@@ -140,6 +140,24 @@ it("selected native calls still revalidate current scopes before an action", asy
   expect(f.registry).toHaveBeenCalledTimes(2);
 });
 
+it("bootstrap remains readable without coding scopes and grants no authority", async () => {
+  const f = fixture(true, []);
+  const result = await f.rpc("tools/call", { name: "bootstrap", arguments: {} });
+  expect(result.error).toBeUndefined();
+  expect(result.result?.isError).not.toBe(true);
+  expect(result.result?.structuredContent).toMatchObject({
+    schema_version: 1,
+    authorization: { source: "runtime", bootstrap_grants_permissions: false },
+    current: { runner: { selection: "unavailable", state: null, available: false } },
+    directory: {
+      remote_mcp: { state: "empty", profile_count: 0, profiles: [], profiles_truncated: false },
+      skills: { state: "empty", page_count: 0, has_more: false },
+    },
+  });
+  const read = await f.rpc("tools/call", { name: "read", arguments: { workspace_id: "work", path: "fixture.txt" } });
+  expect(read.result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+});
+
 it("preserves caller cancellation through the bounded POST rewrite", async () => {
   const f = fixture(), controller = new AbortController();
   const connect = McpServer.prototype.connect;
@@ -166,7 +184,7 @@ it("tool discovery after a selective call still publishes the complete native ca
   const listed = await f.rpc("tools/list");
   expect(listed.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([...MCP_TOOL_NAMES, "skill_list", "skill_read", "remote_profiles", "remote_search", "remote_tools", "remote_call"].sort());
   const sharedOnly = await fixture(true, []).rpc("tools/list");
-  expect(sharedOnly.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["remote_call", "remote_profiles", "remote_search", "remote_tools", "skill_list", "skill_read"]);
+  expect(sharedOnly.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["bootstrap", "remote_call", "remote_profiles", "remote_search", "remote_tools", "skill_list", "skill_read"]);
 });
 
 it("concurrent selective requests keep separate principals", async () => {

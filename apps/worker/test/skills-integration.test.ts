@@ -15,7 +15,7 @@ import { SKILL_LIMITS } from "../src/contracts/skills.js";
 import * as skillReaderModule from "../src/application/skills/reader.js";
 
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName('registry'));
-const sharedTools = ['remote_call', 'remote_profiles', 'remote_search', 'remote_tools', 'skill_list', 'skill_read'];
+const sharedTools = ['bootstrap', 'remote_call', 'remote_profiles', 'remote_search', 'remote_tools', 'skill_list', 'skill_read'];
 const nativeTools = ['context', 'edit', 'inspect', 'job', 'read', 'runner_current', 'runner_list', 'runner_select', 'shell', 'workspace_list'];
 const toolNames = (tools: { name: string }[]) => tools.map(tool => tool.name).sort();
 
@@ -373,21 +373,21 @@ it('Skill errors retain fixed guidance without reflecting dependency exception d
 it('central visibility failure or malformed metadata hides central discovery without touching native calls', async () => {
   const f = await fixture(['coding:read']), client = f.clients[0]!;
   f.port.toolVisibility = async () => { throw new Error('central unavailable'); };
-  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(10);
+  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(11);
   f.port.toolVisibility = async () => JSON.parse('{"state":"visible","skill":"yes","remote":true}');
-  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(10);
+  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(11);
   const get = vi.fn(() => { throw new Error('native calls must not resolve central storage'); });
   const config = { ...f.config, CAPABILITIES: { idFromName: get, get } } as unknown as WorkerEnv;
   const native = await f.rpc(client.secret, 'tools/call', { name: 'runner_list', arguments: {} }, config);
   expect(native.error).toBeUndefined();
   expect(get).not.toHaveBeenCalled();
 });
-it('W07/W08 admin mutations require CSRF and feature-off retains the ten native tools without central I/O', async () => {
+it('W07/W08 admin mutations require CSRF and feature-off retains native tools without central I/O', async () => {
   const f = await fixture(['coding:read']);
   expect((await f.admin('skill-installations', { files: [] }, { ...f.headers, 'x-csrf-token': 'wrong' })).status).toBe(403);
   const off = { ...f.config, CENTRAL_SKILLS_ENABLED: '0', CAPABILITIES: { idFromName: () => { throw new Error('central I/O forbidden'); } } } as unknown as WorkerEnv;
   const result = await f.rpc(f.clients[0]!.secret, 'tools/list', {}, off);
-  expect(result.result.tools).toHaveLength(10);
+  expect(result.result.tools).toHaveLength(11);
 });
 it('W08/W09 administration strips unexpected owner fields and rejects malformed receipts', async () => {
   const f = await fixture(), secret = 'OWNER_SECRET_MUST_NOT_ESCAPE';
@@ -494,6 +494,10 @@ it('shared Skills paginate beyond 128 including empty disabled pages through too
     if (n < 128) expect((await f.invoke(o => o.mutateSkill(f.hash, { action: 'disable', skill_id: id, expected_revision: 1 }))).state).toBe('written');
   }
   for (const client of f.clients) {
+    const bootstrap = await f.rpc(client.secret, 'tools/call', { name: 'bootstrap', arguments: {} });
+    expect(bootstrap.result.structuredContent.directory.skills).toEqual({
+      state: 'ready', discover_with: 'skill_list', page_count: 0, has_more: true,
+    });
     const first = JSON.parse((await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: {} })).result.content[0].text);
     expect(first).toEqual({ state: 'listed', skills: [], next_after: 'shared-127' });
     const second = JSON.parse((await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: { after: first.next_after } })).result.content[0].text);

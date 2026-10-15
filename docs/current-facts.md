@@ -13,8 +13,9 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
     "minimum": 2,
     "current": 2
   },
-  "catalog_sha256": "a3f0292012b8d1b2b7717748b9108f997e475a4dbc0e190cd47b167774ee920a",
+  "catalog_sha256": "cadfbe36264bb04b967e32905f88fde7383b28e5dc486f984d2ac17bab881c7a",
   "tools": [
+    "bootstrap",
     "runner_list",
     "runner_current",
     "runner_select",

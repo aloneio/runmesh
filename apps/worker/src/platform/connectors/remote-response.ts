@@ -34,9 +34,12 @@ export async function guardedRemoteResponse(response: Response, id: string | num
   const cancelBody = () => { void response.body?.cancel().catch(() => undefined); };
   if (signal.aborted) { cancelBody(); throw new RemoteFault("operation_timed_out"); }
   const type = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+  const jsonType = type === undefined || type === "text/plain" || type === "text/json" || type === "application/json"
+    || /^application\/[a-z0-9!#$&^_.+-]+\+json$/u.test(type);
+  const rpcFailure = !discovery && response.status >= 400 && response.status < 500 && ![401, 403, 429].includes(response.status);
   const size = response.headers.get("content-length");
   const discoveryFailure = discovery && response.status >= 400 && response.status < 500 && ![401, 403, 429].includes(response.status);
-  if ((!discoveryFailure && (response.status !== 200 || !["application/json", "text/event-stream"].includes(type ?? "")))
+  if ((!discoveryFailure && ((response.status !== 200 && !rpcFailure) || (!jsonType && type !== "text/event-stream")))
     || (size !== null && (!/^\d+$/u.test(size) || Number(size) > REMOTE_LIMITS.response_bytes))
     || response.headers.has("mcp-session-id")) { cancelBody(); throw new RemoteFault("upstream_protocol_error"); }
   const reader = response.body?.getReader();
@@ -62,11 +65,13 @@ export async function guardedRemoteResponse(response: Response, id: string | num
     const value = boundedWireJson(text);
     if (value.jsonrpc !== "2.0") throw new RemoteFault("upstream_protocol_error");
     if (value.method !== undefined) {
-      if (value.id !== undefined || !["notifications/progress", "notifications/message"].includes(value.method as string))
+      if (value.id !== undefined || typeof value.method !== "string" || !value.method.startsWith("notifications/")
+        || value.params !== undefined && catalogObject(value.params) === undefined)
         throw new RemoteFault("unsupported_interaction");
       return undefined;
     }
     if (value.id !== id || (Object.hasOwn(value, "result") === Object.hasOwn(value, "error"))) throw new RemoteFault("upstream_protocol_error");
+    if (rpcFailure && !Object.hasOwn(value, "error")) throw new RemoteFault("upstream_protocol_error");
     const result = catalogObject(value.result);
     if (result?.resultType === "input_required" || result?.inputRequests !== undefined || result?.task !== undefined)
       throw new RemoteFault("unsupported_interaction");
@@ -89,7 +94,7 @@ export async function guardedRemoteResponse(response: Response, id: string | num
         if (!chunk.done) continue;
         return discoveryResponse(pending);
       }
-      if (type === "application/json") {
+      if (jsonType) {
         if (!chunk.done) continue;
         const value = frame(pending);
         if (value === undefined) throw new RemoteFault("upstream_protocol_error");
@@ -100,14 +105,28 @@ export async function guardedRemoteResponse(response: Response, id: string | num
         if (end < 0 || (!chunk.done && pending[end] === "\r" && end === pending.length - 1)) break;
         const line = pending.slice(0, end); pending = pending.slice(end + (pending.slice(end, end + 2) === "\r\n" ? 2 : 1));
         if (line === "") {
-          if (data.length) { const value = frame(data.join("\n")); data = []; eventBytes = 0; if (value !== undefined) return finish(value); }
+          if (data.length) { const text = data.join("\n"); data = []; eventBytes = 0; if (text.trim()) { const value = frame(text); if (value !== undefined) return finish(value); } }
         } else if (line.startsWith("data:")) {
           const part = line.slice(5).replace(/^ /u, ""); eventBytes += part.length;
           if (eventBytes > REMOTE_LIMITS.response_bytes || data.length >= REMOTE_LIMITS.events * 16) throw new RemoteFault("upstream_protocol_error");
           data.push(part);
         }
       }
-      if (chunk.done) throw new RemoteFault("upstream_protocol_error");
+      if (chunk.done) {
+        // Some Streamable HTTP implementations terminate the final SSE event
+        // immediately after its data line instead of writing a final newline or
+        // blank separator. Treat the remaining bounded buffer as the last line.
+        if (pending) {
+          const line = pending; pending = "";
+          if (line.startsWith("data:")) {
+            const part = line.slice(5).replace(/^ /u, ""); eventBytes += part.length;
+            if (eventBytes > REMOTE_LIMITS.response_bytes || data.length >= REMOTE_LIMITS.events * 16) throw new RemoteFault("upstream_protocol_error");
+            data.push(part);
+          }
+        }
+        if (data.length) { const value = frame(data.join("\n")); if (value !== undefined) return finish(value); }
+        throw new RemoteFault("upstream_protocol_error");
+      }
     }
   } finally { signal.removeEventListener("abort", abort); void reader.cancel().catch(() => undefined); }
 }

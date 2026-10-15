@@ -55,6 +55,7 @@ export const ACTION_OUTPUT_CONTRACTS = {
 } as const;
 
 const SIMPLE_OUTPUT_CONTRACTS = {
+  bootstrap: TOOL_OUTPUT_SCHEMAS.bootstrap,
   runner_list: TOOL_OUTPUT_SCHEMAS.runner_list.required({ runners: true }),
   runner_current: TOOL_OUTPUT_SCHEMAS.runner_current.required({ active_runner_id: true, active_runner_updated_at_ms: true, active_runner: true }),
   runner_select: TOOL_OUTPUT_SCHEMAS.runner_select.required({ active_runner_id: true, active_runner_updated_at_ms: true, active_runner: true, changed: true }),
