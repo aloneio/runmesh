@@ -6,6 +6,7 @@ import { createHttpRemoteConnector } from "../src/platform/connectors/remote-cli
 import { boundedWireJson, guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
 import { BoundedRemoteValidator } from "../src/platform/connectors/remote-validation.js";
 import { parseRemoteTool } from "../src/contracts/catalog-values.js";
+import { catalogPatternCost } from "../src/contracts/catalog-schema.js";
 import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
 import { buildCatalogSnapshot } from "../src/domain/capabilities/catalog.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
@@ -705,4 +706,13 @@ it.each([null, ""])("W05 accepts GitLab-style extensions and terminal nextCursor
     expect(tools[0]).toMatchObject({ name: "increment", annotations: { readOnlyHint: true } });
     expect(tools[0]).not.toHaveProperty("version");
   } finally { await session.close(); }
+});
+
+it("MCP-PORTABILITY budgets unanchored top-level regex alternatives before execution", () => {
+  const pattern = "^fixed|a+a+a+a+b";
+  expect(catalogPatternCost(pattern, 0)).toBe(Infinity);
+  const validator = new BoundedRemoteValidator();
+  expect(validator.supports({ type: "object", properties: { value: { type: "string", pattern } } })).toBe(false);
+  expect(Number.isFinite(catalogPatternCost("^(?:fixed|a+a+a+a+b)$", 0))).toBe(true);
+  expect(validator.validate({ type: "object", properties: { value: { type: "string", pattern: "^[a|b]+$" } } }, { value: "a|b" })).toBe(true);
 });
