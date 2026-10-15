@@ -30,8 +30,5 @@
 - [历史版本说明（英文）](release-history.md)
 - [验证记录与历史档案（英文）](release-evidence.md)
 - [早期版本迁移（英文）](../migration.md)
-- [main 生产切换（英文）](../../reports/history/production-main-cutover.md)与[旧 Durable Object 退役（英文）](../../reports/history/retire-legacy-production-do.md)
-- [正确性审查（2026-09-15，英文）](../../reports/history/review-correctness-20260915.md)与[开发版产品审查（2026-09-25，英文）](../../reports/history/dev-product-readiness-20260925.md)
-- [优化记录（英文）](../../reports/history/optimization-ledger.md)
 
 历史记录对应各文档注明的版本与日期。更新现有实例时，按当前[升级指南](../upgrading.zh-CN.md)和[发行状态](../release-readiness.zh-CN.md)操作。

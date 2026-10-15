@@ -1,7 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { reviewedReleaseSource } from "./runtime-config-tools.mjs";
 const root = new URL("../", import.meta.url);
+// Repository hygiene is enforced by the existing mandatory documentation CI gate.
+execFileSync(process.execPath, [fileURLToPath(new URL("check-repository-hygiene.mjs", import.meta.url))], { cwd: new URL("../", import.meta.url), stdio: "inherit" });
 const pkg = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
 const current = ["README.md", "README.zh-CN.md", "docs/admin-guide.md", "docs/admin-guide.zh-CN.md", "docs/deployment.md", "docs/portable-runner-installation.md", "docs/architecture.md", "docs/adr-0001-architecture.md", "docs/protocol.md", "docs/runner-transport.md", "docs/release-readiness.md", "docs/release-readiness.zh-CN.md", "docs/maintainers/release-process.md"];
 for (const file of current) {

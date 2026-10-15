@@ -30,8 +30,5 @@ Use these references when developing Runmesh, integrating its APIs or preparing 
 - [Archived release notes](release-history.md)
 - [Verification records and archive](release-evidence.md)
 - [Early-version migration](../migration.md)
-- [Main production cutover](../../reports/history/production-main-cutover.md) and [legacy Durable Object retirement](../../reports/history/retire-legacy-production-do.md)
-- [Correctness review (2026-09-15)](../../reports/history/review-correctness-20260915.md) and [development product review (2026-09-25)](../../reports/history/dev-product-readiness-20260925.md)
-- [Optimization ledger](../../reports/history/optimization-ledger.md)
 
 Historical records describe the versions and dates named in each document. For an existing installation, follow the current [upgrade guide](../upgrading.md) and [release status](../release-readiness.md).

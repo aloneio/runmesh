@@ -52,7 +52,8 @@
     "browser:install": "node node_modules/playwright/cli.js install --with-deps chromium",
     "check:mcp-connector": "node ./scripts/check-mcp-connector.mjs",
     "build:dev-release": "node scripts/dev-release/build.mjs",
-    "test:security": "node scripts/run-security-regressions.mjs && node scripts/check-release-readiness.mjs"
+    "test:security": "node scripts/run-security-regressions.mjs && node scripts/check-release-readiness.mjs",
+    "check:repository-hygiene": "node scripts/check-repository-hygiene.mjs"
   },
   "devDependencies": {
     "@babel/parser": "8.0.4",

@@ -1074,7 +1074,7 @@
   },
   "oauth_and_raw_data_review": {
     "reviewed_change": "OAuth handoff is owned by the latest foreground authorization intent. Runner machine values receive data-no-i18n annotations; labels and layout retain their prior content. Every previous fixture is independently reproduced from the frozen R2 source archive.",
-    "prior_manifest": ".audit/r2-fixes-final-source-20261007.json",
+    "prior_manifest": "historical-baseline-reviewed-offline",
     "changes": [
       {
         "name": "login",
