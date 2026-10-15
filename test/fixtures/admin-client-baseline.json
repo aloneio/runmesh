@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "d88cedffdf68cf2b9bea7aea822d9d9d3bbf87cd883ef4f8536ece0069960649",
+      "sha256": "f1afb1fa09263437e7e033562bb25382401e9d1c35337f0c33fd4bed12b1224f",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -12,7 +12,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "f7e08d52df0aa28d74ec7cdba9d2ae6852ec6bd8e8639b25b59f8e1594dcb022",
+      "sha256": "f0bda98b236fada6e223ab5389661eb730af9c990d4a35e6333e094c795ec963",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -643,6 +643,36 @@
       {
         "nonce": "test-nonce",
         "sha256": "c7678b74dc8a4bd9753bcb8ab8dc498a44fb258bafe6a382c3f9ae472aaa1fa6"
+      }
+    ]
+  },
+  "oauth_registration_preflight_review": {
+    "source_base": "481077a8e8dbfa5e7d20432706d63b5c529a4b0c",
+    "reviewed_change": "Discover authorization-server metadata before client registration, classify providers without CIMD or DCR deterministically, and show the exact Runmesh callback URL beside optional pre-registered OAuth client credentials. GitLab-style DCR remains automatic and GitHub-style pre-registration is explicit.",
+    "markup_change": "Adds one localized callback-URL hint to OAuth client settings.",
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "d88cedffdf68cf2b9bea7aea822d9d9d3bbf87cd883ef4f8536ece0069960649"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "f7e08d52df0aa28d74ec7cdba9d2ae6852ec6bd8e8639b25b59f8e1594dcb022"
+      }
+    ]
+  },
+  "mcp_permission_denial_review": {
+    "source_base": "70a619ea3e900043130c801264ecf6232a1633ac",
+    "reviewed_change": "Distinguish an upstream MCP authentication challenge (HTTP 401) from provider-side permission denial (HTTP 403), so a completed OAuth flow is not sent into a reconnect loop when the provider has not enabled MCP access for the account or namespace.",
+    "non_script_markup_unchanged": true,
+    "previous": [
+      {
+        "nonce": null,
+        "sha256": "387e7529eee75c895c66e4d05b2f8edcb34910e8d061d0ffabe83160f3b87ff2"
+      },
+      {
+        "nonce": "test-nonce",
+        "sha256": "5ed7617c361b33abc0a8f9ffdd7c281934d348db3c2678f792d1189d6b76d2bb"
       }
     ]
   }

@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
-import { guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
+import { boundedWireJson, guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
 import { BoundedRemoteValidator } from "../src/platform/connectors/remote-validation.js";
 import { parseRemoteTool } from "../src/contracts/catalog-values.js";
 import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
@@ -52,6 +52,42 @@ it.each(["2025-11-25", "2026-07-28"] as const)("W05 official SDK exchanges real 
   } finally { await session.close(); }
 });
 
+it("W05 forwards only SDK-derived SEP-2243 Mcp-Param headers for GitHub-style tools", async () => {
+  const remote = upstream(), callHeaders: Headers[] = [];
+  const schema = { type: "object", properties: {
+    owner: { type: "string", "x-mcp-header": "owner" },
+    repo: { type: "string", "x-mcp-header": "repo" },
+    value: { type: "integer" },
+  }, required: ["owner", "repo", "value"], additionalProperties: false };
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "tools/list") {
+        const response = await remote.http(input, init);
+        const reply = await (await guardedRemoteResponse(response, request.id, new AbortController().signal, () => undefined)).json() as any;
+        reply.result.tools = [{ name: "increment", description: "GitHub compatible", inputSchema: schema,
+          outputSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false } }];
+        return Response.json(reply);
+      }
+      if (request.method === "tools/call") {
+        const headers = new Headers(init?.headers); callHeaders.push(headers);
+        return Response.json({ jsonrpc: "2.0", id: request.id, result: { resultType: "complete", content: [{ type: "text", text: "3" }], structuredContent: { value: 3 }, isError: false } });
+      }
+      return remote.http(input, init);
+    } });
+  const session = await connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    await expect(session.callTool(tools[0]!, { owner: "aloneio", repo: "runmesh", value: 2 }, async () => undefined)).resolves.toMatchObject({ structuredContent: { value: 3 } });
+    expect(callHeaders).toHaveLength(1);
+    expect(callHeaders[0]!.get("mcp-param-owner")).toBe("aloneio");
+    expect(callHeaders[0]!.get("mcp-param-repo")).toBe("runmesh");
+    expect(callHeaders[0]!.get("authorization")).toBe(`Bearer ${token}`);
+    expect(callHeaders[0]!.has("mcp-param-authorization")).toBe(false);
+    expect(callHeaders[0]!.has("cookie")).toBe(false);
+  } finally { await session.close(); }
+});
+
 it.each(["2025-11-25", "2026-07-28"] as const)("RM10 inspection accepts resource-only servers in %s while ordinary tool connections require tools", async protocol => {
   const methods: string[] = [];
   const handler = createMcpHandler(() => {
@@ -96,6 +132,24 @@ it.each(["synthetic-upstream-secret", 'synthetic"upstream-secret', "synthetic\\u
   }
 });
 
+
+it("W05 accepts a bounded GitHub-sized tools/list envelope with deep output schemas", () => {
+  const leaf = { type: "string", format: "date-time" };
+  let nested: unknown = leaf;
+  for (let i = 0; i < 8; i++) nested = { type: "object", properties: { next: nested }, additionalProperties: false };
+  const tool = { name: "fixture", inputSchema: { type: "object" }, outputSchema: nested };
+  const tools = Array.from({ length: 93 }, (_, i) => ({ ...tool, name: `fixture_${i}`, description: "x".repeat(256) }));
+  const raw = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools } });
+  expect(raw.length).toBeLessThan(1_048_576);
+  expect(boundedWireJson(raw)).toMatchObject({ result: { tools: expect.any(Array) } });
+});
+
+it("W05 wire JSON still rejects catalogs beyond the explicit structural budget", () => {
+  let nested: unknown = "leaf";
+  for (let i = 0; i < 40; i++) nested = { next: nested };
+  expect(() => boundedWireJson(JSON.stringify({ jsonrpc: "2.0", id: 1, result: nested }))).toThrow();
+});
+
 it("W05 partial SSE frames preserve Unicode and stop at the final response before EOF", async () => {
   const encoder = new TextEncoder(), stopped = vi.fn();
   const wire = encoder.encode(': heartbeat\r\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":1,"progress":0}}\r\n\r\ndata: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"中文"}]}}\r\n\r\n');
@@ -125,7 +179,7 @@ it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch prese
   try {
     const tools = await session.listTools();
     await expect(session.callTool(tools[0]!, { value: 1 }, async () => undefined)).rejects.toMatchObject({
-      code: status === 401 || status === 403 ? "authorization_required" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
+      code: status === 401 ? "authorization_required" : status === 403 ? "permission_denied" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
     });
     expect(attempts).toHaveBeenCalledOnce(); expect(sent).toHaveBeenCalledOnce();
   } finally { await session.close(); }
@@ -176,7 +230,7 @@ it("W05 valid provider InternalError after tools/call is availability evidence a
   } finally { await session.close(); }
 });
 
-it.each([401, 403])("W05 HTTP %s during connection and discovery requests requires authorization without dispatch", async status => {
+it.each([401, 403])("W05 HTTP %s during connection and discovery preserves authentication versus permission denial", async status => {
   for (const protocol of ["2025-11-25", "2026-07-28"] as const) {
     for (const method of [protocol === "2025-11-25" ? "initialize" : "server/discover", "tools/list"]) {
       const remote = upstream(), attempts = vi.fn(), sent = vi.fn(), cancelled = vi.fn();
@@ -190,10 +244,10 @@ it.each([401, 403])("W05 HTTP %s during connection and discovery requests requir
         } });
       if (method === "tools/list") {
         const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
-        try { await expect(session.listTools()).rejects.toMatchObject({ code: "authorization_required" }); }
+        try { await expect(session.listTools()).rejects.toMatchObject({ code: status === 401 ? "authorization_required" : "permission_denied" }); }
         finally { await session.close(); }
       } else {
-        await expect(connector.open(profile, new AbortController().signal, sent, async () => undefined)).rejects.toMatchObject({ code: "authorization_required" });
+        await expect(connector.open(profile, new AbortController().signal, sent, async () => undefined)).rejects.toMatchObject({ code: status === 401 ? "authorization_required" : "permission_denied" });
       }
       expect(attempts).toHaveBeenCalledOnce(); expect(cancelled).toHaveBeenCalledOnce();
       expect(sent).not.toHaveBeenCalled(); expect(remote.invoked).not.toHaveBeenCalled();
@@ -267,6 +321,20 @@ it("W05 disallowed destinations never load credentials or make network requests"
   const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: secret, fetch: http });
   await expect(connector.open({ ...profile, endpoint: "https://other.example.com/mcp" }, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({ code: "egress_denied" });
   expect(secret).not.toHaveBeenCalled(); expect(http).not.toHaveBeenCalled();
+});
+
+it("W05 accepts SEP-2243 MCP parameter annotations without weakening schema validation", () => {
+  const validator = new BoundedRemoteValidator();
+  const schema = { type: "object", properties: {
+    owner: { type: "string", minLength: 1, "x-mcp-header": "owner" },
+    repo: { type: "string", "x-mcp-header": "repo" },
+    updated_at: { type: "string", format: "date-time" },
+  }, required: ["owner", "repo"], additionalProperties: false };
+  expect(parseRemoteTool({ name: "github_compatible", inputSchema: schema })).toBeDefined();
+  expect(validator.validate(schema, { owner: "aloneio", repo: "runmesh", updated_at: "2026-10-15T00:00:00Z" })).toBe(true);
+  expect(validator.validate(schema, { owner: "", repo: "runmesh", updated_at: "not-a-date" })).toBe(false);
+  expect(parseRemoteTool({ name: "bad_header", inputSchema: { type: "object", properties: { value: { type: "string", "x-mcp-header": "bad header" } } } })).toBeUndefined();
+  expect(parseRemoteTool({ name: "bad_header_location", inputSchema: { type: "object", properties: { values: { type: "array", items: { type: "string", "x-mcp-header": "item" } } } } })).toBeUndefined();
 });
 
 it("W05 validates the fixed Cloudflare identity pattern while keeping arbitrary regex schemas outside the admitted subset", () => {

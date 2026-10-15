@@ -301,6 +301,14 @@ for (const locale of ["en", "zh-CN"]) test("OAuth providers without automatic cl
   assert.equal(api.requests.length, 1);
 });
 
+for (const locale of ["en", "zh-CN"]) for (const path of ["connection-check", "discovery/service"]) test(`${path} reports provider-side MCP permission denial without suggesting another OAuth login in ${locale}`, async t => {
+  const translate = createCentralTranslator(locale);
+  const api = client(t, () => Response.json({ error: { code: "remote_permission_denied", operation_state: "not_started" } }, { status: 403 }), translate);
+  await assert.rejects(api.request(path, { expected_revision: 1 }), { message: translate("mcpPermissionDenied") });
+  assert.equal(api.refreshRequired(), path.startsWith("discovery/"));
+  assert.equal(api.requests.length, 1);
+});
+
 for (const locale of ["en", "zh-CN"]) for (const path of ["connection-check", "discovery/service"])
 for (const state of ["not_started", "unknown"]) for (const [code, key] of [
   ["remote_upstream_unavailable", "mcpServiceUnavailable"],

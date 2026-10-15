@@ -14,7 +14,7 @@ Add an MCP once in the control panel, then use its enabled tools from your conne
 
 Use the direct endpoint on the standard HTTPS port. The URL should contain its hostname and MCP path; keep account credentials in the OAuth flow. If the provider gives you a download or setup page, obtain its MCP endpoint from its connection instructions.
 
-OAuth providers can use a client metadata document or automatic client registration. See [MCP account authorization](central-oauth.md) for the sign-in flow.
+OAuth providers can use a client metadata document or automatic client registration. Providers that require a pre-registered OAuth application can use the optional **OAuth client settings** in the connection form. See [MCP account authorization](central-oauth.md) for the sign-in flow.
 
 ## Check a connection
 
@@ -23,6 +23,8 @@ Connection checks, `server.json` import and `remote_search` are available in com
 Enter the MCP URL and select **Check connection** to see its negotiated protocol, tool count and declared capabilities. You can also check an enabled MCP from its card. If sign-in is needed, choose **OAuth → Connect** for a new connection, or **Reconnect** on its card.
 
 The check reads connection information. Select **Connect** to add the MCP, or **Refresh tools** to update an existing MCP's shared tool list.
+
+Runmesh treats an upstream HTTP `401` as an authentication challenge and may ask you to reconnect. An upstream HTTP `403` means the provider accepted the credential but denied MCP access; Runmesh reports a provider permission error instead of starting another OAuth loop. Check the provider's MCP feature availability and the account, group or project permissions in that case.
 
 ## Import a server.json entry
 

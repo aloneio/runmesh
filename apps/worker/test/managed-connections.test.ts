@@ -94,8 +94,8 @@ it.each([
   }, { route: "/mcp", legacy: "stateless" });
   const seen: string[] = [];
   let data: unknown = null;
-  if (shape === "depth") for (let i = 0; i < 17; i++) data = { child: data };
-  else data = Array.from({ length: 8192 }, () => 0);
+  if (shape === "depth") for (let i = 0; i < 40; i++) data = { child: data };
+  else data = Array.from({ length: 32_768 }, () => 0);
   const connector = createHttpRemoteConnector({ rules: connectionPolicy, credential: async () => null, fetch: async (url, init) => {
     const request = JSON.parse(String(init?.body)); seen.push(request.method);
     if (request.method === "server/discover") {
@@ -135,7 +135,7 @@ it.each([401, 403, 429, 500, 302, 307])("direct MCP retains HTTP %s discovery fa
     return new Response(new ReadableStream({ cancel: cancelled }), { status, headers: { location: "https://other.provider.com/mcp" } });
   } });
   await expect(connector.open(base, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({
-    code: status === 401 || status === 403 ? "authorization_required" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
+    code: status === 401 ? "authorization_required" : status === 403 ? "permission_denied" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
   });
   expect(seen).toEqual(["server/discover"]); expect(cancelled).toHaveBeenCalledOnce();
 });
@@ -505,14 +505,16 @@ it("OAuth identifies providers that require a pre-registered client instead of r
   expect(send.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
 });
 
-it("pre-registered OAuth clients bypass dynamic registration and keep client secrets in POST token authentication", async () => {
+it("GitHub-style pre-registered OAuth clients bypass DCR and keep client secrets in POST token authentication", async () => {
   const client = { client_id: "fixture-pre-registered-client", client_secret: "fixture-pre-registered-secret", token_endpoint_auth_method: "client_secret_post" };
   const send = vi.fn(async (url: string | URL, init?: RequestInit) => {
     const address = String(url), method = init?.method ?? "GET";
     if (address === endpoint) return new Response(null, { status: 401 });
-    if (method === "GET" && address.includes("oauth-protected-resource")) return Response.json({ resource: endpoint, authorization_servers: [issuer] });
+    if (method === "GET" && address.includes("oauth-protected-resource")) return Response.json({ resource: endpoint, authorization_servers: [issuer],
+      scopes_supported: ["repo", "read:org", "read:user"] });
     if (method === "GET" && address.includes("oauth-authorization-server")) return Response.json({ issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token",
-      response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], authorization_response_iss_parameter_supported: true });
+      response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], scopes_supported: ["offline_access"],
+      code_challenge_methods_supported: ["S256"], authorization_response_iss_parameter_supported: true });
     if (address === issuer + "/token" && method === "POST") {
       const headers = new Headers(init?.headers), body = new URLSearchParams(String(init?.body));
       expect(headers.has("authorization")).toBe(false); expect(body.get("client_id")).toBe(client.client_id); expect(body.get("client_secret")).toBe(client.client_secret);
@@ -523,7 +525,11 @@ it("pre-registered OAuth clients bypass dynamic registration and keep client sec
   });
   const protocol = createManagedOAuthProtocol(send), state = randomBase64Url(), signal = new AbortController().signal;
   const started = await protocol.begin({ endpoint, origin, state, signal, authorize: async () => undefined, client });
-  expect(new URL(started.authorization_url).searchParams.get("client_id")).toBe(client.client_id);
+  const authorization = new URL(started.authorization_url);
+  expect(authorization.searchParams.get("client_id")).toBe(client.client_id);
+  expect(authorization.searchParams.get("redirect_uri")).toBe(origin + "/admin/central/connections/callback");
+  expect(authorization.searchParams.get("scope")).toBe("repo read:org read:user offline_access");
+  expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
   expect(send.mock.calls.some(([url]) => String(url).endsWith("/register"))).toBe(false);
   await expect(protocol.complete({ endpoint, origin, signal, authorize: async () => undefined, beforeTokenRequest: () => undefined,
     discovery: started.discovery, client: started.client, verifier: started.verifier, code: "synthetic-code", issuer })).resolves.toMatchObject({ access_token: "synthetic-pre-registered-access" });

@@ -39,6 +39,9 @@ it("direct public connections and Skill installation are available without deplo
   expect(markup).toContain('MCP 地址');
   expect(markup).toContain('无身份验证');
   expect(markup).toContain('value="oauth"');
+  expect(markup).toContain('data-oauth-client-callback');
+  expect(markup).toContain('name="oauth_client_id"');
+  expect(markup).toContain('name="oauth_client_secret"');
   expect(markup).not.toContain('<fieldset disabled>');
   expect(markup).not.toContain('data-central-admin');
   expect(markup).not.toContain('name="token"');
