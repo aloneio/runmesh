@@ -50,9 +50,8 @@ test("security evidence cannot invent an untested second file", () => {
 
 test("the tracked security manifest retains reauthorization deadline coverage", async () => {
   const { readFile } = await import("node:fs/promises");
-  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../release/security-regressions.json", import.meta.url), "utf8"));
   const finding = manifest.findings.find(value => value.id === "SEC11");
-  assert.equal(finding?.state, "closed");
   assert.deepEqual(finding.regressions, ["apps/worker/test/reauthorization-budget.test.ts"]);
   assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
 });
@@ -60,11 +59,10 @@ test("the tracked security manifest retains reauthorization deadline coverage", 
 test("the tracked security manifest retains completion and selection identity coverage", async () => {
   const { readFile } = await import("node:fs/promises");
   const { REQUIRED_SECURITY_FINDINGS } = await import("../scripts/release-readiness.mjs");
-  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../release/security-regressions.json", import.meta.url), "utf8"));
   for (const id of ["SEC12", "SEC13"]) {
     assert.ok(REQUIRED_SECURITY_FINDINGS.includes(id));
     const finding = manifest.findings.find(value => value.id === id);
-    assert.equal(finding?.state, "closed");
     assert.deepEqual(finding.regressions, ["apps/worker/test/mcp-failure-chain.test.ts"]);
     assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
   }
@@ -92,7 +90,7 @@ test("candidate security gates retain ancestry and cannot reuse old evidence", a
 test("the tracked manifest requires final admission, bounded observations and Job snapshot identity", async () => {
   const { readFile } = await import("node:fs/promises");
   const { REQUIRED_SECURITY_FINDINGS } = await import("../scripts/release-readiness.mjs");
-  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../release/security-regressions.json", import.meta.url), "utf8"));
   const expected = {
     SEC14: ["apps/worker/test/bridge-admission-errors.test.ts", "apps/worker/test/queue-grant.test.ts"],
     SEC15: ["apps/worker/test/mcp-failure-chain.test.ts", "apps/worker/test/release-admin-security.test.ts"],
@@ -101,7 +99,6 @@ test("the tracked manifest requires final admission, bounded observations and Jo
   for (const [id, files] of Object.entries(expected)) {
     assert.ok(REQUIRED_SECURITY_FINDINGS.includes(id));
     const finding = manifest.findings.find(value => value.id === id);
-    assert.equal(finding?.state, "closed");
     assert.deepEqual(finding.regressions, files);
     for (const file of files) assert.ok(securityTestFiles(manifest).includes(file));
   }
@@ -111,11 +108,10 @@ test("the tracked manifest requires final admission, bounded observations and Jo
 test("the tracked manifest requires Runner special-file, metadata and directory boundary coverage", async () => {
   const { readFile } = await import("node:fs/promises");
   const { REQUIRED_SECURITY_FINDINGS } = await import("../scripts/release-readiness.mjs");
-  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../release/security-regressions.json", import.meta.url), "utf8"));
   for (const id of ["SEC17", "SEC18"]) {
     assert.ok(REQUIRED_SECURITY_FINDINGS.includes(id));
     const finding = manifest.findings.find(value => value.id === id);
-    assert.equal(finding?.state, "closed");
     assert.deepEqual(finding.regressions, ["apps/runner/test/release-boundary-security.test.ts"]);
     assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
   }
@@ -123,10 +119,9 @@ test("the tracked manifest requires Runner special-file, metadata and directory 
 
 test("the tracked manifest requires stdin delivery lifecycle regressions", async () => {
   const { readFile } = await import("node:fs/promises");
-  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../release/security-regressions.json", import.meta.url), "utf8"));
   assert.ok(REQUIRED_SECURITY_FINDINGS.includes("SEC19"));
   const finding = manifest.findings.find(value => value.id === "SEC19");
-  assert.equal(finding?.state, "closed");
   assert.deepEqual(finding.regressions, ["apps/runner/test/job-input.test.ts"]);
   assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
   const missing = structuredClone(manifest); missing.findings = missing.findings.filter(value => value.id !== "SEC19");
@@ -138,10 +133,9 @@ test("the tracked manifest requires stdin delivery lifecycle regressions", async
 
 test("the tracked manifest requires cancellation uncertainty and concurrency regressions", async () => {
   const { readFile } = await import("node:fs/promises");
-  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../release/security-regressions.json", import.meta.url), "utf8"));
   assert.ok(REQUIRED_SECURITY_FINDINGS.includes("SEC20"));
   const finding = manifest.findings.find(value => value.id === "SEC20");
-  assert.equal(finding?.state, "closed");
   assert.deepEqual(finding.regressions, ["apps/runner/test/job-cancellation.test.ts"]);
   assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
   const missing = structuredClone(manifest); missing.findings = missing.findings.filter(value => value.id !== "SEC20");
@@ -152,7 +146,7 @@ test("the tracked manifest requires cancellation uncertainty and concurrency reg
 
 test("candidate gates retain credential-generation and metadata-consistency regressions", async () => {
   const { readFile } = await import("node:fs/promises");
-  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../release/security-regressions.json", import.meta.url), "utf8"));
   const expected = {
     SEC21: ["apps/worker/test/reauthorization.test.ts"],
     SEC22: ["apps/runner/test/runner-boundaries.test.ts"],
@@ -160,7 +154,6 @@ test("candidate gates retain credential-generation and metadata-consistency regr
   for (const [id, files] of Object.entries(expected)) {
     assert.ok(REQUIRED_SECURITY_FINDINGS.includes(id));
     const finding = manifest.findings.find(value => value.id === id);
-    assert.equal(finding?.state, "closed");
     assert.deepEqual(finding.regressions, files);
     for (const file of files) assert.ok(securityTestFiles(manifest).includes(file));
     const missing = structuredClone(manifest); missing.findings = missing.findings.filter(value => value.id !== id);

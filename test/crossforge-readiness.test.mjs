@@ -130,7 +130,7 @@ for (const mode of ["stable", "rerun", "source_changed"]) test(`CI07 actual CLI 
   }
 });
 function securityFixture() {
-  const findings = REQUIRED_SECURITY_FINDINGS.map(id => ({ id, state: "closed", fixed_commit: "b".repeat(40), regressions: ["apps/worker/test/permission-chain.test.ts"] }));
+  const findings = REQUIRED_SECURITY_FINDINGS.map(id => ({ id, regressions: ["apps/worker/test/permission-chain.test.ts"] }));
   return { manifest: { schema_version: 1, findings }, evidence: { schema_version: 1, commit: sha, findings: findings.map(f => ({ id: f.id, state: "passed", passed: 1, failed: 0, skipped: 0, files: f.regressions })) } };
 }
 test("CI03 security closure uses current runtime evidence, not a self-referential tracked SHA", () => {

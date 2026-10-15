@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "purpose": "required_security_regression_selection",
+  "findings": [
+    {
+      "id": "SEC01",
+      "regressions": [
+        "apps/worker/test/release-admin-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC02",
+      "regressions": [
+        "apps/runner/test/release-boundary-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC03",
+      "regressions": [
+        "apps/runner/test/release-boundary-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC04",
+      "regressions": [
+        "apps/worker/test/release-admin-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC05",
+      "regressions": [
+        "apps/worker/test/release-admin-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC06",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC07",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC08",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC09",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC10",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC11",
+      "regressions": [
+        "apps/worker/test/reauthorization-budget.test.ts"
+      ]
+    },
+    {
+      "id": "SEC12",
+      "regressions": [
+        "apps/worker/test/mcp-failure-chain.test.ts"
+      ]
+    },
+    {
+      "id": "SEC13",
+      "regressions": [
+        "apps/worker/test/mcp-failure-chain.test.ts"
+      ]
+    },
+    {
+      "id": "SEC14",
+      "regressions": [
+        "apps/worker/test/bridge-admission-errors.test.ts",
+        "apps/worker/test/queue-grant.test.ts"
+      ]
+    },
+    {
+      "id": "SEC15",
+      "regressions": [
+        "apps/worker/test/mcp-failure-chain.test.ts",
+        "apps/worker/test/release-admin-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC16",
+      "regressions": [
+        "apps/worker/test/mcp-failure-chain.test.ts"
+      ]
+    },
+    {
+      "id": "SEC17",
+      "regressions": [
+        "apps/runner/test/release-boundary-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC18",
+      "regressions": [
+        "apps/runner/test/release-boundary-security.test.ts"
+      ]
+    },
+    {
+      "id": "SEC19",
+      "regressions": [
+        "apps/runner/test/job-input.test.ts"
+      ]
+    },
+    {
+      "id": "SEC20",
+      "regressions": [
+        "apps/runner/test/job-cancellation.test.ts"
+      ]
+    },
+    {
+      "id": "SEC21",
+      "regressions": [
+        "apps/worker/test/reauthorization.test.ts"
+      ]
+    },
+    {
+      "id": "SEC22",
+      "regressions": [
+        "apps/runner/test/runner-boundaries.test.ts"
+      ]
+    }
+  ]
+}

@@ -22,7 +22,7 @@ try {
   await publish({ schema_version: 1, commit: source.commit, state: "not_run", findings: [] });
   assert.equal(process.platform, "linux", "this security evidence lane requires Linux; native lanes remain separate");
   assert.equal(source.state, "clean", "security evidence requires a clean candidate");
-  const manifest = await readEvidenceJson(join(ROOT, "release/security-readiness.json"), 65536);
+  const manifest = await readEvidenceJson(join(ROOT, "release/security-regressions.json"), 65536);
   const files = securityTestFiles(manifest);
   temporary = await mkdtemp(join(tmpdir(), "runmesh-security-regressions-"));
   const reports = [];
