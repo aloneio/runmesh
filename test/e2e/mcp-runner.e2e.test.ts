@@ -696,7 +696,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
           if (boundary !== undefined) pending[boundary]++;
         };
         try {
-          const result = await mcpTool(operation.name, operation.args, clientA, observe, signal);
+          const result = await mcpReadToolWhenAvailable(operation.name, operation.args, clientA, observe, signal);
           const elapsed = performance.now() - start;
           latencies.push(elapsed);
           expect(result.isError, mcpToolResultDiagnostic("mixed_load", result)).not.toBe(true);
@@ -1300,18 +1300,36 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }, 10_000, () => diagnostic("timeout"));
   }
 
+  function explicitlyRetryableAvailability(result: ToolResult): boolean {
+    const error = result.structuredContent?.error;
+    return typeof error === "object" && error !== null && !Array.isArray(error)
+      && (error as Record<string, unknown>).code === "registry_unavailable"
+      && (error as Record<string, unknown>).failure_class === "availability"
+      && (error as Record<string, unknown>).operation_state === "not_started"
+      && (error as Record<string, unknown>).next_action === "wait_and_retry";
+  }
+
+  function isReadOnlyLoadOperation(name: string, args: Record<string, unknown>): boolean {
+    return name === "read" || name === "workspace_list"
+      || (name === "job" && (args.action === "get" || args.action === "logs"));
+  }
+
+  async function mcpReadToolWhenAvailable(name: string, args: Record<string, unknown>, client: McpClient | undefined, observe: McpObservation, signal: AbortSignal): Promise<ToolResult> {
+    const first = await mcpTool(name, args, client, observe, signal);
+    if (!isReadOnlyLoadOperation(name, args) || !explicitlyRetryableAvailability(first) || signal.aborted) return first;
+    await delay(100);
+    if (signal.aborted) return first;
+    // Keep one timing sample per logical load request. The first attempt is
+    // fully observed; total latency still spans this documented safe retry.
+    return mcpTool(name, args, client, undefined, signal);
+  }
+
   async function selectRunnerWhenAvailable(targetRunnerId: string, client: McpClient | undefined): Promise<ToolResult> {
     let result: ToolResult = {};
     for (let attempt = 0; attempt < 3; attempt++) {
       result = await mcpTool("runner_select", { runner_id: targetRunnerId }, client);
       if (result.isError !== true) return result;
-      const error = result.structuredContent?.error;
-      const retryable = typeof error === "object" && error !== null && !Array.isArray(error)
-        && (error as Record<string, unknown>).code === "registry_unavailable"
-        && (error as Record<string, unknown>).failure_class === "availability"
-        && (error as Record<string, unknown>).operation_state === "not_started"
-        && (error as Record<string, unknown>).next_action === "wait_and_retry";
-      if (!retryable || attempt === 2) return result;
+      if (!explicitlyRetryableAvailability(result) || attempt === 2) return result;
       await delay(100);
     }
     return result;
