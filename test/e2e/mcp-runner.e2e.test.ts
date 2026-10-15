@@ -276,8 +276,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const html = await status.text();
       return status.status === 200 && runnerPolicyApplied(html);
     }, 15_000, runnerLog);
-    expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
-    expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
+    expect((await selectRunnerWhenAvailable(runnerId, clientA)).isError).not.toBe(true);
+    expect((await selectRunnerWhenAvailable(runnerId, clientB)).isError).not.toBe(true);
     setupComplete = true;
   }, WORKER_FIXTURE_TIMEOUT_MS);
 
@@ -765,7 +765,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   it("multiple MCP clients queue commands on the same Runner while reads remain available", async ({ onTestFinished }) => {
     const {adminJar,csrf}=await adminCredentials();
     const other=await createMcpClient("Queue Client B",["coding:read","coding:write","coding:exec"],adminJar,csrf);
-    expect((await mcpTool("runner_select",{runner_id:runnerId},other)).isError).not.toBe(true);
+    expect((await selectRunnerWhenAvailable(runnerId,other)).isError).not.toBe(true);
     const holdCommand=(path:string)=>nodeCommand(`const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path)}))clearInterval(t)},15)`);
     const cleanupErrors: unknown[] = [];
     onTestFinished(() => { if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Queue fixture cleanup failed"); });
@@ -957,7 +957,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const progress = fixtureProgress("job_recording", onTestFailed);
     const { adminJar, csrf } = await adminCredentials(progress.mark);
     const client = await createMcpClient("No-record source E2E", ["coding:read", "coding:write", "coding:exec"], adminJar, csrf, progress.mark);
-    expect((await progress.run("runner_select", () => mcpTool("runner_select", { runner_id: runnerId }, client))).isError).not.toBe(true);
+    expect((await progress.run("runner_select", () => selectRunnerWhenAvailable(runnerId, client))).isError).not.toBe(true);
     const launch = (request: string) => progress.run("shell", () => mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('private-local-log')"), request_id: request, wait_ms: 4000 }, client));
     const original = await launch("recording-owner"); expect(original.isError).not.toBe(true);
     const owner = original.structuredContent?.created_by_client_id;
@@ -1147,7 +1147,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
         return response.status === 200 && runnerPolicyApplied(html);
       }, 10000, logs);
       const client = await createMcpClient("Root Git E2E", ["coding:read"], adminJar, csrf);
-      expect((await mcpTool("runner_select", { runner_id: rootRunnerId }, client)).isError).not.toBe(true);
+      expect((await selectRunnerWhenAvailable(rootRunnerId, client)).isError).not.toBe(true);
       const cases = [{ action: "git_status" }, { action: "git_diff" }, { action: "git_log" }, { action: "git_log", max_results: 5 },
         { action: "git_show", revision: "a".repeat(40) }, { action: "git_blame" }, { action: "git_blame", start_line: 1 },
         { action: "git_blame", end_line: 1 }, { action: "git_blame", start_line: 1, end_line: 1 }];
@@ -1298,6 +1298,23 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       if (["failed", "cancelled", "interrupted"].includes(status)) throw new Error(`Job did not complete successfully\n${diagnostic("terminal_failure")}`);
       return status === "succeeded";
     }, 10_000, () => diagnostic("timeout"));
+  }
+
+  async function selectRunnerWhenAvailable(targetRunnerId: string, client: McpClient | undefined): Promise<ToolResult> {
+    let result: ToolResult = {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      result = await mcpTool("runner_select", { runner_id: targetRunnerId }, client);
+      if (result.isError !== true) return result;
+      const error = result.structuredContent?.error;
+      const retryable = typeof error === "object" && error !== null && !Array.isArray(error)
+        && (error as Record<string, unknown>).code === "registry_unavailable"
+        && (error as Record<string, unknown>).failure_class === "availability"
+        && (error as Record<string, unknown>).operation_state === "not_started"
+        && (error as Record<string, unknown>).next_action === "wait_and_retry";
+      if (!retryable || attempt === 2) return result;
+      await delay(100);
+    }
+    return result;
   }
 
   async function mcpTool(name: string, args: Record<string, unknown>, client = clientA, observe?: McpObservation, signal?: AbortSignal): Promise<ToolResult> {
