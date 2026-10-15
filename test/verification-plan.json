@@ -149,6 +149,7 @@
         "apps/worker/test/admin-view-contracts.test.ts",
         "apps/worker/test/async-deadline.test.ts",
         "apps/worker/test/audit-metadata.test.ts",
+        "apps/worker/test/bootstrap-manifest.test.ts",
         "apps/worker/test/bridge-admission-errors.test.ts",
         "apps/worker/test/byte-pagination.test.ts",
         "apps/worker/test/capability-contracts.test.ts",

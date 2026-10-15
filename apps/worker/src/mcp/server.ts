@@ -2,6 +2,7 @@ import { verifyToolResult } from "./validated-result.js";
 import { activeRunnerTool } from "./dispatch.js";
 import { activeWorkspaceList } from "./selection.js";
 import { asToolResult } from "./results/envelope.js";
+import { bootstrapTool } from "./handlers/bootstrap.js";
 import { boundedReadParams } from "./request-values.js";
 import { contextTool } from "./handlers/context.js";
 import { defineToolHandlers } from "./handler-registry.js";
@@ -50,6 +51,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, options:
   const server = new McpServer({ name: "runmesh", version: PRODUCT_VERSION });
 
   const handlers = defineToolHandlers({
+    bootstrap: async () => bootstrapTool(env, auth.clientId),
     runner_list: async () => gatedRunnerList(env, auth.clientId),
     runner_current: async () => {
       const selection = await getActiveRunnerSelection(env, auth.clientId);
@@ -122,7 +124,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, options:
         return failure("internal_error", "The MCP tool could not confirm the operation outcome.", "Inspect the existing Job or change receipt before deciding what to do next; do not blindly repeat a write or command. Contact the operator if the outcome cannot be established.");
       } finally { env.mcpDiagnostic?.toolStage("done"); }
     });
-    if (options.hideNative) tool.disable();
+    if (options.hideNative && name !== "bootstrap") tool.disable();
   }
 }
 

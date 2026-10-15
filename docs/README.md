@@ -38,7 +38,7 @@ Check [release status](release-readiness.md) for package availability and [build
 
 ## Integration and maintenance
 
-For custom integrations, start with the [tool examples](tool-examples.md), [MCP call contract](mcp-agent-call-contract.md) and [catalog refresh guide](mcp-connector-refresh.md).
+For custom integrations, start with the [tool examples](tool-examples.md), [MCP call contract](mcp-agent-call-contract.md), [bootstrap manifest v1](mcp-bootstrap-manifest.md) and [catalog refresh guide](mcp-connector-refresh.md).
 
 The [maintainer documentation](maintainers/README.md) covers architecture, development, publication and historical review records.
 

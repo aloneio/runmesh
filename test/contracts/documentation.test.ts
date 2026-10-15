@@ -13,6 +13,6 @@ it("AR08 examples cover every public tool and mapped action", () => {
 });
 
 it("AR08 schema checks never call a handler or accept implicit tool removal", () => {
-  expect(contractFacts.tools).toHaveLength(10);
+  expect(contractFacts.tools).toHaveLength(11);
   expect(exampleProblem({ id: "unknown", tool: "not-a-tool", action: "none", accepts: true, arguments: {} })).toBe("unknown tool");
 });
