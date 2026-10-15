@@ -4,7 +4,7 @@ const types = new Set(["null", "boolean", "object", "array", "number", "integer"
 const text = new Set(["title", "description", "$comment", "contentEncoding", "contentMediaType"]);
 const flag = new Set(["readOnly", "writeOnly", "deprecated", "uniqueItems", "nullable", "$recursiveAnchor"]);
 const mcpHeaderToken = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
-const mcpHeaderTypes = new Set(["string", "integer", "boolean", "number"]);
+const mcpHeaderTypes = new Set(["string", "integer", "boolean"]);
 const schemaDialects = new Set([
   "https://json-schema.org/draft/2020-12/schema", "http://json-schema.org/draft/2020-12/schema",
   "https://json-schema.org/draft/2019-09/schema", "http://json-schema.org/draft/2019-09/schema",
@@ -24,21 +24,44 @@ const names = (value: unknown): value is string[] => Array.isArray(value) && val
   && value.every(name => typeof name === "string" && name.length <= 256) && new Set(value).size === value.length;
 const anchorName = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(value);
 
-/** Compile only regexes whose structure excludes common exponential
- * backtracking forms. This retains ordinary slugs and anchored character-class
- * patterns without making local validation a regex DoS primitive. */
+/** Catalog admission checks syntax only. Executable regexes receive an
+ * independent static and input-size budget before reaching the interpreter. */
 function validPattern(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 512) return false;
   try { new RegExp(value, "u"); return true; } catch { return false; }
 }
 
-/** Whether a provider regex is safe enough to execute in the Worker-side
- * validator. Unsafe-but-valid patterns are still admitted to the catalog and
- * delegated to the provider instead of making the whole MCP unusable. */
-export function safeCatalogPattern(value: unknown): value is string {
+/** A conservative upper bound, not a heuristic claim of ReDoS safety. No
+ * backreferences, lookarounds or quantified groups reach the native engine.
+ * Repetition choices and the unanchored search multiply the evaluation budget. */
+export function catalogPatternCost(value: unknown, length: number): number {
   if (!validPattern(value) || /\\(?:[1-9]|k<)/u.test(value) || /\(\?(?!:)/u.test(value)
-    || /\)(?:[*+?]|\{\d+(?:,\d*)?\})/u.test(value)) return false;
-  return (value.match(/(?:[*+]|\{\d+,\})/gu)?.length ?? 0) <= 16;
+    || /\)(?:[*+?]|\{\d+(?:,\d*)?\})/u.test(value)) return Infinity;
+  let choices = 1, powers = value.startsWith("^") ? 0 : 1, inClass = false;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (c === "\\") { i++; continue; }
+    if (c === "[") { inClass = true; continue; }
+    if (c === "]" && inClass) { inClass = false; continue; }
+    if (inClass) continue;
+    if (c === "*" || c === "+") powers++;
+    else if (c === "?" && value[i - 1] !== "(" && !["*", "+", "?", "}"].includes(value[i - 1] ?? "")) choices *= 2;
+    else if (c === "|") choices *= 2;
+    else if (c === "{") {
+      const end = value.indexOf("}", i), quantifier = value.slice(i + 1, end);
+      if (end < 0 || !/^\d+(?:,\d*)?$/u.test(quantifier)) return Infinity;
+      const parts = quantifier.split(","), low = Number(parts[0]), high = parts.length === 1 ? low : parts[1] ? Number(parts[1]) : undefined;
+      if (low > 256 || high !== undefined && high > 256) return Infinity;
+      if (high === undefined) powers++; else choices *= high - low + 1;
+      i = end;
+    }
+    if (powers > 4 || choices > 4096) return Infinity;
+  }
+  return choices * (value.length + 1) * Math.pow(length + 1, Math.max(1, powers));
+}
+
+export function safeCatalogPattern(value: unknown): value is string {
+  return Number.isFinite(catalogPatternCost(value, 0));
 }
 
 function schemaId(value: unknown): boolean {
@@ -90,20 +113,21 @@ export function catalogSchemaGraph(value: unknown, input: boolean): ReadonlyMap<
       else if (numeric.has(key)) {
         if (typeof field === "boolean" && ["exclusiveMinimum", "exclusiveMaximum"].includes(key)) {
           const base = key === "exclusiveMinimum" ? item.minimum : item.maximum;
-          if (typeof base !== "number" || !Number.isFinite(base)) return false;
+          if (field === true && (typeof base !== "number" || !Number.isFinite(base))) return false;
         } else if (typeof field !== "number" || !Number.isFinite(field) || (key === "multipleOf" && field <= 0)) return false;
       }
       else if (key === "$schema") {
         if (path !== "" || typeof field !== "string" || !schemaDialects.has(field.replace(/#$/u, ""))) return false;
       }
-      else if (key === "$id" || key === "id") { if (!schemaId(field)) return false; }
+      else if (key === "$id" || key === "id") { if (!schemaId(field) || path !== "") return false; }
       else if (key === "$anchor" || key === "$dynamicAnchor") {
         if (!anchorName(field) || anchors.has(field)) return false; anchors.set(field, path);
       }
       else if (key === "$vocabulary") {
         const object = catalogObject(field);
         if (object === undefined || Object.keys(object).length > 32
-          || Object.entries(object).some(([name, required]) => name.length > 2048 || typeof required !== "boolean" || !schemaId(name))) return false;
+          || Object.entries(object).some(([name, required]) => name.length > 2048 || typeof required !== "boolean" || !schemaId(name)
+            || required && !/^https:\/\/json-schema\.org\/draft\/(?:2019-09|2020-12)\/vocab\/(?:core|applicator|validation|meta-data|content|format|format-annotation|unevaluated)$/u.test(name))) return false;
       }
       else if (key === "format") { if (typeof field !== "string" || field.length === 0 || field.length > 128) return false; }
       else if (key === "pattern") { if (!validPattern(field)) return false; }

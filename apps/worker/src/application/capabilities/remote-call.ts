@@ -1,3 +1,4 @@
+import { CATALOG_LIMITS } from "../../contracts/catalog.js";
 import { RemoteFault, type RemoteCallPorts, type RemoteOutcome, type RemoteSession } from "../../contracts/remote.js";
 import { parseRemoteCall, parseRemoteResult } from "../../contracts/remote-values.js";
 import { capturedIdentityState, type CapturedIdentity } from "../../contracts/identity.js";
@@ -55,7 +56,7 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
         const definitions = await session.listTools();
         if (expired()) throw new RemoteFault("operation_timed_out");
         const liveTool = definitions.find(definition => definition.name === tool.definition.name);
-        if (liveTool === undefined || catalogJson(liveTool, 32_768) !== catalogJson(tool.definition, 32_768)) throw new RemoteFault("stale_catalog");
+        if (liveTool === undefined || catalogJson(liveTool, CATALOG_LIMITS.tool_bytes) !== catalogJson(tool.definition, CATALOG_LIMITS.tool_bytes)) throw new RemoteFault("stale_catalog");
         const raw = await session.callTool(tool.definition, command.arguments, fence);
         const result = parseRemoteResult(raw);
         if (result === undefined || (!result.isError && tool.definition.outputSchema !== undefined

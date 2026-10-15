@@ -10,6 +10,10 @@ export function parseRemoteTool(value: unknown): RemoteToolDefinition | undefine
   const encoded = catalogJson(value, CATALOG_LIMITS.tool_bytes);
   if (encoded === undefined) return undefined;
   const item = catalogObject(JSON.parse(encoded));
+  const input = catalogObject(item?.inputSchema);
+  // MCP arguments are always objects. Preserve all supplied constraints when
+  // generated schemas omit the redundant root type.
+  if (input && input.type === undefined) input.type = "object";
   // Tool descriptors are an extension point in current MCP servers. Validate
   // the fields Runmesh executes or persists, and deliberately discard bounded
   // presentation/provider metadata instead of rejecting the entire catalog.
@@ -31,17 +35,9 @@ export function parseRemoteTool(value: unknown): RemoteToolDefinition | undefine
     if (execution === undefined || execution.taskSupport !== undefined
       && !["required", "optional", "forbidden"].includes(execution.taskSupport as string)) return undefined;
   }
-  if (item.icons !== undefined) {
-    if (!Array.isArray(item.icons) || item.icons.length > 32 || item.icons.some(value => {
-      const icon = catalogObject(value);
-      return icon === undefined || typeof icon.src !== "string" || !icon.src || icon.src.length > 2048
-        || !text(icon.mimeType, 256)
-        || icon.sizes !== undefined && (!Array.isArray(icon.sizes) || icon.sizes.length > 32
-          || icon.sizes.some(size => typeof size !== "string" || size.length > 64))
-        || icon.theme !== undefined && !["light", "dark"].includes(icon.theme as string);
-    })) return undefined;
-  }
-  if (item._meta !== undefined && catalogObject(item._meta) === undefined) return undefined;
+  // Icons and opaque metadata are bounded by the enclosing JSON budget and
+  // discarded. They are never fetched or executed, so vendor presentation
+  // formats must not disable otherwise valid tools.
   return {
     name: item.name,
     ...(item.title === undefined ? {} : { title: item.title as string }),

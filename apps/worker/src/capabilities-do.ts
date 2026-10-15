@@ -32,7 +32,7 @@ import { withinDeadline } from "./application/connectors/deadline.js";
 import { createRemoteCaller } from "./application/capabilities/remote-call.js";
 import { createRemoteDiscovery } from "./application/capabilities/remote-discovery.js";
 import { createHttpRemoteConnector } from "./platform/connectors/remote-client.js";
-import { REMOTE_LIMITS, RemoteFault, type CentralRemote, type RemoteOutcome, type RemoteFailure } from "./contracts/remote.js";
+import { REMOTE_LIMITS, RemoteFault, type CentralRemote, type RemoteOutcome, type RemoteDiscoveryResult } from "./contracts/remote.js";
 import { connectionPolicy } from "./platform/connectors/connection-policy.js";
 import { SkillState } from "./platform/skills/store.js";
 import { createSkillAdministration } from "./application/skills/admin.js";
@@ -310,7 +310,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     } finally { this.#remoteClients.delete(key); }
   }
 
-  public async discoverRemote(sessionHash: string, profileId: string, expectedRevision: number): Promise<CatalogMutation | RemoteFailure> {
+  public async discoverRemote(sessionHash: string, profileId: string, expectedRevision: number): Promise<RemoteDiscoveryResult> {
     if (!isAdminSessionDigest(sessionHash)) return { state: "denied" };
     const key = "admin:" + sessionHash;
     if (this.#remoteClients.has(key) || this.#remoteClients.size >= REMOTE_LIMITS.active) return { state: "failed", code: "busy", operation_state: "not_started" };

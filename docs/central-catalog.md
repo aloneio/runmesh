@@ -55,11 +55,12 @@ Titles, descriptions, accepted schemas and annotations are part of that content.
 Annotations provide hints; execution permissions are checked separately. Field
 ordering and upstream list ordering are normalized, while arrays within schemas
 retain their order. Tool definitions accept `name`, `title`, `description`,
-`inputSchema`, `outputSchema` and `annotations`. An additional descriptor field
-causes the complete capture to fail validation.
+`inputSchema`, `outputSchema` and `annotations`. Provider presentation extensions are projected away. Unsupported executable
+constraints isolate that tool during live discovery; stored entries remain strict.
 
-Live discovery publishes the complete observed snapshot and all tool names in a
-single transaction, including an empty catalog. The lower-level staged-import
+Live discovery atomically publishes supported tools from a complete observation,
+with exclusion diagnostics. A genuine empty upstream catalog is valid; a nonempty
+catalog with no supported tools preserves the previous publication. The lower-level staged-import
 API can keep the approved selection and latest imported capture separate. Changed or
 removed tools are immediately excluded from the old approved view; unchanged,
 previously selected tools can remain visible. A live discovery refresh publishes
@@ -72,20 +73,19 @@ assignment are retired; neither participates in live reads or calls.
 
 ## Bounded schema contract
 
-The initial metadata subset uses JSON Schema 2020-12 (implicit or explicit).
-Inputs must have an object root; outputs may describe other JSON types. Accepted
-keywords cover basic types, properties, required fields, enums/constants, numeric
-and size bounds, compositions, conditionals, local definitions and acyclic local
-references. Literal property names and default/example data are not mistaken for
-schema instructions.
+Remote tool envelopes admit bounded provider annotations while snapshots retain
+strict fields, stable ordering and content-derived identities. Standard input and
+output schemas are preserved. The relay supports common JSON Schema dialects and
+OpenAPI-generated forms, without loading remote references or evaluating code.
+Unknown annotations are not permission grants or executable constraints.
 
-Definitions containing `pattern`, `patternProperties`, `format`, remote,
-recursive or dynamic references, IDs/anchors, custom headers, or keywords and
-dialects outside this subset fail validation. The same applies to tool icons and
-arbitrary `_meta`. Prepare definitions using the accepted fields and schema subset
-above; validation applies to the complete capture. Catalog ingestion checks
-structure and budgets. The remote invocation adapter validates arguments against
-the accepted schema before dispatch.
+Local validation is bounded independently of catalog admission. Unsupported
+regexes, recursive graphs and required unknown vocabularies prevent that tool
+from execution rather than having its constraints silently removed. Discovery
+isolates these tools, returns explicit exclusion diagnostics, and publishes only
+supported siblings. If none of a nonempty upstream catalog is supported, the old
+publication remains unchanged. See [MCP compatibility](mcp-compatibility.md).
+
 
 ## Shared directory views
 
@@ -119,11 +119,11 @@ arguments, Runner state or external results are copied into these tables.
 
 | Initial ceiling | Limit |
 | --- | --- |
-| Tools per profile capture | 128 |
-| One tool definition | 32 KiB |
-| Capture request / stored snapshot | 512 KiB each |
+| Tools per profile capture | 512 |
+| One tool definition | 64 KiB |
+| Capture request / stored snapshot | 2 MiB each |
 | Canonical JSON depth / nodes | 16 / 8,192 |
-| Schema nodes / containment depth | 2,048 / 12 |
+| Schema nodes / containment depth | 4,096 / 16 |
 | Catalog profiles / snapshots | 200 / 512 |
 | Retained versions per profile | 32 |
 | Total snapshot body storage | 16 MiB |

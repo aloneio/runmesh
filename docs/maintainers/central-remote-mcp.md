@@ -129,13 +129,13 @@ Read `GET /admin/central/catalogs/{profile_id}` and pass its `head.revision` as
 `{"expected_revision":0}` only when the catalog read returns `{"state":"empty"}`.
 Requests use the administrator's existing session, same origin and matching CSRF token. The
 complete bounded tools/list result is stored and published atomically in one
-catalog revision. Every discovered tool is immediately available to authenticated
+catalog revision. Every accepted tool is immediately available to authenticated
 clients; the connection requires no additional review or approval in the
 [control panel](central-administration.md). Client credentials remain required;
 publication grants no Runner permissions.
 
 The discovery endpoint permits no caller URL, token, HTTP headers or command.
-Partial pages, duplicate tools, unsafe/unresolvable schema graphs, timeouts and failed upstream
+Partial pages, duplicate tools, timeouts and failed upstream
 observations leave the previously reviewed catalog intact. An actual change in
 the selected tool's description/schema/annotations blocks invocation until the
 catalog is refreshed, which publishes all current tools. The call does not publish changes
@@ -143,29 +143,47 @@ or create a new catalog revision for every request.
 
 ### Hosted MCP catalog compatibility
 
-Discovery treats a provider tool descriptor as an extensible MCP envelope rather
-than an exact Runmesh-owned object. Standard executable fields are validated and
-projected; bounded provider/presentation fields (for example GitLab `version` and
-annotation extensions, MCP `icons`/`execution` additions, and `_meta`) do not make
-the complete catalog invalid. Unknown annotation values are never promoted into
-Runmesh authorization or risk decisions.
+A remote descriptor is extensible; the stored Runmesh snapshot is not. The relay
+validates and projects executable fields and known hints. Bounded presentation
+metadata (including GitLab annotation `toolset`, `icons`, `_meta` and provider
+versions) is not fetched, executed or treated as permission. A missing root input
+`type` is normalized to `object`, preserving the supplied constraints.
 
-Tool schemas accept the current JSON Schema 2020-12 default, 2019-09, draft-07
-and draft-06 dialects, plus compatibility normalization for draft-04/OpenAPI
-generated schemas. Common OpenAPI `nullable`, legacy `dependencies`/tuple items,
-standard composition/object/array keywords, local JSON Pointers and anchors,
-custom formats and bounded extension keywords are accepted. Unknown validation
-annotations and regex constraints that are unsafe to execute locally are retained
-in the catalog but omitted from the private Worker-side validation copy; the
-upstream provider remains authoritative for those constraints. Safe constraints
-continue to gate dispatch and structured results.
+Schema support includes 2020-12, 2019-09, draft-07/06, and conservative
+normalization of draft-04 and OpenAPI-generated shapes. Local JSON Pointers,
+anchors, composition, object/array constraints, tuple items, dependencies and
+nullable types are supported. Nullable does not override enum or const. Unknown
+annotations and formats are not executable assertions. Required unknown
+vocabularies, nested identifier scopes, external/dynamic/recursive references,
+malformed constraints and unbounded expansion remain unsupported.
 
-External `$ref` resolution is deliberately disabled, as required for a network-
-isolated client by default. Dynamic/recursive reference graphs, malformed known
-keywords, cycles, excessive depth/node work, oversized descriptors and invalid
-SEP-2243 `x-mcp-header` annotations remain hard failures. This compatibility
-policy lets hosted servers evolve metadata without weakening transport, secret,
-header or computational boundaries.
+Local regex execution has separate syntax, structural and input-size budgets.
+Backreferences, lookarounds and quantified groups are excluded; repetition and
+alternation multiply the work estimate. Unsupported patterns are **never deleted
+to let a tool execute**. All meaningful accepted constraints remain enforced.
+
+During discovery, an individually invalid or unsafe tool is quarantined while
+usable siblings are published atomically. The HTTP receipt includes
+`excluded_tools` with a bounded name and a fixed reason (`invalid_tool`,
+`schema_unsupported`, `interaction_required`). The control panel shows the
+exclusion count and sample names. This diagnostic is for that refresh, not a
+persistent audit history. A nonempty upstream catalog containing no usable tools
+returns `remote_schema_unsupported` and preserves the previous catalog. A truly
+empty catalog is a valid empty publication. Duplicates, missing pages, repeated
+cursors, malformed envelopes and global capacity failures never publish partial
+observations. Inspection remains a non-executing descriptor count and does not
+claim that every observed schema is executable.
+
+The transport accepts JSON, JSON-compatible MIME variants and request-scoped SSE
+with fragmented Unicode, empty heartbeat frames, comments and a complete final
+frame at EOF. Only non-actionable notifications are discarded. JSON-RPC IDs are
+not coerced; server requests and interactive results are never auto-fulfilled.
+Structured JSON-RPC failures on HTTP 4xx retain their error semantics. Negotiated
+versions are used on subsequent requests, including operation-local cleanup.
+Opaque session IDs are bounded to 4 KiB and never shared between operations.
+
+See [the compatibility matrix](../mcp-compatibility.md) for the supported surface,
+exclusions and the distinction between synthetic and live verification.
 
 ## Trust and execution boundaries
 
@@ -212,12 +230,12 @@ hashing and the final publication transaction.
 | --- | --- |
 | One owner operation | 20 seconds |
 | Active operations per owner / per client | 2 / 1; no waiting queue |
-| Outbound request / response | 64 KiB / 1 MiB |
-| Aggregate response bytes | 2 MiB |
-| HTTP requests / tools/list pages | 12 / 8 |
-| Tools in a complete catalog | 128, within the [catalog byte and node budgets](../central-catalog.md#storage-budgets-and-recovery) |
-| Body fragments / SSE events | 4,096 / 256 |
-| Returned content items | 32 |
+| Outbound request / response | 64 KiB / 2 MiB |
+| Aggregate response bytes | 8 MiB |
+| HTTP requests / tools/list pages | 40 / 32 |
+| Tools in a complete catalog | 512, within the [catalog byte and node budgets](../central-catalog.md#storage-budgets-and-recovery) |
+| Body fragments / SSE events | 8,192 / 256 |
+| Returned content items | 128 |
 | Outbound endpoint policy | 64 entries / 16 KiB |
 
 These are admission ceilings, not throughput or cost guarantees. They include

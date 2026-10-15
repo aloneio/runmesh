@@ -302,3 +302,30 @@ it('W08 direct tools preserve reviewed schemas and stale names cannot bypass a d
     expect(malformed.result.tools.some((t: { name: string }) => t.name.startsWith('rm_'))).toBe(false);
   } finally { f.network.mockRestore(); }
 });
+
+it("MCP-PORTABILITY publishes supported tools with exclusion receipts and preserves the catalog when none remain", async () => {
+  const f = await fixture();
+  try {
+    const original = f.network.getMockImplementation()!;
+    const valid = { name: "lookup", inputSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false } };
+    const unsupported = { name: "unsafe", inputSchema: { type: "object", properties: { value: { type: "string", pattern: "(a+)+$" } } } };
+    let tools: unknown[] = [valid, unsupported];
+    f.network.mockImplementation(async (url, init) => {
+      const message = JSON.parse(String(init?.body));
+      if (message.method !== "tools/list") return original(url, init);
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: { resultType: "complete", ttlMs: 0, cacheScope: "private", tools } });
+    });
+    const published = await f.discover();
+    const publishedBody = await published.json();
+    expect(published.status, JSON.stringify(publishedBody)).toBe(200);
+    expect(publishedBody).toMatchObject({ state: "written", excluded_tools: [{ name: "unsafe", code: "schema_unsupported" }] });
+    const before = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
+    expect(before).toMatchObject({ state: "found", head: { revision: 1, approved_names: ["lookup"] } });
+    tools = [unsupported];
+    const rejected = await f.discover(f.admin.headers, 1);
+    expect(rejected.status).toBe(503);
+    expect(await rejected.json()).toMatchObject({ error: { code: "remote_schema_unsupported", operation_state: "not_started" } });
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toEqual(before);
+    expect(f.execute).not.toHaveBeenCalled();
+  } finally { f.network.mockRestore(); }
+});
