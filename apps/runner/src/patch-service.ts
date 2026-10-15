@@ -293,6 +293,9 @@ export class PatchService {
         action: "write",
         bytes: content,
         mode: replacementMode,
+        ...(operation.kind === "update" && pathKey(sourcePath.relativePath) === pathKey(destination.relativePath)
+          ? { previewHunks: operation.hunks }
+          : {}),
       });
       if (pathKey(sourcePath.relativePath) !== pathKey(destination.relativePath)) {
         planned.set(pathKey(sourcePath.relativePath), { path: sourcePath, baseline: source as Baseline, action: "delete" });

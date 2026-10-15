@@ -21,6 +21,7 @@ export function patchPreviewId(workspaceId: string, generation: number, patch: s
 }
 
 export function changePreview(change: PlannedChange): Record<string, unknown> & { insertions: number; deletions: number } {
+  if (change.previewHunks !== undefined) return hunkPreview(change);
   const before = change.baseline.bytes === undefined ? [] : decodePreviewLines(change.baseline.bytes);
   const after = change.action === "write" ? decodePreviewLines(change.bytes as Buffer) : [];
   let prefix = 0;
@@ -50,6 +51,55 @@ export function changePreview(change: PlannedChange): Record<string, unknown> & 
     status: change.action === "write" ? (change.baseline.exists ? "updated" : "created") : "deleted",
     insertions: added.length,
     deletions: removed.length,
+    diff: diff.slice(0, maxDiffLength),
+    truncated: contentTruncated || diff.length > maxDiffLength,
+  };
+}
+
+function hunkPreview(change: PlannedChange): Record<string, unknown> & { insertions: number; deletions: number } {
+  const maxLines = 24;
+  const maxLineLength = 1_024;
+  const maxDiffLength = 16 * 1_024;
+  let insertions = 0;
+  let deletions = 0;
+  let shown = 0;
+  let contentTruncated = false;
+  const lines = [
+    `--- a/${change.path.relativePath}`,
+    `+++ b/${change.path.relativePath}`,
+  ];
+  for (const hunk of change.previewHunks ?? []) {
+    if (shown >= maxLines) { contentTruncated = true; break; }
+    lines.push("@@");
+    for (const line of hunk.lines) {
+      if (line.kind === "add") insertions += 1;
+      else if (line.kind === "delete") deletions += 1;
+      if (shown >= maxLines) { contentTruncated = true; continue; }
+      const prefix = line.kind === "add" ? "+" : line.kind === "delete" ? "-" : " ";
+      if (line.text.length > maxLineLength) contentTruncated = true;
+      lines.push(`${prefix}${line.text.slice(0, maxLineLength)}`);
+      shown += 1;
+    }
+  }
+  // Totals must describe the complete validated patch even if the display
+  // excerpt reaches its line budget.
+  if (contentTruncated) {
+    insertions = 0;
+    deletions = 0;
+    for (const hunk of change.previewHunks ?? []) {
+      for (const line of hunk.lines) {
+        if (line.kind === "add") insertions += 1;
+        else if (line.kind === "delete") deletions += 1;
+      }
+    }
+    lines.push("... preview truncated ...");
+  }
+  const diff = lines.join("\n");
+  return {
+    path: change.path.relativePath,
+    status: "updated",
+    insertions,
+    deletions,
     diff: diff.slice(0, maxDiffLength),
     truncated: contentTruncated || diff.length > maxDiffLength,
   };
