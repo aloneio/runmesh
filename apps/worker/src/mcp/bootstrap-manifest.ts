@@ -2,7 +2,7 @@ import { PRODUCT_VERSION } from "../generated-version.js";
 import { sha256Hex } from "../security.js";
 
 export const BOOTSTRAP_SCHEMA_VERSION = 1 as const;
-export const BOOTSTRAP_MANIFEST_REVISION = 1 as const;
+export const BOOTSTRAP_MANIFEST_REVISION = 2 as const;
 export const BOOTSTRAP_REMOTE_PROFILE_LIMIT = 16;
 
 const runtimeAuthorization = () => Object.freeze({ supported: true, authorization: "runtime" as const });
@@ -45,11 +45,16 @@ const STATIC_CONTRACT = Object.freeze({
       continue_with: "job" as const,
     },
     external_services: {
-      strategy: "search_then_load_then_call" as const,
+      strategy: "search_then_profile_fallback_then_call" as const,
       list_services: "remote_profiles" as const,
       search: "remote_search" as const,
       load_schema: "remote_tools" as const,
       invoke: "remote_call" as const,
+      fallback: {
+        when_search_returns_no_relevant_tools: "inspect_profile_tools_before_unavailable" as const,
+        known_service: "remote_tools" as const,
+        unknown_service: "remote_profiles_then_remote_tools" as const,
+      },
     },
     reusable_workflows: {
       list: "skill_list" as const,
@@ -66,6 +71,7 @@ const STATIC_CONTRACT = Object.freeze({
   },
   rules: [
     "Do not assume a remote service or tool is unavailable before discovery.",
+    "If remote_search returns no relevant tools, inspect the known service with remote_tools, or use remote_profiles then remote_tools, before concluding the capability is unavailable.",
     "Load remote tool schemas only when relevant to the current task.",
     "Prefer inspection before mutation.",
     "Do not blindly retry writes or commands with an uncertain outcome.",
