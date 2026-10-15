@@ -60,15 +60,35 @@ it.each([
   { inputSchema: null }, { inputSchema: { type: "string" } }, { inputSchema: { type: "object", required: ["a", "a"] } },
   { inputSchema: { type: "object", $schema: "http://json-schema.org/draft-07/schema#" } },
   { inputSchema: { type: "object", properties: { a: { type: "string", pattern: "(a+)+$" } } } },
-  { inputSchema: { type: "object", properties: { a: { type: "string", format: "uri" } } } },
+  { inputSchema: { type: "object", properties: { a: { type: "string", format: "private-opaque-format" } } } },
   { inputSchema: { type: "object", $ref: "https://private.invalid/schema" } },
   { inputSchema: { type: "object", $ref: "file:///secret" } },
   { inputSchema: { type: "object", $dynamicRef: "#a" } },
-  { inputSchema: { type: "object", properties: { a: { type: "string", "x-mcp-header": "Authorization" } } } },
+  { inputSchema: { type: "object", properties: { a: { type: "string", "x-mcp-header": "bad header" } } } },
   { name: "bad tool" }, { annotations: { readOnlyHint: "true" } }, { unsupportedMetadata: { grant: "admin" } },
   { description: "a".repeat(8193) }, { inputSchema: { type: "object", anyOf: [] } },
 ])("W04 unsupported/invalid tool contracts are rejected without partial publication: %j", change => {
   expect(parseRemoteTool({ ...catalogDefinition(), ...change })).toBeUndefined();
+});
+
+it("W04 accepts standard bounded JSON Schema formats used by hosted MCP catalogs", () => {
+  const definition = catalogDefinition("formatted");
+  const outputSchema = { type: "object", properties: { created_at: { type: "string", format: "date-time" },
+    endpoint: { type: "string", format: "uri" }, id: { type: "string", format: "uuid" } }, additionalProperties: false };
+  expect(parseRemoteTool({ ...definition, outputSchema })).toEqual({ ...definition, outputSchema });
+  expect(parseRemoteTool({ ...definition, outputSchema: { type: "object", properties: { value: { type: "string", format: "regex" } } } })).toBeUndefined();
+});
+
+it("W04 canonical catalog bounds admit deep but byte-bounded hosted MCP descriptors", () => {
+  let outputSchema: unknown = { type: "string" };
+  for (let i = 0; i < 7; i++) outputSchema = { oneOf: [{ type: "null" }, { type: "array", items: outputSchema }] };
+  const tool = { ...catalogDefinition("deep"), outputSchema };
+  expect(catalogJson(tool, 32_768)).toBeDefined();
+});
+
+it("W04 canonical catalog bounds admit hosted tool lists above the legacy node ceiling", () => {
+  const nodeDense = Array.from({ length: 10_000 }, () => 0);
+  expect(catalogJson(nodeDense, 32_768)).toBeDefined();
 });
 
 it("W04 admits the bounded Cloudflare whoami identity pattern without opening arbitrary regular expressions", () => {

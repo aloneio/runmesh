@@ -1,4 +1,7 @@
-export const JSON_LIMITS = Object.freeze({ depth: 16, nodes: 8_192 });
+// Remote MCP tool catalogs routinely wrap nested JSON Schemas several levels
+// inside a JSON-RPC tools/list result. Keep byte limits as the primary memory
+// bound while permitting standards-compliant catalogs such as GitHub's.
+export const JSON_LIMITS = Object.freeze({ depth: 32, nodes: 32_768 });
 
 /** Bounded canonical JSON, never getter/toJSON evaluation or unbounded stringify.
  * Property order is normalized; arrays retain order. No source objects are mutated. */

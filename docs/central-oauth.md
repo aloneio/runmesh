@@ -13,7 +13,7 @@ Choose **OAuth** when an MCP uses an account at its provider. Runmesh opens the 
 
 The account connection is shared by the instance's active AI clients. Review which account and provider permissions you select with that shared use in mind.
 
-Runmesh discovers the provider settings from the MCP endpoint. The provider needs OAuth metadata and either client metadata document support or dynamic client registration. Use the endpoint listed in the provider's MCP instructions.
+Runmesh discovers the provider settings from the MCP endpoint. If the provider supports a client metadata document or dynamic client registration, Runmesh starts authorization automatically. If the provider requires a pre-registered OAuth application, expand **OAuth client settings**, register the displayed callback URL with the provider, enter that application's client ID and secret, and connect again. The client secret is encrypted with the rest of the managed OAuth state and is not stored in the connection profile.
 
 ## Reauthorize
 
@@ -39,6 +39,7 @@ These actions control future access. Check the provider for the result of any ac
 | Consent was cancelled or expired | Return to the panel and select **Reconnect** to start a fresh attempt. |
 | Authorization returned, but tools have not loaded | Select **Refresh tools**; complete sign-in if prompted. |
 | The provider shows an error | Record its error message and the time. Check the provider's session and status before starting a new authorization attempt. |
+| `oauth_client_registration_required` | Register an OAuth application at the provider using the callback URL shown under **OAuth client settings**, enter its client credentials, and reconnect. |
 | `oauth_configuration_required` | Ask the instance administrator to restore the existing deployment secret and then reconnect. |
 
 ## Administrator notes

@@ -1,4 +1,4 @@
-import { auth, extractWWWAuthenticateParams, refreshAuthorization, type FetchLike, type OAuthClientProvider, type OAuthDiscoveryState, type StoredOAuthClientInformation, type StoredOAuthTokens } from '@modelcontextprotocol/client';
+import { auth, discoverOAuthServerInfo, extractWWWAuthenticateParams, refreshAuthorization, type FetchLike, type OAuthClientProvider, type OAuthDiscoveryState, type StoredOAuthClientInformation, type StoredOAuthTokens } from '@modelcontextprotocol/client';
 import { connectionClientMetadata, publicOAuthUrl } from '../../contracts/managed-connections.js';
 import type { ManagedOAuthDocument, ManagedOAuthProtocol } from '../../contracts/managed-oauth.js';
 import { catalogObject } from '../../contracts/catalog-json.js';
@@ -61,24 +61,29 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
     async begin(input) {
       const configured = input.client === undefined ? undefined : catalogObject(input.client);
       if (input.client !== undefined && (!configured || typeof configured.client_id !== "string" || !configured.client_id)) return fault("invalid_request");
-      const p = provider(input.origin, input.state, configured === undefined ? undefined : { client: configured as unknown as StoredOAuthClientInformation });
       const challenge = extractWWWAuthenticateParams(await managedOAuthChallenge(input.endpoint, { signal: input.signal, authorize: input.authorize, origin: input.origin, ...(send ? { send } : {}) }));
       if ((challenge.resourceMetadataUrl && publicOAuthUrl(challenge.resourceMetadataUrl.href, input.origin) === undefined)
         || (challenge.scope !== undefined && challenge.scope.length > 2048)) return fault("provider_unsupported");
-      let result: Awaited<ReturnType<typeof auth>>;
-      try {
-        result = await auth(p.value, { serverUrl: input.endpoint, forceReauthorization: true,
-          ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: challenge.resourceMetadataUrl } : {}),
-          ...(challenge.scope ? { scope: challenge.scope } : {}),
-          fetchFn: managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
-            discovery: p.discovery, phase: 'begin', ...(send ? { send } : {}) }) });
-      } catch (error) {
-        const metadata = p.discovery()?.authorizationServerMetadata;
-        if (input.client === undefined && metadata !== undefined && metadata.client_id_metadata_document_supported !== true
-          && !metadata.registration_endpoint && error instanceof Error && error.message.includes("does not support dynamic client registration"))
-          return fault("client_registration_required");
-        throw error;
-      }
+      const discoveryFetch = managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
+        discovery: () => undefined, phase: 'begin', ...(send ? { send } : {}) });
+      const discovered = await discoverOAuthServerInfo(input.endpoint, {
+        ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: challenge.resourceMetadataUrl } : {}), fetchFn: discoveryFetch });
+      if (discovered.authorizationServerMetadata === undefined) return fault("provider_unsupported");
+      const initialDiscovery: OAuthDiscoveryState = { authorizationServerUrl: discovered.authorizationServerUrl,
+        ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: challenge.resourceMetadataUrl.href } : {}),
+        ...(discovered.resourceMetadata === undefined ? {} : { resourceMetadata: discovered.resourceMetadata }),
+        authorizationServerMetadata: discovered.authorizationServerMetadata };
+      if (!validDiscovery(initialDiscovery, input.origin)) return fault("provider_unsupported");
+      const metadata = initialDiscovery.authorizationServerMetadata!;
+      if (configured === undefined && metadata.client_id_metadata_document_supported !== true && !metadata.registration_endpoint)
+        return fault("client_registration_required");
+      const p = provider(input.origin, input.state, { discovery: initialDiscovery,
+        ...(configured === undefined ? {} : { client: configured as unknown as StoredOAuthClientInformation }) });
+      const result = await auth(p.value, { serverUrl: input.endpoint, forceReauthorization: true,
+        ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: challenge.resourceMetadataUrl } : {}),
+        ...(challenge.scope ? { scope: challenge.scope } : {}),
+        fetchFn: managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
+          discovery: p.discovery, phase: 'begin', ...(send ? { send } : {}) }) });
       if (result !== 'REDIRECT' || !p.redirect() || !p.client() || !p.verifier() || !p.discovery()) return fault('provider_unsupported');
       return { authorization_url: p.redirect()!, discovery: { ...p.discovery()! }, client: p.client()!, verifier: p.verifier()! };
     },

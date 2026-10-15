@@ -11,6 +11,17 @@ import { guardedRemoteResponse, boundedWireJson, reflectsRemoteSecret } from "./
 import { BoundedRemoteValidator } from "./remote-validation.js";
 import { createRemoteSessionState } from "./remote-session.js";
 
+const mcpParamHeader = /^mcp-param-[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
+function copyMcpParamHeaders(source: Headers, target: Headers): void {
+  let count = 0, bytes = 0;
+  for (const [name, value] of source) {
+    if (!name.startsWith("mcp-param-")) continue;
+    if (!mcpParamHeader.test(name) || ++count > 128 || value.length > 8_192
+      || (bytes += name.length + value.length) > 32_768) throw new RemoteFault("upstream_protocol_error");
+    target.set(name, value);
+  }
+}
+
 function remoteClientFault(error: unknown, fallback: "upstream_protocol_error" | "result_invalid"): RemoteFault {
   if (error instanceof RemoteFault) return error;
   if (!ProtocolError.isInstance(error)) return new RemoteFault(fallback);
@@ -94,7 +105,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             if (selected && !["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"].includes(selected)) throw new RemoteFault("upstream_protocol_error");
             protocol = selected ?? (method === "server/discover" ? "2026-07-28" : protocol);
           }
-          const params = catalogObject(message.params), headers = new Headers({ "content-type": "application/json",
+          const params = catalogObject(message.params), sdkHeaders = new Headers(init.headers), headers = new Headers({ "content-type": "application/json",
             accept: "application/json, text/event-stream", "mcp-protocol-version": protocol,
             "mcp-method": method, "x-runmesh-mcp-hop": "1" });
           if (credential !== null) headers.set("authorization", `Bearer ${credential.token}`);
@@ -109,6 +120,10 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             if (callSent || beforeCall === undefined || typeof params?.name !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/u.test(params.name))
               throw new RemoteFault("upstream_protocol_error");
             headers.set("mcp-name", params.name);
+            // The SDK derives SEP-2243 parameter mirrors from the validated
+            // tools/list schema. Forward only the fixed Mcp-Param-* namespace;
+            // caller headers, cookies and authorization remain impossible here.
+            if (protocol === "2026-07-28") copyMcpParamHeaders(sdkHeaders, headers);
             // Final authorization after DNS-independent connect/list/schema waits.
             await beforeCall();
             if (signal.aborted) throw new RemoteFault("operation_timed_out");
@@ -126,7 +141,12 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             headers, redirect: "manual", credentials: "omit", cache: "no-store", signal });
           if (signal.aborted) { void response.body?.cancel().catch(() => undefined); throw new RemoteFault("operation_timed_out"); }
           if (response.status === 401 || response.status === 403) {
-            void response.body?.cancel().catch(() => undefined); throw new RemoteFault("authorization_required");
+            void response.body?.cancel().catch(() => undefined);
+            // RFC 6750 distinguishes an invalid/missing bearer (401) from an
+            // authenticated principal that is not allowed to use the resource
+            // (403). Treating both as reauthorization causes a reconnect loop
+            // for providers that gate MCP access after a successful OAuth flow.
+            throw new RemoteFault(response.status === 401 ? "authorization_required" : "permission_denied");
           }
           if (response.status === 429 || response.status >= 500) {
             void response.body?.cancel().catch(() => undefined); throw new RemoteFault("upstream_unavailable");

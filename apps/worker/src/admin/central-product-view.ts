@@ -32,6 +32,7 @@ export function centralProductView(csrf: string, skills: boolean): string {
             <details class="central-file-preview oauth-client-settings">
               <summary>OAuth client settings (optional)</summary>
               <p class="muted">Use credentials from an OAuth app registered with the provider when automatic client registration is unavailable.</p>
+              <p class="muted" data-oauth-client-callback data-no-i18n></p>
               <label>Client ID<input name="oauth_client_id" maxlength="2048" autocomplete="off" spellcheck="false"></label>
               <label>Client secret<input name="oauth_client_secret" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false"></label>
             </details>
