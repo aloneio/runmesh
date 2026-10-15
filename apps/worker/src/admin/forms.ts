@@ -124,7 +124,7 @@ export function managedWorkspaceForm(runnerId: string, workspace: Record<string,
       </div>
     </form>
     ${existing ? `<div class="workspace-footer">
-      <span class="validation-tag status-pill ${statusClass(status)}">Validation: ${escapeHtml(status)}</span>
+      <span class="validation-tag status-pill ${statusClass(status)}"><span>${message("workspace.validation.label", "en")}</span> ${escapeHtml(status)}</span>
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/workspace-delete" class="inline-delete-form">
         <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
         <input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}">

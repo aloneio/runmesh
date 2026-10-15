@@ -9,8 +9,19 @@ import {jobTable,mcpCallTable} from "../src/admin/tables.js";
 import {adminDocument} from "../src/admin/layout.js";
 import {authEntryDocument} from "../src/admin/auth-views.js";
 import {passwordToggle} from "../src/admin/forms.js";
-import {message} from "../src/i18n/messages.js";
+import {MESSAGES,message} from "../src/i18n/messages.js";
 const request=(lang="en",headers:Record<string,string>={})=>new Request(`https://worker.test/admin?lang=${lang}`,{headers});
+it("English message catalog never contains Han characters",()=>{
+ for(const [key,value] of Object.entries(MESSAGES)) expect(value.en,key).not.toMatch(/[\u3400-\u9fff]/u);
+});
+it("OAuth settings and workspace validation copy are localized",async()=>{
+ const {centralProductView}=await import("../src/admin/central-product-view.js");
+ const {managedWorkspaceForm}=await import("../src/admin/forms.js");
+ const markup=`<html><body>${centralProductView("synthetic-csrf",true)}${managedWorkspaceForm("synthetic-runner",{workspace_id:"synthetic-workspace",root_path:"/tmp",validation_status:"valid"},"synthetic-csrf")}</body></html>`;
+ const response=await localizeHtmlResponse(request("zh-CN"),new Response(markup,{headers:{"content-type":"text/html"}})).text();
+ for(const value of ["OAuth client settings (optional)","Use credentials from an OAuth app registered with the provider when automatic client registration is unavailable.","Client secret","Validation:"])expect(response).not.toContain(value);
+ for(const value of ["OAuth 客户端设置（可选）","客户端密钥","验证状态："])expect(response).toContain(value);
+});
 it.each(["en", "zh-CN"])("preserves data title segments including separators and entities in %s", async locale => {
  for (const value of ["Source", "read", "Write", "Unknown", "Source · Read", "<script>&quot;&amp;</script>"]) {
   const original=adminDocument([{data:value}, "MCP client"], '<h1>Settings</h1>', "clients");

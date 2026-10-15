@@ -2,6 +2,10 @@ import type { UiLocale } from "../contracts/locale.js";
 
 /** Stable identifiers are source-owned. Do not derive or rename keys when editing copy. */
 const definitions = {
+  "oauth.client.settings.optional": { en: "OAuth client settings (optional)", "zh-CN": "OAuth 客户端设置（可选）" },
+  "oauth.client.settings.help": { en: "Use credentials from an OAuth app registered with the provider when automatic client registration is unavailable.", "zh-CN": "如果服务提供方不支持自动注册客户端，请填写已在服务提供方注册的 OAuth 应用凭据。" },
+  "oauth.client.secret": { en: "Client secret", "zh-CN": "客户端密钥" },
+  "workspace.validation.label": { en: "Validation:", "zh-CN": "验证状态：" },
   "mcp.inspection.check": { en: "Check connection", "zh-CN": "检查连接" },
   "mcp.registry.import": { en: "Import server.json", "zh-CN": "导入 server.json" },
   "mcp.registry.entry": { en: "Registry entry", "zh-CN": "Registry 条目" },
@@ -593,17 +597,7 @@ const definitions = {
   "text.runner": { en: "RUNNER", "zh-CN": "Runner" },
   "text.checksum": { en: "CHECKSUM", "zh-CN": "校验和" },
   "text.highestavailable": { en: "HighestAvailable", "zh-CN": "最高权限" },
-  "text.runner.2": { en: "系统 RUNNER 执行模式", "zh-CN": "系统 Runner 执行模式" },
-  "text.runner.3": { en: "活跃 RUNNER", "zh-CN": "活跃 Runner" },
-  "text.runner.4": { en: "RUNNER 详情", "zh-CN": "Runner 详情" },
   "text.runner.id.2": { en: "RUNNER ID", "zh-CN": "Runner ID" },
-  "text.runner.5": { en: "RUNNER 版本", "zh-CN": "Runner 版本" },
-  "text.runner.6": { en: "RUNNER 报告的执行模式", "zh-CN": "Runner 上报的执行模式" },
-  "text.runner.7": { en: "RUNNER 报告的权限状态", "zh-CN": "Runner 上报的权限状态" },
-  "text.runner.8": { en: "RUNNER 报告的版本", "zh-CN": "Runner 上报的版本" },
-  "text.checksum.2": { en: "期望 CHECKSUM", "zh-CN": "期望校验和" },
-  "text.checksum.3": { en: "活动 CHECKSUM", "zh-CN": "活动校验和" },
-  "text.runner.checksum": { en: "RUNNER 报告的 CHECKSUM", "zh-CN": "Runner 上报的校验和" },
   "text.manual.runner.enrollment.and.install.uses.a.verified.portable.artifact.install.the.artifac": { en: "Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ", "zh-CN": "请先安装已验证的便携版 Runner，再运行下面的命令。命令会在本机提示输入代码，粘贴后按 Enter。当前执行模式：" },
   "text.the.installer.verifies.the.fixed.signed.runner.artifact.before.it.asks.locally.for.this.on.2": { en: "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ", "zh-CN": "安装器会先校验固定签名的 Runner，再在本机提示输入代码。代码不会写入命令、URL 或进程参数。当前执行模式：" },
   "text.the.default.is.dedicated.user.privileged.host.is.an.advanced.explicitly.confirmed.option.t": { en: "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.", "zh-CN": "默认使用 dedicated_user；privileged_host 是需要明确确认的高级选项。只有注册成功后才会继续安装。" },
