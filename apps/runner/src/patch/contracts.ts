@@ -71,6 +71,10 @@ export type PlannedChange = {
   readonly action: "write" | "delete";
   readonly bytes?: Buffer;
   readonly mode?: number;
+  /** Exact validated update hunks used to build a compact review preview.
+   * Only same-path text updates set this; adds/deletes/moves keep the
+   * byte-derived fallback so receipts remain faithful to the installed plan. */
+  readonly previewHunks?: readonly Hunk[];
 };
 
 export type PreparedChange = PlannedChange & {

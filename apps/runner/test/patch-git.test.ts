@@ -104,6 +104,39 @@ describe("fs.apply_patch", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("keeps distant edits compact across multi-file previews", async () => {
+    const test = await fixture();
+    try {
+      const middle = Array.from({ length: 40 }, (_, index) => `middle-${index}`);
+      await writeFile(join(test.root, "alpha.txt"), ["head", "alpha-one", ...middle, "alpha-two", "tail", ""].join("\n"));
+      await writeFile(join(test.root, "beta.txt"), "beta-old\nkeep\n");
+      const result = await patch(test.workspace).preview({ workspace_id: test.workspace.workspaceId, patch: envelope([
+        "*** Update File: alpha.txt",
+        "@@",
+        "-alpha-one",
+        "+ALPHA-ONE",
+        "@@",
+        "-alpha-two",
+        "+ALPHA-TWO",
+        "*** Update File: beta.txt",
+        "@@",
+        "-beta-old",
+        "+BETA-NEW",
+      ].join("\n")) });
+      expect(result).toMatchObject({ insertions: 3, deletions: 3, previews_truncated: false });
+      const previews = result.previews as { path: string; diff: string; insertions: number; deletions: number; truncated: boolean }[];
+      expect(previews).toHaveLength(2);
+      const alpha = previews.find((preview) => preview.path === "alpha.txt");
+      expect(alpha).toMatchObject({ insertions: 2, deletions: 2, truncated: false });
+      expect(alpha?.diff).toContain("-alpha-one\n+ALPHA-ONE");
+      expect(alpha?.diff).toContain("-alpha-two\n+ALPHA-TWO");
+      expect(alpha?.diff).not.toMatch(/[+-]middle-/u);
+      expect(alpha?.diff).not.toContain("preview truncated");
+      expect((await readFile(join(test.root, "alpha.txt"), "utf8"))).toContain("alpha-one");
+      expect(await readFile(join(test.root, "beta.txt"), "utf8")).toBe("beta-old\nkeep\n");
+    } finally { await test.cleanup(); }
+  });
+
   it("rejects a stale preview and returns bounded conflict context", async () => {
     const test = await fixture();
     try {
