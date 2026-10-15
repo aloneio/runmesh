@@ -6,7 +6,7 @@ const flag = new Set(["readOnly", "writeOnly", "deprecated", "uniqueItems"]);
 const mcpHeaderToken = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 const mcpHeaderTypes = new Set(["string", "integer", "boolean", "number"]);
 const formats = new Set(["date", "time", "date-time", "duration", "uri", "uri-reference", "uri-template", "url",
-  "email", "hostname", "ipv4", "ipv6", "uuid", "json-pointer", "json-pointer-uri-fragment", "relative-json-pointer"]);
+  "email", "hostname", "ipv4", "ipv6", "regex", "uuid", "json-pointer", "json-pointer-uri-fragment", "relative-json-pointer"]);
 const count = new Set(["minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties", "minContains", "maxContains"]);
 const numeric = new Set(["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"]);
 const single = new Set(["additionalProperties", "unevaluatedProperties", "items", "contains", "not", "if", "then", "else"]);
