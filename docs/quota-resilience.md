@@ -30,7 +30,7 @@ A workspace-scoped list queries an online Runner directly. Without a workspace, 
 
 Terminal-Job cleanup removes bounded batches while preserving active Jobs. Audit stores each cap metadata at **1,000 records per Runner**, with D1 also partitioned by lifecycle; reads exclude entries older than seven days.
 
-During a backend transition, the read path can merge retained SQLite and D1 audit windows. D1 deletes at most **100 expired audit rows** per append or cron turn. The fifteen-minute D1 cleanup runs independently of core DO instantiation. Backlog or quota failures can extend physical retention; backups and point-in-time recovery have separate lifetimes.
+During a backend transition, the read path can merge retained SQLite and D1 audit windows. D1 deletes at most **100 expired audit rows** per append or cron turn. The hourly D1 cleanup runs independently of core DO instantiation. Backlog or quota failures can extend physical retention; backups and point-in-time recovery have separate lifetimes.
 
 ## Respond to failures
 

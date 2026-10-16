@@ -61,13 +61,15 @@ node --test test/main-promotion-policy.test.mjs
 [本地合并流程](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)，
 保留已有作者和提交者身份 `aloneio <git@aloneio.aleeas.com>`。
 
-GitLab 使用受保护的 `dev -> main` MR 快进合并，所有必需检查必须通过，并保留
-`dev`。`main` 更新不再自动上传生产 Worker。生产发布只能通过
-[部署指南](deployment.md)规定的独立同 SHA 审批及受控发布工作站执行。
+GitLab 仍通过受保护的 `dev -> main` MR 快进合并，要求所有必需检查
+通过，并保留 `dev`。Cloudflare Workers Builds 直接监听受保护的
+`main` 分支，收到合并提交后自动运行构建及 Wrangler 生产部署命令。
+GitLab `main` 流水线是推送后的独立检查，不是额外的部署审批服务。
+每次合并后应核对 Cloudflare 构建和线上提交；需要时可回滚 Worker 版本，
+但 D1/Durable Object 数据与不可逆迁移仍需保持向后兼容。
 
-Cloudflare 构建占位分支使用 `runmesh-trusted-release-*` 保护规则，禁止所有角色
-推送、合并和强推，防止新建同名分支意外触发拥有构建凭据的任务。该规则不影响日常
-`dev` 推送。
+原先的空操作占位分支不再参与生产部署。实际构建命令、验收及恢复方式
+见[部署指南](deployment.md)。
 
 GitLab 是唯一的部署权威来源。GitHub 的发行历史独立保留，本流程不会对其进行
 自动同步或强制覆盖。

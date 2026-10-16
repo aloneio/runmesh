@@ -77,15 +77,17 @@ and preserves the existing author and committer identity,
 `aloneio <git@aloneio.aleeas.com>`.
 
 Use the protected GitLab `dev -> main` MR with the fast-forward merge
-method and all mandatory checks. Preserve `dev`; the production Worker
-must not automatically deploy on a `main` push. Production upload requires
-the independent, exact-SHA GitLab approval and privileged release workstation
-documented in [deployment](deployment.md).
+method and all mandatory checks. Preserve `dev`. Cloudflare Workers Builds
+watches the protected `main` branch and automatically deploys the merged
+source with its configured build and Wrangler production deployment commands.
+The GitLab `main` pipeline is an independent post-push check, not an extra
+deployment-approval service. Verify the actual Cloudflare deployment and live
+commit after each merge; use Cloudflare Worker version rollback when needed.
+Database and Durable Object changes still require backward compatibility.
 
-Protect the Cloudflare Builds placeholder pattern `runmesh-trusted-release-*`
-with **No one** allowed to push or merge and force-push disabled. This blocks a
-new branch from triggering a credential-bearing build; it does not restrict
-routine `dev` pushes or grant production release rights.
+The former inert-build placeholder branch does not participate in production
+deployment. See [deployment](deployment.md) for the active commands and
+production recovery procedure.
 
 GitLab is the only authoritative deployment source. GitHub release history is
 separate and is not force-synchronized or automatically modified by this flow.
