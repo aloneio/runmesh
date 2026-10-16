@@ -2,6 +2,12 @@
 
 移动模块或修改适配器时，可按本文确认职责和验证方法。参见[英文版](module-ownership.md)；组件部署按[升级指南](upgrading.zh-CN.md)执行。
 
+## 本轮状态所有权收敛
+
+- `apps/runner/src/connection/pending-rpcs.ts` 统一管理 Runner 待响应 RPC 的超时计时器、完成与批量拒绝；连接代际与授权仍由连接协调器管理。
+- `apps/worker/src/platform/bridge-pending-attachment.ts` 统一管理 WebSocket 附件中的未确认执行请求 ID。超时不得删除尚无回执的执行证据。
+- Registry 的升级 schema 初始化为可选就绪状态；升级存储不可用时仅相应升级 API 返回不可用。核心授权失败时仍然保守拒绝，升级执行状态未知不得放行。
+
 ## 职责与依赖方向
 
 Runner 的 Git 基线判断位于 `git/baseline.ts`；`git-service.ts` 负责解析工作区

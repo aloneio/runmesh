@@ -2,6 +2,7 @@ import { type AdmissionState, type MutationPhase, type RunnerConnectionIdentity,
 import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
+import { pendingBridgeCount, rememberPendingBridge, forgetPendingBridge } from "./platform/bridge-pending-attachment.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
 import { RunnerHeartbeatPersistence } from "./platform/runner-heartbeat.js";
 import { RunnerOptionalPersistence } from "./platform/runner-optional-persistence.js";
@@ -430,7 +431,7 @@ export class RunnerDO {
     if (requiresSessionProbe && !(await this.verifySocketSession(ws, attachment, false, true))) return;
     if (message.type === "rpc.response" || message.type === "rpc.error") {
       const latest = ws.deserializeAttachment() as ConnectionAttachment;
-      latest.pendingUpdateRpcIds = (latest.pendingUpdateRpcIds ?? []).filter(id => id !== message.request_id);
+      forgetPendingBridge(latest, message.request_id);
       ws.serializeAttachment(latest);
       this.replies.deliver(ws, message);
       return;
@@ -586,7 +587,7 @@ export class RunnerDO {
     if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return preDispatchError("runner_offline", "runner is not connected", 503);
     if (this.updateMaintenance.blocksLifecycle(attachment.lifecycleId)) return preDispatchError("runner_updating", "Runner is preparing a version change", 409);
     if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
-    if ((attachment.pendingUpdateRpcIds?.length ?? 0) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
+    if (pendingBridgeCount(attachment) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
     const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) && input.policy_revision > 0 ? input.policy_revision : undefined;
     const expectedPolicyRevision = typeof input.expected_policy_revision === "number" && Number.isSafeInteger(input.expected_policy_revision) && input.expected_policy_revision > 0 ? input.expected_policy_revision : undefined;
     const expectedPolicyChecksum = typeof input.expected_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(input.expected_policy_checksum) ? input.expected_policy_checksum : undefined;
@@ -688,7 +689,7 @@ export class RunnerDO {
     // Authorization above awaits I/O. Recheck capacity at the synchronous
     // reservation point so concurrent admissions cannot all pass the first gate.
     if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
-    if (((socket.deserializeAttachment() as ConnectionAttachment).pendingUpdateRpcIds?.length ?? 0) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
+    if (pendingBridgeCount(socket.deserializeAttachment() as ConnectionAttachment) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
     const reply = await new Promise<BridgeReply>((resolve) => {
       const timer = setTimeout(() => {
         this.replies.forget(requestId);
@@ -697,7 +698,7 @@ export class RunnerDO {
       this.replies.register(requestId, { resolve, timer, socket });
       // Read the attachment again: another dispatch may have updated it while authorization awaited.
       const currentAttachment = socket.deserializeAttachment() as ConnectionAttachment;
-      currentAttachment.pendingUpdateRpcIds = [...(currentAttachment.pendingUpdateRpcIds ?? []), requestId];
+      rememberPendingBridge(currentAttachment, requestId);
       socket.serializeAttachment(currentAttachment);
       try { socket.send(encodeWireFrame(parsed.data)); } catch (error) {
         clearTimeout(timer); this.replies.forget(requestId);
@@ -710,7 +711,7 @@ export class RunnerDO {
             ? "frame_too_large"
             : undefined;
         if (protocolCode === "frame_too_large") {
-          currentAttachment.pendingUpdateRpcIds = currentAttachment.pendingUpdateRpcIds.filter(id => id !== requestId);
+          forgetPendingBridge(currentAttachment, requestId);
           socket.serializeAttachment(currentAttachment);
           resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit", ...failureMetadata("request_too_large", "not_started") } });
           return;
