@@ -139,3 +139,13 @@ it("RM12 bounds the total verified bytes and returns capacity without partial re
   expect(f.ports.repository.readSnapshot.mock.calls.length).toBeLessThan(44);
   expect(f.ports.digest.mock.calls.reduce((sum, [body]) => sum + new TextEncoder().encode(body).byteLength, 0)).toBeLessThanOrEqual(TOOL_SEARCH_LIMITS.scan_bytes);
 }, 30_000);
+
+it("RM12 deterministic bilingual aliases preserve exact-name priority", () => {
+  const score = (query: string, name: string, description = "") => createToolSearchScorer(query)({ name, description, profile_name: "GitLab" });
+  expect(score("repository", "repo_list")).toBeGreaterThan(0);
+  expect(score("仓库", "repository_search")).toBeGreaterThan(0);
+  expect(score("部署", "deployment_list")).toBeGreaterThan(0);
+  expect(score("issues", "issue_list")).toBeGreaterThan(0);
+  expect(score("search", "search")).toBeGreaterThan(score("find", "search"));
+  expect(score("repository missing", "repo_list")).toBe(0);
+});
