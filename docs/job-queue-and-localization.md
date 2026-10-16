@@ -4,7 +4,7 @@ Authorized MCP clients can select the same Runner and share its execution capaci
 
 ## Submit and follow queued work
 
-Default process concurrency is **two**; operators can configure **1–64** execution slots. When slots are full, a compatible Runner can queue up to **32 Jobs total** and **eight per originating client**. It uses FIFO within each client and round-robin selection across clients. Admission reservations are capped at 64.
+Default process concurrency is **32** (half of the **64**-slot upper bound); operators can configure **1–64** execution slots. When slots are full, a compatible Runner defaults to **500 waiting Jobs total** and **500 per originating client**, half of each **1,000**-slot hard cap. It uses FIFO within each client and round-robin selection across clients. Admission reservations are capped at 64. Existing explicit concurrency and JobManager queue overrides are preserved. The default local Job-record capacity is **632** (32 running + 500 queued + 100 completed records) so the queue is not blocked by the earlier 100-record storage default; explicitly configured lower record limits still take precedence. These are capacity limits, not automatically created processes; higher limits can consume additional host resources when saturated.
 
 Both foreground and background calls return a queued Job ID immediately. Follow that ID with `job get/logs`. Set `queue=false` when you want immediate admission only; a full waiting queue returns `queue_full`. Job reads and controls remain available independently of execution slots.
 

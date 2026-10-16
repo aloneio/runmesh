@@ -51,7 +51,7 @@ async function fixture(mode: "batched" | "off" | "immediate" = "batched", heartb
       request_id: `history-${frame.sync_sequence}`, result: { history_status: "recorded" } }));
   }); });
   const connection = new RunnerConnection({ config: { runnerId: "r", server: `ws://127.0.0.1:${address.port}`,
-    token: "synthetic", stateDir: join(base, "state"), workspaces: [] }, historyClock: clock, heartbeatMs });
+    token: "synthetic", stateDir: join(base, "state"), workspaces: [], maxConcurrentJobs: 2 }, historyClock: clock, heartbeatMs });
   let stoppedError: unknown;
   const running = connection.start().catch(error => { stoppedError = error; });
   await wait(() => frames.some(frame => frame.type === "runner.policy_ack" && frame.status === "applied") || stoppedError !== undefined);

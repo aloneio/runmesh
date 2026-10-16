@@ -572,7 +572,7 @@ describe("workspace path policy", () => {
 });
 
 describe("persistent local jobs", () => {
-  it("uses two product execution slots by default and reports effective scheduler capacity", async () => {
+  it("reports the 32-slot product default with two concurrent Jobs", async () => {
     const test = await fixture();
     let first: JobRecord | undefined;
     let second: JobRecord | undefined;
@@ -585,10 +585,10 @@ describe("persistent local jobs", () => {
       second = await runtime.dispatch("exec.start", { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"] }) as JobRecord;
       expect(first.status).toBe("running");
       expect(second.status).toBe("running");
-      expect(runtime.jobs.queueStatus()).toMatchObject({ running: 2, waiting: 0, max_concurrent_jobs: 2, available_slots: 0 });
+      expect(runtime.jobs.queueStatus()).toMatchObject({ running: 2, waiting: 0, max_concurrent_jobs: 32, available_slots: 30, limit: 500, per_client_limit: 500 });
       await expect(runtime.envInfo()).resolves.toMatchObject({
-        runtime_capabilities: { max_concurrent_jobs: 2 },
-        job_scheduler: { running: 2, waiting: 0, max_concurrent_jobs: 2, available_slots: 0 },
+        runtime_capabilities: { max_concurrent_jobs: 32 },
+        job_scheduler: { running: 2, waiting: 0, max_concurrent_jobs: 32, available_slots: 30, limit: 500, per_client_limit: 500 },
       });
     } finally {
       // The runtime owns the live ChildProcess handles; cancel through that same

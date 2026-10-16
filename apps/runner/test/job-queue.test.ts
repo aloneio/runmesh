@@ -7,6 +7,7 @@ import type { JobFilePort } from "../src/jobs/ports.js";
 import { JobManager } from "../src/jobs.js";
 import { PathPolicy } from "../src/path-policy.js";
 import { FairJobQueue } from "../src/job-queue.js";
+import { DEFAULT_MAX_QUEUED_JOBS, DEFAULT_MAX_QUEUED_JOBS_PER_CLIENT, MAX_QUEUED_JOBS } from "../src/scheduler-limits.js";
 const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 async function wait(done:()=>boolean){for(let i=0;i<400;i++){if(done())return;await sleep(20);}throw new Error("queue did not converge");}
 async function fixture(authorize=vi.fn(async()=>true), files: JobFilePort = nativeJobFiles, maxRetainedJobs = 100){
@@ -21,6 +22,25 @@ async function fixture(authorize=vi.fn(async()=>true), files: JobFilePort = nati
  const close=async()=>{for(const job of jobs.list())await jobs.cancel(job.job_id);await wait(()=>jobs.queueStatus().running===0);await rm(base,{recursive:true,force:true,maxRetries:10,retryDelay:50});};
  return {jobs,launch,hold,release,started,authorize,policy,root,base,close};
 }
+it("defaults both queue capacities to half of their hard ceilings", () => {
+ const queue = new FairJobQueue<number>();
+ expect({limit:queue.limit,perClient:queue.perClient}).toEqual({limit:500,perClient:500});
+ expect(DEFAULT_MAX_QUEUED_JOBS).toBe(MAX_QUEUED_JOBS/2);
+ expect(DEFAULT_MAX_QUEUED_JOBS_PER_CLIENT).toBe(MAX_QUEUED_JOBS/2);
+ for(let i=0;i<500;i++)queue.push("client-a",`job-${i}`,i);
+ expect(queue.size).toBe(500);
+ expect(() => queue.push("client-a","overflow",500)).toThrow("queue_full");
+ const perClient=new FairJobQueue<number>(1000);
+ for(let i=0;i<500;i++)perClient.push("client-a",`a-${i}`,i);
+ expect(() => perClient.push("client-a","a-overflow",0)).toThrow("queue_full");
+ perClient.push("client-b","b-1",0);
+ expect(perClient.size).toBe(501);
+ const explicit=new FairJobQueue<number>(4,2);
+ expect({limit:explicit.limit,perClient:explicit.perClient}).toEqual({limit:4,perClient:2});
+ expect(() => new FairJobQueue<number>(1001,500)).toThrow("Invalid queue limits");
+ expect(() => new FairJobQueue<number>(500,1001)).toThrow("Invalid queue limits");
+});
+
 it("queues two MCP clients fairly while preserving FIFO within each client",async()=>{
  const f=await fixture();try{
   const hold=await f.hold("a","hold");

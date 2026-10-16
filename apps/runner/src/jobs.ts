@@ -5,6 +5,7 @@ import { availableLogBytes } from "./jobs/log-budget.js";
 import { retainedJobCandidates, expiredRetainedJob } from "./jobs/retention-plan.js";
 import type { JobFilePort, JobProcessPort, JobPersistencePort } from "./jobs/ports.js";
 import { FairJobQueue } from "./job-queue.js";
+import { DEFAULT_MAX_QUEUED_JOBS, DEFAULT_MAX_QUEUED_JOBS_PER_CLIENT } from "./scheduler-limits.js";
 import { RpcRuntimeError } from "./errors.js";
 import { isAbsolute, join, parse, resolve } from "node:path";
 import { defaultRunnerStateDir } from "./state-path.js";
@@ -157,7 +158,7 @@ export class JobManager {
     this.persistence = dependencies.persistence;
     this.processAdapter = dependencies.processes ?? nativeJobProcesses;
     this.policy = options.policy;
-    this.queue = new FairJobQueue(options.maxQueuedJobs ?? 32, options.maxQueuedJobsPerClient ?? 8);
+    this.queue = new FairJobQueue(options.maxQueuedJobs ?? DEFAULT_MAX_QUEUED_JOBS, options.maxQueuedJobsPerClient ?? DEFAULT_MAX_QUEUED_JOBS_PER_CLIENT);
     this.queueAuthorizer = options.authorizeQueuedJob;
     this.stateDir = options.stateDir ?? defaultRunnerStateDir();
     if (!isAbsolute(this.stateDir) || this.stateDir.length === 0 || this.stateDir.length > 4_096 || /[\u0000-\u001f\u007f]/u.test(this.stateDir) || resolve(this.stateDir) === parse(resolve(this.stateDir)).root) {
@@ -166,6 +167,8 @@ export class JobManager {
     this.jobsDir = join(this.stateDir, "jobs");
     this.runnerStatePath = join(this.stateDir, "runner.json");
     this.runnerId = options.runnerId ?? "runner";
+    // Standalone JobManager integrations remain single-slot by default;
+    // RunnerRuntime always supplies the validated product default or an operator override.
     this.maxConcurrentJobs = positiveInteger(options.maxConcurrentJobs ?? 1, "maxConcurrentJobs");
     const storageLimits = effectiveJobStorageLimits(options);
     this.maxRetainedJobs = storageLimits.maxRetainedJobs;
