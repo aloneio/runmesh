@@ -174,21 +174,34 @@ it("W05 first discovery preserves initial auto-publication", async () => {
   expect(publish).toHaveBeenCalledOnce(); expect(f.repository.stage).not.toHaveBeenCalled();
 });
 
-it("W05 changed tool definitions are staged without implicit approval", async () => {
-  const f = await fixture(), stage = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
-  f.repository.stage = stage;
+it("W05 changed tool definitions are auto-published", async () => {
+  const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.repository.publish = publish;
   f.listTools.mockResolvedValue([catalogDefinition("search", "Changed tool documentation")]);
   const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
-  expect(stage).toHaveBeenCalledOnce();
-  expect(stage.mock.calls[0]![0].tools[0]!.definition.description).toBe("Changed tool documentation");
-  expect(f.repository.publish).not.toHaveBeenCalled();
+  expect(publish).toHaveBeenCalledOnce();
+  expect(publish.mock.calls[0]![0].tools[0]!.definition.description).toBe("Changed tool documentation");
+  expect(f.repository.stage).not.toHaveBeenCalled();
 });
 
-it("W05 refreshed four-tool Cloudflare Code Mode catalog is staged and sorted", async () => {
-  const f = await fixture(), stage = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
-  f.repository.stage = stage;
+it.each(["pending", "partial"])("W05 an identical observed catalog is republished when the old approval is %s", async mode => {
+  const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.head.approved_names = [];
+  if (mode === "pending") f.head.approved_digest = "f".repeat(64);
+  f.repository.publish = publish;
+  f.listTools.mockResolvedValue([catalogDefinition()]);
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
+  expect(publish).toHaveBeenCalledOnce();
+  expect(f.repository.stage).not.toHaveBeenCalled();
+});
+
+it("W05 refreshed four-tool Cloudflare Code Mode catalog is published and sorted", async () => {
+  const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.repository.publish = publish;
   const whoami = { ...catalogDefinition("whoami"), inputSchema: { type: "object", properties: {}, additionalProperties: false },
     outputSchema: { type: "object", properties: { id: { type: "string", minLength: 1, pattern: "\\S" },
       name: { type: "string" }, email: { type: "string" } }, required: ["id"], additionalProperties: false } };
@@ -196,9 +209,9 @@ it("W05 refreshed four-tool Cloudflare Code Mode catalog is staged and sorted", 
   const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
-  expect(f.repository.publish).not.toHaveBeenCalled();
-  expect(stage).toHaveBeenCalledOnce();
-  const snapshot = stage.mock.calls[0]![0];
+  expect(f.repository.stage).not.toHaveBeenCalled();
+  expect(publish).toHaveBeenCalledOnce();
+  const snapshot = publish.mock.calls[0]![0];
   expect(snapshot.tools.map(tool => tool.definition.name)).toEqual(["docs", "execute", "search", "whoami"]);
 });
 

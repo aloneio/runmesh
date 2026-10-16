@@ -36,7 +36,7 @@ Entries that need additional configuration show a prompt to check the provider's
 
 Select **View tools** on the MCP card to see tool names and descriptions. Enabled tools are shared with the instance's active AI clients. To connect a client, follow the [user guide](user-guide.md).
 
-When the provider changes its tools, select **Refresh tools**. RunMesh stages updates to an existing connection instead of publishing unreviewed definitions. Select **View tools**, review the differences, choose exactly which changed or new tools to authorize, and select **Approve selected tools**. Unchanged previously approved tools stay available; unselected changes stay blocked. An identical refresh does not create a new version. If refresh fails, the saved catalog is retained.
+When the provider changes its tools, select **Refresh tools**. RunMesh automatically publishes the complete compatible tool set, including new or changed definitions, without a separate approval step. Existing pending or partially approved catalogs are brought up to date by the same refresh. An identical, fully published catalog does not create a new version. If refresh fails, the saved catalog is retained.
 
 Runmesh exposes direct tools for smaller collections and directory tools for browsing larger collections. An AI client can use `remote_profiles` to find MCPs, `remote_search` to search by keywords, `remote_tools` to read complete tool definitions, and `remote_call` to invoke a tool with its returned ID and version. Search matches tool names, titles, descriptions and connection names; add `profile_id` to search one MCP. Refresh the client's catalog after adding or changing a connection.
 
@@ -63,7 +63,6 @@ For errors, see [troubleshooting](troubleshooting.md). Protocol and deployment d
 
 ## Partial tool compatibility
 
-Initial discovery can publish supported tools while listing exclusions for unsupported
-schemas or required interactive features. Later refreshes require review before changes are published. The exclusion warning is not an OAuth
-failure. If all tools are unsupported, the existing catalog is preserved. See
+Both initial discovery and later refreshes automatically publish supported tools while listing exclusions for unsupported
+schemas or required interactive features. The exclusion warning is not an OAuth failure. If all tools are unsupported, the existing catalog is preserved. See
 [the compatibility matrix](mcp-compatibility.md) before changing credentials.

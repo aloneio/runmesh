@@ -1389,48 +1389,44 @@ test("MCP inspection invalidation follows the displayed connection or draft", as
   assert.equal(ui.panel.children.length, 0);
 });
 
-test("Changed MCP tools are never preapproved and reviewers can preserve unchanged tools", async t => {
+test("Existing MCP tools refresh automatically without a review checkbox or approval request", async t => {
   const { element } = centralDomFixture(t);
   const list = element(), panel = element(), status = element(), form = element('form');
   const app = { querySelector: selector => ({ '[data-service-list]': list,
     '[data-service-tools]': panel, '[data-product-status]': status, '[data-service-create]': form })[selector] ?? null };
   const profile = { profile_id: 'docs', connector_id: 'docs', display_name: 'Docs', enabled: true, endpoint: 'https://example.com/mcp' };
-  const digest = 'b'.repeat(64), previous = 'a'.repeat(64), submitted = [];
+  const digest = 'b'.repeat(64), previous = 'a'.repeat(64), requests = [];
   let approvedNames = ['lookup', 'stable'], approvedDigest = previous, revision = 2;
   const tools = ['lookup', 'new', 'stable'].map(name => ({ definition: { name, description: name } }));
-  const changes = [{ name: 'lookup', state: 'changed' }, { name: 'new', state: 'added' }, { name: 'stable', state: 'unchanged' }];
   const catalog = () => ({ head: { revision, observed_digest: digest, approved_digest: approvedDigest, approved_names: approvedNames },
-    snapshot: { digest, tools }, changes });
+    snapshot: { digest, tools } });
   let pending;
   const run = action => { pending = Promise.resolve().then(action); return pending; };
   const view = createCentralView(app, key => key, run);
   const workflow = createServiceWorkflow({ app, view, t: key => key, run, navigate() {},
     refresh: async () => { workflow.render([profile]); return [profile]; },
     api: async (path, body) => {
+      requests.push({ path, body });
       if (path === 'catalogs/docs' && body === undefined) return catalog();
-      if (path === 'catalogs/docs' && body?.action === 'approve') {
-        submitted.push(body); approvedNames = [...body.tool_names]; approvedDigest = digest; revision++;
-        return { state: 'written' };
+      if (path === 'discovery/docs' && body?.expected_revision === revision) {
+        approvedNames = ['lookup', 'new', 'stable']; approvedDigest = digest; revision++;
+        return { state: 'written', head: catalog().head };
       }
-      throw new Error('Unexpected path: ' + path);
+      throw new Error('Unexpected request: ' + path);
     } });
   workflow.render([profile]);
   const nodes = node => [node, ...node.children.flatMap(nodes)];
   const button = (container, label) => nodes(container).find(node => node.tag === 'button' && node.textContent === label);
   button(list, 'viewTools').dispatch('click'); await pending;
-  const inputs = nodes(panel).filter(node => node.tag === 'input');
-  assert.deepEqual(inputs.map(node => node.checked), [false, false, true],
-    'Changed and new tools require approval; unchanged previous grants are retained');
-  assert.deepEqual(submitted, [], 'Viewing staged tools never approves the provider changes');
-  inputs[0].checked = true;
-  button(panel, 'catalogApproveSelection').dispatch('click'); await pending;
-  assert.deepEqual(submitted, [{ action: 'approve', expected_revision: 2, digest, tool_names: ['lookup', 'stable'] }],
-    'Approval includes only explicitly selected changes plus retained grants');
-  assert.deepEqual(approvedNames, ['lookup', 'stable']);
-  assert.equal(approvedDigest, digest);
-  const followUp = nodes(panel).filter(node => node.tag === 'input');
-  assert.deepEqual(followUp.map(node => node.checked), [true, false, true],
-    'Unselected new tools remain unapproved after a partial publication');
+  assert.equal(status.textContent, 'catalogRefreshNeeded', 'Legacy pending state shows refresh guidance');
+  assert.equal(nodes(panel).some(node => node.tag === 'input' || node.tag === 'button'), false,
+    'No tool approval checkboxes or actions remain');
+  button(list, 'refreshTools').dispatch('click'); await pending;
+  assert.equal(status.textContent, 'serviceConnectedToolsReady');
+  assert.deepEqual(approvedNames, ['lookup', 'new', 'stable']);
+  assert.deepEqual(requests.filter(item => item.path === 'discovery/docs').map(item => item.body.expected_revision), [2]);
+  assert.equal(requests.some(item => item.body?.action === 'approve'), false);
+  assert.equal(nodes(panel).filter(node => node.tag === 'h3').length, 3);
 });
 
 test("A late tool read cannot replace a later selection, and unrelated invalidation keeps that selection", async t => {

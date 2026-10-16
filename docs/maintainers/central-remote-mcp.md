@@ -127,21 +127,21 @@ Create and enable a profile using the existing protected administration API.
 Read `GET /admin/central/catalogs/{profile_id}` and pass its `head.revision` as
 `expected_revision` to `POST /admin/central/discovery/{profile_id}`. Use
 `{"expected_revision":0}` only when the catalog read returns `{"state":"empty"}`.
-Requests use the administrator's existing session, same origin and matching CSRF token. The first complete bounded tools/list is published atomically to preserve initial
-connection setup. For an existing catalog, refresh stages the full observed
-snapshot and retains the previously approved digest and names. Administrators
-review the changed/new entries in **View tools** and approve only the selected
-names; unchanged previously approved tools are preselected. Unapproved changes
-remain blocked. Repeated identical observations return `unchanged` without a
-storage write or revision bump. Client credentials remain required; publication
-grants no Runner permissions.
+Requests use the administrator's existing session, same origin and matching CSRF token.
+Both initial discovery and subsequent refreshes atomically publish the complete
+compatible tools/list snapshot without administrator approval. Previously staged,
+disabled, or partially approved catalogs are replaced by the complete live
+publication on refresh. A fully published unchanged observation returns
+`unchanged` without a storage write or revision bump. Client credentials
+remain required; publication grants no Runner permissions.
 
 The discovery endpoint permits no caller URL, token, HTTP headers or command.
 Partial pages, duplicate tools, timeouts and failed upstream
-observations leave the previously reviewed catalog intact. An actual change in
+observations leave the previously published catalog intact. An actual change in
 the selected tool's description/schema/annotations blocks invocation until the
-catalog is refreshed and the changed definition is explicitly approved. The call
-itself never publishes changes; an identical refresh does not create a new revision.
+catalog is refreshed and the changed definition is automatically published.
+Calls never publish changes or replay a rejected invocation; a fully published
+unchanged refresh does not create a new revision.
 
 ### Hosted MCP catalog compatibility
 

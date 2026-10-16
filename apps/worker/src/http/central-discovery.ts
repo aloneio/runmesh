@@ -25,12 +25,10 @@ export async function handleCentralDiscovery(request: Request, env: WorkerEnv, u
       const head = parseCatalogHead(result.head);
       const excluded = result.excluded_tools === undefined ? [] : parseRemoteToolIssues(result.excluded_tools);
       if (excluded === undefined) return centralFailure("central_result_unconfirmed", 503, "unknown");
-      // Existing connections stage updates, preserving the last reviewed
-      // digest. Only first-time discovery can publish without prior history.
-      const validPublication = result.state === "unchanged" ? revision > 0
-        : revision > 0 || head?.approved_digest === head?.observed_digest;
+      // Both first discovery and refresh must confirm a published digest:
+      // never report success for a pending/staged catalog or malformed reply.
       if (head?.profile_id === profileId && head.revision === revision + (result.state === "written" ? 1 : 0)
-        && validPublication)
+        && head.approved_digest === head.observed_digest)
         return Response.json({ state: result.state, head, ...(excluded.length ? { excluded_tools: excluded } : {}) }, { headers: centralHeaders });
     } else if (result?.state === "conflict" && catalogRevision(result.current_revision, true)) {
       return Response.json({ error: { code: "central_revision_conflict", operation_state: "not_started", current_revision: result.current_revision } }, { status: 409, headers: centralHeaders });

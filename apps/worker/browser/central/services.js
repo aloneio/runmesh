@@ -127,9 +127,11 @@ export function createServiceWorkflow({
     });
   }
   function isPublished(catalog) {
-    // A reviewed subset is a valid publication; other discovered tools remain
-    // unavailable until an administrator explicitly includes their names.
-    return Boolean(catalog && catalog.head.approved_digest === catalog.snapshot.digest);
+    // A legacy staged or partially approved catalog is not fully available;
+    // Refresh tools automatically publishes the complete compatible set.
+    return Boolean(catalog && catalog.head.approved_digest === catalog.snapshot.digest
+      && catalog.head.approved_names.length === catalog.snapshot.tools.length
+      && catalog.snapshot.tools.every(tool => catalog.head.approved_names.includes(tool.definition.name)));
   }
   async function connectService(profile, { catalog: observedCatalog, authorize = true, background = false, mayPresent = () => false,
     selection = background ? undefined : selectTools(profile),
@@ -152,14 +154,7 @@ export function createServiceWorkflow({
       current = currentProfiles.find(item => item.profile_id === profile.profile_id);
     if (!current || !current.enabled) throw new Error(t('serviceNoLongerEnabled'));
     var published = background ? await api('catalogs/' + id, undefined, true) : await showTools(current, undefined, selection);
-    if (!isPublished(published)) {
-      const reviewMessage = t('catalogRefreshStaged');
-      recoveryMessage(profile.profile_id, reviewMessage);
-      if (background) {
-        if (mayPresent()) { await showTools(current, published); say(reviewMessage); }
-      } else if (selection === toolsGeneration) say(reviewMessage);
-      return currentProfiles;
-    }
+    if (!isPublished(published)) throw new Error(t('toolsNotReadyRefreshToConnect'));
     const readyMessage = excluded?.length ? t('serviceToolsPartiallyReady', { count: excluded.length }) + '\n'
       + excluded.slice(0, 8).map(item => (item.name || '?') + ': ' + item.code).join('\n') : t('serviceConnectedToolsReady');
     recoveryMessage(profile.profile_id, readyMessage, Boolean(excluded?.length));
@@ -220,79 +215,26 @@ export function createServiceWorkflow({
       return null;
     }
     heading.append(el('span', catalog.snapshot.tools.length + ' ' + t(catalog.snapshot.tools.length === 1 ? 'toolCountOne' : 'toolCount'), 'muted'));
-    const staged = !isPublished(catalog);
-    const deltas = new Map((catalog.changes || []).map(entry => [entry.name, entry.state]));
-    const allowed = new Set(catalog.head.approved_names);
-    const choices = [];
-    // After staging, only names with matching old and new definitions can be
-    // retained by default. Changed/new definitions always require a click.
-    for (const tool of catalog.snapshot.tools) {
-      const state = deltas.get(tool.definition.name) || 'unchanged';
-      const retained = allowed.has(tool.definition.name) && (!staged || state === 'unchanged');
-      choices.push({ tool, state, retained });
-    }
-    const reviewNeeded = staged || choices.some(choice => !choice.retained);
     if (!profile.enabled) panel.append(el('p', t('serviceNoLongerEnabled')));
-    if (profile.enabled && staged) panel.append(el('p', t('catalogRefreshStaged'), 'muted'));
-    if (profile.enabled && reviewNeeded) panel.append(el('p', t('catalogReviewInstructions'), 'muted'));
-    const controls = [];
-    choices.forEach(function (choice) {
-      const { tool, state, retained } = choice;
+    if (!isPublished(catalog)) panel.append(el('p', t('catalogRefreshNeeded'), 'muted'));
+    for (const tool of catalog.snapshot.tools) {
       var card = el('article', undefined, 'central-card');
       card.append(el('h3', tool.definition.title || tool.definition.name));
       if (tool.definition.description) card.append(el('p', tool.definition.description, 'muted'));
-      if (reviewNeeded) {
-        const details = el('details', undefined, 'central-file-preview');
-        const summary = el('summary', t('catalogInspectDefinition'));
-        const definition = el('pre');
-        details.append(summary, definition);
-        // Do not render up to 512 large schemas before an administrator opens
-        // them; use textContent to keep provider strings inert.
-        details.addEventListener('toggle', () => {
-          if (details.open && !definition.textContent) definition.textContent = JSON.stringify(tool.definition, null, 2);
-        });
-        card.append(details);
-        const label = el('label', undefined, 'central-tool-review');
-        const check = el('input');
-        check.type = 'checkbox';
-        check.checked = retained;
-        check.disabled = !profile.enabled;
-        label.append(check, el('span', t(retained ? 'catalogKeepApproved' : 'catalogApproveChange')
-          + ' · ' + t('catalogChange_' + state), 'muted'));
-        card.append(label);
-        controls.push({ check, name: tool.definition.name });
-      }
+      const details = el('details', undefined, 'central-file-preview');
+      const summary = el('summary', t('catalogInspectDefinition'));
+      const definition = el('pre');
+      details.append(summary, definition);
+      // Keep provider schemas inert and only render them when expanded.
+      details.addEventListener('toggle', () => {
+        if (details.open && !definition.textContent) definition.textContent = JSON.stringify(tool.definition, null, 2);
+      });
+      card.append(details);
       panel.append(card);
-    });
-    const removed = (catalog.changes || []).filter(change => change.state === 'removed');
-    if (removed.length && staged) {
-      const list = el('ul');
-      removed.forEach(change => list.append(el('li', change.name)));
-      panel.append(el('p', t('catalogRemovedTools'), 'muted'), list);
     }
     if (!catalog.snapshot.tools.length) panel.append(el('p', t('serviceHasNoTools')));
-    if (profile.enabled && reviewNeeded && controls.length) {
-      const actions = el('div', undefined, 'actions');
-      viewButton(actions, t('catalogApproveSelection'), async () => {
-        const names = controls.filter(entry => entry.check.checked).map(entry => entry.name);
-        if (!names.length) throw new Error(t('catalogSelectAtLeastOne'));
-        await api('catalogs/' + encodeURIComponent(profile.profile_id), {
-          action: 'approve',
-          expected_revision: catalog.head.revision,
-          digest: catalog.snapshot.digest,
-          tool_names: names
-        });
-        const profiles = await refresh();
-        const current = profiles.find(item => item.profile_id === profile.profile_id);
-        if (!current || !current.enabled) throw new Error(t('serviceNoLongerEnabled'));
-        await showTools(current, undefined, selection);
-        recoveryMessage(profile.profile_id, t('catalogApprovalSaved'));
-        if (selection === toolsGeneration) say(t('catalogApprovalSaved'));
-      }, serviceOperationScope(profile.profile_id));
-      panel.append(actions);
-    }
     panel.scrollIntoView({ block: 'nearest' });
-    say(t('toolsReadyToView'));
+    say(t(isPublished(catalog) ? 'toolsReadyToView' : 'catalogRefreshNeeded'));
     return catalog;
   }
   async function connectOAuth(profile, authorization = authorizationIntent(profile.authentication), oauthClient) {

@@ -7,9 +7,9 @@ import { createCatalogManager } from "./catalog-admin.js";
 import { buildCatalogSnapshot } from "../../domain/capabilities/catalog.js";
 import { remoteDeadline } from "./remote-deadline.js";
 
-/** Initial discovery preserves the existing connect-and-publish flow. Subsequent
- * refreshes stage provider changes for explicit approval. Failed or incomplete
- * observations never replace a published definition. */
+/** Full, bounded discovery publishes compatible tools atomically on initial
+ * connection and subsequent refreshes, without a separate approval step.
+ * Incomplete observations retain the last working catalog. */
 export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly connector: RemoteConnector }) {
   return async (profileId: string, expectedRevision: number, parent: AbortSignal): Promise<RemoteDiscoveryResult> => {
     if (!isCapabilityIdentifier(profileId) || !catalogRevision(expectedRevision, true)) return { state: "invalid" };
@@ -49,8 +49,9 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
           const current = ports.profile(id);
           return current?.revision === profile.revision && current.enabled && current.endpoint === profile.endpoint ? current : undefined;
         } });
-        // Avoid a storage write and cursor invalidation for identical live
-        // tools, including when a previously staged review is still pending.
+        // Avoid redundant writes only if the latest observation is fully
+        // published. An older staged or partially approved snapshot must
+        // advance to a complete publication even when its digest is unchanged.
         const orderedTools = [...tools].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
         const candidate = await buildCatalogSnapshot(profile, orderedTools, ports.digest, expired);
         if (candidate === undefined || expired()) return { state: "unavailable" };
@@ -58,10 +59,14 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
         // A credential or egress revision can change while hashing. This is
         // an explicit pre-publication denial, not a dispatched tool failure.
         if (!completedSession.current()) return { state: "denied" };
-        if (existing?.observed_digest === candidate.digest) return { state: "unchanged", head: existing,
+        const fullyPublished = existing?.observed_digest === candidate.digest
+          && existing.approved_digest === candidate.digest
+          && existing.approved_names.length === candidate.tools.length
+          && candidate.tools.every(tool => existing.approved_names.includes(tool.definition.name));
+        if (fullyPublished) return { state: "unchanged", head: existing,
           ...(excluded.length ? { excluded_tools: excluded } : {}) };
         publishing = true;
-        const result = await manager.mutate({ action: existing === undefined ? "publish" : "stage",
+        const result = await manager.mutate({ action: "publish",
           profile_id: profileId, expected_revision: expectedRevision, tools }, signal, expired);
         return result.state === "written" && excluded.length ? { ...result, excluded_tools: excluded } : result;
       } catch (error) {

@@ -26,7 +26,7 @@ See the [user guide](user-guide.md) for connecting the AI client and starting wo
 
 | Action | Result |
 | --- | --- |
-| MCP: **Refresh tools** | Checks an existing provider for changes and stages them for review. Use **View tools → Approve selected tools** to authorize changed or new definitions. Unchanged approved tools stay usable. |
+| MCP: **Refresh tools** | Loads and automatically publishes compatible provider tools, including changed and new definitions. No separate tool approval is required. |
 | MCP: **Pause** / **Enable** | Stops or resumes shared access. Enabling refreshes the tool list. |
 | OAuth MCP: **Reconnect** | Starts a new authorization flow with the provider. |
 | OAuth MCP: **Disconnect account** | Removes the account connection saved in Runmesh. Select **Reconnect** to authorize again. |

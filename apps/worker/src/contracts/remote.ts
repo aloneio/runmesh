@@ -42,7 +42,7 @@ export function remoteFailureMetadata(value: unknown, observed: unknown) {
     recovery_hint: operation_state === "unknown" ? "The upstream action may have executed. Inspect its state before a new invocation; this call was not replayed."
       : operation_state === "completed" ? "The upstream action completed, but its result cannot be returned. Do not treat this response as a rollback."
       : code === "busy" ? "The MCP connection is busy. Wait briefly, then try again."
-      : code === "stale_catalog" ? "The provider tool definition differs from the reviewed catalog. In RunMesh MCP & Skill, refresh the tool list and approve the changed tools; this call was not sent upstream."
+      : code === "stale_catalog" ? "The provider tool definition has changed. In RunMesh MCP & Skill, select Refresh tools to automatically publish compatible updates. This call was not sent upstream."
       : "Check the central connection, approved catalog and client connection before a new request." });
 }
 export type RemoteFailure = { readonly state: "failed"; readonly code: RemoteCode;

@@ -171,31 +171,43 @@ it("W05 shared clients discover publications without grants and invalid argument
   } finally { f.network.mockRestore(); }
 });
 
-it("W05 a changed upstream description is staged until explicitly approved", async () => {
+it("W05 changed provider tools auto-publish on refresh without an approval step", async () => {
   const f = await fixture();
   try {
-    expect((await f.discover()).status).toBe(200); const command = await f.toolCommand(); f.drift();
-    expect(await f.port.callRemote(f.current.principal, command)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
+    expect((await f.discover()).status).toBe(200);
+    const old = await f.toolCommand(); f.drift();
+    expect(await f.port.callRemote(f.current.principal, old)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
     expect(f.execute).not.toHaveBeenCalled();
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 1 } });
-    const response = await f.discover(f.admin.headers, 1);
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ state: "written", head: { revision: 2 } });
-    const staged = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
-    expect(staged.state).toBe("found");
-    if (staged.state !== "found") throw new Error("missing staged catalog");
-    expect(staged.head).toMatchObject({ revision: 2, approved_names: ["lookup"] });
-    expect(staged.head.observed_digest).not.toBe(staged.head.approved_digest);
-    expect(staged.changes).toEqual([{ name: "lookup", state: "changed" }]);
+    const refreshed = await f.discover(f.admin.headers, 1);
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.json()).toMatchObject({ state: "written", head: { revision: 2, approved_names: ["lookup"] } });
+    const published = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
+    expect(published.state).toBe("found");
+    if (published.state !== "found") throw new Error("missing published catalog");
+    expect(published.head.observed_digest).toBe(published.head.approved_digest);
+    expect(published.changes).toEqual([{ name: "lookup", state: "unchanged" }]);
     const updated = await f.toolCommand();
-    expect(updated.version).not.toBe(command.version);
-    expect(await f.port.callRemote(f.current.principal, updated)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
-    expect(f.execute).not.toHaveBeenCalled();
-    const approval = await f.call(owner => owner.mutateCatalog(f.admin.hash, {
-      action: "approve", profile_id: "docs", expected_revision: 2, digest: staged.snapshot.digest, tool_names: ["lookup"],
-    }));
-    expect(approval).toMatchObject({ state: "written", head: { revision: 3, approved_names: ["lookup"] } });
+    expect(updated.version).not.toBe(old.version);
+    expect(await f.port.callRemote(f.current.principal, old)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
     expect(await f.port.callRemote(f.current.principal, updated)).toMatchObject({ state: "completed" });
+    expect(f.execute).toHaveBeenCalledOnce();
+  } finally { f.network.mockRestore(); }
+});
+
+it("W05 refresh automatically restores an old partially approved catalog", async () => {
+  const f = await fixture();
+  try {
+    expect((await f.discover()).status).toBe(200);
+    const initial = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
+    if (initial.state !== "found") throw new Error("missing initial catalog");
+    const partial = await f.call(owner => owner.mutateCatalog(f.admin.hash, {
+      action: "approve", profile_id: "docs", expected_revision: 1, digest: initial.snapshot.digest, tool_names: [],
+    }));
+    expect(partial).toMatchObject({ state: "written", head: { revision: 2, approved_names: [] } });
+    const refreshed = await f.discover(f.admin.headers, 2);
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.json()).toMatchObject({ state: "written", head: { revision: 3, approved_names: ["lookup"] } });
+    expect(await f.port.callRemote(f.current.principal, await f.toolCommand())).toMatchObject({ state: "completed" });
     expect(f.execute).toHaveBeenCalledOnce();
   } finally { f.network.mockRestore(); }
 });
