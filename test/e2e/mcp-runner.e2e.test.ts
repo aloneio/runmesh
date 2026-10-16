@@ -355,6 +355,42 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(pinnedRead.structuredContent).toMatchObject({ data: "hello from a real local runner\n", runner_context: { runner_id: runnerId } });
     const selectedAfterPin = await mcpTool("runner_current", {}, clientC);
     expect(selectedAfterPin.structuredContent?.active_runner_id).toBeNull();
+
+    // Pinning is a per-request target, not an authorization or selection grant.
+    const readOnlyClientShell = await mcpTool("shell", {
+      runner_id: runnerId, workspace_id: "workspace-1", command: "pwd",
+    }, clientC);
+    expect(readOnlyClientShell.isError).toBe(true);
+    expect(readOnlyClientShell.structuredContent?.error?.code).toBe("insufficient_scope");
+
+    const missingRunner = await mcpTool("read", {
+      runner_id: "runner-no-such-e2e-id", workspace_id: "workspace-1", path: "note.txt",
+    }, clientC);
+    expect(missingRunner.isError).toBe(true);
+    expect(missingRunner.structuredContent?.error?.code).toBe("runner_unavailable");
+
+    const offlineTarget = await mcpTool("read", {
+      runner_id: otherRunnerId, workspace_id: "workspace-1", path: "note.txt",
+    }, clientC);
+    expect(offlineTarget.isError).toBe(true);
+    expect(offlineTarget.structuredContent?.error?.code).toBe("runner_offline");
+
+    // Concurrent explicit calls must not race the shared sticky selection.
+    const mixed = await Promise.all(Array.from({ length: 6 }, (_, index) => mcpTool("read", {
+      runner_id: index % 2 === 0 ? runnerId : otherRunnerId,
+      workspace_id: "workspace-1", path: "note.txt",
+    }, clientC)));
+    for (const [index, reply] of mixed.entries()) {
+      if (index % 2 === 0) {
+        expect(reply.isError).not.toBe(true);
+        expect(reply.structuredContent?.runner_context?.runner_id).toBe(runnerId);
+        expect(reply.structuredContent?.data).toBe("hello from a real local runner\n");
+      } else {
+        expect(reply.isError).toBe(true);
+        expect(reply.structuredContent?.error?.code).toBe("runner_offline");
+      }
+    }
+    expect((await mcpTool("runner_current", {}, clientC)).structuredContent?.active_runner_id).toBeNull();
   });
 
   it("rejects POSIX, Windows drive, and UNC paths at the MCP schema boundary", async () => {
