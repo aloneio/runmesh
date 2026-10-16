@@ -8,14 +8,15 @@ import type { PermissionBit } from "./contracts.js";
 import { policyReadiness } from "./authorization.js";
 import { projectRunnerResult } from "./results/project.js";
 import { recordRunnerToolCall } from "./audit.js";
-import { resolveActiveRunner } from "./selection.js";
+import { resolveRunnerForOperation } from "./selection.js";
 import { runnerFailure } from "./results/envelope.js";
 import type { RunnerResultMode } from "./contracts.js";
 import { runnerSuccess } from "./results/envelope.js";
 import { withAuditReceipt } from "./audit.js";
 
 export async function activeRunnerTool(env: McpRequestEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
-  const selected = await resolveActiveRunner(env, clientId);
+  const { runner_id: pinnedRunner, ...runnerParams } = params;
+  const selected = await resolveRunnerForOperation(env, clientId, pinnedRunner);
   if (!selected.ok) return asToolResult(selected);
   if (requiredPermission !== undefined && params.workspace_id === undefined) {
     const permission = await checkAnyReadPermission(env, clientId, selected.value.runnerId);
@@ -26,13 +27,14 @@ export async function activeRunnerTool(env: McpRequestEnv, clientId: string, met
     : await policyReadiness(env, selected.value.runnerId);
   if (!readiness.ok) return asToolResult(readiness.error);
   const startedAtMs = Date.now();
-  const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);
-  const result = verifyRunnerToolResult(method, params, call.ok ? runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value) : runnerFailure(call.error, selected.value));
+  const call = await callRunner(env, selected.value.runnerId, method, runnerParams,
+    readiness.value.applied_revision, readiness.value.active_checksum, false, pinnedRunner !== undefined);
+  const result = verifyRunnerToolResult(method, runnerParams, call.ok ? runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value) : runnerFailure(call.error, selected.value));
   const audit = await recordRunnerToolCall(env, {
     runnerId: selected.value.runnerId,
     clientId,
     method,
-    params,
+    params: runnerParams,
     result,
     startedAtMs,
     readiness: readiness.value,

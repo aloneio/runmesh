@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { runnerPolicyChecksum, type RunnerPolicy } from "@aloneio/runmesh-protocol";
 import { expect, it, vi } from "vitest";
+import { internalHeaders } from "../src/security.js";
 import type { RegistryDO } from "../src/registry.js";
 
 const full = { read: true, edit: true, shell: true, job_control: true };
@@ -215,5 +216,50 @@ it.each([0, 4])("an empty visible workspace list does not read an unused overrid
       expect(instance.effectiveWorkspaceList("c", "r")?.workspaces).toEqual([]);
       expect(overrideReads).toBe(0);
     } finally { spy.mockRestore(); }
+  });
+});
+
+it("a pinned Runner is authorized by live workspace policy without changing shared selection", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName("pinned-policy-" + crypto.randomUUID()));
+  await runInDurableObject(stub, (registry, state) => {
+    const policy = ready(registry, state);
+    const input = { client_id: "c", secret_version: 1, runner_id: "r",
+      method: "fs.read", workspace_id: "w0", policy_revision: 1, policy_checksum: policy.checksum };
+    expect(registry.getMcpClientActiveRunner("c")).toMatchObject({ active_runner_id: null });
+    expect(registry.authorizeMcpRpc(input)).toMatchObject({ ok: false });
+    expect(registry.authorizeMcpRpc({ ...input, runner_pinned: true })).toEqual({ ok: true });
+    expect(registry.getMcpClientActiveRunner("c")).toMatchObject({ active_runner_id: null });
+    // Explicit routing is NOT a grant. Workspace overrides, scopes,
+    // revocation and policy versions remain live admission fences.
+    expect(registry.setClientRunnerOverride("c", "r",
+      { read: false, edit: false, shell: false, job_control: false }, Date.now())).toBe(true);
+    expect(registry.authorizeMcpRpc({ ...input, runner_pinned: true })).toEqual({ ok: false, code: "permission_denied" });
+    expect(registry.setClientRunnerOverride("c", "r", full, Date.now())).toBe(true);
+    registry.updateMcpClientScopes("c", ["coding:exec"], Date.now());
+    expect(registry.authorizeMcpRpc({ ...input, runner_pinned: true })).toEqual({ ok: false, code: "insufficient_scope" });
+    registry.updateMcpClientScopes("c", ["coding:read"], Date.now());
+    expect(registry.authorizeMcpRpc({ ...input, runner_pinned: true })).toEqual({ ok: true });
+    registry.revokeMcpClient("c", Date.now());
+    expect(registry.authorizeMcpRpc({ ...input, runner_pinned: true })).toMatchObject({ ok: false });
+  });
+});
+
+it("a pinned Runner context is one exact read-only indexed observation, never a sticky selection write", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName("pinned-context-" + crypto.randomUUID()));
+  await runInDurableObject(stub, (registry, state) => {
+    ready(registry, state);
+    state.storage.sql.exec("UPDATE runners SET last_heartbeat_ms=? WHERE runner_id='r'", Date.now());
+  });
+  const get = async (runnerId: string) => {
+    const path = "/auth/clients/c/runner-context/" + runnerId;
+    const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
+    return stub.fetch(new Request("https://registry.internal" + path, { method: "GET", headers }));
+  };
+  const current = await get("r");
+  expect(current.status).toBe(200);
+  expect(await current.json()).toMatchObject({ runner_id: "r", state: "online", available: true, updated_at_ms: null });
+  expect((await get("missing")).status).toBe(404);
+  await runInDurableObject(stub, registry => {
+    expect(registry.getMcpClientActiveRunner("c")).toMatchObject({ active_runner_id: null });
   });
 });

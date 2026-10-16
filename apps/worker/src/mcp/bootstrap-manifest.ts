@@ -2,7 +2,8 @@ import { PRODUCT_VERSION } from "../generated-version.js";
 import { sha256Hex } from "../security.js";
 
 export const BOOTSTRAP_SCHEMA_VERSION = 1 as const;
-export const BOOTSTRAP_MANIFEST_REVISION = 2 as const;
+export { BOOTSTRAP_MANIFEST_REVISION } from "./bootstrap-constants.js";
+import { BOOTSTRAP_MANIFEST_REVISION } from "./bootstrap-constants.js";
 export const BOOTSTRAP_REMOTE_PROFILE_LIMIT = 16;
 
 const runtimeAuthorization = () => Object.freeze({ supported: true, authorization: "runtime" as const });
@@ -74,6 +75,8 @@ const STATIC_CONTRACT = Object.freeze({
     "If remote_search returns no relevant tools, inspect the known service with remote_tools, or use remote_profiles then remote_tools, before concluding the capability is unavailable.",
     "Load remote tool schemas only when relevant to the current task.",
     "Prefer inspection before mutation.",
+    "For concurrent machine work, pass runner_id on each workspace_list, inspect, read, edit, shell, job and context call. Sticky selection is shared per client.",
+    "An explicit runner_id pins one operation without changing shared selection. Follow Jobs with the same runner_id from the original shell receipt.",
     "Do not blindly retry writes or commands with an uncertain outcome.",
     "Continue existing jobs with job instead of relaunching the command.",
     "Bootstrap describes capabilities and routing but never grants permissions.",

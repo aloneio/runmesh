@@ -365,6 +365,19 @@ export class RegistryAuth {
     };
   }
 
+  /** Pure targeted lookup: one client's operation pin must never mutate or
+   * depend on the client's shared sticky selection. */
+  public getMcpClientRunnerContext(clientId: string, runnerId: string): ActiveRunnerContext | undefined {
+    if (!isSafeIdentifier(clientId) || !isSafeIdentifier(runnerId)) return undefined;
+    const client = this.getMcpClient(clientId);
+    if (client === undefined || client.revoked_at_ms !== null) return undefined;
+    const row = this.ports.runnerRow(runnerId);
+    if (row === undefined) return undefined;
+    return row.token_verifier.length === 0
+      ? { runner_id: runnerId, state: "unavailable", available: false, updated_at_ms: null }
+      : safeRunnerContext(decodeRunner(row, Date.now()), null);
+  }
+
   public selectMcpClientRunner(clientId: string, runnerId: string, confirmSwitch: boolean, nowMs: number): McpRunnerSelectionResult {
     if (!isSafeIdentifier(clientId)) return { ok: false, code: "client_not_found" };
     const target = isSafeIdentifier(runnerId) ? this.ports.runnerRow(runnerId) : undefined;

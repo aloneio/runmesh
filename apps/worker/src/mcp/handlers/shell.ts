@@ -9,7 +9,8 @@ import { success } from "../results/envelope.js";
 import { z } from "zod";
 
 export async function shellTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
-  const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId, ...(params.queue === undefined ? {} : {queue:params.queue}), ...(params.request_id === undefined ? {} : { request_id: params.request_id }) };
+  const invocation = { ...(params.runner_id === undefined ? {} : { runner_id: params.runner_id }),
+    workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId, ...(params.queue === undefined ? {} : {queue:params.queue}), ...(params.request_id === undefined ? {} : { request_id: params.request_id }) };
   // Background starts return a Runner JobRecord.  Keep the MCP response on
   // the stable job-metadata allow-list; command/cwd/PID/process identity are
   // Runner-internal and must not cross this boundary.

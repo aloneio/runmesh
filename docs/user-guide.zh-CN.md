@@ -24,9 +24,9 @@ https://your-host.example/<generated-secret>/mcp
 
 ## 为计算机访问选择机器与工作区
 
-1. 用 `runner_current` 查看当前选择，再用 `runner_list` 查找目标机器。
-2. 尚未选择 Runner 时，用 `runner_select` 明确选择目标机器。切换已有选择须提供 `confirm_switch: true`；完成后用 `runner_current` 确认。
-3. 用 `workspace_list` 查看获准的工作区 ID。先用 `read` 或 `inspect` 查看内容，再修改文件或执行命令。
+1. 用 `runner_list` 查找目标机器并复制其不透明 `runner_id`。 `runner_current` 用于查看旧版共享选择。
+2. 对每个机器操作**明确传入同一 `runner_id`**，包括 `workspace_list`。该参数只固定本次请求，不修改共享选择，也绝不自动改用其他机器。
+3. 使用该 Runner 上授权的工作区 ID。先用 `read` 或 `inspect` 查看，再修改或运行命令。旧客户端仍可用 `runner_select` 和 `runner_current`，但多人或多任务共享同一凭据时应为每次操作传入固定目标。
 
 实例中仅注册了一台 Runner、客户端获准访问且尚无当前选择时，工作区或机器操作可以自动选择它。列表中只显示一台可见 Runner，并不代表实例只注册了一台。显式选择便于确认操作目标。
 
@@ -36,10 +36,10 @@ https://your-host.example/<generated-secret>/mcp
 
 ## 读取、检查与修改
 
-假设工作区名为 `work`，读取文件时可使用：
+假设目标机器 ID 为 `runner-from-runner-list`，工作区为 `work`，先用 `{"runner_id":"runner-from-runner-list"}` 调用 `workspace_list`，再读取：
 
 ```json
-{"workspace_id":"work","path":"README.md"}
+{"runner_id":"runner-from-runner-list","workspace_id":"work","path":"README.md"}
 ```
 
 `inspect` 支持列目录、搜索和 Git 检查。先用 `git_log` 查提交，再用 `git_show` 和必填的 `revision` 查看内容，或用 `git_blame` 和可选行范围查看归属。`revision` 只用于 `git_show`。Worker 更新后，客户端动作或参数与服务器有差异时，刷新工具目录。
@@ -53,7 +53,7 @@ https://your-host.example/<generated-secret>/mcp
 `shell` 使用 Runner 服务账号的操作系统权限；不可信代码应放在独立容器或虚拟机中执行。可先在获准的工作区运行无害检查：
 
 ```json
-{"workspace_id":"work","command":"echo runmesh-ok","wait_ms":1000}
+{"runner_id":"runner-from-runner-list","workspace_id":"work","command":"echo runmesh-ok","wait_ms":1000}
 ```
 
 保留返回的 `job_id` 和 `workspace_id`。`wait_ms` 控制本次调用等待结果的时间，命令可以在调用返回后继续执行。收到 `running` 或 `queued` 回执后，继续查询直到任务进入最终状态，并检查存在时的 `exit_code`。

@@ -4,20 +4,22 @@ Read the current authenticated `tools/list` catalog before using Runmesh. Its el
 
 ## Prepare the call
 
-For native workspace operations, select the intended Runner and a readable workspace. Action tools publish shared root properties and action-specific branches; use the fields for the chosen action. Unknown fields are rejected. For example, `revision` belongs to `inspect`'s `git_show` action. Paths are workspace-relative, and `workspace_id` is the opaque identifier from `workspace_list`.
+For native workspace operations, obtain the intended opaque `runner_id` from `runner_list`, and provide it on **every** `workspace_list`, `inspect`, `read`, `edit`, `shell`, `job` and `context` call. A per-call pin never changes or falls back from that target. Unlike an isolated session, `runner_select` persists a default **per MCP client credential**, so another concurrent task with the same credential can switch it. Without `runner_id`, legacy requests still use that shared default. The pin is only routing, never a permission grant: normal client scope, live workspace permissions, Runner policy and final per-RPC authorization all apply. A `permission_denied` for a pinned operation needs an authorization/policy check, not an automatic Runner switch.
 
-Save `job_id`, `workspace_id` and any `request_id` from a shell launch. Keep that Runner selected while following the operation. Foreground waiting ends at its wait limit while the command can continue; check the Job's status and exit code even when the MCP call succeeds.
+Action tools publish shared root properties and action-specific branches; use the fields for the chosen action. Unknown fields are rejected. For example, `revision` belongs to `inspect`'s `git_show` action. Paths are workspace-relative, and `workspace_id` is the opaque identifier returned by `workspace_list` for the pinned Runner.
+
+Save `job_id`, `workspace_id`, `runner_context.runner_id` and any `request_id` from a shell launch. **Pin the same `runner_id` when following the Job**, even if another task changes the shared selection. Foreground waiting ends at its wait limit while the command can continue; check the Job's status and exit code even when the MCP call succeeds.
 
 ## Follow the original Job
 
 After receiving `job_id: job-original` and `workspace_id: work`, query:
 
 ```json
-{"action":"get","job_id":"job-original","workspace_id":"work"}
+{"action":"get","job_id":"job-original","workspace_id":"work","runner_id":"runner-from-shell-receipt"}
 ```
 
 ```json
-{"action":"logs","job_id":"job-original","workspace_id":"work","stream":"stdout","offset":0,"limit":16384}
+{"action":"logs","job_id":"job-original","workspace_id":"work","runner_id":"runner-from-shell-receipt","stream":"stdout","offset":0,"limit":16384}
 ```
 
 Foreground shell output is a bounded tail. A positive `offset` means its prefix was omitted from that response; read from offset zero to retrieve the retained beginning. If cloud history is absent, use these workspace-bound live queries. They check the actual Job workspace before reading, accepting input or cancelling.

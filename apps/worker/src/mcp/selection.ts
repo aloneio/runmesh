@@ -5,7 +5,7 @@ import { fail } from "./results/envelope.js";
 import { failWithDetails } from "./results/envelope.js";
 import { isRecord } from "./results/primitives.js";
 import { isSafeNonnegativeInteger } from "./results/primitives.js";
-import type { McpClientActiveRunner } from "../contracts/runner-selection.js";
+import type { ActiveRunnerContext, McpClientActiveRunner } from "../contracts/runner-selection.js";
 import type { McpRequestEnv } from "./contracts.js";
 import { registryCall } from "./transport.js";
 import { registryPostCall } from "./transport.js";
@@ -110,8 +110,35 @@ export async function resolveActiveRunner(env: McpRequestEnv, clientId: string, 
   return { ok: true, value: { runnerId: context.runner_id, context: { ...context, automatic_selection: automatic } } };
 }
 
-export async function activeWorkspaceList(env: McpRequestEnv, clientId: string): Promise<unknown> {
-  const selected = await resolveActiveRunner(env, clientId, true);
+/** An explicit runner_id is a request-local routing pin, not a change to the
+ * per-credential sticky default. Every operation retains the existing live
+ * workspace/policy/identity checks and never tries another Runner. */
+export async function resolveRunnerForOperation(env: McpRequestEnv, clientId: string,
+  runnerId?: unknown, allowOfflineSnapshot = false): Promise<ActiveSelectionCall> {
+  if (runnerId === undefined) return resolveActiveRunner(env, clientId, allowOfflineSnapshot);
+  if (typeof runnerId !== "string" || safeJobIdentifier(runnerId) === undefined) return fail("invalid_runner_id",
+    "The pinned runner identifier is invalid.", "Use an exact runner_id returned by runner_list.", "not_started");
+  const call = await registryCall(env, "/auth/clients/" + encodeURIComponent(clientId) + "/runner-context/" + encodeURIComponent(runnerId));
+  if (!call.ok) return call.error.code === "not_found"
+    ? fail("runner_unavailable", "The requested Runner is not registered or no longer available.",
+      "Check runner_list; never substitute another Runner.", "not_started") : call;
+  const record = call.value;
+  if (!isRecord(record) || record.runner_id !== runnerId || typeof record.available !== "boolean"
+    || (record.updated_at_ms !== null && !isSafeNonnegativeInteger(record.updated_at_ms))
+    || !["online", "offline", "stale", "unavailable"].includes(String(record.state))
+    || record.available !== (record.state === "online")) return invalidSelectionReceipt("not_started");
+  const context = record as unknown as ActiveRunnerContext;
+  const pinned = { ...context, automatic_selection: false };
+  if (context.state === "unavailable") return failWithDetails("runner_unavailable", "The requested Runner is unavailable.",
+    "Check runner_list; never substitute another Runner.", { runner_context: pinned }, "not_started");
+  if (context.state !== "online" && !allowOfflineSnapshot) return failWithDetails("runner_offline",
+    "The requested Runner is not connected.", "Confirm the pinned Runner is online; do not switch hosts automatically.",
+    { runner_context: pinned }, "not_started");
+  return { ok: true, value: { runnerId, context: pinned } };
+}
+
+export async function activeWorkspaceList(env: McpRequestEnv, clientId: string, runnerId?: string): Promise<unknown> {
+  const selected = await resolveRunnerForOperation(env, clientId, runnerId, true);
   if (!selected.ok) return asToolResult(selected);
   // The Registry projects the policy and effective intersection in one event
   // turn: the workspace's permission ceiling is not the caller's permission.
@@ -123,8 +150,11 @@ export async function activeWorkspaceList(env: McpRequestEnv, clientId: string):
   const value = call.value;
   const workspaces = call.value.workspaces;
   const projected: Record<string, unknown> = { workspaces: workspaces.flatMap((workspace) => { const safe = safeWorkspaceMetadata(workspace); return safe === undefined ? [] : [safe]; }) };
-  const runnerId = safeJobIdentifier(value.runner_id);
-  if (runnerId !== undefined) projected.runner_id = runnerId;
+  const reportedRunnerId = safeJobIdentifier(value.runner_id);
+  if (reportedRunnerId !== selected.value.runnerId && (runnerId !== undefined || reportedRunnerId !== undefined))
+    return runnerFailure(fail("registry_unavailable", "The Registry returned a missing or mismatched Runner identity.",
+      "Do not accept data from another Runner.", "not_started").error, selected.value);
+  if (reportedRunnerId !== undefined) projected.runner_id = reportedRunnerId;
   if (isSafeNonnegativeInteger(value.revision)) projected.revision = value.revision;
   if (typeof value.checksum === "string" && /^[a-f0-9]{64}$/u.test(value.checksum)) projected.checksum = value.checksum;
   if (selected.value.context.state !== "online") { projected.source = "registry_snapshot"; projected.runner_state = "offline"; }

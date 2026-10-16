@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { failureMetadata, isKnownRpcFailureCode, RPC_FAILURE_CODES, PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
 import { callRunner, registryCall, registryPostCall } from "../src/mcp/transport.js";
-import { getActiveRunnerSelection, resolveActiveRunner, selectActiveRunner } from "../src/mcp/selection.js";
+import { activeWorkspaceList, getActiveRunnerSelection, resolveActiveRunner, selectActiveRunner } from "../src/mcp/selection.js";
 import { jobTool } from "../src/mcp/handlers/jobs.js";
 import { checkPermission, checkAnyReadPermission, policyReadiness, workspacePreflight } from "../src/mcp/authorization.js";
 import { activeRunnerTool } from "../src/mcp/dispatch.js";
@@ -492,5 +492,144 @@ describe("Registry Job identity binding", () => {
     const result = await jobTool(f.env, "client-test", { action: "get", job_id: "job-original" }, ["coding:read"]);
     expect(result).toMatchObject({ structuredContent: { job_id: "job-original", workspace_id: "work", source: "registry_snapshot" } });
     expect(f.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("request-local Runner pins isolate concurrent MCP workflows", () => {
+  const context = { runner_id: "oci0", state: "online", available: true, updated_at_ms: null };
+  it("pins the exact Runner without reading or modifying shared selection and propagates both authorization fences", async () => {
+    const f = fixture(() => Response.json({ type: "rpc.response", result: {
+      workspace_id: "work", path: "file.txt", data: "hello", encoding: "utf-8",
+      offset: 0, size: 5, next_cursor: null, truncated: false,
+    } }));
+    const original = f.registry.getMockImplementation()!;
+    f.registry.mockImplementation(async request => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/runner-context/oci0")) return Response.json(context);
+      if (path.endsWith("/active-runner")) throw new Error("Shared Runner selection must not be read");
+      return original(request);
+    });
+    const result = await activeRunnerTool(f.env, "client-test", "fs.read",
+      { runner_id: "oci0", workspace_id: "work", path: "file.txt" }, "read", "read");
+    expect(result).toMatchObject({ structuredContent: { runner_context: { runner_id: "oci0", automatic_selection: false } } });
+    expect(f.dispatch).toHaveBeenCalledOnce();
+    const auth = f.registry.mock.calls.find(([request]) => new URL(request.url).pathname.endsWith("/authorize-rpc"))![0];
+    expect(JSON.parse(await auth.clone().text())).toMatchObject({ runner_id: "oci0", runner_pinned: true, workspace_id: "work" });
+    const forwarded = JSON.parse(await f.dispatch.mock.calls[0]![0].clone().text());
+    expect(forwarded.mcp_authorization.runner_pinned).toBe(true);
+    expect(forwarded.params).toMatchObject({ workspace_id: "work", path: "file.txt" });
+    expect(forwarded.params).not.toHaveProperty("runner_id");
+  });
+
+  it.each(["unknown", "wrong-identity", "offline", "denied"] as const)(
+    "a %s pinned Runner fails closed without switching or dispatching", async change => {
+      const f = fixture();
+      const original = f.registry.getMockImplementation()!;
+      f.registry.mockImplementation(async request => {
+        const path = new URL(request.url).pathname;
+        if (path.endsWith("/active-runner")) throw new Error("Unexpected sticky selection lookup");
+        if (path.endsWith("/runner-context/oci0")) {
+          if (change === "unknown") return new Response(null, { status: 404 });
+          return Response.json(change === "wrong-identity" ? { ...context, runner_id: "other" }
+            : change === "offline" ? { ...context, state: "offline", available: false } : context);
+        }
+        if (change === "denied" && path.includes("/effective-permissions/"))
+          return Response.json({ permissions: { read: false, edit: false, shell: false, job_control: false } });
+        return original(request);
+      });
+      const result = await activeRunnerTool(f.env, "client-test", "fs.read",
+        { runner_id: "oci0", workspace_id: "work", path: "file.txt" }, "read", "read") as { structuredContent: { error: { code: string } } };
+      expect(result.structuredContent.error.code).toBe(change === "unknown" ? "runner_unavailable"
+        : change === "wrong-identity" ? "registry_unavailable"
+        : change === "offline" ? "runner_offline" : "permission_denied");
+      expect(f.dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("an invalid pin never silently uses the shared active Runner", async () => {
+    const f = fixture();
+    const result = await activeRunnerTool(f.env, "client-test", "fs.read",
+      { runner_id: "../other", workspace_id: "work", path: "file.txt" }, "read", "read") as { structuredContent: { error: { code: string } } };
+    expect(result.structuredContent.error.code).toBe("invalid_runner_id");
+    expect(f.registry).not.toHaveBeenCalled();
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("concurrent machine and Job workflows are isolated by request pins", () => {
+  it("two parallel operations on one credential reach only their own Runners", async () => {
+    const f = fixture();
+    const routes: string[] = [];
+    const responses = (f.env.RUNNER as unknown as { get: (id: string) => unknown });
+    responses.get = (id: string) => ({ fetch: async () => {
+      routes.push(id);
+      return Response.json({ type: "rpc.response", result: { workspace_id: "work", path: "file.txt",
+        data: id, encoding: "utf-8", size: id.length, offset: 0, next_cursor: null, truncated: false } });
+    } });
+    const original = f.registry.getMockImplementation()!;
+    f.registry.mockImplementation(async request => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/active-runner")) throw new Error("No sticky selection allowed for pinned tasks");
+      if (path.includes("/runner-context/")) {
+        const runner_id = path.split("/").at(-1)!;
+        return Response.json({ runner_id, state: "online", available: true, updated_at_ms: null });
+      }
+      return original(request);
+    });
+    const [left, right] = await Promise.all(["oci0", "oci1"].map(runner_id =>
+      activeRunnerTool(f.env, "client-test", "fs.read", { runner_id, workspace_id: "work", path: "file.txt" }, "read", "read")
+    )) as Array<{ structuredContent: { runner_context: { runner_id: string }, data: string } }>;
+    expect(left.structuredContent).toMatchObject({ runner_context: { runner_id: "oci0" }, data: "oci0" });
+    expect(right.structuredContent).toMatchObject({ runner_context: { runner_id: "oci1" }, data: "oci1" });
+    expect(routes.sort()).toEqual(["oci0", "oci1"]);
+    const authorized = await Promise.all(f.registry.mock.calls.filter(([req]) => new URL(req.url).pathname.endsWith("/authorize-rpc"))
+      .map(async ([req]) => JSON.parse(await req.clone().text())));
+    expect(authorized.map(value => value.runner_id).sort()).toEqual(["oci0", "oci1"]);
+    expect(authorized.every(value => value.runner_pinned === true)).toBe(true);
+  });
+
+  it("workspace_list with runner_id keeps the target without a selection write", async () => {
+    const f = fixture();
+    const original = f.registry.getMockImplementation()!;
+    f.registry.mockImplementation(async request => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/active-runner")) throw new Error("Pinned list must not read shared selection");
+      if (path.endsWith("/runner-context/oci0")) return Response.json({
+        runner_id: "oci0", state: "online", available: true, updated_at_ms: null });
+      if (path.endsWith("/effective-workspaces/oci0")) return Response.json({
+        runner_id: "oci0", revision: 1, checksum, workspaces: [
+          { workspace_id: "work", enabled: true, permissions: { read: true, edit: true, shell: true, job_control: true } },
+        ] });
+      return original(request);
+    });
+    const response = await activeWorkspaceList(f.env, "client-test", "oci0") as {
+      structuredContent: { runner_id: string, runner_context: { runner_id: string }, workspaces: unknown[] } };
+    expect(response.structuredContent).toMatchObject({
+      runner_id: "oci0", runner_context: { runner_id: "oci0" }, workspaces: [{ workspace_id: "work" }],
+    });
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("a pinned Job query from a shell receipt reaches the exact Runner without sticky selection", async () => {
+    const f = fixture(() => Response.json({ type: "rpc.response",
+      result: { job_id: "job-original", workspace_id: "work", status: "running" } }));
+    const original = f.registry.getMockImplementation()!;
+    f.registry.mockImplementation(async request => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/active-runner")) throw new Error("Unexpected shared selection read");
+      if (path.endsWith("/runner-context/oci0")) return Response.json({
+        runner_id: "oci0", state: "online", available: true, updated_at_ms: null });
+      return original(request);
+    });
+    const response = await jobTool(f.env, "client-test",
+      { action: "get", job_id: "job-original", workspace_id: "work", runner_id: "oci0" }, ["coding:read"]) as {
+      structuredContent: { runner_context: { runner_id: string } } };
+    expect(response.structuredContent.runner_context.runner_id).toBe("oci0");
+    expect(f.dispatch).toHaveBeenCalledOnce();
+    const payload = JSON.parse(await f.dispatch.mock.calls[0]![0].clone().text());
+    expect(payload.mcp_authorization.runner_pinned).toBe(true);
+    expect(payload.params).toMatchObject({ job_id: "job-original", workspace_id: "work",
+      expected_workspace_id: "work" });
+    expect(payload.params).not.toHaveProperty("runner_id");
   });
 });

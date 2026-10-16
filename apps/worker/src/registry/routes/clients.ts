@@ -1,6 +1,6 @@
 import type { RegistryRoute } from "./request.js";
 import type { ClientIdentity } from "../../contracts/identity.js";
-import type { McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness } from "../../contracts/runner-selection.js";
+import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness } from "../../contracts/runner-selection.js";
 import { isSafeIdentifier } from "../../security.js";
 import type { CodingScope, McpClientRecord, VerifiedMcpClient, PermissionSet } from "../records.js";
 import { parseMcpIdentity, parseNativeMcpClient } from "../route-inputs.js";
@@ -25,6 +25,7 @@ export interface ClientsRoutePorts {
   effectivePermissions(clientId: string, runnerId: string, workspaceId: string): PermissionSet | undefined;
   getPolicyReadiness(runnerId: string): PolicyReadiness;
   getMcpClientActiveRunner(clientId: string): McpClientActiveRunner | undefined;
+  getMcpClientRunnerContext(clientId: string, runnerId: string): ActiveRunnerContext | undefined;
   resetMcpClientRunner(clientId: string, nowMs: number): McpClientActiveRunner | undefined;
   revalidateMcpClient(clientId: unknown, secretVersion: unknown, includeJobRecording?: boolean): VerifiedMcpClient | undefined;
   selectMcpClientRunner(clientId: string, runnerId: string, confirmSwitch: boolean, nowMs: number): McpRunnerSelectionResult;
@@ -95,6 +96,13 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
       const readiness = (required === "read" || required === "edit" || required === "shell" || required === "job_control") && permissions[required]
         ? ports.getPolicyReadiness(targetRunnerId) : undefined;
       return Response.json({ permissions, ...(readiness === undefined ? {} : { policy_readiness: readiness }) });
+    }
+    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "runner-context"
+      && targetRunnerId !== undefined && segments.length === 4) {
+      // A pinned lookup is read-only, uses a single indexed Runner row, and
+      // never touches the shared active-runner selection.
+      const context = ports.getMcpClientRunnerContext(clientId, targetRunnerId);
+      return context === undefined ? new Response("not found", { status: 404 }) : Response.json(context);
     }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "active-runner") {
       const selection = ports.getMcpClientActiveRunner(clientId);

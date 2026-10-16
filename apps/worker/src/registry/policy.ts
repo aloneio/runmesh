@@ -29,8 +29,12 @@ export class RegistryPolicy {
     const requirement = typeof input.method === "string" ? rpcPermissionRequirement(input.method) : undefined;
     if (client === undefined || typeof runnerId !== "string" || !isSafeIdentifier(runnerId) || requirement === undefined) return deny();
     if (!client.scopes.includes(requirement.scope)) return deny("insufficient_scope");
-    const selection = this.ports.getMcpClientActiveRunner(client.client_id);
-    if (selection?.active_runner_id !== runnerId) return deny();
+    // Explicit operation pins do not rely on shared per-client selection.
+    // Neither path skips live scope, Runner policy or workspace admission.
+    if (input.runner_pinned !== true) {
+      const selection = this.ports.getMcpClientActiveRunner(client.client_id);
+      if (selection?.active_runner_id !== runnerId) return deny();
+    }
     const readiness = this.getPolicyReadiness(runnerId);
     if (!readiness.ok || readiness.applied_revision !== input.policy_revision || readiness.active_checksum !== input.policy_checksum) return deny("stale_policy");
     let workspaceId = input.workspace_id;

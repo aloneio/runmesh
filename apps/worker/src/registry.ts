@@ -167,6 +167,7 @@ export class RegistryDO {
       effectivePermissions: (...args) => this.effectivePermissions(...args),
       getPolicyReadiness: (...args) => this.getPolicyReadiness(...args),
       getMcpClientActiveRunner: (...args) => this.getMcpClientActiveRunner(...args),
+      getMcpClientRunnerContext: (...args) => this.auth.getMcpClientRunnerContext(...args),
       resetMcpClientRunner: (...args) => this.resetMcpClientRunner(...args),
       revalidateMcpClient: (...args) => this.revalidateMcpClient(...args),
       selectMcpClientRunner: (...args) => this.selectMcpClientRunner(...args),

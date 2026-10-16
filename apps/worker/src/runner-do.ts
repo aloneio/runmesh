@@ -627,6 +627,7 @@ export class RunnerDO {
       const receipt = await boundedJsonReceipt(async signal => {
         authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", signal, body: JSON.stringify({
           client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
+          runner_pinned: principal.runner_pinned === true,
           workspace_id: params.expected_workspace_id ?? params.workspace_id,
           ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
           policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,

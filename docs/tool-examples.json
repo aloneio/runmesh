@@ -397,14 +397,14 @@
     }
   },
   {
-    "id": "reject-implicit-runner-override",
+    "id": "accept-explicit-runner-pin",
     "tool": "shell",
     "action": "run",
-    "accepts": false,
+    "accepts": true,
     "arguments": {
       "workspace_id": "example-workspace",
       "command": "true",
-      "runner_id": "another-runner"
+      "runner_id": "runner-from-runner-list"
     }
   },
   {
@@ -417,6 +417,17 @@
       "path": "example.txt",
       "consistency": "snapshot",
       "cursor": "1"
+    }
+  },
+  {
+    "id": "reject-invalid-runner-pin",
+    "tool": "shell",
+    "action": "run",
+    "accepts": false,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "command": "true",
+      "runner_id": "../other"
     }
   }
 ]
