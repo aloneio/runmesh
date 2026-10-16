@@ -215,9 +215,10 @@ export class PackedJobHistory {
         if (result?.meta.changes === 0) receipt.conflicts++;
       }
       const next = rows.results.length < HISTORY_LIFECYCLE_BATCH_SIZE ? 0 : rows.results.at(-1)?.id ?? 0;
-      const saved = await this.run("INSERT INTO runmesh_job_cleanup_v2 (namespace,cursor,generation) VALUES (?,?,1) ON CONFLICT(namespace) DO UPDATE SET cursor=excluded.cursor,generation=generation+1 WHERE generation=? AND cursor<>excluded.cursor",this.namespace,next,state?.generation ?? 0);
-      receipt.cursor_advanced = saved.meta.changes > 0;
-      if (receipt.conflicts > 0 || (saved.meta.changes === 0 && state?.cursor !== next)) receipt.state = "deferred";
+      // No progress change needs no SQL write attempt or extra index read.
+      const saved = state?.cursor === next ? undefined : await this.run("INSERT INTO runmesh_job_cleanup_v2 (namespace,cursor,generation) VALUES (?,?,1) ON CONFLICT(namespace) DO UPDATE SET cursor=excluded.cursor,generation=generation+1 WHERE generation=? AND cursor<>excluded.cursor",this.namespace,next,state?.generation ?? 0);
+      receipt.cursor_advanced = saved !== undefined && saved.meta.changes > 0;
+      if (receipt.conflicts > 0 || saved?.meta.changes === 0) receipt.state = "deferred";
       return receipt;
     } catch {
       // query() already accounts for dependency failure; unknown local failures
