@@ -1,7 +1,7 @@
 import type { ActivePolicyReadiness } from "./contracts.js";
 import { appliedPolicyIdentity } from "../contracts/runner-selection.js";
 import { fail } from "./results/envelope.js";
-import { isRecord, isSafePositiveInteger, isSha256 } from "./results/primitives.js";
+import { isRecord } from "./results/primitives.js";
 import { isSafeIdentifier } from "../security.js";
 import type { McpRequestEnv } from "./contracts.js";
 import type { PermissionBit } from "./contracts.js";
@@ -74,28 +74,26 @@ function parsePolicyReadiness(value: unknown): PolicyReadinessCheck {
   };
 }
 
-async function snapshotAuthorization(env: McpRequestEnv, runnerId: string): Promise<ToolFailure | undefined> {
-  const snapshot = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/snapshot-authorization`);
-  if (!snapshot.ok) return snapshot;
-  if (!isRecord(snapshot.value) || typeof snapshot.value.ok !== "boolean"
-    || (snapshot.value.ok ? !isSafePositiveInteger(snapshot.value.revision) || !isSha256(snapshot.value.checksum)
-      : (snapshot.value.code !== "policy_pending" && snapshot.value.code !== "stale_policy") || typeof snapshot.value.reason !== "string")) {
-    return fail("authorization_response_invalid", "Policy snapshot authorization returned an invalid response.", "Ask the administrator to check the control-plane logs.", "not_started");
-  }
-  if (!snapshot.value.ok) return fail("policy_pending", "The selected runner has no trusted active policy snapshot.", "Wait for an active policy to be acknowledged, then retry.");
-  return undefined;
-}
-
+/** Read-only permission listing observes the current Runner policy and
+ * client/workspace intersection in the same Registry event. The result must
+ * carry an explicit attestation; no request-local snapshot is persisted or
+ * reused for dispatch, which still performs final authorization. */
 export async function checkAnyReadPermission(env: McpRequestEnv, clientId: string, runnerId: string): Promise<PermissionCheck | undefined> {
-  const snapshotPermission = await snapshotAuthorization(env, runnerId);
-  if (snapshotPermission !== undefined) return snapshotPermission;
-  // The Registry computes the current client/policy intersection once for the
-  // complete list, without one additional request per enabled workspace.
-  const effective = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-workspaces/${encodeURIComponent(runnerId)}`);
+  const effective = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-workspaces/${encodeURIComponent(runnerId)}?snapshot_guard=1`);
   if (!effective.ok) return effective.error.code === "not_found"
     ? fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.") : effective;
   const value = effective.value;
-  if (!isRecord(value) || value.runner_id !== runnerId || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1
+  if (!isRecord(value) || typeof value.ok !== "boolean") {
+    return fail("authorization_response_invalid", "Runner workspace authorization returned an invalid response.", "Ask the administrator to check the control-plane logs.", "not_started");
+  }
+  if (!value.ok) {
+    if (value.code === "policy_pending" || value.code === "stale_policy")
+      return fail(value.code, "The selected runner has no trusted active policy snapshot.", "Wait for an active policy to be acknowledged, then retry.", "not_started");
+    if (value.code === "permission_denied")
+      return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.", "not_started");
+    return fail("authorization_response_invalid", "Runner workspace authorization returned an invalid response.", "Ask the administrator to check the control-plane logs.", "not_started");
+  }
+  if (value.runner_id !== runnerId || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1
     || typeof value.checksum !== "string" || !/^[a-f0-9]{64}$/u.test(value.checksum)
     || !Array.isArray(value.workspaces) || value.workspaces.some(workspace => safeWorkspaceMetadata(workspace) === undefined)) {
     return fail("authorization_response_invalid", "Runner workspace authorization returned an invalid response.", "Ask the administrator to check the control-plane logs.", "not_started");

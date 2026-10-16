@@ -36,3 +36,30 @@ The healthy Worker persistence interval is 120 seconds; it coalesces legacy Runn
 `apps/worker/test/heartbeat-budget.test.ts` executes the six-Runner scenario against the local Durable Object SQLite implementation and records `input_frames`, `persistence_requests`, `rows_read` and `rows_written`. It excludes initialization and checks that the heartbeat lane does not add Job, MCP-audit or nonce history. `apps/worker/test/heartbeat-persistence.test.ts` separately exercises a continuous dependency outage, hibernation, successful recovery, explicit identity rejection and the absence of authorization grants from retry metadata.
 
 Treat request counts and SQLite row counts as different measurements: an indexed update can write more than one row. Preserve the emitted counters and test revision, then compare them with a real Cloudflare usage export after a development rollout. Keep the host/transport reconnect rate, unknown audit receipts, deferred history and failed authorization checks visible alongside storage reductions.
+
+
+## Resource controls and safety invariants
+
+- **Registry authorization:** `checkAnyReadPermission` uses the guarded
+  `effective-workspaces?snapshot_guard=1` endpoint. Registry checks current
+  policy validity and client/workspace permissions synchronously in one DO
+  event, replacing two Worker-to-Registry requests with one. No grant is
+  cached across requests, and final RPC dispatch still checks authority.
+- **History cleanup:** production runs hourly (`0 * * * *`); development has no
+  D1 cleanup trigger. Expiry sweeps do not modify retention periods or grant
+  permissions. Audit ingestion and Runner connectivity are independent.
+- **Observability:** persist 10% sampled operational logs but disable raw
+  invocation logs and redact query strings. Never introduce client secrets,
+  internal headers, private paths or raw job data in diagnostic logs.
+- **CI browser cache:** lockfile-keyed Playwright binaries can be reused but
+  full blocking browser testing and system dependencies are still required.
+  A missing cache must not make a test optional.
+- **Heartbeat:** keep transport ping/pong independent of 120-second
+  persistence, retain compatibility for 30-second peers, and never infer
+  authorization from a pong or stale heartbeat.
+- **Account attribution:** use the exact DO namespace and Worker script
+  before attributing Cloudflare account-wide resources to Runmesh.
+
+Compare the same UTC windows before and after changes: Worker invocations,
+Registry DO SQL reads/writes, subrequests per MCP call, Runner reconnections,
+and command response latency. Missing billing rights mean unknown cost.

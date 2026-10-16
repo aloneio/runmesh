@@ -339,48 +339,50 @@ describe("agent-visible recovery receipts", () => {
     expect(await checkPermission(f.env, "client-test", "runner-test", "work", "read")).toMatchObject({ error: { code: "authorization_response_invalid", operation_state: "not_started" } });
   });
   describe("any readable workspace observation", () => {
-    const snapshotPath = "/runners/runner-test/snapshot-authorization";
     const listPath = "/auth/clients/client-test/effective-workspaces/runner-test";
-    const receipt = (workspaces: unknown[]) => ({ runner_id: "runner-test", revision: 1, checksum, workspaces });
+    const receipt = (workspaces: unknown[]) => ({ ok: true, runner_id: "runner-test", revision: 1, checksum, workspaces });
 
-    it.each([false, true])("uses two Registry reads for 64 workspaces when the last workspace is readable=%s", async lastReadable => {
+    it.each([false, true])("uses one Registry read for 64 workspaces when the last workspace is readable=%s", async lastReadable => {
       const f = fixture();
       const workspaces = Array.from({ length: 64 }, (_, index) => ({ workspace_id: `work-${index}`, enabled: true,
         permissions: { read: lastReadable && index === 63, edit: false, shell: false, job_control: false } }));
       f.registry.mockImplementation(async request => {
         const url = new URL(request.url);
-        if (url.pathname === snapshotPath) return Response.json({ ok: true, revision: 1, checksum });
-        if (url.pathname === listPath) return Response.json(receipt(workspaces.filter(workspace => workspace.permissions.read)));
-        // Keep the prior read routes available so the regression measures the
-        // real fan-out instead of failing merely because a mock route changed.
-        if (url.pathname.endsWith("/active-workspaces")) return Response.json({ workspaces });
-        if (url.pathname.includes("/effective-permissions/")) return Response.json({ permissions: workspaces.find(workspace => workspace.workspace_id === url.searchParams.get("workspace_id"))?.permissions });
+        if (url.pathname === listPath && url.searchParams.get("snapshot_guard") === "1")
+          return Response.json(receipt(workspaces.filter(workspace => workspace.permissions.read)));
         throw new Error(`Unexpected test route: ${url.pathname}`);
       });
       const result = await checkAnyReadPermission(f.env, "client-test", "runner-test");
       if (lastReadable) expect(result).toBeUndefined();
       else expect(result).toMatchObject({ error: { code: "permission_denied", operation_state: "not_started" } });
-      console.log(JSON.stringify({ scenario: "any_read_permission_64", last_readable: lastReadable, requests: f.registry.mock.calls.length }));
-      expect(f.registry.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([snapshotPath, listPath]);
+      expect(f.registry.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([listPath]);
       expect(f.dispatch).not.toHaveBeenCalled();
     });
 
-    it.each(["pending", "unavailable"] as const)("does not read workspaces after a %s snapshot", async state => {
+    it.each(["policy_pending", "stale_policy", "permission_denied"] as const)("rejects current %s in the single attested observation", async code => {
       const f = fixture();
-      f.registry.mockImplementation(async () => state === "pending" ? Response.json({ ok: false, code: "policy_pending", reason: "policy identity is not fully applied" }) : new Response(null, { status: 503 }));
+      f.registry.mockImplementation(async () => Response.json({ ok: false, code }));
       expect(await checkAnyReadPermission(f.env, "client-test", "runner-test")).toMatchObject({ error: {
-        code: state === "pending" ? "policy_pending" : "registry_unavailable", operation_state: "not_started" } });
-      expect(f.registry.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([snapshotPath]);
+        code, operation_state: "not_started" } });
+      expect(f.registry).toHaveBeenCalledOnce();
+      expect(f.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("keeps a Registry outage distinct from a policy denial", async () => {
+      const f = fixture();
+      f.registry.mockImplementation(async () => new Response(null, { status: 503 }));
+      expect(await checkAnyReadPermission(f.env, "client-test", "runner-test")).toMatchObject({ error: {
+        code: "registry_unavailable", operation_state: "not_started" } });
+      expect(f.registry).toHaveBeenCalledOnce();
       expect(f.dispatch).not.toHaveBeenCalled();
     });
 
     it.each([404, 503])("preserves the effective workspace HTTP %i outcome", async status => {
       const f = fixture();
-      f.registry.mockImplementation(async request => new URL(request.url).pathname === snapshotPath
-        ? Response.json({ ok: true, revision: 1, checksum }) : new Response(null, { status }));
+      f.registry.mockImplementation(async () => new Response(null, { status }));
       expect(await checkAnyReadPermission(f.env, "client-test", "runner-test")).toMatchObject({ error: {
         code: status === 404 ? "permission_denied" : "registry_unavailable", operation_state: "not_started" } });
-      expect(f.registry.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([snapshotPath, listPath]);
+      expect(f.registry.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([listPath]);
       expect(f.dispatch).not.toHaveBeenCalled();
     });
 
@@ -388,11 +390,12 @@ describe("agent-visible recovery receipts", () => {
       null, {}, { workspaces: [] }, { ...receipt([]), workspaces: "invalid" },
       { ...receipt([]), runner_id: "another-runner" }, { ...receipt([]), revision: 0 }, { ...receipt([]), checksum: "invalid" },
       receipt([null]), receipt([{ workspace_id: "work", enabled: true, permissions: { read: "true", edit: false, shell: false, job_control: false } }]),
-    ])("keeps a malformed effective workspace receipt distinct from denied permissions: %j", async value => {
+      { ok: false, code: "unknown" },
+    ])("keeps malformed or unverified workspace receipts distinct from denied permissions: %j", async value => {
       const f = fixture();
-      f.registry.mockImplementation(async request => Response.json(new URL(request.url).pathname === snapshotPath ? { ok: true, revision: 1, checksum } : value));
+      f.registry.mockImplementation(async () => Response.json(value));
       expect(await checkAnyReadPermission(f.env, "client-test", "runner-test")).toMatchObject({ error: { code: "authorization_response_invalid", operation_state: "not_started" } });
-      expect(f.registry.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([snapshotPath, listPath]);
+      expect(f.registry.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([listPath]);
       expect(f.dispatch).not.toHaveBeenCalled();
     });
   });

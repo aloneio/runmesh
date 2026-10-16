@@ -172,6 +172,7 @@ export class RegistryDO {
       selectMcpClientRunner: (...args) => this.selectMcpClientRunner(...args),
       autoSelectOnlyRunner: (...args) => this.autoSelectOnlyRunner(...args),
       effectiveWorkspaceList: (...args) => this.effectiveWorkspaceList(...args),
+      effectiveWorkspaceDecision: (...args) => this.effectiveWorkspaceDecision(...args),
     });
     this.runnerPolicyRoutes = createRunnerPolicyRoutes({
       hasRunner: runnerId => this.runnerRow(runnerId) !== undefined,
@@ -462,6 +463,9 @@ export class RegistryDO {
   public authorizeMcpRpc(input: Record<string, unknown>): { ok: true; record_history?: boolean } | { ok: false; code: string } { return this.policy.authorizeMcpRpc(input); }
 
   public effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined { return this.policy.effectiveWorkspaceList(clientId, runnerId); }
+  public effectiveWorkspaceDecision(clientId: string, runnerId: string): ReturnType<RegistryPolicy["effectiveWorkspaceDecision"]> {
+    return this.policy.effectiveWorkspaceDecision(clientId, runnerId);
+  }
 
   public setClientRunnerOverride(clientId: string, runnerId: string, permissions: PermissionSet, nowMs: number): boolean { return this.policy.setClientRunnerOverride(clientId, runnerId, permissions, nowMs); }
 

@@ -73,6 +73,34 @@ it("signed browser selection uses the owner-admitted session and the same mutati
   expect(route(request("clients/c/active-runner?admin_session=owner-verified", { runner_id: "r" }))?.status).toBe(409);
 });
 
+it.each(["policy_pending", "stale_policy", "permission_denied"] as const)(
+  "combined workspace read reports %s in one synchronous Registry event", async code => {
+    const calls: string[] = [];
+    const route = createClientsRoutes(ports<ClientsRoutePorts>({
+      effectiveWorkspaceDecision(clientId, runnerId) {
+        calls.push(`${clientId}:${runnerId}`);
+        queueMicrotask(() => calls.push("next-event"));
+        return { ok: false, code };
+      },
+    }));
+    const response = route(request("clients/c/effective-workspaces/r?snapshot_guard=1", {}, "GET"));
+    expect(response?.status).toBe(200);
+    expect(calls).toEqual(["c:r"]);
+    expect(await response?.json()).toEqual({ ok: false, code });
+    await Promise.resolve();
+    expect(calls).toEqual(["c:r", "next-event"]);
+  },
+);
+
+it("unguarded clients route retains its original workspace response without a second collaborator", async () => {
+  const route = createClientsRoutes(ports<ClientsRoutePorts>({
+    effectiveWorkspaceList: () => ({ runner_id: "r", revision: 2, checksum: "a".repeat(64), workspaces: [] }),
+  }));
+  expect(await route(request("clients/c/effective-workspaces/r", {}, "GET"))?.json()).toEqual({
+    runner_id: "r", revision: 2, checksum: "a".repeat(64), workspaces: [],
+  });
+});
+
 it("workspace preflight captures permission and policy before yielding, and reads fresh state each time", async () => {
   const order: string[] = [];
   const permissions = { read: true, edit: false, shell: false, job_control: false };

@@ -109,6 +109,33 @@ it.each([1, 64])("workspace listing uses bounded SQL reads with %i workspaces an
   });
 });
 
+it("single-event workspace decision respects revocation and a changed policy without caching authority", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`combined-cost-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, (instance, state) => {
+    seed(instance, state, 64);
+    const exec = state.storage.sql.exec.bind(state.storage.sql);
+    const calls: string[] = [];
+    const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: SqlStorageValue[]) => {
+      calls.push(query);
+      return exec(query, ...args);
+    });
+    try {
+      const observation = instance.effectiveWorkspaceDecision("c", "r");
+      expect(observation).toMatchObject({ ok: true, revision: 1 });
+      if (!observation.ok) throw new Error("missing read authority");
+      expect(observation.workspaces).toHaveLength(64);
+      expect(calls.filter(sql => sql.includes("FROM runner_policy_versions"))).toHaveLength(1);
+    } finally { spy.mockRestore(); }
+    instance.revokeMcpClient("c", Date.now());
+    expect(instance.effectiveWorkspaceDecision("c", "r")).toEqual({ ok: false, code: "permission_denied" });
+    const refreshed = instance.createMcpClient({ client_id: "other", label: "New reader", secret_verifier: "c".repeat(64),
+      secret_prefix: "test", scopes: ["coding:read"] }, Date.now());
+    expect(refreshed).toBeDefined();
+    state.storage.sql.exec("UPDATE runners SET policy_status='pending' WHERE runner_id='r'");
+    expect(instance.effectiveWorkspaceDecision("other", "r")).toEqual({ ok: false, code: "policy_pending" });
+  });
+});
+
 it("workspace listing agrees with single-workspace permissions and filters disabled or unreadable workspaces", async () => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`permission-results-${crypto.randomUUID()}`));
   await runInDurableObject(stub, (instance, state) => {

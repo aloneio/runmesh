@@ -30,6 +30,9 @@ export interface ClientsRoutePorts {
   selectMcpClientRunner(clientId: string, runnerId: string, confirmSwitch: boolean, nowMs: number): McpRunnerSelectionResult;
   autoSelectOnlyRunner(clientId: string, nowMs: number): McpRunnerSelectionResult | undefined;
   effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined;
+  effectiveWorkspaceDecision(clientId: string, runnerId: string):
+    | { ok: true; runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> }
+    | { ok: false; code: "permission_denied" | "policy_pending" | "stale_policy" };
 }
 
 /** Parsing and responses only; authority and transactions stay with RegistryDO. */
@@ -123,6 +126,11 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
       return result === undefined ? Response.json({ code: "runner_not_selected" }, { status: 409 }) : result.ok ? Response.json(result) : new Response("not found", { status: 404 });
     }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-workspaces" && targetRunnerId !== undefined) {
+      if (url.searchParams.get("snapshot_guard") === "1") {
+        // The guard and permissions are observed inside one synchronous DO
+        // event. In particular, no cached authorization crosses a mutation.
+        return Response.json(ports.effectiveWorkspaceDecision(clientId, targetRunnerId));
+      }
       const value = ports.effectiveWorkspaceList(clientId, targetRunnerId);
       return value === undefined ? new Response("not found", { status: 404 }) : Response.json(value);
     }
