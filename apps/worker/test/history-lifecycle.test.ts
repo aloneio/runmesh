@@ -117,7 +117,7 @@ it("does not let a stale cleanup retire a row updated during its Registry observ
 
 it("migrates an existing snapshot table across concurrent store initialization without changing retained jobs", async () => {
   const table = "history_migration_" + crypto.randomUUID().replaceAll("-", ""), ns = "migration", now = Date.now();
-  const database = { prepare: (query: string) => db.prepare(query.replaceAll("runmesh_job_snapshots_v1", table).replaceAll("runmesh_job_cleanup_v1", table + "_cursor")), batch: db.batch.bind(db) } as D1Database;
+  const database = { prepare: (query: string) => db.prepare(query.replaceAll("runmesh_job_snapshots_v1", table).replaceAll("runmesh_job_cleanup_v1", table + "_cursor").replaceAll("runmesh_job_cleanup_v2", table + "_cursor_v2").replaceAll("runmesh_job_scan_v1", table + "_scan")), batch: db.batch.bind(db) } as D1Database;
   await db.prepare(`CREATE TABLE ${table} (snapshot_id INTEGER PRIMARY KEY,namespace TEXT NOT NULL,runner_id TEXT NOT NULL,lifecycle_id TEXT NOT NULL,jobs_json TEXT NOT NULL,updated_at_ms INTEGER NOT NULL,revision INTEGER NOT NULL,retention_days INTEGER NOT NULL,UNIQUE(namespace,runner_id,lifecycle_id))`).run();
   const legacy = job("legacy", "r", now);
   await db.prepare(`INSERT INTO ${table} VALUES (1,?,'r','legacy-lifecycle',?,?,4,7)`).bind(ns, JSON.stringify([legacy]), now).run();
