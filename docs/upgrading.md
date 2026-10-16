@@ -465,3 +465,7 @@ If your workflow uses input, cancellation, queueing or optional history, exercis
 | Credential loss, expiry or revocation | Use the appropriate access-extension, rotation or recovery enrollment procedure |
 
 Restore the program, configuration and data versions together according to the rehearsed plan. Keep a copy of the current state and verified packages while investigating a failed upgrade.
+
+## Data and credential recovery
+
+Use the [data recovery guide](data-recovery.md) for damaged-history isolation, guarded single-snapshot repair, identity-bound credential restoration and same-commit acceptance.
