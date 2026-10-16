@@ -91,11 +91,14 @@ test("routine cleanup uses hourly cadence and persisted logs avoid raw invocatio
   for (const production of [config, config.env.production]) assert.deepEqual(production.triggers.crons, ["0 * * * *"]);
   assert.deepEqual(config.env.development.triggers.crons, []);
   for (const environment of [config.env.production, config.env.development]) {
+    assert.equal(environment.observability.redact_query_string, true,
+      "query string redaction is an observability-level setting, not a logs child");
     const logs = environment.observability.logs;
+    assert.equal(Object.hasOwn(logs, "redact_query_string"), false,
+      "unknown Wrangler log options silently disable intended privacy controls");
     assert.equal(logs.enabled, true);
     assert.equal(logs.persist, true);
     assert.equal(logs.invocation_logs, false, "no unredacted URL-path credentials in persisted invocation events");
-    assert.equal(logs.redact_query_string, true);
     assert.ok(logs.head_sampling_rate > 0 && logs.head_sampling_rate <= 0.1);
   }
 });
