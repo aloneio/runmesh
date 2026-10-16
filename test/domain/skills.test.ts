@@ -47,12 +47,12 @@ it("Skill import bounds encoded bytes, file counts and metadata", () => {
   expect(parseSkillBundle({ ...a, files: Array.from({ length: SKILL_LIMITS.files + 1 }, (_, n) => ({ path: 'f' + n, text: '' })) })).toBeUndefined();
   expect(parseSkillBundle({ ...a, license: 'x'.repeat(257) })).toBeUndefined();
 });
-it("Skill imports support 256 files and one MiB UTF-8 files within an eight MiB package", () => {
-  const a = input(), files = [a.files[0]!, ...Array.from({ length: 255 }, (_, n) => ({ path: 'references/' + n + '.txt', text: n === 0 ? 'x'.repeat(1_048_576) : 'reference' }))];
+it("Skill imports support 256 files and four MiB UTF-8 files within a sixteen MiB bundle", () => {
+  const a = input(), files = [a.files[0]!, ...Array.from({ length: 255 }, (_, n) => ({ path: 'references/' + n + '.txt', text: n === 0 ? 'x'.repeat(SKILL_LIMITS.file_bytes) : 'reference' }))];
   expect(parseSkillBundle({ ...a, files })?.files).toHaveLength(256);
   files[1]!.text += 'x';
   expect(parseSkillBundle({ ...a, files })).toBeUndefined();
-  const large = [a.files[0]!, ...Array.from({ length: 8 }, (_, n) => ({ path: 'references/' + n + '.txt', text: 'x'.repeat(1_048_576) }))];
+  const large = [a.files[0]!, ...Array.from({ length: 4 }, (_, n) => ({ path: 'references/' + n + '.txt', text: 'x'.repeat(SKILL_LIMITS.file_bytes) }))];
   expect(parseSkillBundle({ ...a, files: large })).toBeUndefined();
   large.pop();
   expect(parseSkillBundle({ ...a, files: large })).toBeDefined();

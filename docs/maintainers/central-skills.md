@@ -59,7 +59,7 @@ their original metadata and digest when verified after parser changes.
 Installation stores UTF-8 text collections. A file object contains only path and
 text. Relative paths are checked for traversal, empty segments, Windows reserved
 names/streams, backslashes and case-folding collisions. Limits are 256 files,
-1 MiB per file, 8 MiB per canonical bundle, 12 MiB per admin upload, 32 versions per
+4 MiB per file, 16 MiB per canonical bundle, 24 MiB per admin upload, 32 versions per
 Skill, 1,000 Skills and 256 MiB of stored bundles. Cleanup is an explicit lifecycle
 operation described below. Reinstalling an existing digest preserves its content
 row and creation time.
@@ -67,7 +67,7 @@ row and creation time.
 File sizes count UTF-8 bytes. Capacity reports logical bundle bytes, including
 JSON encoding and metadata. Cloudflare physical storage and billed usage are
 separate metrics. The browser receives upload limits from the server contract.
-File content occupies separate rows below SQLite's row limit. Schema-2 content
+File content occupies separate SQLite rows: ordinary files retain their original rows and text over 1 MiB uses an additive 512 KiB UTF-8-safe chunk table, respecting Cloudflare's 2 MB row limit. Schema-2 content
 retains its digests, revisions and publication state; lifecycle metadata is held
 in auxiliary tables understood by the new lifecycle store.
 
@@ -79,7 +79,7 @@ POST `/admin/central/skill-source/preview` accepts
 commit SHA, and `path` is a Skill folder or an empty string for the repository root.
 The platform reader checks the exact commit and reads at most 32 text files.
 The selected folder path has at most eight components; each tree response has
-at most 2,048 entries and 512 KiB of metadata. The operation deadline is 25 seconds. Normal file and
+at most 2,048 entries and 512 KiB of metadata. Up to four immutable raw files are fetched concurrently; failure cancels sibling reads and preserves source ordering. The operation deadline is 45 seconds. GitHub 429 and explicit rate-limit headers surface as a separate rate-limited outcome. Normal file and
 bundle limits also apply. Symlinks and submodules are rejected.
 
 Preview returns `{state:"previewed",source,bundle}` without storing content.

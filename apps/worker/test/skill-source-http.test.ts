@@ -100,6 +100,7 @@ it("source HTTP distinguishes busy, capacity, conflict and unknown outcomes with
   for (const [result, status, code, operationState] of [
     [{ state: "busy" }, 429, "skill_source_busy", "not_started"],
     [{ state: "source_capacity" }, 429, "skill_source_capacity", "not_started"],
+    [{ state: "rate_limited" }, 429, "skill_source_rate_limited", "not_started"],
     [{ state: "capacity" }, 429, "skill_capacity", "not_started"],
     [{ state: "changed" }, 409, "skill_source_changed", "not_started"],
     [{ state: "unknown" }, 503, "central_result_unconfirmed", "unknown"],
@@ -111,7 +112,7 @@ it("source HTTP distinguishes busy, capacity, conflict and unknown outcomes with
   f.skillSource.mockResolvedValueOnce({ state: "conflict", current_revision: 3, secret: "synthetic-private-value" });
   const conflict = await f.request("install", request); expect(conflict.status).toBe(409);
   expect(await conflict.json()).toEqual({ state: "conflict", current_revision: 3 });
-  expect(f.skillSource).toHaveBeenCalledTimes(6);
+  expect(f.skillSource).toHaveBeenCalledTimes(7);
 });
 
 it.each(["source", "folder"])("malformed %s installation error states retain an unknown result", async kind => {
