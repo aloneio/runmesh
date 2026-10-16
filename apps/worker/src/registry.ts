@@ -90,6 +90,7 @@ export class RegistryDO {
   private readonly history: RegistryHistory;
   private readonly featureHealth: RegistryFeatureHealthStore;
   private readonly runnerUpdates: RegistryRunnerUpdates;
+  private runnerUpdatesReady = false;
 
   private maintenanceQueue: Promise<void> = Promise.resolve();
 
@@ -272,7 +273,7 @@ export class RegistryDO {
         try { this.ctx.storage.transactionSync(() => ensureRunnerMaintenanceIndex(this.ctx.storage.sql)); }
         catch { /* The same deadline query works without this optional index; retry on reconstruction. */ }
         this.loadFeatureHealth();
-        this.ctx.storage.transactionSync(() => ensureRunnerUpdatesSchema(this.ctx.storage.sql));
+        this.ensureOptionalRunnerUpdatesReady(Date.now());
         // No legacy audit body is exposed, even if optional cleanup hits a quota.
         try { this.ctx.storage.transactionSync(() => { ensureMetadataOnlyAudit(this.ctx.storage.sql); ensureHistoryRetentionSchema(this.ctx.storage.sql); ensureJobHistorySettings(this.ctx.storage.sql); }); }
         catch (error) { this.disableFeatureHealth("mcp_audit", error, Date.now()); }
@@ -376,6 +377,28 @@ export class RegistryDO {
       if (source === "alarm") throw error;
       this.disableFeatureHealth("maintenance_alarm", error, nowMs);
     }
+  }
+
+  /** Runner updates are optional: failure to create their storage must not reset
+   * the Registry's core authorization transaction owner. Only update APIs retry. */
+  private ensureOptionalRunnerUpdatesReady(nowMs: number): boolean {
+    if (this.runnerUpdatesReady) return true;
+    if (this.featureHealthDisabled("runner_updates", nowMs)) return false;
+    try {
+      this.ctx.storage.transactionSync(() => ensureRunnerUpdatesSchema(this.ctx.storage.sql));
+      this.runnerUpdatesReady = true;
+      this.clearFeatureHealth("runner_updates");
+      return true;
+    } catch (error) {
+      this.disableFeatureHealth("runner_updates", error, nowMs);
+      return false;
+    }
+  }
+
+  private unavailableRunnerUpdates(): Response {
+    return new Response("Runner update storage temporarily unavailable", {
+      status: 503, headers: { "cache-control": "no-store", "retry-after": "900" },
+    });
   }
 
   private loadFeatureHealth(): void { this.featureHealth.load(); }
@@ -647,6 +670,7 @@ export class RegistryDO {
     if (segments[0] === "auth" && segments[1] === "runners" && segments.length === 4 && segments[3] === "update") {
       const id = parsePathIdentifier(segments[2]);
       if (id === undefined) return new Response("not found", { status: 404 });
+      if (!this.ensureOptionalRunnerUpdatesReady(now)) return this.unavailableRunnerUpdates();
       if (request.method === "GET") return Response.json(this.runnerUpdates.response(id, now) ?? { operation: null });
       if (request.method === "POST") return this.runnerUpdates.create(id, input, now);
     }
@@ -693,7 +717,8 @@ export class RegistryDO {
     const runnerId = segments[0] === "runners" ? parsePathIdentifier(segments[1]) : undefined;
     const action = segments[2]; const itemId = segments[3];
     if (runnerId === undefined || segments.length > 4) return new Response("not found", { status: 404 });
-    if (action === "update") return this.runnerUpdates.handle(runnerId, request.method, itemId, input, url, now);
+    if (action === "update") return this.ensureOptionalRunnerUpdatesReady(now)
+      ? this.runnerUpdates.handle(runnerId, request.method, itemId, input, url, now) : this.unavailableRunnerUpdates();
     const route = { method: request.method, runnerId, action, itemId, input, nowMs: now, url };
     const synchronous = this.runnerLifecycleRoutes(route) ?? this.runnerPolicyReadRoutes(route);
     if (synchronous !== undefined) {
