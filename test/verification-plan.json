@@ -298,6 +298,7 @@
         "test/mcp-connector.test.mjs",
         "test/message-types.test.mjs",
         "test/package-verification.test.mjs",
+        "test/production-approval.test.mjs",
         "test/public-contract-baseline.test.mjs",
         "test/release-baseline.test.mjs",
         "test/release-tools.test.mjs",

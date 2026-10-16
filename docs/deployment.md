@@ -29,21 +29,43 @@ npm run pack:runner
 
 The [release status](release-readiness.md) lists the current stable package and installation options. Deploy the activated `main` source for production, then verify the live commit through [build provenance](build-provenance.md).
 
-In Cloudflare Workers Builds, select the repository root and set the build command to `npm run build`. Use the matching deploy command:
+The production Cloudflare Workers Builds trigger is deliberately non-deploying:
+its build and deploy commands are fixed to the inert shell command `true`.
+A GitLab `main` update must not upload new Worker code before its own CI
+finishes. The active production version is preserved pending explicit release.
+
+**Development** remains separate: publish a clean `dev` checkout only to
+`runmeshdev` using `npm run deploy:worker -- --env development` with
+development credentials.
+
+**Production** requires a clean, exact `main` checkout on a trusted release
+workstation holding independent Cloudflare deployment credentials and a
+GitLab read-only API session through `glab`:
 
 ```sh
-# Development
-npm run deploy:worker -- --env development
-
-# Production
+npm ci
 npm run deploy:worker -- --env production
 ```
 
-Cloudflare manages build-connection authentication. The deployment wrapper checks the branch, release state and clean Git source against the CI declarations, then records the source commit/tree. After deployment, compare the live commit through [build provenance](build-provenance.md).
+The deployment wrapper validates the latest remote `main` SHA and branch
+rules, the successful same-SHA `main` pipeline and all mandatory Jobs,
+the merged same-project `dev -> main` MR and its source-policy CI, and
+source/tree-bound CI artifact files. GitLab Job artifacts are hashed with
+SHA-256 in the approval receipt; they are not independent signed releases.
+Missing, skipped, stale, mismatched, still running, failed or unavailable
+evidence refuses upload. There is no environment flag to bypass this gate.
 
-For candidate commits on `main`, Workers Builds completes these checks and keeps the active production Worker in place. Its log records `production_preserved` and `uploaded: false` while the signed release is prepared and verified. Pushing the reviewed release activation then deploys that source automatically with its commit tag. A manual production deployment requires the activated release record.
+Never place production Cloudflare tokens in the `dev` project's CI variables:
+the `dev` branch is intentionally writable and protected. Keep production
+release credentials behind a separate operator-controlled execution boundary.
+The wrapper cannot prevent arbitrary direct API calls by a credential holder;
+audit the Cloudflare trigger settings independently, record deployment IDs,
+verify the live health/provenance commit, and preserve the previous known-good
+version for rollback.
 
-GitLab is the authoritative repository for deployment. Push reviewed development changes to GitLab `dev`, run the required GitLab checks, and promote the exact commit to protected `main` through a same-project `dev` to `main` merge request. Do not synchronize the deployment branches from GitHub. Keep the Cloudflare build connections bound to their respective GitLab branches.
+GitLab is the authoritative deployment repository. Daily fixes go to `dev`;
+only an explicitly approved protected `dev -> main` MR can advance production.
+No GitHub branch rewrite is part of the release procedure.
 
 ## Provision resources and secrets
 
