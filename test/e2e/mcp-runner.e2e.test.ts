@@ -252,7 +252,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(savedProfile.workspaces).toEqual([]);
 
     runner = spawn(process.execPath, [
-      ...runnerInvocation, "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      ...runnerInvocation, "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--max-concurrent-jobs", "2", "--disconnect-control-file", join(root, "disconnect"),
     ], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
@@ -336,7 +336,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await expect(mcpMessage("runner_list", {})).resolves.toBeDefined();
   });
 
-  it("requires an explicit selection when multiple runners exist and rejects runner_id on coding tools", async () => {
+  it("requires a selection for implicit routing but allows explicitly pinned read calls without changing selection", async () => {
     const otherRunnerId = "e2e-runner-secondary";
     const enrollment = await fetch(`${workerUrl}/admin/runners`, {
       method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
@@ -350,8 +350,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const unselected = await mcpTool("workspace_list", {}, clientC);
     expect(unselected).toMatchObject({ isError: true, structuredContent: { error: { code: "runner_not_selected" } } });
 
-    const rejectedRunnerId = await mcpTool("read", { runner_id: runnerId, workspace_id: "workspace-1", path: "note.txt" }, clientA);
-    expect(rejectedRunnerId.isError).toBe(true);
+    const pinnedRead = await mcpTool("read", { runner_id: runnerId, workspace_id: "workspace-1", path: "note.txt" }, clientC);
+    expect(pinnedRead.isError, JSON.stringify(pinnedRead)).not.toBe(true);
+    expect(pinnedRead.structuredContent).toMatchObject({ data: "hello from a real local runner\n", runner_context: { runner_id: runnerId } });
+    const selectedAfterPin = await mcpTool("runner_current", {}, clientC);
+    expect(selectedAfterPin.structuredContent?.active_runner_id).toBeNull();
   });
 
   it("rejects POSIX, Windows drive, and UNC paths at the MCP schema boundary", async () => {
@@ -492,7 +495,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // detached persistent job and registry snapshot remain available.
     await stop(runner);
     runner = spawn(process.execPath, [
-      ...runnerInvocation, "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      ...runnerInvocation, "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--max-concurrent-jobs", "2", "--disconnect-control-file", join(root, "disconnect"),
     ], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
