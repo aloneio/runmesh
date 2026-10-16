@@ -158,7 +158,10 @@ it("source HTTP previews then installs through the real owner without publishing
     const installed = await f.request("install", { source, expected_revision: 0, digest: observed.bundle.digest }); expect(installed.status).toBe(200);
     expect(await installed.json()).toMatchObject({ state: "written", head: { skill_id: "imported", revision: 1, active_digest: observed.bundle.digest, enabled: true } });
     expect(await real.invoke(instance => instance.listSkillLibrary(f.hash))).toMatchObject({ state: "listed", skills: [{ head: { skill_id: "imported" } }] });
-    expect(network).toHaveBeenCalledTimes(6);
+    // The archive endpoint is unavailable in this legacy-source fixture;
+    // both preview and install must independently fall back to Git trees.
+    expect(network).toHaveBeenCalledTimes(8);
+    expect(network.mock.calls.filter(([url]) => String(url).startsWith("https://codeload.github.com/"))).toHaveLength(2);
   } finally { network.mockRestore(); }
 });
 

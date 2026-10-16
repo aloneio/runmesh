@@ -3,14 +3,31 @@ import { SKILL_LIMITS, type SkillFile } from "../../contracts/skills.js";
 import { parseSkillSource } from "../../contracts/skill-source-values.js";
 import { skillObject, skillPath } from "../../contracts/skill-values.js";
 import { mapOrderedBounded } from "./ordered-downloads.js";
+import { readGithubArchive } from "./github-archive.js";
 
 class SourceFault extends Error {
   public constructor(readonly state: "missing" | "invalid" | "capacity" | "unavailable" | "rate_limited") { super(state); }
 }
 const sha = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{40}$/u.test(value);
 
-/** Source-specific fixed hosts. Never uses MCP egress policy or credentials. */
+/** Prefer a single immutable GitHub archive. Preserve the independently
+ * validated, bounded Git tree implementation for oversized repositories
+ * and when codeload is unavailable. Both routes use fixed GitHub hosts. */
 export function createGithubSkillSource(send: typeof fetch = fetch): SkillSourcePort {
+  const legacy = createLegacyGithubSkillSource(send);
+  return {
+    async read(raw, signal) {
+      const source = parseSkillSource(raw);
+      if (!source) return { state: "invalid" };
+      if (signal.aborted) return { state: "unavailable" };
+      const archive = await readGithubArchive(send, source, signal);
+      return archive.state === "fallback" ? legacy.read(source, signal) : archive;
+    },
+  };
+}
+
+/** Fallback: immutable Git trees plus bounded concurrent raw-file requests. */
+export function createLegacyGithubSkillSource(send: typeof fetch = fetch): SkillSourcePort {
   return {
     async read(raw, signal) {
       const source = parseSkillSource(raw);

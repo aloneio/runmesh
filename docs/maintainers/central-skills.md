@@ -78,9 +78,18 @@ POST `/admin/central/skill-source/preview` accepts
 `https://github.com/owner/repo` URL, `commit` is a full 40-character lowercase
 commit SHA, and `path` is a Skill folder or an empty string for the repository root.
 The platform reader checks the exact commit and reads at most 32 text files.
-The selected folder path has at most eight components; each tree response has
-at most 2,048 entries and 512 KiB of metadata. Up to four immutable raw files are fetched concurrently; failure cancels sibling reads and preserves source ordering. The operation deadline is 45 seconds. GitHub 429 and explicit rate-limit headers surface as a separate rate-limited outcome. Normal file and
-bundle limits also apply. Symlinks and submodules are rejected.
+The selected folder path has at most eight components. The source adapter first
+reads one pinned codeload tar.gz snapshot (at most 8 MiB compressed and 32 MiB
+decompressed, with at most 4,096 tar entries and a 9-second archive attempt).
+It extracts only the selected text subtree, validates tar checksums, paths,
+file counts and UTF-8, and ignores unrelated binary files and symlinks.
+If the archive is unavailable or too large, the independent Git tree adapter
+remains the compatibility fallback: each tree response permits at most 2,048
+entries and 512 KiB metadata, with up to four bounded raw-file reads concurrently.
+An unsupported archive never grants access to unsafe selected entries, and
+preview/install still compare the same immutable digest. The full operation
+deadline is 45 seconds. Rate limits, ordinary file and bundle limits, and
+selected symlink/submodule restrictions remain enforced.
 
 Preview returns `{state:"previewed",source,bundle}` without storing content.
 POST `/admin/central/skill-source/install` accepts the same source, the previewed

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createGithubSkillSource } from "../src/platform/skills/github-source.js";
+import { createLegacyGithubSkillSource } from "../src/platform/skills/github-source.js";
 import { SKILL_SOURCE_LIMITS } from "../src/contracts/skill-source.js";
 import { SKILL_LIMITS } from "../src/contracts/skills.js";
 
@@ -21,7 +21,7 @@ function fixture(entries: readonly Record<string, unknown>[] = [blob()]) {
     if (!response) throw new Error("unexpected test URL: " + String(input));
     return response();
   });
-  return { send, responses, run: (input = source, signal = new AbortController().signal) => createGithubSkillSource(send as typeof fetch).read(input, signal) };
+  return { send, responses, run: (input = source, signal = new AbortController().signal) => createLegacyGithubSkillSource(send as typeof fetch).read(input, signal) };
 }
 
 it("RM07 fetches a fixed commit from fixed hosts and retains text bytes", async () => {
@@ -70,7 +70,7 @@ it("RM07 limits simultaneous file downloads to four, preserves tree order, and f
     }
     return f.send(input, init);
   });
-  const result = await createGithubSkillSource(send as typeof fetch).read(source, new AbortController().signal);
+  const result = await createLegacyGithubSkillSource(send as typeof fetch).read(source, new AbortController().signal);
   expect(result.state).toBe("read");
   if (result.state !== "read") throw new Error("expected source");
   expect(result.files.map(file => file.path)).toEqual(entries.map(entry => entry.path));
@@ -91,7 +91,7 @@ it("RM07 aborts sibling downloads on the first malformed file without starting q
       requestSignal.addEventListener("abort", () => { aborted++; reject(new Error("cancelled")); }, { once: true });
     });
   });
-  expect(await createGithubSkillSource(send as typeof fetch).read(source, new AbortController().signal)).toEqual({ state: "invalid" });
+  expect(await createLegacyGithubSkillSource(send as typeof fetch).read(source, new AbortController().signal)).toEqual({ state: "invalid" });
   expect(started).toBe(SKILL_SOURCE_LIMITS.file_concurrency - 1);
   expect(aborted).toBe(started);
   expect(send).toHaveBeenCalledTimes(2 + SKILL_SOURCE_LIMITS.file_concurrency);
