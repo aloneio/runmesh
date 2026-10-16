@@ -196,6 +196,7 @@ export class PackedJobHistory {
         // quarantine window; active or untrusted retirement remains recoverable.
         const malformedRetirementExpired = !retentionValid && retirementValid && row.retired_at_ms !== null
           && row.corrupt_reason === "expired" && row.jobs_json === ""
+          && row.retired_at_ms <= now - HISTORY_QUARANTINE_MAX_DAYS * DAY
           && row.corrupt_detected_at_ms !== null && Number.isSafeInteger(row.corrupt_detected_at_ms)
           && row.corrupt_detected_at_ms >= 0 && row.corrupt_detected_at_ms <= now - HISTORY_QUARANTINE_MAX_DAYS * DAY;
         if (retirementValid && row.retired_at_ms !== null

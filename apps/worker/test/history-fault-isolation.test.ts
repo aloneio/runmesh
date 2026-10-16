@@ -213,6 +213,22 @@ it("reclaims a retired malformed-retention tombstone only after the full quarant
   expect(await f.row()).toBeNull();
 });
 
+it("preserves a full retirement grace after an earlier quarantine expiry", async () => {
+  const f = await damaged(), clock = vi.spyOn(Date, "now").mockReturnValue(f.now);
+  await db.prepare("UPDATE runmesh_job_snapshots_v1 SET retention_days=-9 WHERE namespace=?").bind(f.ns).run();
+  await f.store.cleanup();
+  clock.mockReturnValue(f.now + 7 * day);
+  await new PackedJobHistory(db, f.ns).cleanup();
+  expect(await f.row()).toMatchObject({ jobs_json: "", corrupt_reason: "expired", retired_at_ms: null });
+  await new PackedJobHistory(db, f.ns).cleanup(async ids => new Map(ids.map(id => [id, null])));
+  expect((await f.row())?.retired_at_ms).toBe(f.now + 7 * day);
+  await new PackedJobHistory(db, f.ns).cleanup();
+  expect(await f.row()).not.toBeNull();
+  clock.mockReturnValue(f.now + 14 * day);
+  await new PackedJobHistory(db, f.ns).cleanup();
+  expect(await f.row()).toBeNull();
+});
+
 it("scheduled cleanup reports D1 unavailability using only bounded metadata", async () => {
   const sentinel = "synthetic-private-value-must-not-be-logged";
   const database = { prepare: () => { throw new Error(sentinel); } } as unknown as D1Database;
