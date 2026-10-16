@@ -37,7 +37,9 @@ export function createLegacyGithubSkillSource(send: typeof fetch = fetch): Skill
       async function bytes(url: string, limit: number, requestSignal: AbortSignal = signal): Promise<Uint8Array> {
         if (requestSignal.aborted) throw new SourceFault("unavailable");
         if (++requests > SKILL_SOURCE_LIMITS.files + SKILL_SOURCE_LIMITS.directory_depth + 3) throw new SourceFault("capacity");
-        const response = await send(url, { method: "GET", redirect: "error", credentials: "omit", cache: "no-store", signal: requestSignal,
+        // Workers supports manual redirects, not redirect: "error" or cache: "no-store".
+        // Explicitly reject all non-200 statuses rather than following a redirect.
+        const response = await send(url, { method: "GET", redirect: "manual", credentials: "omit", signal: requestSignal,
           headers: { accept: "application/vnd.github+json", "user-agent": "Runmesh-Skill-Import", "x-github-api-version": "2022-11-28" } });
         const cancel = () => { void response.body?.cancel().catch(() => undefined); };
         if (response.status === 404) { cancel(); throw new SourceFault("missing"); }

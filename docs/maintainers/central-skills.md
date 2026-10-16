@@ -87,7 +87,10 @@ If the archive is unavailable or too large, the independent Git tree adapter
 remains the compatibility fallback: each tree response permits at most 2,048
 entries and 512 KiB metadata, with up to four bounded raw-file reads concurrently.
 An unsupported archive never grants access to unsafe selected entries, and
-preview/install still compare the same immutable digest. The full operation
+preview/install still compare the same immutable digest. Both adapters omit
+the unsupported Workers `cache` RequestInit member and use
+`redirect: "manual"` with explicit non-200 rejection instead of the
+unsupported `redirect: "error"` mode; redirects are never followed. The full operation
 deadline is 45 seconds. Rate limits, ordinary file and bundle limits, and
 selected symlink/submodule restrictions remain enforced.
 

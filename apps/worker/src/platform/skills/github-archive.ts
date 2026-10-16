@@ -49,7 +49,9 @@ export async function readGithubArchive(send: typeof fetch, source: SkillSource,
   const timer = setTimeout(cancel, ARCHIVE_DEADLINE_MS);
   const requestSignal = timeoutController.signal;
   try {
-    const response = await send(url, { method: "GET", redirect: "error", credentials: "omit", cache: "no-store",
+    // Cloudflare Workers cannot use redirect: "error" or cache: "no-store".
+    // Manual redirects are rejected by the explicit status === 200 check.
+    const response = await send(url, { method: "GET", redirect: "manual", credentials: "omit",
       signal: requestSignal, headers: { accept: "application/gzip", "user-agent": "Runmesh-Skill-Import" } });
     const reject = () => { void response.body?.cancel().catch(() => undefined); };
     if (response.status !== 200 || !response.body) { reject(); return { state: "fallback" }; }

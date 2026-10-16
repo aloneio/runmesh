@@ -14,7 +14,8 @@ function fixture(entries: readonly Record<string, unknown>[] = [blob()]) {
     [raw + "SKILL.md", () => new Response(body)],
   ]);
   const send = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    expect(init?.method).toBe("GET"); expect(init?.redirect).toBe("error"); expect(init?.credentials).toBe("omit");
+    expect(init?.method).toBe("GET"); expect(init?.redirect).toBe("manual"); expect(init?.credentials).toBe("omit");
+    expect(init).not.toHaveProperty("cache");
     const headers = new Headers(init?.headers);
     expect(headers.has("authorization")).toBe(false); expect(headers.has("cookie")).toBe(false);
     const response = responses.get(String(input));

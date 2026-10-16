@@ -67,8 +67,9 @@ it("uses exactly one immutable codeload fetch for a 26-file subtree, despite unr
   const binary = await gzip(pack(fixtures(files)));
   const send = vi.fn(async (url: RequestInfo | URL, options?: RequestInit) => {
     expect(String(url)).toBe("https://codeload.github.com/example/skills/tar.gz/" + source.commit);
-    expect(options?.redirect).toBe("error");
+    expect(options?.redirect).toBe("manual");
     expect(options?.credentials).toBe("omit");
+    expect(options).not.toHaveProperty("cache");
     expect(options?.signal).toBeTruthy();
     return new Response(binary, { status: 200 });
   });
