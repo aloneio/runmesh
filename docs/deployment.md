@@ -33,6 +33,11 @@ The production Cloudflare Workers Builds trigger is deliberately non-deploying:
 its build and deploy commands are fixed to the inert shell command `true`.
 A GitLab `main` update must not upload new Worker code before its own CI
 finishes. The active production version is preserved pending explicit release.
+The trigger watches a reserved, otherwise-unused branch pattern
+`runmesh-trusted-release-*` protected in GitLab with **No one** permitted to
+push or merge and force-push disabled. Do not remove this rule or create a
+same-named release branch: an inert build command alone cannot prevent
+untrusted repository code from running during dependency installation.
 
 **Development** remains separate: publish a clean `dev` checkout only to
 `runmeshdev` using `npm run deploy:worker -- --env development` with

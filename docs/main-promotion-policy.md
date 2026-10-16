@@ -82,6 +82,11 @@ must not automatically deploy on a `main` push. Production upload requires
 the independent, exact-SHA GitLab approval and privileged release workstation
 documented in [deployment](deployment.md).
 
+Protect the Cloudflare Builds placeholder pattern `runmesh-trusted-release-*`
+with **No one** allowed to push or merge and force-push disabled. This blocks a
+new branch from triggering a credential-bearing build; it does not restrict
+routine `dev` pushes or grant production release rights.
+
 GitLab is the only authoritative deployment source. GitHub release history is
 separate and is not force-synchronized or automatically modified by this flow.
 

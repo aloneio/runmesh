@@ -65,6 +65,10 @@ GitLab 使用受保护的 `dev -> main` MR 快进合并，所有必需检查必�
 `dev`。`main` 更新不再自动上传生产 Worker。生产发布只能通过
 [部署指南](deployment.md)规定的独立同 SHA 审批及受控发布工作站执行。
 
+Cloudflare 构建占位分支使用 `runmesh-trusted-release-*` 保护规则，禁止所有角色
+推送、合并和强推，防止新建同名分支意外触发拥有构建凭据的任务。该规则不影响日常
+`dev` 推送。
+
 GitLab 是唯一的部署权威来源。GitHub 的发行历史独立保留，本流程不会对其进行
 自动同步或强制覆盖。
 

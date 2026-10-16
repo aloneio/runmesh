@@ -7,6 +7,7 @@ export const PRODUCTION_TRUST = Object.freeze({
   projectPath: "aloneio/runmesh",
   branch: "main",
   sourceBranch: "dev",
+  inertBuildBranchRule: "runmesh-trusted-release-*",
   mainJobs: Object.freeze(["privacy-policy", "verify", "browser"]),
   mrJobs: Object.freeze(["main-source-policy", "privacy-policy", "verify", "browser"]),
   requiredArtifacts: Object.freeze([
@@ -38,14 +39,23 @@ export function checkProjectAndBranch(project, branch, rules, trust = PRODUCTION
   assert.equal(branch?.protected, true);
   assert.match(branch?.commit?.id ?? "", sha40);
   assert.ok(Array.isArray(rules), "protected branch rules missing");
+  // GitLab uses the most permissive matching branch rule. The third, narrow
+  // protection explicitly reserves the inert Cloudflare Builds trigger name;
+  // otherwise a Developer could create that branch and run repository-supplied
+  // code in a build context holding privileged Cloudflare credentials.
+  assert.deepEqual(rules.map(rule => rule.name).sort(),
+    [trust.branch, trust.sourceBranch, trust.inertBuildBranchRule].sort(),
+    "unreviewed protected branch or wildcard rule");
   const exactMain = rules.find(x => x.name === trust.branch);
   const exactDev = rules.find(x => x.name === trust.sourceBranch);
-  assert.ok(exactMain && exactDev && !exactMain.allow_force_push && !exactDev.allow_force_push);
+  const inertBuildRule = rules.find(x => x.name === trust.inertBuildBranchRule);
+  for (const rule of [exactMain, exactDev, inertBuildRule])
+    assert.equal(rule?.allow_force_push, false, "force push must remain disabled");
   assert.deepEqual(exactMain.push_access_levels.map(x => x.access_level), [0]);
   assert.deepEqual(exactMain.merge_access_levels.map(x => x.access_level), [40]);
   assert.deepEqual(exactDev.push_access_levels.map(x => x.access_level), [30]);
-  // The most permissive matching GitLab branch rule applies.
-  assert.equal(rules.length, 2, "unreviewed protected branch or wildcard rule");
+  assert.deepEqual(inertBuildRule.push_access_levels.map(x => x.access_level), [0]);
+  assert.deepEqual(inertBuildRule.merge_access_levels.map(x => x.access_level), [0]);
 }
 
 export function checkPipeline(pipeline, jobs, { sha, ref, source, projectId, requiredJobs }) {
