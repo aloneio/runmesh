@@ -53,6 +53,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
+      - name: Reject private commit metadata before prerelease planning
+        run: node scripts/check-release-privacy.mjs source
       - name: Restore this run's original planning outcome on retry
         if: github.run_attempt > 1
         env:
@@ -185,6 +187,9 @@ jobs:
           cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md .dev-release/assets/
           (cd .dev-release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
           git diff --exit-code
+      - name: Reject private email addresses in the exact prerelease payload
+        if: steps.publication-preflight.outputs.already_published != 'true'
+        run: node scripts/check-release-privacy.mjs assets .dev-release/assets --plan .dev-release/plan.json
       - name: Publish an immutable prerelease, never Latest, with download verification
         if: steps.publication-preflight.outputs.already_published != 'true'
         env:

@@ -12,6 +12,8 @@ export async function verifyDevTag(plan, ref, api) {
   const object = await api(`git/tags/${ref.object.sha}`);
   assert.equal(object.object?.type, "commit"); assert.equal(object.object?.sha, plan.source_sha);
   assert.equal(object.tag, plan.tag); assert.equal(object.message, planMessage(plan));
+  assert.equal(object.tagger?.name, "aloneio", "development release tagger name must be reviewed");
+  assert.equal(object.tagger?.email, "git@aloneio.aleeas.com", "development release tagger email must be reviewed");
 }
 export function assertReleaseIdentity(release, plan, complete = false) {
   assert.ok(release && Number.isSafeInteger(release.id) && release.id > 0);

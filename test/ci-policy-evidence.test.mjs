@@ -133,7 +133,7 @@ function fixture() {
   const gh = { on: { push: { branches: ["main", "dev"] }, pull_request: null, workflow_dispatch: null, workflow_call: null }, permissions: { contents: "read" }, jobs: {
     verify: { "runs-on": "ubuntu-latest", "timeout-minutes": 30, steps: [
       { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version-file": ".node-version" } },
-      { run: VERIFY_REPORT_INITIALIZATION_COMMAND }, ...CHECK_IDS.map(id => ({ run: checkCommand(id) })), githubReportUpload("verify")] },
+      { run: VERIFY_REPORT_INITIALIZATION_COMMAND }, { run: "node scripts/check-git-privacy.mjs --ci" }, ...CHECK_IDS.map(id => ({ run: checkCommand(id) })), githubReportUpload("verify")] },
     "native-runner": { name: "Runner native checks (${{ matrix.os }})", "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: [
       { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version-file": ".node-version" } },
       { ...WINDOWS_REPORT_INITIALIZATION_STEP }, ...NATIVE_COMMANDS.map(run => ({ run })), { ...WINDOWS_TRANSPORT_STEP }, githubReportUpload("native-runner"),
@@ -159,6 +159,18 @@ const browserStep = f => f.gh.jobs.browser.steps.find(step => step.run === "npm 
 const transportStep = f => f.gh.jobs["native-runner"].steps.find(step => step.run === WINDOWS_TRANSPORT_STEP.run);
 const initializationStep = f => f.gh.jobs["native-runner"].steps.find(step => step.run === WINDOWS_REPORT_INITIALIZATION_STEP.run);
 test("CI02 normal closed execution grammar is accepted", () => assert.equal(verify(fixture()).critical_checks, CHECK_IDS.length));
+test("CI02 requires a blocking, correctly ordered GitHub privacy gate", () => {
+  for (const mutate of [
+    steps => steps.splice(steps.findIndex(step => step.run === "node scripts/check-git-privacy.mjs --ci"), 1),
+    steps => { steps.find(step => step.run === "node scripts/check-git-privacy.mjs --ci").if = "false"; },
+    steps => { steps.find(step => step.run === "node scripts/check-git-privacy.mjs --ci")["continue-on-error"] = true; },
+    steps => { steps.push(steps.splice(steps.findIndex(step => step.run === "node scripts/check-git-privacy.mjs --ci"), 1)[0]); },
+    steps => { steps.splice(2, 0, { run: "node scripts/check-git-privacy.mjs --ci" }); },
+  ]) {
+    const value = fixture(); mutate(value.gh.jobs.verify.steps);
+    assert.throws(() => verify(value));
+  }
+});
 test("CI02 accepts an explicit unfiltered pull request trigger", () => {
   const value = fixture(); value.gh.on.pull_request = {};
   assert.equal(verify(value).critical_checks, CHECK_IDS.length);

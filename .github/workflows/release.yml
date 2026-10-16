@@ -89,6 +89,8 @@ jobs:
           test "$(node -p 'require("./apps/worker/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./packages/protocol/package.json").version')" = "$RELEASE_VERSION"
           node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+      - name: Reject personal mailboxes before building a stable release
+        run: node scripts/check-release-privacy.mjs source --notes "docs/releases/${RELEASE_VERSION}.md"
       - run: npm ci
       - name: Verify generated release inputs after installing dependencies
         run: |
@@ -180,6 +182,8 @@ jobs:
           # independent transport/infrastructure verification.
           node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
           (cd release/assets && sha256sum -c SHA256SUMS)
+      - name: Reject private email addresses in exact signed release assets
+        run: node scripts/check-release-privacy.mjs assets release/assets --notes "docs/releases/${RELEASE_VERSION}.md"
       - name: Preserve signed release assets as an unpublished CI artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

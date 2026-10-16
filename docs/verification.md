@@ -40,7 +40,7 @@ GitLab is the authoritative deployment source. Direct `dev` pushes run the light
 | `Runner native checks` | Native behavior on Windows, Linux and macOS; Windows also runs the complete transport suite |
 | `Runner LTS` | Runner behavior on the declared Node LTS versions |
 
-GitHub's `verify-all` aggregates every required job. GitLab acceptance checks both `verify` and `browser`; Worker deployment builds have a separate result. Cross-forge release evidence reads the GitHub run details and required jobs from the same selected run attempt.
+GitHub also blocks noncompliant commit identities in `verify` and rechecks release contents before either stable or development publication. The portable Runner archive and the complete release asset set reject nonapproved email addresses, with a single hash-pinned legal notice exception. GitHub's `verify-all` aggregates every required job. GitLab acceptance checks both `verify` and `browser`; Worker deployment builds have a separate result. Cross-forge release evidence reads the GitHub run details and required jobs from the same selected run attempt.
 
 Open `ci-results/` in the job artifacts for JSON summaries and JUnit reports. Transport evidence includes source identity, platform, test counts, and source locations and error categories on failure. Browser checks use the same diagnostic rules. Reports are retained for 14 days after GitHub verification, browser and Windows transport jobs, and after GitLab verification and browser jobs. To investigate log-pagination failures, use the reported field states, byte counts and source location to identify the failing step.
 

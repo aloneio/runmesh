@@ -28,6 +28,7 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: node scripts/ci-check.mjs --initialize verify
+      - run: node scripts/check-git-privacy.mjs --ci
       - run: npm install --global npm@10.9.3
       - run: node scripts/ci-check.mjs toolchain
       - run: node scripts/ci-check.mjs install

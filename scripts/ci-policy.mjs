@@ -70,6 +70,11 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   assert.ok(verify.defaults === undefined && gh.defaults === undefined, "implicit working-directory/shell overrides are unreviewed");
   for (const id of CHECK_IDS) requiredStep(verify.steps, checkCommand(id));
   reportInitialization(verify.steps, VERIFY_REPORT_INITIALIZATION_COMMAND, undefined, "Verification");
+  const githubPrivacyCommand = "node scripts/check-git-privacy.mjs --ci";
+  requiredStep(verify.steps, githubPrivacyCommand);
+  assert.equal(verify.steps.findIndex(step => step.run === githubPrivacyCommand),
+    verify.steps.findIndex(step => step.run === VERIFY_REPORT_INITIALIZATION_COMMAND) + 1,
+    "GitHub privacy policy must run immediately after report initialization");
   const order = verify.steps.filter(s => typeof s.run === "string" && s.run.startsWith("node scripts/ci-check.mjs ")).map(s => s.run);
   eq(order, [VERIFY_REPORT_INITIALIZATION_COMMAND, ...CHECK_IDS.map(checkCommand)], "mandatory checks reordered, removed, or duplicated");
   for (const name of AGGREGATE_JOBS) {

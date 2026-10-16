@@ -282,6 +282,7 @@
         "test/deployment-provenance-cli.test.mjs",
         "test/gitlab-deployment-source.test.mjs",
         "test/git-privacy-policy.test.mjs",
+        "test/release-privacy.test.mjs",
         "test/dev-release.test.mjs",
         "test/installer-arguments.test.mjs",
         "test/installer-concurrency.test.mjs",

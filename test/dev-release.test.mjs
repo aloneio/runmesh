@@ -213,7 +213,7 @@ test("GitHub adapter fixes origin, disallows redirects and caps responses", asyn
 
 function publisherFixture({ published = false, draft = false, wrongTag = false, badBytes = false, immutable = true, tagLookupMissing = false } = {}) {
   const p = plan(), objectSha = "d".repeat(40), writes = [], verifications = [];
-  let object = published || draft || wrongTag ? { sha: objectSha, object: { type: "commit", sha: wrongTag ? "e".repeat(40) : p.source_sha }, tag: p.tag, message: planMessage(p) } : null;
+  let object = published || draft || wrongTag ? { sha: objectSha, object: { type: "commit", sha: wrongTag ? "e".repeat(40) : p.source_sha }, tag: p.tag, message: planMessage(p), tagger: { name: "aloneio", email: "git@aloneio.aleeas.com" } } : null;
   let ref = object ? { object: { type: "tag", sha: objectSha } } : null;
   const asset = name => ({ name, size: 50, state: "uploaded" });
   let release = published || draft ? { id: 1, tag_name: p.tag, body: planMessage(p), draft: !published, prerelease: true, immutable: published && immutable, assets: (published ? devAssetNames(p.version) : ["manifest.json"]).map(asset) } : null;
@@ -224,7 +224,7 @@ function publisherFixture({ published = false, draft = false, wrongTag = false, 
     api: async (path, options = {}) => {
       if (options.method) writes.push({ path, ...options });
       if (path.startsWith("git/ref/tags/")) return ref;
-      if (path === "git/tags") { object = { sha: objectSha, object: { type: "commit", sha: options.body.object }, tag: options.body.tag, message: options.body.message }; return object; }
+      if (path === "git/tags") { object = { sha: objectSha, object: { type: "commit", sha: options.body.object }, tag: options.body.tag, message: options.body.message, tagger: options.body.tagger }; return object; }
       if (path.startsWith("git/tags/")) return object;
       if (path === "git/refs") { ref = { object: { type: "tag", sha: objectSha } }; return ref; }
       if (path.startsWith("releases/tags/")) return tagLookupMissing ? null : release && structuredClone(release);
@@ -269,6 +269,24 @@ test("unavailable remote evidence and revoked source stop all publication", asyn
   const g = publisherFixture(); g.io.assertCurrentSource = async () => { throw new Error("source no longer reachable"); };
   await assert.rejects(publishDevelopmentRelease(g.plan, g.io)); assert.deepEqual(g.writes, []);
 });
+test("a failed local release privacy gate makes no GitHub publication requests", async () => {
+  const f = publisherFixture();
+  f.io.verifyLocal = async () => { throw new Error("release_privacy_email_rejected"); };
+  await assert.rejects(publishDevelopmentRelease(f.plan, f.io), /release_privacy_email_rejected/u);
+  assert.deepEqual(f.writes, []);
+});
+
+test("existing prerelease tags with a personal tagger cannot be reused", async () => {
+  const f = publisherFixture({ draft: true });
+  const api = f.io.api;
+  f.io.api = async (path, options) => {
+    const value = await api(path, options);
+    return path.startsWith("git/tags/") && value ? { ...value, tagger: { name: "Someone", email: "private@example.test" } } : value;
+  };
+  await assert.rejects(publishDevelopmentRelease(f.plan, f.io), /tagger name/u);
+  assert.deepEqual(f.writes, []);
+});
+
 test("a public but unlocked release is not reported as successful", async () => {
   const f = publisherFixture({ published: true, immutable: false }); await assert.rejects(publishDevelopmentRelease(f.plan, f.io), /immutable/u);
 });

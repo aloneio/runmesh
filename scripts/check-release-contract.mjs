@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { reviewedReleaseSource } from "./runtime-config-tools.mjs";
 import { fileURLToPath } from "node:url";
 import { checkStablePublication } from "./stable-publication.mjs";
+import { checkReleasePrivacyWiring } from "./check-release-workflow-privacy.mjs";
 
 const root = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const source = readFileSync(new URL("../apps/worker/src/domain/release-config.ts", import.meta.url), "utf8");
@@ -19,6 +20,7 @@ if(state.state === "released") {
 
 assert.equal(fixed, root.version, "installer must match source version");
 await checkStablePublication(fileURLToPath(new URL("../", import.meta.url)), root.version, undefined, false);
+checkReleasePrivacyWiring();
 assert.notEqual(root.version, "0.1.0-dev.3", "security fixes cannot reuse the immutable dev.3 identity");
 assert.equal(config.name, "runmesh", "top-level Wrangler config is the canonical production Worker");
 assert.deepEqual(config.vars, { CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" }, "production ships the reviewed central capabilities without provider credentials in source");
