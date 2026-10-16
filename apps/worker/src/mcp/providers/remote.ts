@@ -15,7 +15,8 @@ const profilesResponse = z.object({ state: z.literal("listed"), profiles: z.arra
   profile_id: profileId, name: z.string().min(1).max(128),
 }).strict()).max(CATALOG_LIMITS.profiles) }).strict();
 const toolsInput = publishSchema(z.object({ profile_id: profileId,
-  limit: z.number().int().min(1).max(CATALOG_LIMITS.page_tools).optional(), cursor: z.string().min(1).max(CATALOG_LIMITS.cursor_bytes).optional() }).strict(), "input");
+  limit: z.number().int().min(1).max(CATALOG_LIMITS.page_tools).optional(), cursor: z.string().min(1).max(CATALOG_LIMITS.cursor_bytes).optional(),
+  tool_id: z.string().regex(/^mcp\.[a-f0-9]{64}$/u).optional() }).strict().refine(v => v.tool_id === undefined || (v.limit === undefined && v.cursor === undefined)), "input");
 const callInput = publishSchema(z.object({ profile_id: profileId, tool_id: z.string().regex(/^mcp\.[a-f0-9]{64}$/u),
   version: z.string().regex(/^[a-f0-9]{64}$/u), arguments: z.record(z.string(), z.unknown()) }).strict(), "input");
 
@@ -44,7 +45,7 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { 
     return directoryResult(parsed.data);
   });
   server.registerTool("remote_tools", {
-    description: "List shared published remote MCP tools for a profile from remote_profiles. No Runner is needed. Use the returned tool_id and version with remote_call. This lists saved reviewed definitions, not live discovery.",
+    description: "List reviewed remote MCP tools for a profile, or request one definition with tool_id (without limit/cursor). Pagination remains available. Definitions are stored snapshots, not live discovery.",
     inputSchema: toolsInput,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     _meta: { "runmesh/central_contract": 1 },

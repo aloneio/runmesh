@@ -46,7 +46,7 @@ Only `not_started` can justify an admission retry. **Do not automatically replay
 
 Use `remote_profiles` to find a service, or `remote_search` with a keyword `query`
 and optional `profile_id` to find relevant tools. Search returns a bounded summary;
-read the full definition and `inputSchema` through `remote_tools`. Call
+read the full definition and `inputSchema` through `remote_tools`. With an exact tool ID, use `remote_tools` with `profile_id` and `tool_id` to load only that definition; do not combine `tool_id` with `cursor` or `limit`. Existing paginated listing remains supported. Call
 `remote_call` with the returned `profile_id`, `tool_id`, `version` and schema-valid
 `arguments`. A changed catalog requires a fresh definition and version.
 
