@@ -127,19 +127,21 @@ Create and enable a profile using the existing protected administration API.
 Read `GET /admin/central/catalogs/{profile_id}` and pass its `head.revision` as
 `expected_revision` to `POST /admin/central/discovery/{profile_id}`. Use
 `{"expected_revision":0}` only when the catalog read returns `{"state":"empty"}`.
-Requests use the administrator's existing session, same origin and matching CSRF token. The
-complete bounded tools/list result is stored and published atomically in one
-catalog revision. Every accepted tool is immediately available to authenticated
-clients; the connection requires no additional review or approval in the
-[control panel](central-administration.md). Client credentials remain required;
-publication grants no Runner permissions.
+Requests use the administrator's existing session, same origin and matching CSRF token. The first complete bounded tools/list is published atomically to preserve initial
+connection setup. For an existing catalog, refresh stages the full observed
+snapshot and retains the previously approved digest and names. Administrators
+review the changed/new entries in **View tools** and approve only the selected
+names; unchanged previously approved tools are preselected. Unapproved changes
+remain blocked. Repeated identical observations return `unchanged` without a
+storage write or revision bump. Client credentials remain required; publication
+grants no Runner permissions.
 
 The discovery endpoint permits no caller URL, token, HTTP headers or command.
 Partial pages, duplicate tools, timeouts and failed upstream
 observations leave the previously reviewed catalog intact. An actual change in
 the selected tool's description/schema/annotations blocks invocation until the
-catalog is refreshed, which publishes all current tools. The call does not publish changes
-or create a new catalog revision for every request.
+catalog is refreshed and the changed definition is explicitly approved. The call
+itself never publishes changes; an identical refresh does not create a new revision.
 
 ### Hosted MCP catalog compatibility
 

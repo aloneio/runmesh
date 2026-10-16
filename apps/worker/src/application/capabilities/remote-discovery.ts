@@ -4,10 +4,12 @@ import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
 import { catalogRevision } from "../../contracts/catalog-json.js";
 import { parseProfile } from "../../contracts/connector-values.js";
 import { createCatalogManager } from "./catalog-admin.js";
+import { buildCatalogSnapshot } from "../../domain/capabilities/catalog.js";
 import { remoteDeadline } from "./remote-deadline.js";
 
-/** Complete, bounded discovery publishes every tool in one transaction. Partial
- * pages and failed observations leave the previously published state intact. */
+/** Initial discovery preserves the existing connect-and-publish flow. Subsequent
+ * refreshes stage provider changes for explicit approval. Failed or incomplete
+ * observations never replace a published definition. */
 export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly connector: RemoteConnector }) {
   return async (profileId: string, expectedRevision: number, parent: AbortSignal): Promise<RemoteDiscoveryResult> => {
     if (!isCapabilityIdentifier(profileId) || !catalogRevision(expectedRevision, true)) return { state: "invalid" };
@@ -20,8 +22,9 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
         if (admission !== "allowed") return { state: admission };
         const profile = parseProfile(ports.profile(profileId));
         if (profile === undefined || profile.profile_id !== profileId || !profile.enabled) return { state: "denied" };
-        if ((ports.repository.readHead(profileId)?.revision ?? 0) !== expectedRevision)
-          return { state: "conflict", current_revision: ports.repository.readHead(profileId)?.revision ?? 0 };
+        const existing = ports.repository.readHead(profileId);
+        if ((existing?.revision ?? 0) !== expectedRevision)
+          return { state: "conflict", current_revision: existing?.revision ?? 0 };
         const fence = async () => {
           const current = await ports.authorize(signal);
           if (expired()) throw new RemoteFault("operation_timed_out");
@@ -46,8 +49,20 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
           const current = ports.profile(id);
           return current?.revision === profile.revision && current.enabled && current.endpoint === profile.endpoint ? current : undefined;
         } });
+        // Avoid a storage write and cursor invalidation for identical live
+        // tools, including when a previously staged review is still pending.
+        const orderedTools = [...tools].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+        const candidate = await buildCatalogSnapshot(profile, orderedTools, ports.digest, expired);
+        if (candidate === undefined || expired()) return { state: "unavailable" };
+        await fence();
+        // A credential or egress revision can change while hashing. This is
+        // an explicit pre-publication denial, not a dispatched tool failure.
+        if (!completedSession.current()) return { state: "denied" };
+        if (existing?.observed_digest === candidate.digest) return { state: "unchanged", head: existing,
+          ...(excluded.length ? { excluded_tools: excluded } : {}) };
         publishing = true;
-        const result = await manager.mutate({ action: "publish", profile_id: profileId, expected_revision: expectedRevision, tools }, signal, expired);
+        const result = await manager.mutate({ action: existing === undefined ? "publish" : "stage",
+          profile_id: profileId, expected_revision: expectedRevision, tools }, signal, expired);
         return result.state === "written" && excluded.length ? { ...result, excluded_tools: excluded } : result;
       } catch (error) {
         return { state: "failed", code: error instanceof RemoteFault ? error.code : "dependency_unavailable", operation_state: publishing ? "unknown" : "not_started" };

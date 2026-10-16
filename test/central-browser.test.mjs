@@ -61,7 +61,7 @@ test("central request contracts keep recovery scopes and read-only POST receipts
     ['catalogs/cloud%2Fdocs', undefined, false, 'mcp:cloud/docs', false, ['found']],
     ['catalogs/cloud%2Fdocs', undefined, true, 'mcp:cloud/docs', false, ['found', 'empty']],
     ['catalogs/cloud%2Fdocs', { action: 'approve' }, true, 'mcp:cloud/docs', true, ['written']],
-    ['discovery/cloud%2Fdocs', { expected_revision: 0 }, false, 'mcp:cloud/docs', true, ['written', 'authorization_required']],
+    ['discovery/cloud%2Fdocs', { expected_revision: 0 }, false, 'mcp:cloud/docs', true, ['written', 'authorization_required', 'unchanged']],
     ['connections/begin', { profile_id: 'cloud/docs' }, false, 'mcp:cloud/docs', true, ['started']],
     ['connections/revoke', { profile_id: 'cloud/docs' }, false, 'mcp:cloud/docs', true, ['revoked']],
     ['connection-check', { profile_id: 'cloud/docs' }, false, 'mcp:cloud/docs', false, ['inspected', 'authorization_required']],
@@ -1387,6 +1387,50 @@ test("MCP inspection invalidation follows the displayed connection or draft", as
   assert.equal(ui.panel.hidden, false, 'A draft inspection belongs to the form');
   ui.view.invalidate('mcp-create');
   assert.equal(ui.panel.children.length, 0);
+});
+
+test("Changed MCP tools are never preapproved and reviewers can preserve unchanged tools", async t => {
+  const { element } = centralDomFixture(t);
+  const list = element(), panel = element(), status = element(), form = element('form');
+  const app = { querySelector: selector => ({ '[data-service-list]': list,
+    '[data-service-tools]': panel, '[data-product-status]': status, '[data-service-create]': form })[selector] ?? null };
+  const profile = { profile_id: 'docs', connector_id: 'docs', display_name: 'Docs', enabled: true, endpoint: 'https://example.com/mcp' };
+  const digest = 'b'.repeat(64), previous = 'a'.repeat(64), submitted = [];
+  let approvedNames = ['lookup', 'stable'], approvedDigest = previous, revision = 2;
+  const tools = ['lookup', 'new', 'stable'].map(name => ({ definition: { name, description: name } }));
+  const changes = [{ name: 'lookup', state: 'changed' }, { name: 'new', state: 'added' }, { name: 'stable', state: 'unchanged' }];
+  const catalog = () => ({ head: { revision, observed_digest: digest, approved_digest: approvedDigest, approved_names: approvedNames },
+    snapshot: { digest, tools }, changes });
+  let pending;
+  const run = action => { pending = Promise.resolve().then(action); return pending; };
+  const view = createCentralView(app, key => key, run);
+  const workflow = createServiceWorkflow({ app, view, t: key => key, run, navigate() {},
+    refresh: async () => { workflow.render([profile]); return [profile]; },
+    api: async (path, body) => {
+      if (path === 'catalogs/docs' && body === undefined) return catalog();
+      if (path === 'catalogs/docs' && body?.action === 'approve') {
+        submitted.push(body); approvedNames = [...body.tool_names]; approvedDigest = digest; revision++;
+        return { state: 'written' };
+      }
+      throw new Error('Unexpected path: ' + path);
+    } });
+  workflow.render([profile]);
+  const nodes = node => [node, ...node.children.flatMap(nodes)];
+  const button = (container, label) => nodes(container).find(node => node.tag === 'button' && node.textContent === label);
+  button(list, 'viewTools').dispatch('click'); await pending;
+  const inputs = nodes(panel).filter(node => node.tag === 'input');
+  assert.deepEqual(inputs.map(node => node.checked), [false, false, true],
+    'Changed and new tools require approval; unchanged previous grants are retained');
+  assert.deepEqual(submitted, [], 'Viewing staged tools never approves the provider changes');
+  inputs[0].checked = true;
+  button(panel, 'catalogApproveSelection').dispatch('click'); await pending;
+  assert.deepEqual(submitted, [{ action: 'approve', expected_revision: 2, digest, tool_names: ['lookup', 'stable'] }],
+    'Approval includes only explicitly selected changes plus retained grants');
+  assert.deepEqual(approvedNames, ['lookup', 'stable']);
+  assert.equal(approvedDigest, digest);
+  const followUp = nodes(panel).filter(node => node.tag === 'input');
+  assert.deepEqual(followUp.map(node => node.checked), [true, false, true],
+    'Unselected new tools remain unapproved after a partial publication');
 });
 
 test("A late tool read cannot replace a later selection, and unrelated invalidation keeps that selection", async t => {

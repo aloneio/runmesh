@@ -152,19 +152,43 @@ it("W05 failed discovery does not publish a partial or empty successful replacem
   expect(f.repository.stage).not.toHaveBeenCalled(); expect(f.repository.publish).not.toHaveBeenCalled();
 });
 
-it("W05 successful discovery publishes complete tool definitions without a separate approval", async () => {
-  const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
-  f.repository.publish = publish;
+it("W05 repeated identical upstream discovery returns unchanged without a new write", async () => {
+  const f = await fixture();
   f.listTools.mockResolvedValue([catalogDefinition()]);
   const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
-  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
-  expect(publish).toHaveBeenCalledOnce(); expect(f.repository.stage).not.toHaveBeenCalled(); expect(f.invoked).not.toHaveBeenCalled();
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "unchanged", head: { revision: 2 } });
+  expect(f.repository.publish).not.toHaveBeenCalled();
+  expect(f.repository.stage).not.toHaveBeenCalled();
 });
 
-it("W05 refresh publishes the four-tool Cloudflare Code Mode catalog including whoami", async () => {
-  const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+it("W05 first discovery preserves initial auto-publication", async () => {
+  const f = await fixture();
+  f.repository.readHead = () => undefined;
+  f.listTools.mockResolvedValue([catalogDefinition()]);
+  const publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 1 } }));
   f.repository.publish = publish;
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 0, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 1 } });
+  expect(publish).toHaveBeenCalledOnce(); expect(f.repository.stage).not.toHaveBeenCalled();
+});
+
+it("W05 changed tool definitions are staged without implicit approval", async () => {
+  const f = await fixture(), stage = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.repository.stage = stage;
+  f.listTools.mockResolvedValue([catalogDefinition("search", "Changed tool documentation")]);
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
+  expect(stage).toHaveBeenCalledOnce();
+  expect(stage.mock.calls[0]![0].tools[0]!.definition.description).toBe("Changed tool documentation");
+  expect(f.repository.publish).not.toHaveBeenCalled();
+});
+
+it("W05 refreshed four-tool Cloudflare Code Mode catalog is staged and sorted", async () => {
+  const f = await fixture(), stage = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.repository.stage = stage;
   const whoami = { ...catalogDefinition("whoami"), inputSchema: { type: "object", properties: {}, additionalProperties: false },
     outputSchema: { type: "object", properties: { id: { type: "string", minLength: 1, pattern: "\\S" },
       name: { type: "string" }, email: { type: "string" } }, required: ["id"], additionalProperties: false } };
@@ -172,8 +196,9 @@ it("W05 refresh publishes the four-tool Cloudflare Code Mode catalog including w
   const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
-  expect(publish).toHaveBeenCalledOnce();
-  const snapshot = publish.mock.calls[0]![0];
+  expect(f.repository.publish).not.toHaveBeenCalled();
+  expect(stage).toHaveBeenCalledOnce();
+  const snapshot = stage.mock.calls[0]![0];
   expect(snapshot.tools.map(tool => tool.definition.name)).toEqual(["docs", "execute", "search", "whoami"]);
 });
 

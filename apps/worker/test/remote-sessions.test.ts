@@ -62,24 +62,29 @@ it.each(["complete", "repeated", "cycle"] as const)("W06 upstream pagination %s 
   let snapshot = previous, head: CatalogHead = { schema_version: 1, profile_id: profile.profile_id, revision: 7,
     observed_digest: previous.digest, approved_digest: previous.digest, approved_names: ["previous"] };
   const initial = structuredClone(head);
-  const publish = vi.fn<CatalogRepository["publish"]>((value, expected) => {
+  const stage = vi.fn<CatalogRepository["stage"]>((value, expected) => {
     expect(expected).toBe(head.revision); snapshot = value;
-    head = { ...head, revision: expected + 1, observed_digest: value.digest, approved_digest: value.digest, approved_names: value.tools.map(tool => tool.definition.name) };
+    head = { ...head, revision: expected + 1, observed_digest: value.digest };
     return { state: "written", head };
   });
+  const publish = vi.fn<CatalogRepository["publish"]>(() => ({ state: "invalid" }));
   const repository: CatalogRepository = { readHead: () => head, readSnapshot: () => snapshot, publish,
-    stage: () => ({ state: "invalid" }), approve: () => ({ state: "invalid" }), disable: () => ({ state: "invalid" }) };
+    stage, approve: () => ({ state: "invalid" }), disable: () => ({ state: "invalid" }) };
   const discover = createRemoteDiscovery({ repository, connector, profile: () => profile, authorize: async () => "allowed", digest: catalogSha256 });
   const result = await discover(profile.profile_id, 7, new AbortController().signal);
   expect(cursors).toEqual(pagination === "repeated" ? [null, "page-a"] : [null, "page-a", "page-b"]);
   if (pagination === "complete") {
-    expect(result).toMatchObject({ state: "written", head: { revision: 8, approved_names: ["tool_1", "tool_2", "tool_3"] } });
-    expect(publish).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ state: "written", head: { revision: 8, approved_names: ["previous"] } });
+    expect(stage).toHaveBeenCalledOnce(); expect(publish).not.toHaveBeenCalled();
+    expect(head.approved_digest).toBe(previous.digest);
+    expect(head.observed_digest).not.toBe(previous.digest);
   } else {
     expect(result).toEqual({ state: "failed", code: "upstream_protocol_error", operation_state: "not_started" });
-    expect(publish).not.toHaveBeenCalled(); expect(head).toEqual(initial); expect(snapshot).toEqual(previous);
+    expect(stage).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
+    expect(head).toEqual(initial); expect(snapshot).toEqual(previous);
   }
 });
+
 it.each(["publish", "admin", "profile", "catalog", "credential", "egress", "credential-digest", "egress-digest"])("W06 discovery closes its session before publication and rechecks %s", async change => {
   let allowed = true, currentProfile = { ...profile }, head: CatalogHead | undefined, snapshot: CatalogSnapshot | undefined;
   const f = fixture(() => {

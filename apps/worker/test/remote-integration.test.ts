@@ -171,19 +171,44 @@ it("W05 shared clients discover publications without grants and invalid argument
   } finally { f.network.mockRestore(); }
 });
 
-it("W05 live description changes require a refresh which immediately publishes the new definition", async () => {
+it("W05 a changed upstream description is staged until explicitly approved", async () => {
   const f = await fixture();
   try {
     expect((await f.discover()).status).toBe(200); const command = await f.toolCommand(); f.drift();
     expect(await f.port.callRemote(f.current.principal, command)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
     expect(f.execute).not.toHaveBeenCalled();
     expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 1 } });
-    expect((await f.discover(f.admin.headers, 1)).status).toBe(200);
+    const response = await f.discover(f.admin.headers, 1);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ state: "written", head: { revision: 2 } });
+    const staged = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
+    expect(staged.state).toBe("found");
+    if (staged.state !== "found") throw new Error("missing staged catalog");
+    expect(staged.head).toMatchObject({ revision: 2, approved_names: ["lookup"] });
+    expect(staged.head.observed_digest).not.toBe(staged.head.approved_digest);
+    expect(staged.changes).toEqual([{ name: "lookup", state: "changed" }]);
     const updated = await f.toolCommand();
     expect(updated.version).not.toBe(command.version);
+    expect(await f.port.callRemote(f.current.principal, updated)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
+    expect(f.execute).not.toHaveBeenCalled();
+    const approval = await f.call(owner => owner.mutateCatalog(f.admin.hash, {
+      action: "approve", profile_id: "docs", expected_revision: 2, digest: staged.snapshot.digest, tool_names: ["lookup"],
+    }));
+    expect(approval).toMatchObject({ state: "written", head: { revision: 3, approved_names: ["lookup"] } });
     expect(await f.port.callRemote(f.current.principal, updated)).toMatchObject({ state: "completed" });
     expect(f.execute).toHaveBeenCalledOnce();
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 2, approved_names: ["lookup"] } });
+  } finally { f.network.mockRestore(); }
+});
+
+it("W05 an identical upstream refresh does not write or invalidate the approved catalog", async () => {
+  const f = await fixture();
+  try {
+    expect((await f.discover()).status).toBe(200);
+    const same = await f.discover(f.admin.headers, 1);
+    expect(same.status).toBe(200);
+    expect(await same.json()).toMatchObject({ state: "unchanged", head: { revision: 1, approved_names: ["lookup"] } });
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 1 } });
+    expect(await f.port.callRemote(f.current.principal, await f.toolCommand())).toMatchObject({ state: "completed" });
   } finally { f.network.mockRestore(); }
 });
 

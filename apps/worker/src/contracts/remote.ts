@@ -1,4 +1,4 @@
-import type { CatalogJson, CatalogMutation, CatalogPage, CatalogReadPorts, RemoteToolDefinition, SharedProfiles } from "./catalog.js";
+import type { CatalogJson, CatalogHead, CatalogMutation, CatalogPage, CatalogReadPorts, RemoteToolDefinition, SharedProfiles } from "./catalog.js";
 import type { CapturedIdentity } from "./identity.js";
 import type { ConnectionProfile } from "./connectors.js";
 import type { CentralObservation, CentralReceipt } from "./central-audit.js";
@@ -42,6 +42,7 @@ export function remoteFailureMetadata(value: unknown, observed: unknown) {
     recovery_hint: operation_state === "unknown" ? "The upstream action may have executed. Inspect its state before a new invocation; this call was not replayed."
       : operation_state === "completed" ? "The upstream action completed, but its result cannot be returned. Do not treat this response as a rollback."
       : code === "busy" ? "The MCP connection is busy. Wait briefly, then try again."
+      : code === "stale_catalog" ? "The provider tool definition differs from the reviewed catalog. In RunMesh MCP & Skill, refresh the tool list and approve the changed tools; this call was not sent upstream."
       : "Check the central connection, approved catalog and client connection before a new request." });
 }
 export type RemoteFailure = { readonly state: "failed"; readonly code: RemoteCode;
@@ -49,7 +50,8 @@ export type RemoteFailure = { readonly state: "failed"; readonly code: RemoteCod
 export type RemoteOutcome = ({ readonly state: "completed"; readonly operation_state: "completed"; readonly result: RemoteResult } | RemoteFailure) & { readonly receipt?: CentralReceipt };
 
 export interface RemoteToolIssue { readonly name: string | null; readonly code: "invalid_tool" | "schema_unsupported" | "interaction_required" }
-export type RemoteDiscoveryResult = (CatalogMutation & { readonly excluded_tools?: readonly RemoteToolIssue[] }) | RemoteFailure;
+export type RemoteDiscoveryResult = ((CatalogMutation | { readonly state: "unchanged"; readonly head: CatalogHead })
+  & { readonly excluded_tools?: readonly RemoteToolIssue[] }) | RemoteFailure;
 
 /** No URLs, headers, tokens, sessions, Runner selection or SDK types in the call port. */
 export interface RemoteSession {
