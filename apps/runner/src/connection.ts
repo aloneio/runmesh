@@ -1,4 +1,5 @@
 import { reportTransportClose } from "./connection/diagnostics.js";
+import { PendingRpcRegistry } from "./connection/pending-rpcs.js";
 import { RunnerTransportKeepalive, negotiatedHeartbeatInterval, type TransportKeepaliveClock } from "./connection/keepalive.js";
 import { jobEventMessage } from "./connection/job-events.js";
 import { createHash } from "node:crypto";
@@ -111,7 +112,7 @@ export class RunnerConnection {
   private appliedPolicyChecksum: string | null = null;
   private desiredPolicyChecksum = "";
   private policyApplyGeneration = 0;
-  private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pending = new PendingRpcRegistry();
   // Worker timeouts do not cancel already dispatched local work. Keep the
   // budget across reconnects so repeated expired bridge requests stay bounded.
   private inFlightRpcs = 0;
@@ -291,11 +292,7 @@ export class RunnerConnection {
     this.socket = undefined;
     this.welcomedSocket = undefined;
     socket?.close(1000, "runner stopped");
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("runner stopped"));
-    }
-    this.pending.clear();
+    this.pending.rejectAll(new Error("runner stopped"));
   }
 
   private async authorizeQueuedJob(input: Record<string,unknown>, jobId: string, clientId: string | null): Promise<boolean> {
@@ -310,10 +307,10 @@ export class RunnerConnection {
     const requestId=`queue-${crypto.randomUUID()}`;
     try {
       const result=await new Promise<unknown>((resolve,reject)=>{
-        const timer=setTimeout(()=>{this.pending.delete(requestId);reject(new Error("Queue authorization timed out"));},5000);
-        this.pending.set(requestId,{resolve,reject,timer});
+        const timer=setTimeout(()=>this.pending.reject(requestId,new Error("Queue authorization timed out")),5000);
+        this.pending.register(requestId,resolve,reject,timer);
         try {socket.send(encodeWireFrame({type:"runner.queue_check",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:requestId,runner_id:this.config.runnerId,job_id:jobId,grant}));}
-        catch(error){clearTimeout(timer);this.pending.delete(requestId);reject(error);}
+        catch(error){this.pending.reject(requestId,error instanceof Error ? error : new Error("Queue authorization send failed"));}
       });
       const allowed = this.socket===socket && this.welcomedSocket===socket && !this.stopped && socket.readyState===WebSocket.OPEN
         && typeof result==="object" && result!==null && !Array.isArray(result) && "authorized" in result && result.authorized===true;
@@ -337,16 +334,13 @@ export class RunnerConnection {
       : { type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: requestId, method, params: params as RpcRequest["params"], policy_revision: policyRevision };
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(new Error(`RPC request timed out: ${method}`));
+        this.pending.reject(requestId, new Error(`RPC request timed out: ${method}`));
       }, this.rpcTimeoutMs);
-      this.pending.set(requestId, { resolve, reject, timer });
+      this.pending.register(requestId, resolve, reject, timer);
       try {
         socket.send(encodeWireFrame(request));
       } catch (error) {
-        clearTimeout(timer);
-        this.pending.delete(requestId);
-        reject(error instanceof Error ? error : new Error("failed to send RPC request"));
+        this.pending.reject(requestId, error instanceof Error ? error : new Error("failed to send RPC request"));
       }
     });
   }
@@ -521,12 +515,8 @@ export class RunnerConnection {
           return;
         }
         if (message.type === "rpc.response" || message.type === "rpc.error") {
-          const pending = this.pending.get(message.request_id);
-          if (pending === undefined) return;
-          clearTimeout(pending.timer);
-          this.pending.delete(message.request_id);
-          if (message.type === "rpc.response") pending.resolve(message.result);
-          else pending.reject(new Error(`${message.error.code}: ${message.error.message}`));
+          if (message.type === "rpc.response") this.pending.resolve(message.request_id, message.result);
+          else this.pending.reject(message.request_id, new Error(`${message.error.code}: ${message.error.message}`));
         }
       });
       socket.once("error", (error: Error) => {
@@ -792,11 +782,7 @@ export class RunnerConnection {
 
   private rejectPendingForSocket(socket: WebSocket, error: Error): void {
     if (this.socket !== socket) return;
-    for (const [requestId, pending] of this.pending) {
-      clearTimeout(pending.timer);
-      this.pending.delete(requestId);
-      pending.reject(error);
-    }
+    this.pending.rejectAll(error);
   }
 
   private forwardJobEvent(event: import("./jobs.js").JobEvent): void {
