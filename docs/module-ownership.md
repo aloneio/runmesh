@@ -27,6 +27,9 @@ produce an error instead of an incomplete branch observation.
 | Registry | Single authority/transaction owner | Presentation in domain modules |
 | Runner coordinators | State transitions and side-effect ordering | Competing owners of the same state |
 | Runner pending RPCs | `apps/runner/src/connection/pending-rpcs.ts` owns pending timers and promise settlement | Socket generations, authorization and protocol decisions |
+| Runner socket policy queue | `apps/runner/src/connection/session-policy-queue.ts` owns FIFO chains per socket | Session generation and policy authorization decisions |
+| Runner history receipt tracker | `apps/runner/src/connection/history-receipts.ts` owns per-session history ACK identity and confirmed snapshots | Transport sends, upload cadence and authorization |
+| RunnerDO admission persistence | Reviewed `apps/worker/src/runner-do-admission.ts` owns durable CAS, mutation fencing and serialized writes | Registry identity decisions, WebSocket effects and broad extension imports |
 | Worker bridge attachment | `apps/worker/src/platform/bridge-pending-attachment.ts` owns unresolved request ID bookkeeping | Authorization, async dispatch and unknown execution classification |
 | Optional Runner update storage | Registry controls upgrade schema readiness and cooldown separately from core authorization | Any broad catch that grants dispatch while upgrade execution state is uncertain |
 

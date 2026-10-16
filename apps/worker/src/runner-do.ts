@@ -1,7 +1,8 @@
-import { type AdmissionState, type MutationPhase, type RunnerConnectionIdentity, FENCED_ADMISSION, RESTART_RECONCILE_MUTATION_ID, admitsProtectedRpc, conservativeAdmission, restoreAdmission, sameAdmissionState, sameRunnerConnection, validAdmissionState, validSessionId } from "./domain/runner-admission.js";
+import { type AdmissionState, type MutationPhase, type RunnerConnectionIdentity, FENCED_ADMISSION, RESTART_RECONCILE_MUTATION_ID, admitsProtectedRpc, sameAdmissionState, sameRunnerConnection, validSessionId } from "./domain/runner-admission.js";
 import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
+import { RunnerAdmissionStore } from "./runner-do-admission.js";
 import { pendingBridgeCount, rememberPendingBridge, forgetPendingBridge } from "./platform/bridge-pending-attachment.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
 import { RunnerHeartbeatPersistence } from "./platform/runner-heartbeat.js";
@@ -52,7 +53,6 @@ interface ConnectionAttachment extends RunnerConnectionIdentity {
   pendingUpdateRpcIds?: string[];
 }
 
-const ADMISSION_STATE_KEY = "policy-admission-v1";
 const HELLO_DEADLINE_MS = 10_000;
 const BRIDGE_TIMEOUT_MS = WORKER_BRIDGE_TIMEOUT_MS;
 const MAX_BRIDGE_IN_FLIGHT = 32;
@@ -71,8 +71,8 @@ export class RunnerDO {
   private readonly policyRecovery = new RunnerPolicyRecovery();
   /** Guards duplicate/concurrent hello frames on one hibernating socket. */
   private readonly helloInFlight = new WeakSet<WebSocket>();
-  private admissionState: AdmissionState | undefined;
-  private admissionWriteQueue: Promise<void> = Promise.resolve();
+  private readonly admissionStore: RunnerAdmissionStore;
+  private get admissionState(): AdmissionState | undefined { return this.admissionStore.snapshot(); }
   private restartReconcilePromise: Promise<boolean> | undefined;
   private readonly updateMaintenance: RunnerUpdateMaintenance;
   public constructor(
@@ -81,6 +81,7 @@ export class RunnerDO {
     dependencies: RunnerDoDependencies = {},
   ) {
     this.env = resolveRuntimeConfiguration(env);
+    this.admissionStore = new RunnerAdmissionStore(ctx.storage);
     this.heartbeats = new RunnerHeartbeatPersistence({ active: heartbeatRetryActive, next: nextHeartbeatRetry,
       temporaryFailure: isTemporaryHeartbeatFailure }, this.env.RUNMESH_HEARTBEAT_FAILURE_MODE === "reconnect");
     this.optionalPersistence = new RunnerOptionalPersistence({ active: heartbeatRetryActive, next: nextHeartbeatRetry, temporaryFailure: isTemporaryHeartbeatFailure });
@@ -784,43 +785,12 @@ export class RunnerDO {
     return this.persistAdmissionIfCurrent(before, next);
   }
 
-  private async persistAdmissionIfCurrent(expected: AdmissionState, next: AdmissionState): Promise<boolean> {
-    let applied = false;
-    const operation = this.admissionWriteQueue.then(async () => {
-      const current = await this.admission();
-      if (!sameAdmissionState(current, expected)) return;
-      try {
-        // Commit the durable value before publishing an in-memory authorization
-        // state. If storage rejects, publishing `next` first could leave an
-        // unfenced/reconciled state live until the Durable Object restarts.
-        await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
-        this.admissionState = next;
-      } catch (error) {
-        // A failed write has an uncertain outcome. Keep this isolate fenced so
-        // protected RPCs fail closed; restart reconciliation will verify the
-        // Registry identity before reopening admission.
-        this.admissionState = conservativeAdmission(next);
-        throw error;
-      }
-      applied = true;
-    });
-    this.admissionWriteQueue = operation.catch(() => undefined);
-    await operation;
-    return applied;
+  private persistAdmissionIfCurrent(expected: AdmissionState, next: AdmissionState): Promise<boolean> {
+    return this.admissionStore.compareAndSet(expected, next);
   }
 
-  private async admission(): Promise<AdmissionState> {
-    if (this.admissionState !== undefined) return this.admissionState;
-    const stored = await this.ctx.storage.get<AdmissionState>(ADMISSION_STATE_KEY);
-    // Concurrent events may already have initialized (and mutated) admission
-    // while this read was pending. Never replace their fence owner with an
-    // older cold-start snapshot.
-    if (this.admissionState !== undefined) return this.admissionState;
-    const recovered = restoreAdmission(stored);
-    this.admissionState = recovered.state;
-    // Reconstructing an already-conservative fence must not write it again.
-    if (recovered.changed) await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
-    return this.admissionState;
+  private admission(): Promise<AdmissionState> {
+    return this.admissionStore.read();
   }
 
   /**
@@ -917,17 +887,14 @@ export class RunnerDO {
       const recovered = await this.recoverCommittedPrecommit(initial);
       if (recovered) return this.beginPolicyMutation(mutationId, requestedRunnerId);
     }
-    const operation = this.admissionWriteQueue.then(async () => {
+    const operation = this.admissionStore.exclusive(async () => {
       const refreshed = await this.admission();
       if (requestedRunnerId !== undefined && refreshed.runnerId !== null && refreshed.runnerId !== requestedRunnerId) return;
       if (refreshed.fenced && refreshed.mutationId === mutationId) {
         // A failed begin write keeps the local owner fenced, but a retry must
         // confirm that owner survives hibernation before authorizing Registry
         // mutation. Reuse an already persisted fence without another write.
-        const stored = await this.ctx.storage.get(ADMISSION_STATE_KEY);
-        if (!validAdmissionState(stored) || !sameAdmissionState(stored, refreshed)) {
-          await this.ctx.storage.put(ADMISSION_STATE_KEY, refreshed);
-        }
+        await this.admissionStore.ensurePersistedFence(refreshed);
         result = "idempotent"; return;
       }
       // A mutation which has not reached Registry is the only exclusive phase.
@@ -943,11 +910,9 @@ export class RunnerDO {
         preMutationDesiredRevision: capture ? refreshed.desiredRevision : null,
         preMutationDesiredChecksum: capture ? refreshed.desiredChecksum : null,
       };
-      this.admissionState = next;
-      await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+      await this.admissionStore.fenceAndPersist(next);
       result = "started";
     });
-    this.admissionWriteQueue = operation.catch(() => undefined);
     await operation;
     return result;
   }
@@ -1056,7 +1021,7 @@ export class RunnerDO {
    */
   private async finalizeOwnedMutation(mutationId: string, closeReason: string, deleteState = false): Promise<"ok" | "conflict" | "error"> {
     let result: "ok" | "conflict" = "conflict";
-    const operation = this.admissionWriteQueue.then(async () => {
+    const operation = this.admissionStore.exclusive(async () => {
       // `mutationOwnsFence`/the recovery check above have initialized the
       // in-memory state. Read it synchronously here so no event can slip
       // between the ownership check and socket closure before this queued
@@ -1076,8 +1041,7 @@ export class RunnerDO {
       }
       if (closeFailed) throw new Error("RunnerDO socket cleanup failed");
       if (deleteState) {
-        await this.ctx.storage.delete(ADMISSION_STATE_KEY);
-        this.admissionState = { ...FENCED_ADMISSION };
+        await this.admissionStore.deleteAndFence();
       } else {
         const next: AdmissionState = {
           ...current, fenced: true, reconciled: false, mutationId: null, mutationPhase: "restart_reconcile",
@@ -1086,20 +1050,17 @@ export class RunnerDO {
           preMutationActiveRevision: null, preMutationActiveChecksum: null,
           preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
         };
-        await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
-        this.admissionState = next;
+        await this.admissionStore.persist(next);
       }
       result = "ok";
     });
-    this.admissionWriteQueue = operation.catch(() => undefined);
     try {
       await operation;
       return result;
     } catch {
       // A failed storage/transport finalization has an uncertain outcome.
       // Keep the exact owner fenced so no caller can receive a credential.
-      const current = this.admissionState;
-      if (current !== undefined && current.mutationId === mutationId) this.admissionState = conservativeAdmission(current);
+      this.admissionStore.fenceUncertainMutation(mutationId);
       return "error";
     }
   }

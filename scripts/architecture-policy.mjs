@@ -212,6 +212,7 @@ export function specifierProblem(from, specifier, typeOnly) {
 /** Explicit worker roles. Unknown modules are extensions, not trusted foundations. */
 const workerRootRoles = {
   "index.ts": "entry", "production.ts": "entry", "registry.ts": "registry_facade", "runner-do.ts": "transport_owner",
+  "runner-do-admission.ts": "transport_owner",
   "admin-styles.ts": "presentation", "history-ui.ts": "presentation", "ui-locale.ts": "presentation", "ui-catalog.ts": "presentation",
   "admin-jobs.ts": "http", "installer.ts": "distribution", "installer-preflight.ts": "distribution",
   "job-history-store.ts": "persistence", "external-audit.ts": "persistence", "history-retention.ts": "persistence", "audit-metadata.ts": "persistence", "auth-throttle.ts": "persistence",

@@ -22,6 +22,24 @@ test("catalog, maintenance and byte-reading consumers retain their scoped struct
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });
 
+test("only reviewed RunnerDO admission owner may couple durable effects with pure admission rules", async t => {
+  const pass = await fixture(t, {
+    "apps/worker/src/runner-do.ts": 'import "./runner-do-admission.js";',
+    "apps/worker/src/runner-do-admission.ts": 'import "./domain/runner-admission.js";',
+    "apps/worker/src/domain/runner-admission.ts": 'export const verify = value => Boolean(value);',
+  });
+  const result = await pass.run();
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const deny = await fixture(t, {
+    "apps/worker/src/runner-do.ts": 'import "./unknown-admission-owner.js";',
+    "apps/worker/src/unknown-admission-owner.ts": 'import "./domain/runner-admission.js";',
+    "apps/worker/src/domain/runner-admission.ts": 'export const verify = value => Boolean(value);',
+  });
+  const blocked = await deny.run();
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /transport_owner must not depend on extension|extension must not depend on domain/u);
+});
+
 test("admission and browser request rules share values without owning effects", async t => {
   const source = await fixture(t, {
     "apps/worker/src/domain/runner-admission.ts": 'import { validLifecycleId } from "./runner-handshake.js"; export const restore = value => validLifecycleId(value);',

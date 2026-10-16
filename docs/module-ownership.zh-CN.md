@@ -5,6 +5,9 @@
 ## 本轮状态所有权收敛
 
 - `apps/runner/src/connection/pending-rpcs.ts` 统一管理 Runner 待响应 RPC 的超时计时器、完成与批量拒绝；连接代际与授权仍由连接协调器管理。
+- `apps/runner/src/connection/session-policy-queue.ts` 按 WebSocket 会话分别串行化策略应用；连接代际验证和策略授权仍由连接协调器负责。
+- `apps/runner/src/connection/history-receipts.ts` 管理会话关联的历史 ACK 身份、已确认快照与旧会话回执拒绝；消息发送和上传节奏仍由连接层控制。
+- 经审核的 `apps/worker/src/runner-do-admission.ts` 作为 RunnerDO 专属状态所有者，统一管理持久化 CAS、变更栅栏和串行写入；Registry 身份判定与 WebSocket 副作用保留在协调器。
 - `apps/worker/src/platform/bridge-pending-attachment.ts` 统一管理 WebSocket 附件中的未确认执行请求 ID。超时不得删除尚无回执的执行证据。
 - Registry 的升级 schema 初始化为可选就绪状态；升级存储不可用时仅相应升级 API 返回不可用。核心授权失败时仍然保守拒绝，升级执行状态未知不得放行。
 

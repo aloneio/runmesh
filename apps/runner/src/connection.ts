@@ -1,5 +1,7 @@
 import { reportTransportClose } from "./connection/diagnostics.js";
 import { PendingRpcRegistry } from "./connection/pending-rpcs.js";
+import { SessionPolicyQueue } from "./connection/session-policy-queue.js";
+import { HistoryReceiptTracker } from "./connection/history-receipts.js";
 import { RunnerTransportKeepalive, negotiatedHeartbeatInterval, type TransportKeepaliveClock } from "./connection/keepalive.js";
 import { jobEventMessage } from "./connection/job-events.js";
 import { createHash } from "node:crypto";
@@ -78,7 +80,7 @@ export class RunnerConnection {
   private readonly rpcTimeoutMs: number;
   private readonly syncMs: number;
   private jobHistory: JobHistorySettings | undefined;
-  private historyPending: {requestId:string;snapshot:string;socket:WebSocket;revision?:number} | undefined;
+  private readonly historyReceipts = new HistoryReceiptTracker<WebSocket>();
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupBusy = false;
   private readonly random: () => number;
@@ -102,7 +104,6 @@ export class RunnerConnection {
   private lifecycleGeneration = 0;
   private reconnectAttempt = 0;
   private syncSequence = 0;
-  private lastSyncSnapshot: string | undefined;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private transportKeepalive: RunnerTransportKeepalive | undefined;
   private readonly keepaliveClock: TransportKeepaliveClock | undefined;
@@ -122,7 +123,7 @@ export class RunnerConnection {
    * single WebSocket, but never let a stalled operation from a superseded
    * transport block policy delivery on the replacement socket.
    */
-  private readonly policyApplyQueues = new WeakMap<WebSocket, Promise<void>>();
+  private readonly policyApplyQueues = new SessionPolicyQueue<WebSocket>();
   /**
    * A sync snapshot is asynchronous (job recovery/persistence may yield), so
    * timer, welcome, and policy-apply triggers must share one FIFO. Without a
@@ -437,7 +438,7 @@ export class RunnerConnection {
           this.jobHistory = history;
           this.reportingNegotiated = message.extensions?.runmesh_job_reporting === 2 && history !== undefined;
           this.historyUploads.stop(); this.demandSnapshot = undefined;
-          this.historyPending = undefined;
+          this.historyReceipts.reset();
           if (this.cleanupTimer !== undefined) { clearInterval(this.cleanupTimer); this.cleanupTimer = undefined; }
           if (history !== undefined || priorHistory !== undefined) this.runtime.configureJobRetention(history?.local_retention_days ?? 0);
           if ((history?.local_retention_days ?? 0) > 0) {
@@ -468,7 +469,6 @@ export class RunnerConnection {
             this.transportKeepalive = keepalive;
             keepalive.start();
           }
-          this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
           if (this.reportingNegotiated && history !== undefined) {
             if (history.mode !== "off") this.historyUploads.start(history.interval_seconds * 1000, history.mode === "immediate");
@@ -501,18 +501,15 @@ export class RunnerConnection {
           void this.respondToRpc(socket, message, () => welcomed && this.socket === socket && !this.stopped);
           return;
         }
-        if (message.type === "rpc.response" && this.historyPending?.socket === socket && message.request_id === this.historyPending.requestId) {
-          const result = message.result;
-          if (typeof result === "object" && result !== null && !Array.isArray(result)
-            && ["recorded","unchanged","disabled"].includes(String(result.history_status))) {
-            this.lastSyncSnapshot = this.historyPending.snapshot;
-            if (this.historyPending.revision !== undefined) {
-              if (result.history_status === "disabled") this.historyUploads.stop();
-              else this.historyUploads.acknowledge(this.historyPending.revision);
+        if (message.type === "rpc.response") {
+          const receipt = this.historyReceipts.accept(socket, message.request_id, message.result);
+          if (receipt !== null) {
+            if (receipt.status !== null && receipt.revision !== undefined) {
+              if (receipt.status === "disabled") this.historyUploads.stop();
+              else this.historyUploads.acknowledge(receipt.revision);
             }
+            return;
           }
-          this.historyPending = undefined;
-          return;
         }
         if (message.type === "rpc.response" || message.type === "rpc.error") {
           if (message.type === "rpc.response") this.pending.resolve(message.request_id, message.result);
@@ -564,12 +561,7 @@ export class RunnerConnection {
   }
 
   private queueDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): void {
-    const previous = this.policyApplyQueues.get(socket) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(() => this.applyDesiredPolicy(socket, policy));
-    // Consume failures so one bad policy candidate cannot poison later updates
-    // on this socket. `next` is still returned nowhere by design: policy
-    // application is best-effort and the ACK is the observable result.
-    this.policyApplyQueues.set(socket, next.catch(() => undefined));
+    this.policyApplyQueues.enqueue(socket, () => this.applyDesiredPolicy(socket, policy));
   }
 
   private async applyDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<void> {
@@ -723,13 +715,13 @@ export class RunnerConnection {
       this.demandSnapshot = captured;
       this.historyUploads.setRecoveryPending(this.runtime.needsHistoryReconciliation?.() === true);
     }
-    if (captured.jobs.length === 0 || captured.snapshot === this.lastSyncSnapshot) {
+    if (captured.jobs.length === 0 || captured.snapshot === this.historyReceipts.lastSnapshot) {
       this.historyUploads.acknowledge(revision); return;
     }
     const sync: RunnerSync = { type: "runner.sync", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId,
       sync_sequence: this.syncSequence++, sent_at_ms: Date.now(), workspaces: captured.workspaces, jobs: captured.jobs,
       extensions: { runmesh_history_ack: true } };
-    this.historyPending = { requestId: `history-${sync.sync_sequence}`, snapshot: captured.snapshot, socket, revision };
+    this.historyReceipts.track(socket, `history-${sync.sync_sequence}`, captured.snapshot, revision);
     // The scheduler retains this generation until a matching receipt arrives.
     socket.send(encodeWireFrame(sync));
   }
@@ -741,7 +733,7 @@ export class RunnerConnection {
     if (jobs === undefined || socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const workspaces = this.runtime.syncWorkspaceMetadata();
     const snapshot = JSON.stringify({ workspaces, jobs });
-    if (snapshot === this.lastSyncSnapshot) return;
+    if (snapshot === this.historyReceipts.lastSnapshot) return;
     const sync: RunnerSync = {
       type: "runner.sync",
       protocol_version: PROTOCOL_CURRENT_VERSION,
@@ -753,9 +745,9 @@ export class RunnerConnection {
       jobs,
     };
     try {
-      if (this.jobHistory !== undefined) this.historyPending = {requestId:`history-${sync.sync_sequence}`,snapshot,socket};
+      if (this.jobHistory !== undefined) this.historyReceipts.track(socket, `history-${sync.sync_sequence}`, snapshot);
       socket.send(encodeWireFrame(sync));
-      if (this.jobHistory === undefined) this.lastSyncSnapshot = snapshot;
+      if (this.jobHistory === undefined) this.historyReceipts.optimistic(snapshot);
     } catch { /* close handler drives reconnect */ }
   }
 
