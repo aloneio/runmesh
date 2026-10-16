@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createGithubSkillSource } from "../src/platform/skills/github-source.js";
+import { createLegacyGithubSkillSource } from "../src/platform/skills/github-source.js";
 import { SKILL_SOURCE_LIMITS } from "../src/contracts/skill-source.js";
 import { SKILL_LIMITS } from "../src/contracts/skills.js";
 
@@ -14,14 +14,15 @@ function fixture(entries: readonly Record<string, unknown>[] = [blob()]) {
     [raw + "SKILL.md", () => new Response(body)],
   ]);
   const send = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    expect(init?.method).toBe("GET"); expect(init?.redirect).toBe("error"); expect(init?.credentials).toBe("omit");
+    expect(init?.method).toBe("GET"); expect(init?.redirect).toBe("manual"); expect(init?.credentials).toBe("omit");
+    expect(init).not.toHaveProperty("cache");
     const headers = new Headers(init?.headers);
     expect(headers.has("authorization")).toBe(false); expect(headers.has("cookie")).toBe(false);
     const response = responses.get(String(input));
     if (!response) throw new Error("unexpected test URL: " + String(input));
     return response();
   });
-  return { send, responses, run: (input = source, signal = new AbortController().signal) => createGithubSkillSource(send as typeof fetch).read(input, signal) };
+  return { send, responses, run: (input = source, signal = new AbortController().signal) => createLegacyGithubSkillSource(send as typeof fetch).read(input, signal) };
 }
 
 it("RM07 fetches a fixed commit from fixed hosts and retains text bytes", async () => {
@@ -39,11 +40,62 @@ it("RM07 resolves a chosen subtree even when unrelated root files use other name
   expect(await f.run({ ...source, path: "research" })).toEqual({ state: "read", files: [{ path: "SKILL.md", text: body }] });
 });
 
-it.each([301, 302, 307, 308, 403, 429, 500])("RM07 rejects HTTP %s without following redirects or retrying", async status => {
+it.each([301, 302, 307, 308, 403, 500])("RM07 rejects HTTP %s without following redirects or retrying", async status => {
   const f = fixture();
   f.responses.set(`${api}/git/commits/${source.commit}`, () => new Response("upstream response", { status, headers: { location: "https://elsewhere.example/private" } }));
   expect(await f.run()).toEqual({ state: "unavailable" });
   expect(f.send).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { status: 429, headers: {} },
+  { status: 403, headers: { "x-ratelimit-remaining": "0" } },
+  { status: 403, headers: { "retry-after": "90" } },
+])("RM07 reports GitHub rate limits without exposing upstream response content: %j", async ({ status, headers }) => {
+  const f = fixture();
+  f.responses.set(`${api}/git/commits/${source.commit}`, () => new Response("upstream-private-detail", { status, headers }));
+  expect(await f.run()).toEqual({ state: "rate_limited" });
+  expect(f.send).toHaveBeenCalledOnce();
+});
+
+it("RM07 limits simultaneous file downloads to four, preserves tree order, and finishes a 26-file source", async () => {
+  const entries = Array.from({ length: 26 }, (_, index) => blob(index === 0 ? "SKILL.md" : `scripts/file-${index}.py`));
+  const f = fixture(entries);
+  for (const entry of entries) f.responses.set(raw + entry.path, () => new Response(body));
+  let active = 0, peak = 0;
+  const send = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(raw)) {
+      active++; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 25));
+      active--;
+    }
+    return f.send(input, init);
+  });
+  const result = await createLegacyGithubSkillSource(send as typeof fetch).read(source, new AbortController().signal);
+  expect(result.state).toBe("read");
+  if (result.state !== "read") throw new Error("expected source");
+  expect(result.files.map(file => file.path)).toEqual(entries.map(entry => entry.path));
+  expect(peak).toBe(SKILL_SOURCE_LIMITS.file_concurrency);
+  expect(send).toHaveBeenCalledTimes(entries.length + 2);
+});
+
+it("RM07 aborts sibling downloads on the first malformed file without starting queued work", async () => {
+  const entries = Array.from({ length: 12 }, (_, index) => blob(index === 0 ? "SKILL.md" : `scripts/slow-${index}.py`)), f = fixture(entries);
+  f.responses.set(raw + "SKILL.md", () => new Response("bad-size"));
+  let aborted = 0, started = 0;
+  const send = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!String(input).startsWith(raw) || String(input).endsWith("/SKILL.md")) return f.send(input, init);
+    started++;
+    const requestSignal = init?.signal;
+    return new Promise<Response>((_resolve, reject) => {
+      if (!requestSignal || requestSignal.aborted) { aborted++; reject(new Error("cancelled")); return; }
+      requestSignal.addEventListener("abort", () => { aborted++; reject(new Error("cancelled")); }, { once: true });
+    });
+  });
+  expect(await createLegacyGithubSkillSource(send as typeof fetch).read(source, new AbortController().signal)).toEqual({ state: "invalid" });
+  expect(started).toBe(SKILL_SOURCE_LIMITS.file_concurrency - 1);
+  expect(aborted).toBe(started);
+  expect(send).toHaveBeenCalledTimes(2 + SKILL_SOURCE_LIMITS.file_concurrency);
 });
 
 it("RM07 rejects missing sources, truncated trees and metadata above the limit", async () => {

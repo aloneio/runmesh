@@ -110,6 +110,7 @@ const messages = {
   "skillSourceInvalid": ["Enter a public GitHub repository, a 40-character commit SHA, and the Skill folder path.", "请填写 GitHub 公开仓库地址、40 位提交 SHA 和 Skill 文件夹路径。"],
   "skillSourceMissing": ["Skill folder not found. Check the repository, commit and folder path.", "未找到 Skill 文件夹，请检查仓库、提交和文件夹路径。"],
   "skillSourceCapacity": ["The folder exceeds the import limit. Select a smaller Skill folder.", "文件夹超出导入上限，请选择较小的 Skill 文件夹。"],
+  "skillSourceRateLimited": ["GitHub is rate-limiting Skill imports. Retry after its limit resets.", "GitHub 已限制 Skill 导入请求频率，请在限流恢复后重试。"],
   "skillSourceUnavailable": ["Could not load the Skill source. Try the preview again.", "未能加载 Skill 来源，请重新预览。"],
   "skillHistoryTitle": ["{name} · Version history", "{name} · 版本记录"],
   "skillHistoryLoaded": ["Version history loaded.", "版本记录已加载。"],

@@ -250,6 +250,7 @@
         "apps/worker/test/schema-publication.test.ts",
         "apps/worker/test/session-generation.test.ts",
         "apps/worker/test/setup-hardening.test.ts",
+        "apps/worker/test/skill-github-archive.test.ts",
         "apps/worker/test/skill-lifecycle-http.test.ts",
         "apps/worker/test/skill-lifecycle-state.test.ts",
         "apps/worker/test/skill-source-http.test.ts",

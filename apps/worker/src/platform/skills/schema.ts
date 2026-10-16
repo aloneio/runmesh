@@ -8,6 +8,13 @@ function createContentTables(sql: SqlStorage): void {
   sql.exec("CREATE TABLE skill_files_v2 (skill_id TEXT NOT NULL, digest TEXT NOT NULL, position INTEGER NOT NULL, path TEXT NOT NULL, content_text TEXT NOT NULL, PRIMARY KEY(skill_id,digest,position))");
 }
 
+/** Additive table, not a rewrite of existing schema-v2 file rows.
+ * Legacy file content stays in skill_files_v2, while only new oversized
+ * text receives chunk rows. This makes rolling upgrades non-destructive. */
+function ensureSkillChunks(sql: SqlStorage): void {
+  sql.exec("CREATE TABLE IF NOT EXISTS skill_file_chunks_v1 (skill_id TEXT NOT NULL, digest TEXT NOT NULL, position INTEGER NOT NULL, ordinal INTEGER NOT NULL, content_text TEXT NOT NULL, PRIMARY KEY(skill_id,digest,position,ordinal))");
+}
+
 /** Upgrade installed content once, atomically, without retaining a legacy read path. */
 export function initializeSkillSchema(storage: Pick<DurableObjectStorage, "sql" | "transactionSync">): void {
   storage.transactionSync(() => {
@@ -18,14 +25,18 @@ export function initializeSkillSchema(storage: Pick<DurableObjectStorage, "sql" 
       sql.exec("INSERT INTO skill_meta VALUES (1,2)");
       sql.exec("CREATE TABLE skill_heads_v1 (skill_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, staged_digest TEXT NOT NULL, active_digest TEXT, enabled INTEGER NOT NULL)");
       createContentTables(sql);
+      ensureSkillChunks(sql);
       initializeSkillCapacity(sql);
       return;
     }
     if (!existing.includes("skill_meta") || !existing.includes("skill_heads_v1")) throw new Error("skill_schema_unsupported");
     const version = sql.exec<{ schema_version: number }>("SELECT schema_version FROM skill_meta WHERE id=1").toArray()[0]?.schema_version;
-    if (version === 2 && existing.length === 4 && existing.includes("skill_bundles_v2") && existing.includes("skill_files_v2")) { initializeSkillCapacity(sql); return; }
+    if (version === 2 && existing.length === 4 && existing.includes("skill_bundles_v2") && existing.includes("skill_files_v2")) {
+      ensureSkillChunks(sql); initializeSkillCapacity(sql); return;
+    }
     if (version !== 1 || existing.length !== 3 || !existing.includes("skill_bundles_v1")) throw new Error("skill_schema_unsupported");
     createContentTables(sql);
+    ensureSkillChunks(sql);
     initializeSkillCapacity(sql);
     // Read one body at a time within the atomic upgrade. Exhaust each cursor
     // before writing so a failed upgrade leaves no read lock for its retry.

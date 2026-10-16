@@ -49,7 +49,7 @@ GitHub import and the version-management tools below require a compatible contro
 
 In the Skill section, expand **Import from GitHub** and enter a public repository URL, the full 40-character commit SHA, and the Skill folder path. Leave the path empty when `SKILL.md` is at the repository root. Select **Preview Skill**, review the files, then select **Install Skill** or **Update Skill**.
 
-The installed source links to that exact commit. To update later, enter the new commit SHA and preview it again. One import can include up to 32 text files; use folder upload for a larger collection.
+The import downloads up to four source files at a time and uses a bounded 45-second deadline. GitHub rate limits are reported separately from invalid input. The installed source links to that exact commit. To update later, enter the new commit SHA and preview it again. One import can include up to 32 text files; use folder upload for a larger collection.
 
 ## Update, pause and resume
 
@@ -78,9 +78,9 @@ Cleanup previews remain valid for five minutes. Changing the selection or updati
 | --- | --- |
 | Files per uploaded Skill | 256 |
 | Files per GitHub import | 32 |
-| One file | 1 MiB |
+| One file | 4 MiB |
 | File path length | 200 characters |
-| Upload bundle, including encoded paths and metadata | 8 MiB |
+| Upload bundle, including encoded paths and metadata | 16 MiB |
 | Retained versions per Skill | 32 |
 | Skills per instance | 1,000 |
 | Stored Skill bundles per instance | 256 MiB |

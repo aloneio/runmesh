@@ -3,7 +3,9 @@ import type { CapabilityTarget } from "./capabilities.js";
 import type { AdminDecision } from "./admin-session.js";
 import type { SkillFileManifest } from "./skill-manifest.js";
 
-export const SKILL_LIMITS = Object.freeze({ files: 256, file_bytes: 1_048_576, bundle_bytes: 8_388_608, request_bytes: 12_582_912,
+/** Large text files are chunked at the SQLite boundary; see platform/skills/text-chunks.ts.
+ * These are logical Skill budgets, not individual database row limits. */
+export const SKILL_LIMITS = Object.freeze({ files: 256, file_bytes: 4_194_304, bundle_bytes: 16_777_216, request_bytes: 25_165_824,
   skills: 1_000, versions: 32, storage_bytes: 268_435_456, page: 128, dependencies: 8, operation_ms: 5_000 });
 /** Stored bundles add one digest field to the admitted JSON. Metadata and
  * summaries are subsets of that bundle and share its serialized byte budget. */
