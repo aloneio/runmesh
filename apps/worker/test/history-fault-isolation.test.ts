@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { JobMetadata } from "@aloneio/runmesh-protocol";
 import { PackedJobHistory, JobHistoryUnavailableError } from "../src/job-history-store.js";
 import { DEFAULT_JOB_HISTORY } from "../src/job-history-settings.js";
+import worker from "../src/index.js";
+import type { WorkerEnv } from "../src/platform/env.js";
 
 const db = (env as unknown as { HISTORY_DB: D1Database }).HISTORY_DB;
 const day = 86_400_000;
@@ -193,4 +195,33 @@ it("a delayed quarantine expiry cannot erase a freshly repaired snapshot", async
   expect(await sweep).toMatchObject({ state: "deferred", conflicts: 1 });
   expect((await f.store.list("r", "life", settings)).jobs[0]?.job_id).toBe("fresh");
   expect((await f.row())?.corrupt_reason).toBeNull();
+});
+
+
+it("reclaims a retired malformed-retention tombstone only after the full quarantine window", async () => {
+  const f = await damaged(), clock = vi.spyOn(Date, "now").mockReturnValue(f.now);
+  await db.prepare("UPDATE runmesh_job_snapshots_v1 SET retention_days=-9 WHERE namespace=?").bind(f.ns).run();
+  await f.store.cleanup(async ids => new Map(ids.map(id => [id, null])));
+  expect(await f.row()).toMatchObject({ retired_at_ms: f.now, corrupt_reason: "invalid_metadata", jobs_json: "{" });
+  clock.mockReturnValue(f.now + 6 * day);
+  await new PackedJobHistory(db, f.ns).cleanup();
+  expect((await f.row())?.jobs_json).toBe("{");
+  clock.mockReturnValue(f.now + 7 * day);
+  await new PackedJobHistory(db, f.ns).cleanup();
+  expect(await f.row()).toMatchObject({ jobs_json: "", corrupt_reason: "expired" });
+  await new PackedJobHistory(db, f.ns).cleanup();
+  expect(await f.row()).toBeNull();
+});
+
+it("scheduled cleanup reports D1 unavailability using only bounded metadata", async () => {
+  const sentinel = "synthetic-private-value-must-not-be-logged";
+  const database = { prepare: () => { throw new Error(sentinel); } } as unknown as D1Database;
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const cronEnv = { ...env, HISTORY_DB: database, RUNMESH_AUDIT_BACKEND: "durable_object",
+    RUNMESH_JOB_HISTORY_BACKEND: "d1" } as unknown as WorkerEnv;
+  await worker.scheduled({} as ScheduledController, cronEnv);
+  const calls = warning.mock.calls.flat().map(String);
+  expect(calls.some(call => call.includes("job_history_cleanup_deferred")
+    && call.includes("unavailable"))).toBe(true);
+  expect(calls.join(" ")).not.toContain(sentinel);
 });

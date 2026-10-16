@@ -188,9 +188,18 @@ export class PackedJobHistory {
       for (const row of rows.results) {
         receipt.scanned++;
         const now = Date.now();
-        const metadataValid = HISTORY_DAYS.some(days => days === row.retention_days)
-          && (row.retired_at_ms === null || (Number.isSafeInteger(row.retired_at_ms) && row.retired_at_ms >= 0));
-        if (metadataValid && row.retired_at_ms !== null && row.retired_at_ms <= now - row.retention_days * DAY) {
+        const retentionValid = HISTORY_DAYS.some(days => days === row.retention_days);
+        const retirementValid = row.retired_at_ms === null || (Number.isSafeInteger(row.retired_at_ms) && row.retired_at_ms >= 0);
+        const metadataValid = retentionValid && retirementValid;
+        // A retired row with damaged retention metadata cannot rely on that
+        // retention value. Only remove its empty tombstone after a full bounded
+        // quarantine window; active or untrusted retirement remains recoverable.
+        const malformedRetirementExpired = !retentionValid && retirementValid && row.retired_at_ms !== null
+          && row.corrupt_reason === "expired" && row.jobs_json === ""
+          && row.corrupt_detected_at_ms !== null && Number.isSafeInteger(row.corrupt_detected_at_ms)
+          && row.corrupt_detected_at_ms >= 0 && row.corrupt_detected_at_ms <= now - HISTORY_QUARANTINE_MAX_DAYS * DAY;
+        if (retirementValid && row.retired_at_ms !== null
+          && ((retentionValid && row.retired_at_ms <= now - row.retention_days * DAY) || malformedRetirementExpired)) {
           const result = await this.run("DELETE FROM runmesh_job_snapshots_v1 WHERE snapshot_id=? AND namespace=? AND revision=? AND retired_at_ms=?",row.id,this.namespace,row.revision,row.retired_at_ms);
           if (result.meta.changes === 0) receipt.conflicts++;
           continue;

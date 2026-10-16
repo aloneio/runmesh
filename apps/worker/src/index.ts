@@ -52,7 +52,16 @@ export default {
     // Deriving an ID does not instantiate a DO or touch its SQLite storage.
     const history = new ExternalAuditHistory(env.HISTORY_DB, env.REGISTRY.idFromName("registry").toString());
     if (env.RUNMESH_AUDIT_BACKEND === "d1") await history.cleanup();
-    if (env.RUNMESH_JOB_HISTORY_BACKEND === "d1") await new PackedJobHistory(env.HISTORY_DB,env.REGISTRY.idFromName("registry").toString()).cleanup(historyLifecycleReader(env));
+    if (env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
+      const receipt = await new PackedJobHistory(env.HISTORY_DB, env.REGISTRY.idFromName("registry").toString()).cleanup(historyLifecycleReader(env));
+      if (receipt.state !== "complete") console.warn(JSON.stringify({
+        event: "job_history_cleanup_deferred",
+        state: receipt.state,
+        scanned: receipt.scanned,
+        quarantined: receipt.quarantined,
+        conflicts: receipt.conflicts,
+      }));
+    }
   },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     env = resolveRuntimeConfiguration(env, request);
