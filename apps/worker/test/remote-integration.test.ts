@@ -141,8 +141,10 @@ it.each(["docs", "docs:reference"])("W05 admin discovery immediately enables cli
     const count = f.methods.length;
     const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: id } });
     expect(JSON.parse(page.result.content[0].text).tools[0].tool_id).toBe(command.tool_id);
+    expect(page.result.structuredContent.tools[0].tool_id).toBe(command.tool_id);
     const search = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_search", arguments: { query: "lookup" } });
     expect(search.result.isError).not.toBe(true);
+    expect(search.result.structuredContent.tools[0].tool_id).toBe(command.tool_id);
     expect(JSON.parse(search.result.content[0].text)).toMatchObject({ state: "listed", tools: [{ profile_id: id, tool_id: command.tool_id, version: command.version, name: "lookup" }] });
     expect(f.methods).toHaveLength(count);
     const response = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_call", arguments: command });

@@ -7,6 +7,7 @@ import { parseCatalogTool } from "../../contracts/catalog-values.js";
 import { REMOTE_CODES, REMOTE_LIMITS, remoteFailureMetadata, type RemoteCode, type RemoteOutcome } from "../../contracts/remote.js";
 import { parseRemoteResult } from "../../contracts/remote-values.js";
 import { publishSchema } from "./schema-publication.js";
+import { directoryResult } from "./remote/directory-result.js";
 
 const profileId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
 const profilesInput = publishSchema(z.object({}).strict(), "input");
@@ -40,7 +41,7 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { 
     const raw = await bounded(() => port.profiles(), 7000);
     const parsed = profilesResponse.safeParse(raw);
     if (!parsed.success) return remoteFailure(raw?.state === "denied" ? "permission_denied" : "dependency_unavailable", "not_started");
-    return { content: [{ type: "text" as const, text: JSON.stringify(parsed.data) }] };
+    return directoryResult(parsed.data);
   });
   server.registerTool("remote_tools", {
     description: "List shared published remote MCP tools for a profile from remote_profiles. No Runner is needed. Use the returned tool_id and version with remote_call. This lists saved reviewed definitions, not live discovery.",
@@ -64,7 +65,7 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { 
       if (tool === undefined) return remoteFailure("dependency_unavailable", "not_started");
       tools.push(tool);
     }
-    return { content: [{ type: "text" as const, text: JSON.stringify({ tools, next_cursor: raw.next_cursor }) }] };
+    return directoryResult({ tools, next_cursor: raw.next_cursor });
   });
   server.registerTool("remote_call", {
     description: "Invoke exactly one approved remote MCP tool using profile_id, tool_id and version from remote_tools. Arguments follow that tool's reviewed inputSchema. No Runner or machine permission is implied. Never repeat an unknown outcome blindly; upstream writes are never automatically retried.",
