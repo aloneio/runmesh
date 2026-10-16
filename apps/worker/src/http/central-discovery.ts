@@ -27,9 +27,15 @@ export async function handleCentralDiscovery(request: Request, env: WorkerEnv, u
       if (excluded === undefined) return centralFailure("central_result_unconfirmed", 503, "unknown");
       // Both first discovery and refresh must confirm a published digest:
       // never report success for a pending/staged catalog or malformed reply.
-      if (head?.profile_id === profileId && head.revision === revision + (result.state === "written" ? 1 : 0)
+      const expectedResultRevision = revision + (result.state === "written" ? 1 : 0);
+      // An advanced head requires an explicit safe-rebase receipt from the
+      // state owner; ordinary writes keep their original exact CAS contract.
+      const recovered = result.recovered_from_revision === revision && head !== undefined
+        && head.revision > expectedResultRevision;
+      if (head?.profile_id === profileId && (head.revision === expectedResultRevision || recovered)
         && head.approved_digest === head.observed_digest)
-        return Response.json({ state: result.state, head, ...(excluded.length ? { excluded_tools: excluded } : {}) }, { headers: centralHeaders });
+        return Response.json({ state: result.state, head, ...(recovered ? { recovered_from_revision: revision } : {}),
+          ...(excluded.length ? { excluded_tools: excluded } : {}) }, { headers: centralHeaders });
     } else if (result?.state === "conflict" && catalogRevision(result.current_revision, true)) {
       return Response.json({ error: { code: "central_revision_conflict", operation_state: "not_started", current_revision: result.current_revision } }, { status: 409, headers: centralHeaders });
     } else if (result?.state === "failed" && REMOTE_CODES.includes(result.code) && ["not_started", "unknown"].includes(result.operation_state)) {

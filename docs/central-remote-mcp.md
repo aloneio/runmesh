@@ -38,6 +38,8 @@ Select **View tools** on the MCP card to see tool names and descriptions. Enable
 
 When the provider changes its tools, select **Refresh tools**. RunMesh automatically publishes the complete compatible tool set, including new or changed definitions, without a separate approval step. Existing pending or partially approved catalogs are brought up to date by the same refresh. An identical, fully published catalog does not create a new version. If refresh fails, the saved catalog is retained.
 
+If a catalog revision changes during discovery, RunMesh verifies the latest fully published catalog and re-reads upstream `tools/list` at most once. Successful recovery returns `recovered_from_revision` in the discovery receipt. If the newer catalog is disabled, pending or partially approved, connection authorization has changed, or another conflict occurs, recovery stops and reports the conflict. Re-open the tool list before trying again. This never retries `remote_call` or any provider action.
+
 Runmesh exposes direct tools for smaller collections and directory tools for browsing larger collections. An AI client can use `remote_profiles` to find MCPs, `remote_search` to search by keywords, `remote_tools` to read complete tool definitions, and `remote_call` to invoke a tool with its returned ID and version. Search matches tool names, titles, descriptions and connection names; add `profile_id` to search one MCP. Refresh the client's catalog after adding or changing a connection.
 
 ## Pause or resume

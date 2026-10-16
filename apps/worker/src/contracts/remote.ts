@@ -51,7 +51,7 @@ export type RemoteOutcome = ({ readonly state: "completed"; readonly operation_s
 
 export interface RemoteToolIssue { readonly name: string | null; readonly code: "invalid_tool" | "schema_unsupported" | "interaction_required" }
 export type RemoteDiscoveryResult = ((CatalogMutation | { readonly state: "unchanged"; readonly head: CatalogHead })
-  & { readonly excluded_tools?: readonly RemoteToolIssue[] }) | RemoteFailure;
+  & { readonly excluded_tools?: readonly RemoteToolIssue[]; readonly recovered_from_revision?: number }) | RemoteFailure;
 
 /** No URLs, headers, tokens, sessions, Runner selection or SDK types in the call port. */
 export interface RemoteSession {

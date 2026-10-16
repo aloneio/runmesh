@@ -143,6 +143,19 @@ catalog is refreshed and the changed definition is automatically published.
 Calls never publish changes or replay a rejected invocation; a fully published
 unchanged refresh does not create a new revision.
 
+Discovery handles confirmed catalog revision conflicts within the existing
+20-second operation budget. A changed revision can be rebased at most once,
+only after verifying the latest fully published head, approved tool set,
+snapshot digest, enabled profile and unchanged profile identity. A retry uses
+a fresh upstream session and reads `tools/list` again; it never writes
+stale observations against a new revision. The underlying compare-and-swap
+catalog transaction remains authoritative. A confirmed CAS conflict can be
+retried; an unknown publication cannot. Disabled, staged, partly approved or
+invalid catalogs, authorization changes and a second conflict remain failures.
+Successful recovery includes `recovered_from_revision` in the response
+so the HTTP boundary can distinguish the newer head from an unconfirmed
+revision jump. No `remote_call` is automatically replayed.
+
 ### Hosted MCP catalog compatibility
 
 A remote descriptor is extensible; the stored Runmesh snapshot is not. The relay

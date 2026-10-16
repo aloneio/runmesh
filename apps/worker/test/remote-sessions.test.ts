@@ -121,7 +121,8 @@ it.each(["publish", "admin", "profile", "catalog", "credential", "egress", "cred
     expect(result).toMatchObject({ state: "written", head: { revision: 1, approved_names: ["read"] } });
     expect(publish).toHaveBeenCalledOnce();
   } else {
-    expect(result).toMatchObject(change.endsWith("-digest") ? { state: "denied" } : { state: "failed", operation_state: "not_started" });
+    expect(result).toMatchObject(change === "catalog" ? { state: "conflict", current_revision: 1 }
+      : change.endsWith("-digest") ? { state: "denied" } : { state: "failed", operation_state: "not_started" });
     expect(publish).not.toHaveBeenCalled();
   }
 });
