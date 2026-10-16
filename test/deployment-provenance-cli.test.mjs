@@ -59,6 +59,8 @@ async function fixture(t, state = { version: "0.1.3", state: "released", release
         push_access_levels: [{ access_level: 0 }], merge_access_levels: [{ access_level: 40 }] },
       { name: "dev", allow_force_push: false,
         push_access_levels: [{ access_level: 30 }], merge_access_levels: [{ access_level: 30 }] },
+      { name: "runmesh-trusted-release-*", allow_force_push: false,
+        push_access_levels: [{ access_level: 0 }], merge_access_levels: [{ access_level: 0 }] },
     ]],
     [base + `/pipelines?ref=main&sha=${commit}&per_page=100`, [main]],
     [base + "/pipelines/101", main],
