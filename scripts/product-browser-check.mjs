@@ -215,7 +215,13 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await review.locator('article h3').textContent(),'search');
   assert.equal(await review.locator('article h3').evaluate(node=>getComputedStyle(node).textTransform),'none');
   assert.equal(await review.locator('article p').textContent(),'<img src=x onerror=alert(1)>');
-  assert.equal(await review.locator('details,pre').count(),0);
+  const schemaDetails=review.locator('details.central-file-preview');
+  assert.equal(await schemaDetails.count(),1);
+  assert.equal(await schemaDetails.locator('pre').textContent(),'');
+  await schemaDetails.locator('summary').click();
+  await page.waitForFunction(() => document.querySelector('[data-service-tools] details pre')?.textContent?.includes('inputSchema') === true);
+  assert.equal(await schemaDetails.locator('pre img,pre script').count(),0);
+  await schemaDetails.locator('summary').click();
   assert.equal(await review.getByText('Tools from enabled services are available to all connected AI clients automatically.',{exact:true}).count(),0);
   assert.equal(await review.locator('input[type=checkbox]').count(),0);
   assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,['search']);

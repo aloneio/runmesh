@@ -69,7 +69,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, options:
       }
       return asToolResult(selection);
     },
-    workspace_list: async () => activeWorkspaceList(env, auth.clientId),
+    workspace_list: async params => activeWorkspaceList(env, auth.clientId, params.runner_id),
     inspect: async (params, scopes) => inspectTool(env, auth.clientId, params, scopes),
     read: async params => activeRunnerTool(env, auth.clientId, MCP_RPC_ACTIONS.read.read, boundedReadParams(params, 32 * 1024), "read", "read"),
     edit: async params => editTool(env, auth.clientId, params),

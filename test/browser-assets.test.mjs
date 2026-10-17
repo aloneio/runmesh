@@ -129,8 +129,8 @@ for (const [name, entry, dependency] of [
 
 test("browser bundler rejects oversized dependency graphs before writing output", async t => {
   const root = await browserFixture(t, {
-    "admin-client.js": 'import "./large.js";\n/*' + "a".repeat(70 * 1024) + '*/',
-    "large.js": '/*' + "b".repeat(70 * 1024) + '*/',
+    "admin-client.js": 'import "./large.js";\n/*' + "a".repeat(90 * 1024) + '*/',
+    "large.js": '/*' + "b".repeat(90 * 1024) + '*/',
   });
   await assert.rejects(writeBrowserAssets(root), /invalid_browser_source/u);
   await assert.rejects(readFile(join(root, "apps/worker/src/generated-admin-client.ts")), { code: "ENOENT" });
@@ -148,6 +148,6 @@ test("browser bundler rejects symlink dependencies", async t => {
 test("browser syntax checking never executes the source", () => {
   assert.doesNotThrow(() => browserModule('throw new Error("must not execute");'));
   assert.throws(() => browserModule("function {"));
-  assert.throws(() => browserModule("x".repeat(128 * 1024 + 1)));
+  assert.throws(() => browserModule("x".repeat(160 * 1024 + 1)));
   assert.throws(() => browserModule("</" + "script>"));
 });

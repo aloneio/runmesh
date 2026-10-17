@@ -152,17 +152,54 @@ it("W05 failed discovery does not publish a partial or empty successful replacem
   expect(f.repository.stage).not.toHaveBeenCalled(); expect(f.repository.publish).not.toHaveBeenCalled();
 });
 
-it("W05 successful discovery publishes complete tool definitions without a separate approval", async () => {
+it("W05 repeated identical upstream discovery returns unchanged without a new write", async () => {
+  const f = await fixture();
+  f.listTools.mockResolvedValue([catalogDefinition()]);
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "unchanged", head: { revision: 2 } });
+  expect(f.repository.publish).not.toHaveBeenCalled();
+  expect(f.repository.stage).not.toHaveBeenCalled();
+});
+
+it("W05 first discovery preserves initial auto-publication", async () => {
+  const f = await fixture();
+  f.repository.readHead = () => undefined;
+  f.listTools.mockResolvedValue([catalogDefinition()]);
+  const publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 1 } }));
+  f.repository.publish = publish;
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 0, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 1 } });
+  expect(publish).toHaveBeenCalledOnce(); expect(f.repository.stage).not.toHaveBeenCalled();
+});
+
+it("W05 changed tool definitions are auto-published", async () => {
   const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.repository.publish = publish;
+  f.listTools.mockResolvedValue([catalogDefinition("search", "Changed tool documentation")]);
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
+  expect(publish).toHaveBeenCalledOnce();
+  expect(publish.mock.calls[0]![0].tools[0]!.definition.description).toBe("Changed tool documentation");
+  expect(f.repository.stage).not.toHaveBeenCalled();
+});
+
+it.each(["pending", "partial"])("W05 an identical observed catalog is republished when the old approval is %s", async mode => {
+  const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.head.approved_names = [];
+  if (mode === "pending") f.head.approved_digest = "f".repeat(64);
   f.repository.publish = publish;
   f.listTools.mockResolvedValue([catalogDefinition()]);
   const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
-  expect(publish).toHaveBeenCalledOnce(); expect(f.repository.stage).not.toHaveBeenCalled(); expect(f.invoked).not.toHaveBeenCalled();
+  expect(publish).toHaveBeenCalledOnce();
+  expect(f.repository.stage).not.toHaveBeenCalled();
 });
 
-it("W05 refresh publishes the four-tool Cloudflare Code Mode catalog including whoami", async () => {
+it("W05 refreshed four-tool Cloudflare Code Mode catalog is published and sorted", async () => {
   const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
   f.repository.publish = publish;
   const whoami = { ...catalogDefinition("whoami"), inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -172,6 +209,7 @@ it("W05 refresh publishes the four-tool Cloudflare Code Mode catalog including w
   const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
+  expect(f.repository.stage).not.toHaveBeenCalled();
   expect(publish).toHaveBeenCalledOnce();
   const snapshot = publish.mock.calls[0]![0];
   expect(snapshot.tools.map(tool => tool.definition.name)).toEqual(["docs", "execute", "search", "whoami"]);
@@ -188,6 +226,92 @@ it.each(["session", "profile", "catalog"])("discovery cannot publish after the %
   });
   const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
     authorize: async () => allowed ? "allowed" : "denied", digest: fixtureDigest, connector: f.ports.connector });
-  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "failed", operation_state: "not_started" });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject(changed === "catalog"
+    ? { state: "conflict", current_revision: 4 } : { state: "failed", operation_state: "not_started" });
   expect(f.repository.publish).not.toHaveBeenCalled();
+});
+
+it("W05 a version change after tools/list reopens the provider and publishes only the fresh observation", async () => {
+  const f = await fixture();
+  const changed = catalogDefinition("search", "Fresh post-conflict definition");
+  f.listTools.mockImplementationOnce(async () => {
+    f.head.revision++;
+    return [catalogDefinition()];
+  }).mockResolvedValue([changed]);
+  const publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 4 } }));
+  f.repository.publish = publish;
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({
+    state: "written", recovered_from_revision: 2, head: { revision: 4 },
+  });
+  expect(f.listTools).toHaveBeenCalledTimes(2);
+  expect(f.ports.connector.open).toHaveBeenCalledTimes(2);
+  expect(f.closed).toHaveBeenCalledTimes(2);
+  expect(publish).toHaveBeenCalledOnce();
+  expect(publish.mock.calls[0]![0].tools[0]!.definition.description).toBe("Fresh post-conflict definition");
+  expect(f.invoked).not.toHaveBeenCalled();
+});
+
+it("W05 repeated version churn stops after one fresh discovery and does not publish stale tools", async () => {
+  const f = await fixture();
+  f.listTools.mockImplementation(async () => {
+    f.head.revision++;
+    return [catalogDefinition("search", "Changing upstream")];
+  });
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toEqual({ state: "conflict", current_revision: 4 });
+  expect(f.listTools).toHaveBeenCalledTimes(2);
+  expect(f.closed).toHaveBeenCalledTimes(2);
+  expect(f.repository.publish).not.toHaveBeenCalled();
+  expect(f.invoked).not.toHaveBeenCalled();
+});
+
+it("W05 a concurrent manual disable blocks automatic catalog rebase", async () => {
+  const f = await fixture();
+  f.listTools.mockImplementation(async () => {
+    f.head.revision++;
+    f.head.approved_digest = null;
+    return [catalogDefinition("search", "New tools")];
+  });
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toEqual({ state: "conflict", current_revision: 3 });
+  expect(f.listTools).toHaveBeenCalledOnce();
+  expect(f.repository.publish).not.toHaveBeenCalled();
+});
+
+it("W05 a confirmed CAS rejection may rebase once, but only a later publish writes", async () => {
+  const f = await fixture();
+  f.listTools.mockResolvedValue([catalogDefinition("search", "Fresh review")]);
+  const publish = vi.fn((_snapshot, expectedRevision: number) => {
+    if (expectedRevision === 2) {
+      f.head.revision = 3;
+      return { state: "conflict" as const, current_revision: 3 };
+    }
+    return { state: "written" as const, head: { ...f.head, revision: 4 } };
+  });
+  f.repository.publish = publish;
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({
+    state: "written", recovered_from_revision: 2, head: { revision: 4 },
+  });
+  expect(publish.mock.calls.map(call => call[1])).toEqual([2, 3]);
+  expect(f.listTools).toHaveBeenCalledTimes(2);
+  expect(f.invoked).not.toHaveBeenCalled();
+});
+
+it("W05 unknown catalog publication never triggers automatic replay", async () => {
+  const f = await fixture();
+  f.listTools.mockResolvedValue([catalogDefinition("search", "Different")]);
+  const publish = vi.fn(() => ({ state: "unknown" as const }));
+  f.repository.publish = publish;
+  const discover = createRemoteDiscovery({ repository: f.repository, profile: f.ports.profile,
+    authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toEqual({ state: "unknown" });
+  expect(publish).toHaveBeenCalledOnce();
+  expect(f.listTools).toHaveBeenCalledOnce();
+  expect(f.invoked).not.toHaveBeenCalled();
 });

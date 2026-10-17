@@ -35,7 +35,7 @@ export async function checkSkillUploads(browser, origin, requests, library) {
      await form.locator('[name=files]').setInputFiles(selection);
      await form.locator('[type=submit]').click();
      await page.locator('[data-central-product][aria-busy="false"]').waitFor();
-     assert.match(await status.textContent(),locale==='en'?/Select 1–256 text files.*1 MiB.*8 MiB/u:/请选择 1–256 个文本文件.*1 MiB.*8 MiB/u);
+     assert.match(await status.textContent(),locale==='en'?/Select 1–256 text files.*4 MiB.*16 MiB/u:/请选择 1–256 个文本文件.*4 MiB.*16 MiB/u);
      assert.equal(await status.getAttribute('data-error'),'true');
      assert.equal(count(),before);
     }

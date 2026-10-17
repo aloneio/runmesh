@@ -20,11 +20,15 @@ Connect `dev` to the separate development Worker:
 npm run deploy:worker -- --env development
 ```
 
-For production, use protected `main` after its signed release has been verified and activated:
+For production, Cloudflare Workers Builds automatically deploys pushes to
+protected `main` using the production Wrangler configuration:
 
 ```sh
-npm run deploy:worker -- --env production
+npx wrangler deploy --config apps/worker/wrangler.jsonc --env production --name runmesh --tag "main:$WORKERS_CI_COMMIT_SHA"
 ```
+
+The regular workflow needs no local Cloudflare token. The reviewed manual
+fallback `npm run deploy:worker -- --env production` is for recovery only.
 
 For production, deploy a tested `main` commit that includes the stable release activation listed in [release status](release-readiness.md). Later control-plane updates can retain that same Runner release. Test upcoming changes with development, then verify the deployed source using the checks below.
 
@@ -57,7 +61,7 @@ After the source check, verify administrator login, Runner connection and policy
 | Failure stage | Next step |
 | --- | --- |
 | Cloudflare tool or dependency installation | Inspect the full log, configured toolchain and cache settings, then retry after correcting the reported problem |
-| Deployment preflight | Correct the branch, source or release-state issue before starting an upload |
+| Manual fallback preflight | Correct the branch, source or release-state issue before starting an upload |
 | Wrangler upload | Inspect the live source first; the provider may have accepted the deployment despite a failed response |
 
 After any successful retry, run the source comparison above.

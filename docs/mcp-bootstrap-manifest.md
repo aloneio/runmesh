@@ -50,7 +50,7 @@ If `remote_search` returns no relevant tools, do not conclude that the service l
 
 The effective external-service flow is therefore:
 
-`bootstrap -> remote_search -> [remote_tools | remote_profiles -> remote_tools] -> remote_call`
+`bootstrap -> remote_search -> [remote_tools (exact tool_id) | remote_profiles -> remote_tools (paged)] -> remote_call`
 
 Reusable workflows use:
 

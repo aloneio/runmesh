@@ -423,6 +423,27 @@ test("format gate reads quoted Git paths and untracked browser sources", async t
   assert.ok(run().stderr.includes("new browser.js: invalid UTF-8"));
 });
 
+test("format gate excludes downloaded browser caches but still checks untracked project source", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "runmesh-format-cache-"));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
+  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: dir }).status, 0);
+  await writeFile(join(dir, ".gitignore"), await readFile(join(root, ".gitignore"), "utf8"));
+  const cache = join(dir, ".cache", "ms-playwright", "chromium");
+  await mkdir(cache, { recursive: true });
+  await writeFile(join(cache, "manifest.json"), '{"downloaded":true}  ');
+  const source = join(dir, "new source.ts");
+  await writeFile(source, "export {};  \n");
+  const run = () => spawnSync(process.execPath, [join(root, "scripts/check-format.mjs")],
+    { cwd: dir, encoding: "utf8", timeout: 10000 });
+  const rejected = run();
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /new source\.ts:1: trailing whitespace/u);
+  assert.doesNotMatch(rejected.stderr, /ms-playwright|\.cache/u);
+  await writeFile(source, "export {};\n");
+  const accepted = run();
+  assert.equal(accepted.status, 0, accepted.stderr);
+});
+
 test("failed browser diagnostics retain status counts without copying private reporter values", () => {
   const summary = browserFailureEvidence({ testResults: [{ name: "/private/source", assertionResults: [
     { title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: ["cookie=private-token"] },

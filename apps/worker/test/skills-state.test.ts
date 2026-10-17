@@ -7,6 +7,8 @@ import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
 import { createSkillAdministration } from "../src/application/skills/admin.js";
 import { createSkillReader } from "../src/application/skills/reader.js";
 import { readSkillCapacity } from "../src/platform/skills/capacity.js";
+import { deleteSkillContent } from "../src/platform/skills/content.js";
+import { SKILL_SQL_CHUNK_BYTES } from "../src/platform/skills/text-chunks.js";
 import type { CapabilityTarget } from "../src/contracts/capabilities.js";
 import { SKILL_LIMITS, SKILL_STORED_BUNDLE_BYTES, type SkillBundle, type SkillReadPorts } from "../src/contracts/skills.js";
 
@@ -364,4 +366,55 @@ it("Skill capacity shares zero-safe metadata totals with installation admission"
     expect(store.head(first.skill_id)?.active_digest).toBe(first.digest);
     expect(store.bundle(second.skill_id, second.digest)).toBeUndefined();
   });
+});
+
+
+it("oversized UTF-8 Skill files roundtrip through bounded SQLite chunks, detect corruption, and clean up", async () => {
+  // No single SQLite TEXT column may exceed Cloudflare's 2 MB row limit.
+  const text = "中😀".repeat(500_000);
+  expect(new TextEncoder().encode(text).byteLength).toBeGreaterThan(2_000_000);
+  const value = (await makeSkillBundle({ skill_id: "chunked", source: "verified", license: "MIT", files: [
+    { path: "SKILL.md", text: "---\nname: chunked\ndescription: Large references\n---\nRead references/large.md" },
+    { path: "references/large.md", text },
+    { path: "references/empty.md", text: "" },
+  ] }, catalogSha256))!;
+  expect(value).toBeDefined();
+  await runInDurableObject(owner(), (_instance, state) => {
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    expect(store.install(value, 0)).toMatchObject({ state: "written", head: { active_digest: value.digest } });
+    const files = state.storage.sql.exec<{ position: number; content_text: string }>(
+      "SELECT position,content_text FROM skill_files_v2 WHERE skill_id=? AND digest=? ORDER BY position", value.skill_id, value.digest).toArray();
+    expect(files).toHaveLength(3);
+    expect(files[1]!.content_text).toBe("");
+    expect(files[2]!.content_text).toBe("");
+    const chunks = state.storage.sql.exec<{ position: number; ordinal: number; bytes: number }>(
+      "SELECT position,ordinal,length(CAST(content_text AS BLOB)) AS bytes FROM skill_file_chunks_v1 WHERE skill_id=? AND digest=? ORDER BY position,ordinal",
+      value.skill_id, value.digest).toArray();
+    expect(chunks.length).toBeGreaterThan(4);
+    expect(chunks.every(chunk => chunk.position === 2 && chunk.bytes > 0 && chunk.bytes <= SKILL_SQL_CHUNK_BYTES)).toBe(true);
+    expect(chunks.map(chunk => chunk.ordinal)).toEqual(chunks.map((_part, i) => i));
+    expect(new SkillState(state.storage, () => undefined).bundle(value.skill_id, value.digest)).toEqual(value);
+    const capacity = readSkillCapacity(state.storage.sql, value.skill_id);
+    expect(capacity.library_bytes).toBe(new TextEncoder().encode(JSON.stringify(value)).byteLength);
+
+    state.storage.sql.exec("UPDATE skill_file_chunks_v1 SET ordinal=99 WHERE skill_id=? AND digest=? AND position=2 AND ordinal=0", value.skill_id, value.digest);
+    expect(() => store.bundle(value.skill_id, value.digest)).toThrow("skill_record_invalid");
+    state.storage.sql.exec("UPDATE skill_file_chunks_v1 SET ordinal=0 WHERE skill_id=? AND digest=? AND position=2 AND ordinal=99", value.skill_id, value.digest);
+    expect(store.bundle(value.skill_id, value.digest)).toEqual(value);
+
+    state.storage.transactionSync(() => deleteSkillContent(state.storage.sql, value.skill_id, value.digest));
+    expect(store.bundle(value.skill_id, value.digest)).toBeUndefined();
+    expect(state.storage.sql.exec("SELECT * FROM skill_file_chunks_v1 WHERE skill_id=? AND digest=?", value.skill_id, value.digest).toArray()).toEqual([]);
+    expect(readSkillCapacity(state.storage.sql, value.skill_id)).toMatchObject({ library_bytes: 0, skill_versions: 0 });
+  });
+});
+
+it("large Skill file admission is bounded at 4 MiB without relying on SQLite row limits", async () => {
+  const large = "a".repeat(SKILL_LIMITS.file_bytes);
+  const make = (content: string) => makeSkillBundle({ skill_id: "edge", source: "", license: "", files: [
+    { path: "SKILL.md", text: "---\nname: edge\ndescription: Edge test\n---\n" },
+    { path: "reference.md", text: content },
+  ] }, catalogSha256);
+  expect(await make(large)).toBeDefined();
+  expect(await make(large + "x")).toBeUndefined();
 });

@@ -13,6 +13,7 @@ const FEATURE_LABELS: Record<RegistryFeatureHealth["feature"], string> = {
   mcp_usage_tracking: "MCP usage tracking",
   auth_throttle: "Login protection",
   maintenance_alarm: "Maintenance alarm",
+  runner_updates: "Runner update storage",
 };
 
 const FEATURE_NOTICE_TEXT: Record<RegistryFeatureHealth["feature"], AdminNotice> = {
@@ -35,6 +36,10 @@ const FEATURE_NOTICE_TEXT: Record<RegistryFeatureHealth["feature"], AdminNotice>
   maintenance_alarm: {
     title: "Maintenance alarm paused",
     message: "Background cleanup and stale-runner checks are temporarily disabled.",
+  },
+  runner_updates: {
+    title: "Runner update storage unavailable",
+    message: "Runner upgrade operations are temporarily unavailable; core authentication remains independent.",
   },
 };
 

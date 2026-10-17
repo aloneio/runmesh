@@ -124,3 +124,61 @@ it("RM11 bounds source JSON, collection sizes and malformed metadata", () => {
   expect(previewRegistryEntry({ ...registryEntry(), name: "" })).toBeUndefined();
   expect(previewRegistryEntry({ ...registryEntry(), remotes: [] })).toBeUndefined();
 });
+
+it("RM11 previews a real client stdio configuration without executing or exposing command-line tokens", () => {
+  const secret = "synthetic-ctx7-private-api-key";
+  const input = { mcpServers: { context7: { command: "npx", args: ["-y", "@upstash/context7-mcp", "--api-key", secret],
+    env: { API_KEY: secret } } } };
+  const preview = previewRegistryEntry(input);
+  expect(preview).toMatchObject({ state: "previewed", format: "client_config", remotes: [], packages: [],
+    skipped: [{ name: "context7", reason: "stdio" }] });
+  expect(JSON.stringify(preview)).not.toContain(secret);
+  expect(JSON.stringify(preview)).not.toMatch(/command|args|npx|API_KEY|@upstash/u);
+});
+
+it("RM11 imports client HTTP candidates independently while retaining safe per-entry transport metadata", () => {
+  const secret = "synthetic-secret-do-not-echo";
+  const preview = previewRegistryEntry({ mcpServers: {
+    docs: { url: "https://mcp.docs.example.com/mcp", type: "http" },
+    authorized: { url: "https://mcp.other.example.com/mcp", type: "streamable-http",
+      headers: { Authorization: "Bearer " + secret, "X-API-Key": secret }, env: { ACCESS_KEY: secret } },
+    legacy: { url: "https://mcp.legacy.example.com/sse", type: "sse" },
+    local: { type: "stdio", command: "bash", args: ["-c", secret] }
+  } });
+  expect(preview?.remotes).toEqual([
+    { name: "docs", endpoint: "https://mcp.docs.example.com/mcp", transport: "streamable-http", mode: "connect", headers: [] },
+    { name: "authorized", endpoint: "https://mcp.other.example.com/mcp", transport: "streamable-http", mode: "configure", headers: ["Authorization", "X-API-Key"] },
+    { name: "legacy", endpoint: "https://mcp.legacy.example.com/sse", transport: "sse", mode: "configure", headers: [] }
+  ]);
+  expect(preview?.skipped).toEqual([{ name: "local", reason: "stdio" }]);
+  expect(JSON.stringify(preview)).not.toContain(secret);
+});
+
+it("RM11 supports VS Code servers wrappers and records unsafe endpoints without reflecting them", () => {
+  const secret = "private-client-token";
+  const preview = previewRegistryEntry({ mcp: { servers: {
+    safe: { type: "http", url: "https://mcp.example.com/mcp" },
+    token_url: { type: "http", url: "https://mcp.example.com/mcp?token=" + secret },
+    invalid_header: { type: "http", url: "https://mcp.example.com/mcp", headers: { "Bad\nName": secret } },
+    unknown: { type: "websocket", url: "wss://mcp.example.com" },
+    mixed: { command: "npx", url: "https://mcp.example.com/mcp" }
+  } } });
+  expect(preview?.remotes).toHaveLength(1);
+  expect(preview?.skipped).toEqual([
+    { name: "token_url", reason: "invalid_endpoint" }, { name: "invalid_header", reason: "invalid_definition" },
+    { name: "unknown", reason: "unsupported_transport" }, { name: "mixed", reason: "stdio" }
+  ]);
+  expect(JSON.stringify(preview)).not.toContain(secret);
+  expect(previewRegistryEntry({ servers: { same: { url: "https://mcp.example.com/mcp" } } })?.remotes[0]?.mode).toBe("connect");
+  expect(previewRegistryEntry({ servers: { templated: { url: "https://mcp.example.com/%7Bworkspace%7D/mcp" } } })?.remotes[0]?.mode).toBe("configure");
+});
+
+it("RM11 bounds client server counts and rejects malformed client configuration envelopes", () => {
+  const servers = Object.fromEntries(Array.from({ length: MCP_REGISTRY_LIMITS.remotes + MCP_REGISTRY_LIMITS.packages + 1 },
+    (_, i) => ["item" + i, { type: "stdio", command: "npx" }]));
+  expect(previewRegistryEntry({ mcpServers: servers })).toBeUndefined();
+  expect(previewRegistryEntry({ mcpServers: {} })).toBeUndefined();
+  expect(previewRegistryEntry({ mcpServers: [] })).toBeUndefined();
+  expect(previewRegistryEntry({ mcpServers: { "\nunsafe": { type: "stdio" } } })).toBeUndefined();
+  expect(previewRegistryEntry({ somethingElse: { token: "private" } })).toBeUndefined();
+});

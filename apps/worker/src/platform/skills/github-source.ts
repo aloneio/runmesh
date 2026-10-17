@@ -2,27 +2,51 @@ import { SKILL_SOURCE_LIMITS, type SkillSourcePort } from "../../contracts/skill
 import { SKILL_LIMITS, type SkillFile } from "../../contracts/skills.js";
 import { parseSkillSource } from "../../contracts/skill-source-values.js";
 import { skillObject, skillPath } from "../../contracts/skill-values.js";
+import { mapOrderedBounded } from "./ordered-downloads.js";
+import { readGithubArchive } from "./github-archive.js";
 
 class SourceFault extends Error {
-  public constructor(readonly state: "missing" | "invalid" | "capacity" | "unavailable") { super(state); }
+  public constructor(readonly state: "missing" | "invalid" | "capacity" | "unavailable" | "rate_limited") { super(state); }
 }
 const sha = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{40}$/u.test(value);
 
-/** Source-specific fixed hosts. Never uses MCP egress policy or credentials. */
+/** Prefer a single immutable GitHub archive. Preserve the independently
+ * validated, bounded Git tree implementation for oversized repositories
+ * and when codeload is unavailable. Both routes use fixed GitHub hosts. */
 export function createGithubSkillSource(send: typeof fetch = fetch): SkillSourcePort {
+  const legacy = createLegacyGithubSkillSource(send);
+  return {
+    async read(raw, signal) {
+      const source = parseSkillSource(raw);
+      if (!source) return { state: "invalid" };
+      if (signal.aborted) return { state: "unavailable" };
+      const archive = await readGithubArchive(send, source, signal);
+      return archive.state === "fallback" ? legacy.read(source, signal) : archive;
+    },
+  };
+}
+
+/** Fallback: immutable Git trees plus bounded concurrent raw-file requests. */
+export function createLegacyGithubSkillSource(send: typeof fetch = fetch): SkillSourcePort {
   return {
     async read(raw, signal) {
       const source = parseSkillSource(raw);
       if (!source) return { state: "invalid" };
       const repo = source.repository.slice("https://github.com/".length);
       let requests = 0, totalBytes = 0;
-      async function bytes(url: string, limit: number): Promise<Uint8Array> {
-        if (signal.aborted) throw new SourceFault("unavailable");
+      async function bytes(url: string, limit: number, requestSignal: AbortSignal = signal): Promise<Uint8Array> {
+        if (requestSignal.aborted) throw new SourceFault("unavailable");
         if (++requests > SKILL_SOURCE_LIMITS.files + SKILL_SOURCE_LIMITS.directory_depth + 3) throw new SourceFault("capacity");
-        const response = await send(url, { method: "GET", redirect: "error", credentials: "omit", cache: "no-store", signal,
+        // Workers supports manual redirects, not redirect: "error" or cache: "no-store".
+        // Explicitly reject all non-200 statuses rather than following a redirect.
+        const response = await send(url, { method: "GET", redirect: "manual", credentials: "omit", signal: requestSignal,
           headers: { accept: "application/vnd.github+json", "user-agent": "Runmesh-Skill-Import", "x-github-api-version": "2022-11-28" } });
         const cancel = () => { void response.body?.cancel().catch(() => undefined); };
         if (response.status === 404) { cancel(); throw new SourceFault("missing"); }
+        if (response.status === 429 || (response.status === 403
+          && (response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after")))) {
+          cancel(); throw new SourceFault("rate_limited");
+        }
         if (!response.ok || response.status !== 200) { cancel(); throw new SourceFault("unavailable"); }
         const length = response.headers.get("content-length");
         if (length !== null && (!/^\d+$/u.test(length) || Number(length) > limit)) { cancel(); throw new SourceFault("capacity"); }
@@ -30,11 +54,11 @@ export function createGithubSkillSource(send: typeof fetch = fetch): SkillSource
         const reader = response.body.getReader();
         let value = new Uint8Array(0), size = 0, empty = 0;
         const abort = () => { void reader.cancel().catch(() => undefined); };
-        signal.addEventListener("abort", abort, { once: true });
+        requestSignal.addEventListener("abort", abort, { once: true });
         try {
-          while (!signal.aborted) {
+          while (!requestSignal.aborted) {
             const next = await reader.read();
-            if (signal.aborted) break;
+            if (requestSignal.aborted) break;
             if (next.done) return value.slice(0, size);
             if (next.value.byteLength > limit - size) throw new SourceFault("capacity");
             if (!next.value.byteLength && ++empty > 128) throw new SourceFault("invalid");
@@ -45,7 +69,7 @@ export function createGithubSkillSource(send: typeof fetch = fetch): SkillSource
             value.set(next.value, size); size += next.value.byteLength;
           }
           throw new SourceFault("unavailable");
-        } finally { signal.removeEventListener("abort", abort); abort(); try { reader.releaseLock(); } catch { /* A canceled read settles asynchronously. */ } }
+        } finally { requestSignal.removeEventListener("abort", abort); abort(); try { reader.releaseLock(); } catch { /* A canceled read settles asynchronously. */ } }
       }
       async function json(path: string) {
         const value = await bytes("https://api.github.com/repos/" + repo + path, SKILL_SOURCE_LIMITS.metadata_bytes);
@@ -67,7 +91,7 @@ export function createGithubSkillSource(send: typeof fetch = fetch): SkillSource
           if (entry.type !== "tree" || entry.mode !== "040000") throw new SourceFault("invalid");
           treeId = entry.sha as string;
         }
-        const entries = await tree(treeId, true), files: SkillFile[] = [], seen = new Set<string>();
+        const entries = await tree(treeId, true), seen = new Set<string>();
         const blobs = entries.filter(entry => entry.type !== "tree");
         if (!blobs.length || blobs.length > SKILL_SOURCE_LIMITS.files) throw new SourceFault("capacity");
         for (const entry of entries) {
@@ -80,17 +104,17 @@ export function createGithubSkillSource(send: typeof fetch = fetch): SkillSource
           totalBytes += entry.size as number;
           if ((entry.size as number) > SKILL_LIMITS.file_bytes || totalBytes > SKILL_LIMITS.bundle_bytes) throw new SourceFault("capacity");
         }
-        for (const entry of blobs) {
+        const files: SkillFile[] = await mapOrderedBounded(blobs, SKILL_SOURCE_LIMITS.file_concurrency, signal, async (entry, groupSignal) => {
           const path = entry.path as string;
           const content = await bytes("https://raw.githubusercontent.com/" + repo + "/" + source.commit + "/"
-            + (source.path ? source.path + "/" : "") + path, SKILL_LIMITS.file_bytes);
+            + (source.path ? source.path + "/" : "") + path, SKILL_LIMITS.file_bytes, groupSignal);
           if (content.byteLength !== entry.size) throw new SourceFault("invalid");
           let text: string;
           try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content); }
           catch { throw new SourceFault("invalid"); }
           if (text.includes("\0") || text.startsWith("version https://git-lfs.github.com/spec/v1")) throw new SourceFault("invalid");
-          files.push({ path, text });
-        }
+          return { path, text };
+        });
         return { state: "read", files };
       } catch (error) { return { state: error instanceof SourceFault ? error.state : "unavailable" }; }
     }

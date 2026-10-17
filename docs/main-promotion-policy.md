@@ -27,10 +27,10 @@ so ordinary `dev` CI must use its own names.
 Set the project's **CI/CD configuration file** to:
 
 ```text
-.gitlab/main-policy.yml@aloneio/runmesh:dev
+.gitlab/main-policy.yml@aloneio/runmesh:main
 ```
 
-This loads the entrypoint from reviewed `dev`, includes ordinary
+This loads the entrypoint from protected `main`, includes ordinary
 `.gitlab-ci.yml` at the actual pipeline commit, then applies the mandatory
 metadata-only `.pre` job and pipeline creation rules. Source branches that
 predate the gate receive the same policy. For a fork, substitute its project path
@@ -76,12 +76,21 @@ reviewed head. This uses GitHub's supported
 and preserves the existing author and committer identity,
 `aloneio <git@aloneio.aleeas.com>`.
 
-Use the corresponding protected GitLab `dev -> main` MR with the fast-forward
-merge method and a successful pipeline. Preserve `dev` and verify that both
-providers' `main` branches point to the same reviewed commit.
+Use the protected GitLab `dev -> main` MR with the fast-forward merge
+method and all mandatory checks. Preserve `dev`. Cloudflare Workers Builds
+watches the protected `main` branch and automatically deploys the merged
+source with its configured build and Wrangler production deployment commands.
+The GitLab `main` pipeline is an independent post-push check, not an extra
+deployment-approval service. Verify the actual Cloudflare deployment and live
+commit after each merge; use Cloudflare Worker version rollback when needed.
+Database and Durable Object changes still require backward compatibility.
 
-Stable publication continues from protected `main` through its release gates.
-Verify the final commit on both providers and the deployed Worker separately.
+The former inert-build placeholder branch does not participate in production
+deployment. See [deployment](deployment.md) for the active commands and
+production recovery procedure.
+
+GitLab is the only authoritative deployment source. GitHub release history is
+separate and is not force-synchronized or automatically modified by this flow.
 
 The current GitHub policy uses a read-only `pull_request` workflow. Its trust
 boundary includes maintainers who can change workflow files or repository rules.

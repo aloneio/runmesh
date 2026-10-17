@@ -1,10 +1,12 @@
+import { DEFAULT_MAX_QUEUED_JOBS, DEFAULT_MAX_QUEUED_JOBS_PER_CLIENT, MAX_QUEUED_JOBS, MAX_QUEUED_JOBS_PER_CLIENT } from "./scheduler-limits.js";
+
 /** Bounded per-client round robin. Queue order is FIFO within one client.
  * This contains no timer or persistence: JobManager owns durable task state. */
 export class FairJobQueue<T> {
   private readonly clients = new Map<string, Array<{id:string;value:T}>>();
   private turn: string | undefined;
-  public constructor(readonly limit = 32, readonly perClient = 8) {
-    if (!Number.isInteger(limit) || limit<0 || limit>1000 || !Number.isInteger(perClient) || perClient<1 || perClient>1000) throw new Error("Invalid queue limits");
+  public constructor(readonly limit = DEFAULT_MAX_QUEUED_JOBS, readonly perClient = DEFAULT_MAX_QUEUED_JOBS_PER_CLIENT) {
+    if (!Number.isInteger(limit) || limit<0 || limit>MAX_QUEUED_JOBS || !Number.isInteger(perClient) || perClient<1 || perClient>MAX_QUEUED_JOBS_PER_CLIENT) throw new Error("Invalid queue limits");
   }
   public get size(): number { return [...this.clients.values()].reduce((n,q)=>n+q.length,0); }
   public count(client: string): number { return this.clients.get(client)?.length ?? 0; }

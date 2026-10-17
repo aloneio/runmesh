@@ -78,15 +78,20 @@ POST `/admin/central/connection-check` 接受新公网 MCP 地址 `{endpoint}`�
 数量与其他服务声明。需要登录时返回 `{state:"authorization_required"}`。检查保留
 原档案及已发布目录，添加连接和刷新工具通过各自操作完成。
 
-POST `/admin/central/registry-preview` 接受 `{entry}`，内容为一份 server.json，
-或含 server 字段的 Registry 包装对象，使用同一管理员/CSRF 边界。请求上限为
-256 KiB，最多包含 16 个远程条目、16 个软件包，以及每远程条目 32 个请求头名称。
+POST `/admin/central/registry-preview` 接受 `{entry}`，内容可为 server.json、
+含 server 字段的 Registry 包装对象，或 `mcpServers`、`servers`、
+`mcp.servers` 客户端配置，使用同一管理员/CSRF 边界。请求上限为
+256 KiB，最多包含 16 个 Registry 远程条目、16 个软件包或 32 个客户端条目，
+以及每远程条目 32 个请求头名称。
 临时预览返回名称、版本、说明、schema 地址、摘要和观测时间，以及投影后的远程与
-软件包条目。
+软件包条目。客户端预览额外提供 `format: "client_config"`、候选名称和固定原因的
+`skipped` 元数据。摘要根据脱敏后的预览计算，不对原始密钥计算。
 
 公网 Streamable HTTP 地址在路径完整、无需请求头或变量配置时可填入连接表单。
 含 URL 占位符（包括编码后的花括号）、请求头或变量配置的条目提示先完成提供方
-配置。预览展示请求头名称和软件包标识，省略请求头值、变量值及启动参数。「使用此
+配置。预览展示请求头名称和软件包标识，省略请求头值、变量值及启动参数。客户端
+HTTP 类型归一化为 Streamable HTTP，SSE 仅提示配置，本地 stdio 命令绝不执行。
+浏览器在 POST 前移除密钥字段，不向 Worker 发送命令、参数、令牌或请求头值。「使用此
 连接」填入普通表单，管理员选择身份验证方式后点击「连接」。每次导入只处理所选
 文件，预览不保存外部目录快照，也不改动已有连接。
 
@@ -98,14 +103,15 @@ POST `/admin/central/registry-preview` 接受 `{entry}`，内容为一份 server
 `GET /admin/central/catalogs/{profile_id}`，将返回的 `head.revision` 作为
 `expected_revision`，POST 到 `/admin/central/discovery/{profile_id}`。仅当目录读取
 返回 `{"state":"empty"}` 时使用 `{"expected_revision":0}`。请求沿用管理员会话、同源
-及 CSRF 校验。完整、有界的 tools/list 结果一次性保存并发布全部工具，
-只增加一个目录版本，所有有效客户端立即可用，无需单独审阅或批准，参见
-[控制端管理界面](central-administration.zh-CN.md)。客户端仍需连接凭据，中央发布不授予机器权限。
+及 CSRF 校验。首次发现及后续刷新都会原子发布完整的兼容工具目录，无需逐项审核或批准。
+历史上暂存、禁用目录或仅部分批准的状态，会在下一次刷新时通过完整发布恢复。
+目录已完整发布且工具定义未变化时返回 `unchanged`，不写入存储、不增加版本号。
+参见[控制端管理界面](central-administration.zh-CN.md)。客户端仍需连接凭据，中央发布不授予机器权限。
 
 发现接口不接受调用方提供 URL、token、请求头或命令。分页不完整、重复工具、
-超时和上游失败不会覆盖旧的已审核目录。实际调用会再次获取
-上游工具定义；所选工具的说明、schema 或注解变化后停止派发，需刷新工具，刷新成功后直接发布。
-调用本身不改写目录，也不会每次请求都创建新目录版本。
+超时和上游失败不会覆盖旧的已发布目录。实际调用会再次获取
+上游工具定义；所选工具的说明、schema 或注解变化后停止派发，刷新成功后自动发布新版定义。
+调用本身不改写目录，不会自动重试已拒绝的调用；完整发布的相同目录再次刷新不会创建新版本。
 
 ## 信任与执行边界
 

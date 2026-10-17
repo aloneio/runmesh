@@ -1,7 +1,9 @@
-import { type AdmissionState, type MutationPhase, type RunnerConnectionIdentity, FENCED_ADMISSION, RESTART_RECONCILE_MUTATION_ID, admitsProtectedRpc, conservativeAdmission, restoreAdmission, sameAdmissionState, sameRunnerConnection, validAdmissionState, validSessionId } from "./domain/runner-admission.js";
+import { type AdmissionState, type MutationPhase, type RunnerConnectionIdentity, FENCED_ADMISSION, RESTART_RECONCILE_MUTATION_ID, admitsProtectedRpc, sameAdmissionState, sameRunnerConnection, validSessionId } from "./domain/runner-admission.js";
 import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
+import { RunnerAdmissionStore } from "./runner-do-admission.js";
+import { pendingBridgeCount, rememberPendingBridge, forgetPendingBridge } from "./platform/bridge-pending-attachment.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
 import { RunnerHeartbeatPersistence } from "./platform/runner-heartbeat.js";
 import { RunnerOptionalPersistence } from "./platform/runner-optional-persistence.js";
@@ -51,7 +53,6 @@ interface ConnectionAttachment extends RunnerConnectionIdentity {
   pendingUpdateRpcIds?: string[];
 }
 
-const ADMISSION_STATE_KEY = "policy-admission-v1";
 const HELLO_DEADLINE_MS = 10_000;
 const BRIDGE_TIMEOUT_MS = WORKER_BRIDGE_TIMEOUT_MS;
 const MAX_BRIDGE_IN_FLIGHT = 32;
@@ -70,8 +71,8 @@ export class RunnerDO {
   private readonly policyRecovery = new RunnerPolicyRecovery();
   /** Guards duplicate/concurrent hello frames on one hibernating socket. */
   private readonly helloInFlight = new WeakSet<WebSocket>();
-  private admissionState: AdmissionState | undefined;
-  private admissionWriteQueue: Promise<void> = Promise.resolve();
+  private readonly admissionStore: RunnerAdmissionStore;
+  private get admissionState(): AdmissionState | undefined { return this.admissionStore.snapshot(); }
   private restartReconcilePromise: Promise<boolean> | undefined;
   private readonly updateMaintenance: RunnerUpdateMaintenance;
   public constructor(
@@ -80,6 +81,7 @@ export class RunnerDO {
     dependencies: RunnerDoDependencies = {},
   ) {
     this.env = resolveRuntimeConfiguration(env);
+    this.admissionStore = new RunnerAdmissionStore(ctx.storage);
     this.heartbeats = new RunnerHeartbeatPersistence({ active: heartbeatRetryActive, next: nextHeartbeatRetry,
       temporaryFailure: isTemporaryHeartbeatFailure }, this.env.RUNMESH_HEARTBEAT_FAILURE_MODE === "reconnect");
     this.optionalPersistence = new RunnerOptionalPersistence({ active: heartbeatRetryActive, next: nextHeartbeatRetry, temporaryFailure: isTemporaryHeartbeatFailure });
@@ -430,7 +432,7 @@ export class RunnerDO {
     if (requiresSessionProbe && !(await this.verifySocketSession(ws, attachment, false, true))) return;
     if (message.type === "rpc.response" || message.type === "rpc.error") {
       const latest = ws.deserializeAttachment() as ConnectionAttachment;
-      latest.pendingUpdateRpcIds = (latest.pendingUpdateRpcIds ?? []).filter(id => id !== message.request_id);
+      forgetPendingBridge(latest, message.request_id);
       ws.serializeAttachment(latest);
       this.replies.deliver(ws, message);
       return;
@@ -440,21 +442,37 @@ export class RunnerDO {
       let allowed = false;
       let recordHistory = false;
       if (attachment.queueProtocol === 1 && grant !== undefined && message.runner_id === attachment.runnerId
-        && grant.runner_id === attachment.runnerId && grant.lifecycle_id === attachment.lifecycleId
+        && grant.runner_id === attachment.runnerId && grant.job_id === message.job_id && grant.lifecycle_id === attachment.lifecycleId
         && grant.credential_version === attachment.credentialVersion
         && await this.admitOrReconcileProtectedRpc(attachment,grant.policy_revision,grant.policy_checksum)) {
         const response = await boundedJsonResponse(signal => this.registryRequest(attachment.runnerId,"/mcp-authorization",{method:"POST",signal,body:JSON.stringify({
           client_id:grant.client_id,secret_version:grant.secret_version,method:"exec.start",workspace_id:grant.workspace_id,
-          policy_revision:grant.policy_revision,policy_checksum:grant.policy_checksum,
+          job_id:message.job_id, policy_revision:grant.policy_revision,policy_checksum:grant.policy_checksum,
           ...(attachment.historyProtocol === 2 ? {include_job_recording:true} : {}),
         })}));
         const decision = response?.value;
         allowed=response?.status===200 && isRecord(decision) && decision.ok===true;
         recordHistory = allowed && isRecord(decision) && decision.record_history === true;
       }
+      let nonceConsumed = false;
+      let authorizationUnavailable = false;
+      if (allowed && grant !== undefined) {
+        try {
+          nonceConsumed = await this.admissionStore.consumeQueueGrantNonce(grant.nonce, grant.expires_at_ms, state =>
+            admitsProtectedRpc(state, attachment, grant.policy_revision, grant.policy_checksum)
+              && this.ctx.getWebSockets("runner").includes(ws));
+        } catch {
+          authorizationUnavailable = true;
+        }
+      }
+      if (authorizationUnavailable) {
+        ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,
+          result:{authorized:false,authorization_unavailable:true,record_history:false}}));
+        return;
+      }
       // No await after the final local session/policy fence. A grant never
       // authorizes by itself, and this decision never executes a command.
-      allowed = allowed && grant !== undefined && this.admissionState !== undefined
+      allowed = allowed && nonceConsumed && grant !== undefined && this.admissionState !== undefined
         && admitsProtectedRpc(this.admissionState,attachment,grant.policy_revision,grant.policy_checksum)
         && this.ctx.getWebSockets("runner").includes(ws);
       ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed,...(attachment.historyProtocol === 2 ? {record_history:allowed && recordHistory} : {})}}));
@@ -586,7 +604,7 @@ export class RunnerDO {
     if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return preDispatchError("runner_offline", "runner is not connected", 503);
     if (this.updateMaintenance.blocksLifecycle(attachment.lifecycleId)) return preDispatchError("runner_updating", "Runner is preparing a version change", 409);
     if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
-    if ((attachment.pendingUpdateRpcIds?.length ?? 0) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
+    if (pendingBridgeCount(attachment) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
     const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) && input.policy_revision > 0 ? input.policy_revision : undefined;
     const expectedPolicyRevision = typeof input.expected_policy_revision === "number" && Number.isSafeInteger(input.expected_policy_revision) && input.expected_policy_revision > 0 ? input.expected_policy_revision : undefined;
     const expectedPolicyChecksum = typeof input.expected_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(input.expected_policy_checksum) ? input.expected_policy_checksum : undefined;
@@ -618,17 +636,27 @@ export class RunnerDO {
     // the Worker HMAC. Do not trust its earlier permission preflight: async
     // policy reconciliation can overlap client revocation or override edits.
     const reportingLaunch = attachment.historyProtocol === 2 && (method === "exec.start" || method === "exec.run");
+    // Generate the launch identity before the final Registry authorization so
+    // the decision and the dispatched job carry the same authenticated ID.
+    // Caller-supplied job_id values are never trusted at this boundary.
+    const authenticatedJobId = (method === "exec.start" || method === "exec.run") && isRecord(input.params)
+      ? "job-" + crypto.randomUUID()
+      : undefined;
     let recordHistory = !Object.prototype.hasOwnProperty.call(input, "mcp_authorization");
     if (Object.prototype.hasOwnProperty.call(input, "mcp_authorization")) {
       const principal = input.mcp_authorization;
       const params = input.params;
       if (!isRecord(principal) || !isRecord(params)) return preDispatchError("permission_denied", "invalid MCP authorization identity", 403);
+      // Launches receive a fresh authenticated identity before authorization;
+      // existing Job operations must retain the caller's addressed job ID.
+      const authorizationJobId = authenticatedJobId ?? (typeof params.job_id === "string" ? params.job_id : undefined);
       let authorized: Response | undefined;
       const receipt = await boundedJsonReceipt(async signal => {
         authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", signal, body: JSON.stringify({
           client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
+          runner_pinned: principal.runner_pinned === true,
           workspace_id: params.expected_workspace_id ?? params.workspace_id,
-          ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
+          ...(authorizationJobId === undefined ? {} : { job_id: authorizationJobId }),
           policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
           ...(reportingLaunch ? { include_job_recording: true } : {}),
         }) });
@@ -649,20 +677,22 @@ export class RunnerDO {
     // Never accept a caller-supplied grant or creator identity at this boundary.
     let dispatchParams = input.params;
     if ((method === "exec.start" || method === "exec.run") && isRecord(input.params)) {
-      const clean = { ...input.params }; delete clean.queue_grant; delete clean.record_history; delete clean.created_by_client_id;
+      const clean = { ...input.params }; delete clean.queue_grant; delete clean.record_history; delete clean.created_by_client_id; delete clean.job_id;
       if (reportingLaunch) clean.record_history = recordHistory;
       const principal = input.mcp_authorization;
       if (isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)) {
         // Job attribution belongs to the authenticated launch, independently
         // of whether this Runner advertises queue admission.
         clean.created_by_client_id = principal.client_id;
+        const queueJobId = authenticatedJobId ?? "job-" + crypto.randomUUID();
+        clean.job_id = queueJobId;
         if (attachment.queueProtocol === 1 && typeof clean.workspace_id === "string" && validLifecycleId(attachment.lifecycleId)
           && requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
           clean.queue_grant = await signQueueGrant(this.env.INTERNAL_CONTROL_SECRET ?? "", {
             version:1, runner_id:attachment.runnerId,lifecycle_id:attachment.lifecycleId,credential_version:attachment.credentialVersion,
             client_id:principal.client_id,secret_version:principal.secret_version,workspace_id:clean.workspace_id,
             policy_revision:requestPolicyRevision,policy_checksum:expectedPolicyChecksum,
-            launch_digest:await launchDigest(clean),expires_at_ms:Date.now()+3600000,nonce:crypto.randomUUID(),
+            launch_digest:await launchDigest(clean),expires_at_ms:Date.now()+3600000,nonce:crypto.randomUUID(),job_id:queueJobId,
           });
         }
       }
@@ -687,7 +717,7 @@ export class RunnerDO {
     // Authorization above awaits I/O. Recheck capacity at the synchronous
     // reservation point so concurrent admissions cannot all pass the first gate.
     if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
-    if (((socket.deserializeAttachment() as ConnectionAttachment).pendingUpdateRpcIds?.length ?? 0) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
+    if (pendingBridgeCount(socket.deserializeAttachment() as ConnectionAttachment) >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "Runner has unresolved RPC replies", 429);
     const reply = await new Promise<BridgeReply>((resolve) => {
       const timer = setTimeout(() => {
         this.replies.forget(requestId);
@@ -696,7 +726,7 @@ export class RunnerDO {
       this.replies.register(requestId, { resolve, timer, socket });
       // Read the attachment again: another dispatch may have updated it while authorization awaited.
       const currentAttachment = socket.deserializeAttachment() as ConnectionAttachment;
-      currentAttachment.pendingUpdateRpcIds = [...(currentAttachment.pendingUpdateRpcIds ?? []), requestId];
+      rememberPendingBridge(currentAttachment, requestId);
       socket.serializeAttachment(currentAttachment);
       try { socket.send(encodeWireFrame(parsed.data)); } catch (error) {
         clearTimeout(timer); this.replies.forget(requestId);
@@ -709,7 +739,7 @@ export class RunnerDO {
             ? "frame_too_large"
             : undefined;
         if (protocolCode === "frame_too_large") {
-          currentAttachment.pendingUpdateRpcIds = currentAttachment.pendingUpdateRpcIds.filter(id => id !== requestId);
+          forgetPendingBridge(currentAttachment, requestId);
           socket.serializeAttachment(currentAttachment);
           resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit", ...failureMetadata("request_too_large", "not_started") } });
           return;
@@ -782,43 +812,12 @@ export class RunnerDO {
     return this.persistAdmissionIfCurrent(before, next);
   }
 
-  private async persistAdmissionIfCurrent(expected: AdmissionState, next: AdmissionState): Promise<boolean> {
-    let applied = false;
-    const operation = this.admissionWriteQueue.then(async () => {
-      const current = await this.admission();
-      if (!sameAdmissionState(current, expected)) return;
-      try {
-        // Commit the durable value before publishing an in-memory authorization
-        // state. If storage rejects, publishing `next` first could leave an
-        // unfenced/reconciled state live until the Durable Object restarts.
-        await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
-        this.admissionState = next;
-      } catch (error) {
-        // A failed write has an uncertain outcome. Keep this isolate fenced so
-        // protected RPCs fail closed; restart reconciliation will verify the
-        // Registry identity before reopening admission.
-        this.admissionState = conservativeAdmission(next);
-        throw error;
-      }
-      applied = true;
-    });
-    this.admissionWriteQueue = operation.catch(() => undefined);
-    await operation;
-    return applied;
+  private persistAdmissionIfCurrent(expected: AdmissionState, next: AdmissionState): Promise<boolean> {
+    return this.admissionStore.compareAndSet(expected, next);
   }
 
-  private async admission(): Promise<AdmissionState> {
-    if (this.admissionState !== undefined) return this.admissionState;
-    const stored = await this.ctx.storage.get<AdmissionState>(ADMISSION_STATE_KEY);
-    // Concurrent events may already have initialized (and mutated) admission
-    // while this read was pending. Never replace their fence owner with an
-    // older cold-start snapshot.
-    if (this.admissionState !== undefined) return this.admissionState;
-    const recovered = restoreAdmission(stored);
-    this.admissionState = recovered.state;
-    // Reconstructing an already-conservative fence must not write it again.
-    if (recovered.changed) await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
-    return this.admissionState;
+  private admission(): Promise<AdmissionState> {
+    return this.admissionStore.read();
   }
 
   /**
@@ -915,17 +914,14 @@ export class RunnerDO {
       const recovered = await this.recoverCommittedPrecommit(initial);
       if (recovered) return this.beginPolicyMutation(mutationId, requestedRunnerId);
     }
-    const operation = this.admissionWriteQueue.then(async () => {
+    const operation = this.admissionStore.exclusive(async () => {
       const refreshed = await this.admission();
       if (requestedRunnerId !== undefined && refreshed.runnerId !== null && refreshed.runnerId !== requestedRunnerId) return;
       if (refreshed.fenced && refreshed.mutationId === mutationId) {
         // A failed begin write keeps the local owner fenced, but a retry must
         // confirm that owner survives hibernation before authorizing Registry
         // mutation. Reuse an already persisted fence without another write.
-        const stored = await this.ctx.storage.get(ADMISSION_STATE_KEY);
-        if (!validAdmissionState(stored) || !sameAdmissionState(stored, refreshed)) {
-          await this.ctx.storage.put(ADMISSION_STATE_KEY, refreshed);
-        }
+        await this.admissionStore.ensurePersistedFence(refreshed);
         result = "idempotent"; return;
       }
       // A mutation which has not reached Registry is the only exclusive phase.
@@ -941,11 +937,9 @@ export class RunnerDO {
         preMutationDesiredRevision: capture ? refreshed.desiredRevision : null,
         preMutationDesiredChecksum: capture ? refreshed.desiredChecksum : null,
       };
-      this.admissionState = next;
-      await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+      await this.admissionStore.fenceAndPersist(next);
       result = "started";
     });
-    this.admissionWriteQueue = operation.catch(() => undefined);
     await operation;
     return result;
   }
@@ -1054,7 +1048,7 @@ export class RunnerDO {
    */
   private async finalizeOwnedMutation(mutationId: string, closeReason: string, deleteState = false): Promise<"ok" | "conflict" | "error"> {
     let result: "ok" | "conflict" = "conflict";
-    const operation = this.admissionWriteQueue.then(async () => {
+    const operation = this.admissionStore.exclusive(async () => {
       // `mutationOwnsFence`/the recovery check above have initialized the
       // in-memory state. Read it synchronously here so no event can slip
       // between the ownership check and socket closure before this queued
@@ -1074,8 +1068,7 @@ export class RunnerDO {
       }
       if (closeFailed) throw new Error("RunnerDO socket cleanup failed");
       if (deleteState) {
-        await this.ctx.storage.delete(ADMISSION_STATE_KEY);
-        this.admissionState = { ...FENCED_ADMISSION };
+        await this.admissionStore.deleteAndFence();
       } else {
         const next: AdmissionState = {
           ...current, fenced: true, reconciled: false, mutationId: null, mutationPhase: "restart_reconcile",
@@ -1084,20 +1077,17 @@ export class RunnerDO {
           preMutationActiveRevision: null, preMutationActiveChecksum: null,
           preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
         };
-        await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
-        this.admissionState = next;
+        await this.admissionStore.persist(next);
       }
       result = "ok";
     });
-    this.admissionWriteQueue = operation.catch(() => undefined);
     try {
       await operation;
       return result;
     } catch {
       // A failed storage/transport finalization has an uncertain outcome.
       // Keep the exact owner fenced so no caller can receive a credential.
-      const current = this.admissionState;
-      if (current !== undefined && current.mutationId === mutationId) this.admissionState = conservativeAdmission(current);
+      this.admissionStore.fenceUncertainMutation(mutationId);
       return "error";
     }
   }

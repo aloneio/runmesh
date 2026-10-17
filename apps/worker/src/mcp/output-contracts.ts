@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BOOTSTRAP_MANIFEST_REVISION } from "./bootstrap-constants.js";
 import { BytePageMetadataSchema, BoundFileCursorSchema, BoundLogCursorSchema, ContextStorageReportSchema, ContextPruneReportSchema, RunnerCapabilityReportSchema, ProcessExitCodeSchema } from "@aloneio/runmesh-protocol";
 
 // These schemas describe the already-redacted public boundary, never internal
@@ -106,7 +107,7 @@ export const BootstrapOutputSchema = z.object({
       has_more: z.boolean().optional(),
     }).strict(),
   }).strict(),
-  manifest: z.object({ revision: z.literal(2), sha256: hash, digest_scope: z.literal("static_contract") }).strict(),
+  manifest: z.object({ revision: z.literal(BOOTSTRAP_MANIFEST_REVISION), sha256: hash, digest_scope: z.literal("static_contract") }).strict(),
 }).strict();
 export const RunnerCurrentOutputSchema = z.object({ ...common, active_runner_id: id.nullable().optional(), active_runner_updated_at_ms: count.nullable().optional(), active_runner: runnerContext.nullable().optional() }).strict();
 export const RunnerSelectOutputSchema = RunnerCurrentOutputSchema.extend({ changed: z.boolean().optional() });

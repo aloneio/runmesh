@@ -24,9 +24,9 @@ Runmesh manages these connections and content reads. Continue to the machine-sel
 
 ## Choose a machine and workspace for computer access
 
-1. Call `runner_current` to check your current selection, and `runner_list` to find the intended machine.
-2. If no Runner is selected, use `runner_select` to choose the intended machine explicitly. Switching an existing selection requires `confirm_switch: true`. Confirm the result with `runner_current`.
-3. Call `workspace_list` to see your permitted workspace IDs. Start with `read` or `inspect` before changing files or starting commands.
+1. Call `runner_list` to find the intended machine and copy its opaque `runner_id`. `runner_current` shows the legacy shared selection.
+2. For every machine operation, **pass that `runner_id` explicitly**, starting with `workspace_list`. The pin selects only this request; it never changes the default selection and never falls back to another host.
+3. Use the workspace IDs permitted on that Runner. Start with `read` or `inspect` before changing files or starting commands. Legacy clients may still use `runner_select` and `runner_current`, but should not share their credential across concurrent workflows without per-call pins.
 
 When the instance has exactly one registered Runner, a workspace or machine operation can select it automatically if the client is authorized and has no current selection. A list showing one visible Runner does not imply that it is the instance's only registered Runner. Explicit selection keeps the target clear.
 
@@ -36,10 +36,10 @@ Use your instance's tool catalog and actual IDs with the examples below. A missi
 
 ## Read, inspect and edit
 
-For a workspace called `work`, reading a file uses:
+For a workspace called `work` on a Runner with ID `runner-from-runner-list`, first list its workspaces with `{"runner_id":"runner-from-runner-list"}`; then read:
 
 ```json
-{"workspace_id":"work","path":"README.md"}
+{"runner_id":"runner-from-runner-list","workspace_id":"work","path":"README.md"}
 ```
 
 `inspect` lists files, searches text and inspects Git. Use `git_log` to find a commit, `git_show` with the required `revision` to view it, and `git_blame` with optional line bounds for attribution. `revision` belongs only to `git_show`. After a Worker update, refresh the client catalog if its actions or fields differ from the server.
@@ -53,7 +53,7 @@ Read a file before using `edit` and keep the observed baseline. On a baseline co
 `shell` runs with the Runner service account's operating-system permissions. Use a separate container or VM for untrusted code. Start with a harmless check in an approved workspace:
 
 ```json
-{"workspace_id":"work","command":"echo runmesh-ok","wait_ms":1000}
+{"runner_id":"runner-from-runner-list","workspace_id":"work","command":"echo runmesh-ok","wait_ms":1000}
 ```
 
 Save the returned `job_id` and `workspace_id`. `wait_ms` controls how long this call waits for a result; a command can continue afterward. Follow a `running` or `queued` receipt until the Job reaches a final state, and check `exit_code` when present.

@@ -473,7 +473,7 @@ Generated from `tool-examples.json` and checked locally against the tool input s
 }
 ```
 
-## reject-implicit-runner-override — schema rejects / 应拒绝
+## accept-explicit-runner-pin — schema accepts / 参数有效
 
 ```json
 {
@@ -481,7 +481,7 @@ Generated from `tool-examples.json` and checked locally against the tool input s
   "arguments": {
     "workspace_id": "example-workspace",
     "command": "true",
-    "runner_id": "another-runner"
+    "runner_id": "runner-from-runner-list"
   }
 }
 ```
@@ -496,6 +496,19 @@ Generated from `tool-examples.json` and checked locally against the tool input s
     "path": "example.txt",
     "consistency": "snapshot",
     "cursor": "1"
+  }
+}
+```
+
+## reject-invalid-runner-pin — schema rejects / 应拒绝
+
+```json
+{
+  "name": "shell",
+  "arguments": {
+    "workspace_id": "example-workspace",
+    "command": "true",
+    "runner_id": "../other"
   }
 }
 ```

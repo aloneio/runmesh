@@ -26,17 +26,21 @@ The check reads connection information. Select **Connect** to add the MCP, or **
 
 Runmesh treats an upstream HTTP `401` as an authentication challenge and may ask you to reconnect. An upstream HTTP `403` means the provider accepted the credential but denied MCP access; Runmesh reports a provider permission error instead of starting another OAuth loop. Check the provider's MCP feature availability and the account, group or project permissions in that case.
 
-## Import a server.json entry
+## Import MCP JSON configuration
 
-Expand **Import server.json**, choose the provider's file, then select **Preview connections**. For a ready HTTPS entry, select **Use this connection** to fill the connection form, choose the authentication method and select **Connect**.
+Expand **Import MCP JSON configuration**, choose a JSON file, then select **Preview connections**. Supported formats are MCP Registry `server.json` (including the `server` wrapper) and client `mcpServers`, `servers`, or `mcp.servers` configurations. For a public HTTPS entry, select **Use this connection** to fill the ordinary connection form, choose authentication and select **Connect**.
 
-Entries that need additional configuration show a prompt to check the provider's connection instructions. Package entries show the package details; after hosting one, add its HTTPS endpoint through the same connection form.
+Client `http` and `streamable-http` entries can be previewed as direct remote candidates. Legacy SSE requires separate configuration. Local `stdio` entries (`command` / `args`, including `npx`) are **never executed or installed**; obtain the provider's hosted HTTPS MCP endpoint instead. Custom request headers, private endpoints and URL templates cannot be connected automatically. RunMesh currently supports public MCP connections and managed OAuth, not arbitrary API-key headers.
+
+The browser strips command arguments, environment values, request-header values and secrets **before sending the preview request**. The Worker returns only projected connection metadata and computes the preview digest over that redacted projection. URLs containing credentials or query strings are excluded from client previews. Preview never stores or enables connections or publishes tools. Registry packages remain informational.
 
 ## Use and refresh tools
 
 Select **View tools** on the MCP card to see tool names and descriptions. Enabled tools are shared with the instance's active AI clients. To connect a client, follow the [user guide](user-guide.md).
 
-When the provider changes its tools, select **Refresh tools**. Once the full list loads, it becomes available to all clients. If refresh fails, the saved catalog is retained; follow the panel's message to restore the connection and refresh again.
+When the provider changes its tools, select **Refresh tools**. RunMesh automatically publishes the complete compatible tool set, including new or changed definitions, without a separate approval step. Existing pending or partially approved catalogs are brought up to date by the same refresh. An identical, fully published catalog does not create a new version. If refresh fails, the saved catalog is retained.
+
+If a catalog revision changes during discovery, RunMesh verifies the latest fully published catalog and re-reads upstream `tools/list` at most once. Successful recovery returns `recovered_from_revision` in the discovery receipt. If the newer catalog is disabled, pending or partially approved, connection authorization has changed, or another conflict occurs, recovery stops and reports the conflict. Re-open the tool list before trying again. This never retries `remote_call` or any provider action.
 
 Runmesh exposes direct tools for smaller collections and directory tools for browsing larger collections. An AI client can use `remote_profiles` to find MCPs, `remote_search` to search by keywords, `remote_tools` to read complete tool definitions, and `remote_call` to invoke a tool with its returned ID and version. Search matches tool names, titles, descriptions and connection names; add `profile_id` to search one MCP. Refresh the client's catalog after adding or changing a connection.
 
@@ -63,7 +67,6 @@ For errors, see [troubleshooting](troubleshooting.md). Protocol and deployment d
 
 ## Partial tool compatibility
 
-A refresh can publish supported tools while listing exclusions for unsupported
-schemas or required interactive features. The exclusion warning is not an OAuth
-failure. If all tools are unsupported, the existing catalog is preserved. See
+Both initial discovery and later refreshes automatically publish supported tools while listing exclusions for unsupported
+schemas or required interactive features. The exclusion warning is not an OAuth failure. If all tools are unsupported, the existing catalog is preserved. See
 [the compatibility matrix](mcp-compatibility.md) before changing credentials.

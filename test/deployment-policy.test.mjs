@@ -86,6 +86,33 @@ test("central activation uses independent namespaces while credentials remain en
   assert.ok(config.compatibility_flags.includes("global_fetch_strictly_public"));
 });
 
+test("routine cleanup uses hourly cadence and persisted logs avoid raw invocations", async () => {
+  const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
+  for (const production of [config, config.env.production]) assert.deepEqual(production.triggers.crons, ["0 * * * *"]);
+  assert.deepEqual(config.env.development.triggers.crons, []);
+  for (const environment of [config.env.production, config.env.development]) {
+    assert.equal(environment.observability.redact_query_string, true,
+      "query string redaction is an observability-level setting, not a logs child");
+    const logs = environment.observability.logs;
+    assert.equal(Object.hasOwn(logs, "redact_query_string"), false,
+      "unknown Wrangler log options silently disable intended privacy controls");
+    assert.equal(logs.enabled, true);
+    assert.equal(logs.persist, true);
+    assert.equal(logs.invocation_logs, false, "no unredacted URL-path credentials in persisted invocation events");
+    assert.ok(logs.head_sampling_rate > 0 && logs.head_sampling_rate <= 0.1);
+  }
+});
+
+test("GitLab reuses the lockfile-scoped Playwright browser cache without relaxing verification", async () => {
+  const content = await readFile(new URL("../.gitlab-ci.yml", import.meta.url), "utf8");
+  const { parseCi } = await import("../scripts/ci-policy.mjs");
+  const ci = parseCi(content);
+  assert.equal(ci.variables.PLAYWRIGHT_BROWSERS_PATH, "$CI_PROJECT_DIR/.cache/ms-playwright");
+  assert.ok(ci.cache.paths.includes(".cache/ms-playwright/"));
+  assert.deepEqual(ci.cache.key.files, ["package-lock.json"]);
+  assert.equal(ci.browser.script.at(-1), "npm run test:browser");
+});
+
 test("deployment targets, configured environments and provider overrides must agree", async () => {
   const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
   for (const [environment, branch, worker] of [["development", "dev", "runmeshdev"], ["production", "main", "runmesh"]]) {

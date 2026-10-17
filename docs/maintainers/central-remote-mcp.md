@@ -103,17 +103,24 @@ other service declarations. A sign-in requirement returns
 catalogs unchanged; connection and tool refresh remain separate actions.
 
 POST `/admin/central/registry-preview` accepts `{entry}` containing one
-`server.json` object or a Registry wrapper with a `server` field. The same
+`server.json` object, a Registry wrapper with a `server` field, or an MCP
+client configuration with `mcpServers`, `servers`, or `mcp.servers`. The same
 administrator/CSRF boundary applies. The request is bounded to 256 KiB, with
-at most 16 remotes, 16 packages and 32 header names per remote. The transient
+at most 16 Registry remotes, 16 packages or 32 client entries, and 32 header names per remote. The transient
 response includes name, version, description, schema URL, digest and observation
-time, plus projected remote and package entries.
+time, plus projected remote and package entries. Client previews also include
+`format: "client_config"`, candidate names and bounded `skipped` metadata
+with fixed reasons. The digest hashes the redacted preview, not source secrets.
 
 Public Streamable HTTP URLs with complete paths and no header or variable
 configuration become connection-form candidates. URL placeholders, including
 encoded braces, and configured headers or variables mark an entry for provider
 setup. Preview exposes header names and package identifiers while discarding
-header values, variable values and launch arguments. **Use this connection**
+header values, variable values and launch arguments. Client HTTP type is
+normalized to Streamable HTTP, SSE is configuration-only, and local stdio
+commands are never executed. The browser independently removes secret-bearing
+fields before POST; no command, argument, token or header value is sent to
+the Worker. **Use this connection**
 fills the ordinary form; the administrator chooses authentication and selects
 **Connect**. Import processes the selected file once and stores no directory
 snapshot or connection changes.
@@ -127,19 +134,34 @@ Create and enable a profile using the existing protected administration API.
 Read `GET /admin/central/catalogs/{profile_id}` and pass its `head.revision` as
 `expected_revision` to `POST /admin/central/discovery/{profile_id}`. Use
 `{"expected_revision":0}` only when the catalog read returns `{"state":"empty"}`.
-Requests use the administrator's existing session, same origin and matching CSRF token. The
-complete bounded tools/list result is stored and published atomically in one
-catalog revision. Every accepted tool is immediately available to authenticated
-clients; the connection requires no additional review or approval in the
-[control panel](central-administration.md). Client credentials remain required;
-publication grants no Runner permissions.
+Requests use the administrator's existing session, same origin and matching CSRF token.
+Both initial discovery and subsequent refreshes atomically publish the complete
+compatible tools/list snapshot without administrator approval. Previously staged,
+disabled, or partially approved catalogs are replaced by the complete live
+publication on refresh. A fully published unchanged observation returns
+`unchanged` without a storage write or revision bump. Client credentials
+remain required; publication grants no Runner permissions.
 
 The discovery endpoint permits no caller URL, token, HTTP headers or command.
 Partial pages, duplicate tools, timeouts and failed upstream
-observations leave the previously reviewed catalog intact. An actual change in
+observations leave the previously published catalog intact. An actual change in
 the selected tool's description/schema/annotations blocks invocation until the
-catalog is refreshed, which publishes all current tools. The call does not publish changes
-or create a new catalog revision for every request.
+catalog is refreshed and the changed definition is automatically published.
+Calls never publish changes or replay a rejected invocation; a fully published
+unchanged refresh does not create a new revision.
+
+Discovery handles confirmed catalog revision conflicts within the existing
+20-second operation budget. A changed revision can be rebased at most once,
+only after verifying the latest fully published head, approved tool set,
+snapshot digest, enabled profile and unchanged profile identity. A retry uses
+a fresh upstream session and reads `tools/list` again; it never writes
+stale observations against a new revision. The underlying compare-and-swap
+catalog transaction remains authoritative. A confirmed CAS conflict can be
+retried; an unknown publication cannot. Disabled, staged, partly approved or
+invalid catalogs, authorization changes and a second conflict remain failures.
+Successful recovery includes `recovered_from_revision` in the response
+so the HTTP boundary can distinguish the newer head from an unconfirmed
+revision jump. No `remote_call` is automatically replayed.
 
 ### Hosted MCP catalog compatibility
 

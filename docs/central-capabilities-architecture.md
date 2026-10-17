@@ -61,7 +61,7 @@ Catalog cursors are version 2, MAC authenticated and bound to client identity, c
 | Skills | 1,000 heads; skill_list scans up to 128 heads per page |
 | Skill continuation | after / next_after; disabled heads may produce an empty page with a continuation |
 | Skill resources/list | Walks bounded pages, rejects duplicate/non-progressing results and never returns a partial success |
-| Skill bundle | 256 text files, 1 MiB per file, 8 MiB per canonical bundle, 256 MiB stored total, 32 stored versions per Skill |
+| Skill bundle | 256 text files, 4 MiB per file, 16 MiB per canonical bundle, 256 MiB stored total, 32 stored versions per Skill |
 | GitHub Skill import | 32 text files at one full commit SHA; preview and installation use the same commit and bundle digest |
 | Skill cleanup | Explicit preview and confirmation bound to the administrator session, exact versions and head revision; five-minute expiry |
 

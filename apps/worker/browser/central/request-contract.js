@@ -43,7 +43,7 @@ export function centralRequestContract(path, body, missing = false) {
   else if (path === 'connections/revoke') states = ['revoked'];
   const optionalCatalog = missing && body === undefined && path.startsWith('catalogs/');
   if (optionalCatalog) states.push('empty');
-  if (body && path.startsWith('discovery/')) states.push('authorization_required');
+  if (body && path.startsWith('discovery/')) states.push('authorization_required', 'unchanged');
   return { path, body, scope: centralRequestScope(path, body), mutation, states, collection, lifecycle, sourceAction, inspection, registry,
     profileWrite, authorizationStart, skillInstallation, serviceInput, skillInput, optionalCatalog };
 }

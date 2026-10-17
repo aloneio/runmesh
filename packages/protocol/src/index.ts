@@ -440,3 +440,5 @@ export type { ReleaseValidationTarget } from "./release-manifest.js";
 export { verifyRunnerReleaseSignature, RUNNER_RELEASE_TRUST } from "./release-signature.js";
 export type { ReleaseTrust } from "./release-signature.js";
 export * from "./runner-update.js";
+
+export * from "./launch.js";

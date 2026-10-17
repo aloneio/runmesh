@@ -1,6 +1,6 @@
 
 
-export type RegistryFeatureKey = "job_recording" | "mcp_audit" | "mcp_usage_tracking" | "auth_throttle" | "maintenance_alarm";
+export type RegistryFeatureKey = "job_recording" | "mcp_audit" | "mcp_usage_tracking" | "auth_throttle" | "maintenance_alarm" | "runner_updates";
 
 export interface RegistryFeatureHealth {
   readonly feature: RegistryFeatureKey;

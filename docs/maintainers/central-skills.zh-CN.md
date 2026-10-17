@@ -47,14 +47,14 @@ SKILL.md 的 name、description 元数据必须为字符串。YAML core 解析�
 更新后验证历史版本时，沿用其原始元数据和摘要。
 
 安装内容为 UTF-8 文本集合，文件对象只含 path、text。相对路径检查涵盖路径穿越、
-空段、Windows 保留名及数据流、反斜杠和大小写冲突。上限为 256 文件、单文件 1 MiB、
-规范化 bundle 8 MiB、管理上传请求 12 MiB、每 Skill 32 版本、1,000 个 Skill 和
+空段、Windows 保留名及数据流、反斜杠和大小写冲突。上限为 256 文件、单文件 4 MiB、
+规范化 bundle 16 MiB、管理上传请求 24 MiB、每 Skill 32 版本、1,000 个 Skill 和
 256 MiB 已存储 bundle。清理通过下述显式生命周期操作完成；再次安装已有摘要时，
 沿用内容行和创建时间。
 
 文件大小按 UTF-8 字节计算，容量统计 bundle 的逻辑字节数，包含 JSON 编码和元数据。
 Cloudflare 物理存储及计费用量另行统计。浏览器从服务端合同获取上传限制。文件内容
-分行存储，保持在 SQLite 单行大小上限内。Schema 2 内容的摘要、修订号和发布状态
+分行存储，超过 1 MiB 的正文拆分为最长 512 KiB 的 UTF-8 安全片段写入附属表，避免触及 SQLite 单行 2 MB 限制；旧文件的存储形式不变。Schema 2 内容的摘要、修订号和发布状态
 保持原值，生命周期元数据由新存储适配器管理的附属表保存。
 
 ## 固定 GitHub 来源
@@ -63,8 +63,16 @@ POST `/admin/central/skill-source/preview` 接受
 `{source:{repository,commit,path},expected_revision:0}`。repository 为公开的
 `https://github.com/owner/repo` 地址，commit 为完整的 40 位小写提交 SHA，path 为
 Skill 目录，仓库根目录使用空字符串。平台读取器验证固定提交，每次读取最多 32 个
-文本文件。所选文件夹路径最多八段，每份树响应最多 2,048 个条目和 512 KiB 元数据，
-操作期限为 25 秒，同时遵守常规文件与 bundle 上限。符号链接和子模块会被拒绝。
+文本文件。所选文件夹路径最多八段。来源适配器优先从固定提交的 codeload tar.gz
+获取单次归档快照，归档压缩大小最多 8 MiB、解压后最多 32 MiB，最多扫描
+4,096 个 tar 条目，单次归档请求期限 9 秒。仅提取所选目录内的文本文件，
+校验 tar 校验和、文件路径、数量及 UTF-8，其他目录的二进制文件或符号链接不会被安装。
+归档不可用或体积超过预算时，独立的 Git 树读取器作为兼容回退：每份树响应最多
+2,048 个条目及 512 KiB 元数据，同时最多并发四个文件下载，失败时取消其余请求。
+归档不得绕过所选目录的符号链接、子模块或容量检查；预览和安装继续校验同一固定提交摘要。
+两种下载器都不使用 Cloudflare Workers 尚未实现的 `cache` 请求参数；
+`redirect: "manual"` 配合显式非 200 拒绝替代不支持的 `redirect: "error"`，不会跟随跳转。
+整体操作期限为 45 秒，GitHub 限流明确报告。
 
 预览返回 `{state:"previewed",source,bundle}`，此时尚未写入内容。
 POST `/admin/central/skill-source/install` 接受同一来源、预览得到的 digest 和当前

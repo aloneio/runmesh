@@ -122,11 +122,13 @@ describe("complete local job drain", () => {
 });
 
 async function installation() {
-  const root = await temporary(); await mkdir(join(root, "versions"));
+  // Installation fixtures must satisfy production permission fences even
+  // when the invoking shell uses a group-writable umask.
+  const root = await temporary(); await mkdir(join(root, "versions"), { mode: 0o755 });
   const release = async (version: string, name: string) => {
     const directory = join(root, "versions", name);
     const packagePath = process.platform === "win32" ? join(directory, "node_modules", "@aloneio", "runmesh-runner") : join(directory, "lib", "node_modules", "@aloneio", "runmesh-runner");
-    await mkdir(packagePath, { recursive: true }); await writeFile(join(packagePath, "package.json"), JSON.stringify({ name: "@aloneio/runmesh-runner", version }));
+    await mkdir(packagePath, { recursive: true, mode: 0o755 }); await writeFile(join(packagePath, "package.json"), JSON.stringify({ name: "@aloneio/runmesh-runner", version }), { mode: 0o644 });
     return { version, directory };
   };
   const previous = await release("0.1.7", "0.1.7"); const next = await release("0.1.6", "0.1.6-upgrade_1-random");

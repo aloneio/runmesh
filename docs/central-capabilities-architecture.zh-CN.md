@@ -61,7 +61,7 @@ CapabilitiesDOv1 拥有中央状态。CentralSchema 只初始化命名空间标�
 | Skill | 最多 1,000 个 head；skill_list 每页扫描最多 128 个 head |
 | Skill 续页 | after / next_after；禁用项可能形成带续页指针的空页 |
 | Skill resources/list | 有界遍历，拒绝重复或不前进的结果，不返回部分成功 |
-| Skill 内容包 | 最多 256 个文本文件，每文件 1 MiB，规范化包 8 MiB，总存储 256 MiB，每 Skill 保留最多 32 个版本 |
+| Skill 内容包 | 最多 256 个文本文件，每文件 4 MiB，规范化包 16 MiB，总存储 256 MiB，每 Skill 保留最多 32 个版本 |
 | GitHub Skill 导入 | 完整提交 SHA 下最多 32 个文本文件；预览和安装绑定同一提交与内容摘要 |
 | Skill 清理 | 显式预览并确认，绑定管理员会话、确切版本集合及 head revision；5 分钟有效 |
 

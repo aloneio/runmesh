@@ -141,8 +141,10 @@ it.each(["docs", "docs:reference"])("W05 admin discovery immediately enables cli
     const count = f.methods.length;
     const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: id } });
     expect(JSON.parse(page.result.content[0].text).tools[0].tool_id).toBe(command.tool_id);
+    expect(page.result.structuredContent.tools[0].tool_id).toBe(command.tool_id);
     const search = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_search", arguments: { query: "lookup" } });
     expect(search.result.isError).not.toBe(true);
+    expect(search.result.structuredContent.tools[0].tool_id).toBe(command.tool_id);
     expect(JSON.parse(search.result.content[0].text)).toMatchObject({ state: "listed", tools: [{ profile_id: id, tool_id: command.tool_id, version: command.version, name: "lookup" }] });
     expect(f.methods).toHaveLength(count);
     const response = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_call", arguments: command });
@@ -171,19 +173,56 @@ it("W05 shared clients discover publications without grants and invalid argument
   } finally { f.network.mockRestore(); }
 });
 
-it("W05 live description changes require a refresh which immediately publishes the new definition", async () => {
+it("W05 changed provider tools auto-publish on refresh without an approval step", async () => {
   const f = await fixture();
   try {
-    expect((await f.discover()).status).toBe(200); const command = await f.toolCommand(); f.drift();
-    expect(await f.port.callRemote(f.current.principal, command)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
+    expect((await f.discover()).status).toBe(200);
+    const old = await f.toolCommand(); f.drift();
+    expect(await f.port.callRemote(f.current.principal, old)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
     expect(f.execute).not.toHaveBeenCalled();
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 1 } });
-    expect((await f.discover(f.admin.headers, 1)).status).toBe(200);
+    const refreshed = await f.discover(f.admin.headers, 1);
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.json()).toMatchObject({ state: "written", head: { revision: 2, approved_names: ["lookup"] } });
+    const published = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
+    expect(published.state).toBe("found");
+    if (published.state !== "found") throw new Error("missing published catalog");
+    expect(published.head.observed_digest).toBe(published.head.approved_digest);
+    expect(published.changes).toEqual([{ name: "lookup", state: "unchanged" }]);
     const updated = await f.toolCommand();
-    expect(updated.version).not.toBe(command.version);
+    expect(updated.version).not.toBe(old.version);
+    expect(await f.port.callRemote(f.current.principal, old)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
     expect(await f.port.callRemote(f.current.principal, updated)).toMatchObject({ state: "completed" });
     expect(f.execute).toHaveBeenCalledOnce();
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 2, approved_names: ["lookup"] } });
+  } finally { f.network.mockRestore(); }
+});
+
+it("W05 refresh automatically restores an old partially approved catalog", async () => {
+  const f = await fixture();
+  try {
+    expect((await f.discover()).status).toBe(200);
+    const initial = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
+    if (initial.state !== "found") throw new Error("missing initial catalog");
+    const partial = await f.call(owner => owner.mutateCatalog(f.admin.hash, {
+      action: "approve", profile_id: "docs", expected_revision: 1, digest: initial.snapshot.digest, tool_names: [],
+    }));
+    expect(partial).toMatchObject({ state: "written", head: { revision: 2, approved_names: [] } });
+    const refreshed = await f.discover(f.admin.headers, 2);
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.json()).toMatchObject({ state: "written", head: { revision: 3, approved_names: ["lookup"] } });
+    expect(await f.port.callRemote(f.current.principal, await f.toolCommand())).toMatchObject({ state: "completed" });
+    expect(f.execute).toHaveBeenCalledOnce();
+  } finally { f.network.mockRestore(); }
+});
+
+it("W05 an identical upstream refresh does not write or invalidate the approved catalog", async () => {
+  const f = await fixture();
+  try {
+    expect((await f.discover()).status).toBe(200);
+    const same = await f.discover(f.admin.headers, 1);
+    expect(same.status).toBe(200);
+    expect(await same.json()).toMatchObject({ state: "unchanged", head: { revision: 1, approved_names: ["lookup"] } });
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 1 } });
+    expect(await f.port.callRemote(f.current.principal, await f.toolCommand())).toMatchObject({ state: "completed" });
   } finally { f.network.mockRestore(); }
 });
 
@@ -327,5 +366,61 @@ it("MCP-PORTABILITY publishes supported tools with exclusion receipts and preser
     expect(await rejected.json()).toMatchObject({ error: { code: "remote_schema_unsupported", operation_state: "not_started" } });
     expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toEqual(before);
     expect(f.execute).not.toHaveBeenCalled();
+  } finally { f.network.mockRestore(); }
+});
+
+it("W05 an obsolete discovery revision auto-rebases a fully published catalog without another write", async () => {
+  const f = await fixture();
+  try {
+    expect((await f.discover()).status).toBe(200);
+    const before = f.methods.length;
+    const response = await f.discover(f.admin.headers, 0);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ state: "unchanged", recovered_from_revision: 0,
+      head: { revision: 1, approved_names: ["lookup"] } });
+    expect(f.methods.slice(before).filter(method => method === "tools/list")).toHaveLength(1);
+    expect(f.methods).not.toContain("tools/call");
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 1 } });
+  } finally { f.network.mockRestore(); }
+});
+
+it("W05 a stale discovery request re-reads changed tools before publishing an updated catalog", async () => {
+  const f = await fixture();
+  try {
+    expect((await f.discover()).status).toBe(200);
+    const old = await f.toolCommand();
+    f.drift();
+    const response = await f.discover(f.admin.headers, 0);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ state: "written", recovered_from_revision: 0,
+      head: { revision: 2, approved_names: ["lookup"] } });
+    expect(await f.port.callRemote(f.current.principal, old)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
+    expect(f.execute).not.toHaveBeenCalled();
+    expect(await f.port.callRemote(f.current.principal, await f.toolCommand())).toMatchObject({ state: "completed" });
+    expect(f.execute).toHaveBeenCalledOnce();
+  } finally { f.network.mockRestore(); }
+});
+
+it("W05 revision recovery never overrides disabled or partly approved catalogs", async () => {
+  const f = await fixture();
+  try {
+    expect((await f.discover()).status).toBe(200);
+    const first = await f.call(owner => owner.getCatalog(f.admin.hash, "docs"));
+    if (first.state !== "found") throw new Error("fixture missing catalog");
+    const partial = await f.call(owner => owner.mutateCatalog(f.admin.hash, {
+      action: "approve", profile_id: "docs", expected_revision: 1, digest: first.snapshot.digest, tool_names: [],
+    }));
+    expect(partial).toMatchObject({ state: "written", head: { revision: 2, approved_names: [] } });
+    const before = f.methods.length;
+    const refused = await f.discover(f.admin.headers, 1);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: { code: "central_revision_conflict", current_revision: 2, operation_state: "not_started" } });
+    expect(f.methods).toHaveLength(before);
+    const disabled = await f.call(owner => owner.mutateCatalog(f.admin.hash, { action: "disable", profile_id: "docs", expected_revision: 2 }));
+    expect(disabled).toMatchObject({ state: "written", head: { revision: 3, approved_digest: null } });
+    const noOverride = await f.discover(f.admin.headers, 2);
+    expect(noOverride.status).toBe(409);
+    expect(await noOverride.json()).toMatchObject({ error: { current_revision: 3, operation_state: "not_started" } });
+    expect(f.methods).toHaveLength(before);
   } finally { f.network.mockRestore(); }
 });

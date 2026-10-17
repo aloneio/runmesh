@@ -1,6 +1,8 @@
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { MAX_MAINTENANCE_JOB_RECORDS } from "./maintenance-contract.js";
+import { DEFAULT_MAX_CONCURRENT_JOBS, DEFAULT_MAX_QUEUED_JOBS, MAX_CONCURRENT_JOBS } from "./scheduler-limits.js";
+export { DEFAULT_MAX_CONCURRENT_JOBS } from "./scheduler-limits.js";
 
 export interface PermissionSet {
   readonly read: boolean;
@@ -25,7 +27,7 @@ export interface RunnerConfig {
   readonly token: string;
   readonly runnerId: string;
   readonly workspaces: readonly WorkspaceConfig[];
-  /** Local supervisor concurrency; omitted values use the conservative product default. */
+  /** Local supervisor concurrency; omitted values use half the supported limit. */
   readonly maxConcurrentJobs?: number;
   readonly maxRetainedJobs?: number;
   readonly maxLogBytesPerJob?: number;
@@ -67,8 +69,9 @@ const MAX_SERVER_URL_LENGTH = 2_048;
 const MAX_TOKEN_LENGTH = 4_096;
 const MAX_DISCONNECT_AFTER_MS = 24 * 60 * 60 * 1_000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
-export const DEFAULT_MAX_CONCURRENT_JOBS = 2;
-const DEFAULT_MAX_RETAINED_JOBS = 100;
+// Retain enough metadata for all 32 running and 500 waiting Jobs, plus 100 completed Jobs.
+// Keep the default derived from scheduler capacity to avoid an invisible lower admission limit.
+const DEFAULT_MAX_RETAINED_JOBS = DEFAULT_MAX_CONCURRENT_JOBS + DEFAULT_MAX_QUEUED_JOBS + 100;
 const DEFAULT_MAX_LOG_BYTES_PER_JOB = 4 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_LOG_BYTES = 32 * 1024 * 1024;
 const MAX_CONFIGURED_LOG_BYTES = 512 * 1024 * 1024;
@@ -123,8 +126,8 @@ export async function validateRunnerConfig(options: RawRunnerOptions): Promise<R
   if (token === undefined || token.length < 16 || token.length > MAX_TOKEN_LENGTH || /[\s]/.test(token) || CONTROL_CHARACTER_PATTERN.test(token)) throw new Error(`--token must be 16-${MAX_TOKEN_LENGTH} non-whitespace characters without control characters`);
   if (runnerId === undefined || !SAFE_ID.test(runnerId)) throw new Error("--runner-id must be a safe protocol identifier");
   if (options.insecureLocal !== undefined && typeof options.insecureLocal !== "boolean") throw new Error("insecureLocal must be a boolean");
-  if (options.maxConcurrentJobs !== undefined && (!Number.isSafeInteger(options.maxConcurrentJobs) || options.maxConcurrentJobs < 1 || options.maxConcurrentJobs > 64)) {
-    throw new Error("--max-concurrent-jobs must be an integer from 1 to 64");
+  if (options.maxConcurrentJobs !== undefined && (!Number.isSafeInteger(options.maxConcurrentJobs) || options.maxConcurrentJobs < 1 || options.maxConcurrentJobs > MAX_CONCURRENT_JOBS)) {
+    throw new Error(`--max-concurrent-jobs must be an integer from 1 to ${MAX_CONCURRENT_JOBS}`);
   }
   effectiveJobStorageLimits(options);
   if (options.disconnectAfterMs !== undefined && (!Number.isSafeInteger(options.disconnectAfterMs) || options.disconnectAfterMs < 1 || options.disconnectAfterMs > MAX_DISCONNECT_AFTER_MS)) {

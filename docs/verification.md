@@ -31,7 +31,7 @@ Exercise domain rules through public APIs and keep adapter integration in its de
 
 ## Read CI results
 
-GitLab is the authoritative deployment source. Direct `dev` pushes run the lightweight blocking privacy policy; same-project merge requests, `main` pushes, manual pipelines and scheduled pipelines run the complete GitLab verification and browser suites. To execute the full suite against `dev`, choose that branch under **New pipeline**. Independent GitHub checks remain available for its separate release workflow; they do not update GitLab deployment branches.
+GitLab is the authoritative deployment source. Direct `dev` pushes run the blocking privacy policy and the complete `verify` and `browser` suites. Same-project merge requests, `main` pushes, manual pipelines and scheduled pipelines run the same complete gates. A privacy-only `dev` pipeline is no longer sufficient to promote source to `main`. Independent GitHub release checks do not update GitLab deployment branches.
 
 | Job | Main checks |
 | --- | --- |

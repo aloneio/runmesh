@@ -100,6 +100,7 @@ it("source HTTP distinguishes busy, capacity, conflict and unknown outcomes with
   for (const [result, status, code, operationState] of [
     [{ state: "busy" }, 429, "skill_source_busy", "not_started"],
     [{ state: "source_capacity" }, 429, "skill_source_capacity", "not_started"],
+    [{ state: "rate_limited" }, 429, "skill_source_rate_limited", "not_started"],
     [{ state: "capacity" }, 429, "skill_capacity", "not_started"],
     [{ state: "changed" }, 409, "skill_source_changed", "not_started"],
     [{ state: "unknown" }, 503, "central_result_unconfirmed", "unknown"],
@@ -111,7 +112,7 @@ it("source HTTP distinguishes busy, capacity, conflict and unknown outcomes with
   f.skillSource.mockResolvedValueOnce({ state: "conflict", current_revision: 3, secret: "synthetic-private-value" });
   const conflict = await f.request("install", request); expect(conflict.status).toBe(409);
   expect(await conflict.json()).toEqual({ state: "conflict", current_revision: 3 });
-  expect(f.skillSource).toHaveBeenCalledTimes(6);
+  expect(f.skillSource).toHaveBeenCalledTimes(7);
 });
 
 it.each(["source", "folder"])("malformed %s installation error states retain an unknown result", async kind => {
@@ -157,7 +158,10 @@ it("source HTTP previews then installs through the real owner without publishing
     const installed = await f.request("install", { source, expected_revision: 0, digest: observed.bundle.digest }); expect(installed.status).toBe(200);
     expect(await installed.json()).toMatchObject({ state: "written", head: { skill_id: "imported", revision: 1, active_digest: observed.bundle.digest, enabled: true } });
     expect(await real.invoke(instance => instance.listSkillLibrary(f.hash))).toMatchObject({ state: "listed", skills: [{ head: { skill_id: "imported" } }] });
-    expect(network).toHaveBeenCalledTimes(6);
+    // The archive endpoint is unavailable in this legacy-source fixture;
+    // both preview and install must independently fall back to Git trees.
+    expect(network).toHaveBeenCalledTimes(8);
+    expect(network.mock.calls.filter(([url]) => String(url).startsWith("https://codeload.github.com/"))).toHaveLength(2);
   } finally { network.mockRestore(); }
 });
 
@@ -264,4 +268,24 @@ it("registry HTTP keeps encoded placeholders and declared variables configuratio
   expect(result.remotes[4]!.headers).toEqual(["Authorization"]);
   expect(result.digest).toMatch(/^[a-f0-9]{64}$/u); expect(result.observed_at_ms).toBeGreaterThan(0);
   expect(f.get).not.toHaveBeenCalled(); expect(f.port.mutateProfile).not.toHaveBeenCalled(); expect(f.port.mutateCatalog).not.toHaveBeenCalled();
+});
+
+it("client MCP imports are read-only, redact private keys and do not fingerprint credential changes", async () => {
+  const f = await fixture();
+  const makeInput = (secret: string) => ({ mcpServers: {
+    context7: { command: "npx", args: ["-y", "@upstash/context7-mcp", "--api-key", secret] },
+    documents: { type: "http", url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer " + secret } }
+  } });
+  const first = await f.central("registry-preview", { entry: makeInput("synthetic-key-first") });
+  const second = await f.central("registry-preview", { entry: makeInput("synthetic-key-second") });
+  expect(first.status).toBe(200); expect(second.status).toBe(200);
+  const firstText = await first.text(), secondText = await second.text();
+  expect(firstText).not.toMatch(/synthetic-key-|@upstash|npx|--api-key|Bearer /u);
+  expect(secondText).not.toMatch(/synthetic-key-|@upstash|npx|--api-key|Bearer /u);
+  const preview = JSON.parse(firstText);
+  expect(preview).toMatchObject({ state: "previewed", format: "client_config",
+    skipped: [{ name: "context7", reason: "stdio" }],
+    remotes: [{ name: "documents", endpoint: "https://mcp.example.com/mcp", mode: "configure", headers: ["Authorization"] }] });
+  expect(preview.digest).toEqual(JSON.parse(secondText).digest);
+  for (const mutation of [f.port.mutateProfile, f.port.mutateCatalog, f.port.connectionOAuth]) expect(mutation).not.toHaveBeenCalled();
 });

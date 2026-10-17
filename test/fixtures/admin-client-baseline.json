@@ -2,11 +2,11 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "a3175c6da05dabcfda7d8afc444fb7dd1cbe677a7434987c22c3b4da7e8087ab"
+      "sha256": "578b9b5fa8e8a1f3fcca357e976bddc27113c8dedb46310e8f3e9ba15ab60cd3"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "e5d701080e736ba1d098e68c3ac1fb420ff300731c25e289137afb769ab16d08"
+      "sha256": "fec3e69752edd6872766a215ead5703fb3fdb378ce0fc831c6a6968fa9e1da9d"
     }
   ]
 }

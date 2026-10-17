@@ -49,3 +49,7 @@ The Registry validates transport identity and current preferences even for an em
 | Binary downgrade | Older code may ignore or drop the capture marker; verify behavior using a backup before relying on source filtering |
 
 Deploy a compatible Worker, install a verified Runner release containing the feature, then check the negotiated behavior. Worker deployment and Runner installation are separate upgrade steps.
+
+## Data and credential recovery
+
+Use the [data recovery guide](data-recovery.md) for damaged-history isolation, guarded single-snapshot repair, identity-bound credential restoration and same-commit acceptance.
