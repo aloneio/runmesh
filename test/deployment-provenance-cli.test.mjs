@@ -78,11 +78,12 @@ async function fixture(t, state = { version: "0.1.3", state: "released", release
     [base + "/jobs/2/artifacts/ci-results/installed_transport.json", artifact("installed_transport")],
     [base + "/jobs/3/artifacts/ci-results/browser.json", artifact("browser")],
   ]);
+  const sourceChangePath = join(root, "apps/worker/browser/admin-client.js");
   const fakeGlabSource = `const responses = ${JSON.stringify(responses)};
 const rawPath = process.argv[3] ?? "";
 const path = rawPath.replace(/^"(.*)"$/u, "$1");
 if (process.env.RUNMESH_TEST_CHANGE_SOURCE === "1" && path.endsWith("/ci-results/browser.json")) {
-  require("node:fs").writeFileSync("apps/worker/browser/admin-client.js", "source changed after approval");
+  require("node:fs").writeFileSync(${JSON.stringify(sourceChangePath)}, "source changed after approval");
 }
 if (${JSON.stringify(approved)} && Object.prototype.hasOwnProperty.call(responses, path)) {
   process.stdout.write(JSON.stringify(responses[path]) + "\\n");
