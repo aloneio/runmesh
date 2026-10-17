@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { validateCommit, selectPrivacyRevision } from "../scripts/check-git-privacy.mjs";
+import { isGitHubMergeCommit, validateCommit, selectPrivacyRevision } from "../scripts/check-git-privacy.mjs";
 
 const knownGood = { name: "aloneio", email: "git@aloneio.aleeas.com", committerName: "aloneio",
   committerEmail: "git@aloneio.aleeas.com", message: "fix(security): reject unsafe commit metadata" };
@@ -16,6 +16,12 @@ test("commit validation enforces exact identity, ASCII messages and no assistant
   assert.deepEqual(validateCommit({ ...knownGood, message: "fix: Codex output" }), ["assistant_attribution"]);
   assert.deepEqual(validateCommit({ ...knownGood, message: "fix: issue\n\nCo-authored-by: Other <other@example.invalid>" }), ["attribution_trailer"]);
   assert.deepEqual(validateCommit({ ...knownGood, message: "" }), ["message_format"]);
+  const githubMerge = { ...knownGood, email: "aloneio@hotmail.com", committerName: "GitHub",
+    committerEmail: "noreply@github.com", parentCount: 2, message: "Merge verified runmesh fixes" };
+  assert.equal(isGitHubMergeCommit(githubMerge), true);
+  assert.deepEqual(validateCommit(githubMerge), []);
+  assert.equal(isGitHubMergeCommit({ ...githubMerge, parentCount: 1 }), false);
+  assert.deepEqual(validateCommit({ ...githubMerge, parentCount: 1 }), ["author", "committer"]);
 });
 test("CI ranges only accept an observed ancestor; otherwise scan complete reachable history", () => {
   const old = "a".repeat(40);
