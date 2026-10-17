@@ -109,12 +109,16 @@ export class RunnerAdmissionStore {
         await this.storage.put(QUEUE_GRANT_NONCES_KEY, entries);
         return false;
       }
-      entries[nonce] = expiresAtMs;
-      const keys = Object.keys(entries);
-      if (keys.length > MAX_QUEUE_GRANT_NONCES) {
-        keys.sort((left, right) => (entries[left] ?? 0) - (entries[right] ?? 0));
-        for (const key of keys.slice(0, keys.length - MAX_QUEUE_GRANT_NONCES)) delete entries[key];
+      // Never evict a still-valid nonce: doing so would let an unexpired grant
+      // replay after the bounded map drops its original record. Once capacity
+      // is reached, reject the new grant and retain every active nonce. Expired
+      // entries were already removed above, so the next attempt can proceed
+      // after their TTL elapses without weakening replay protection.
+      if (Object.keys(entries).length >= MAX_QUEUE_GRANT_NONCES) {
+        await this.storage.put(QUEUE_GRANT_NONCES_KEY, entries);
+        return false;
       }
+      entries[nonce] = expiresAtMs;
       await this.storage.put(QUEUE_GRANT_NONCES_KEY, entries);
       return true;
     });

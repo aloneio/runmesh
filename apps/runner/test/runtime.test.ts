@@ -631,6 +631,19 @@ describe("persistent local jobs", () => {
       await waitFor(() => manager.get(first.job_id), (job) => !["queued", "running", "cancelling"].includes(job.status));
     } finally { await test.cleanup(); }
   });
+  it("binds an explicit job_id and rejects conflicting reuse", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 2 });
+      await manager.initialize();
+      const input = { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"], job_id: "job-bound" };
+      const first = await manager.start(input);
+      expect(first.job_id).toBe("job-bound");
+      await expect(manager.start({ ...input, args: ["-e", "process.exit(0)"] })).rejects.toMatchObject({ code: "job_id_conflict" });
+      await manager.cancel(first.job_id);
+      await waitFor(() => manager.get(first.job_id), (job) => !["queued", "running", "cancelling"].includes(job.status));
+    } finally { await test.cleanup(); }
+  });
   it("persists metadata, captures paginated logs, and preserves jobs independently of a client", async () => {
     const test = await fixture();
     try {

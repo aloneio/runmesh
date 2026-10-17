@@ -354,7 +354,7 @@ export class JobManager {
     const workspace = this.policy.getWorkspace(params.workspace_id);
     const cwd = await this.policy.resolve(workspace.workspaceId, params.cwd ?? ".", "cwd");
     this.policy.assertGeneration(generation);
-    const { invocation, createdByClientId, requestId } = parseStartValues(params, workspace);
+    const { invocation, createdByClientId, requestId, jobId } = parseStartValues(params, workspace);
     const requestFingerprint = requestId === null ? null : launchRequestFingerprint(workspace.workspaceId, relativeWorkspacePath(workspace, cwd.path), invocation, createdByClientId);
     if (reservedJob === undefined && requestId !== null) {
       const existing = [...this.jobs.values()].find((job) => job.workspace_id === workspace.workspaceId && job.created_by_client_id === createdByClientId && job.request_id === requestId);
@@ -387,9 +387,12 @@ export class JobManager {
       await this.pruneRetainedJobs(this.maxRetainedJobs - 1);
       if (this.jobs.size >= this.maxRetainedJobs) throw new RpcRuntimeError("busy", `max retained jobs (${this.maxRetainedJobs}) reached while active and queued jobs are retained`);
     }
+    if (reservedJob === undefined && jobId !== null && this.jobs.has(jobId)) {
+      throw new RpcRuntimeError("job_id_conflict", "job_id is already bound to another launch");
+    }
     const now = Date.now();
     const job: JobRecord = reservedJob ?? {
-      job_id: `job-${randomUUID()}`, workspace_id: workspace.workspaceId, cwd: relativeWorkspacePath(workspace, cwd.path),
+      job_id: jobId ?? "job-" + randomUUID(), workspace_id: workspace.workspaceId, cwd: relativeWorkspacePath(workspace, cwd.path),
       command: invocation.command, shell: invocation.shell, status: "queued", pid: null,
       process_start_fingerprint: null, recovery_liveness: null,
       created_at_ms: now, started_at_ms: null, updated_at_ms: now, completed_at_ms: null, exit_code: null, signal: null,

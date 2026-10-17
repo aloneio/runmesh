@@ -4,10 +4,10 @@ import {encodeWireFrame,PROTOCOL_CURRENT_VERSION} from "@aloneio/runmesh-protoco
 import {signQueueGrant,verifyQueueGrant,launchDigest} from "../src/queue-grant.js";
 import {runnerSession} from "./helpers/runner-session.js";
 const secret="synthetic-queue-signing-secret-at-least-32";
-const payload={version:1 as const,runner_id:"r",lifecycle_id:"lifecycle-queue-tests",credential_version:1,client_id:"c",secret_version:1,workspace_id:"w",policy_revision:1,policy_checksum:"a".repeat(64),launch_digest:"b".repeat(64),expires_at_ms:Date.now()+3500000,nonce:"queue-test-nonce"};
+const payload={version:1 as const,runner_id:"r",lifecycle_id:"lifecycle-queue-tests",credential_version:1,client_id:"c",secret_version:1,workspace_id:"w",policy_revision:1,policy_checksum:"a".repeat(64),launch_digest:"b".repeat(64),expires_at_ms:Date.now()+3500000,nonce:"queue-test-nonce",job_id:"queued-j"};
 it("queue grants authenticate the full context and reject tampering, cross-key reuse and expiry",async()=>{
  const grant=await signQueueGrant(secret,payload);expect(await verifyQueueGrant(secret,grant)).toEqual(payload);
- const reordered={...grant,payload:{nonce:payload.nonce,expires_at_ms:payload.expires_at_ms,launch_digest:payload.launch_digest,policy_checksum:payload.policy_checksum,policy_revision:payload.policy_revision,workspace_id:payload.workspace_id,secret_version:payload.secret_version,client_id:payload.client_id,credential_version:payload.credential_version,lifecycle_id:payload.lifecycle_id,runner_id:payload.runner_id,version:payload.version}};
+ const reordered={...grant,payload:{nonce:payload.nonce,expires_at_ms:payload.expires_at_ms,launch_digest:payload.launch_digest,policy_checksum:payload.policy_checksum,policy_revision:payload.policy_revision,workspace_id:payload.workspace_id,secret_version:payload.secret_version,client_id:payload.client_id,credential_version:payload.credential_version,lifecycle_id:payload.lifecycle_id,runner_id:payload.runner_id,version:payload.version,job_id:payload.job_id}};
  expect(await verifyQueueGrant(secret,reordered)).toEqual(payload);
  expect(await verifyQueueGrant(secret,{...grant,payload:{...payload,client_id:"other"}})).toBeUndefined();
  expect(await verifyQueueGrant(secret+"other",grant)).toBeUndefined();expect(await verifyQueueGrant(secret,grant,payload.expires_at_ms)).toBeUndefined();

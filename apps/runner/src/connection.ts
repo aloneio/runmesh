@@ -9,7 +9,7 @@ import { HistoryUploadScheduler, type HistoryUploadClock } from "./history-uploa
 import { QueueGrantSchema } from "@aloneio/runmesh-protocol";
 import { parseJobHistorySettings, type JobHistorySettings } from "@aloneio/runmesh-protocol";
 import {
-  canonicalJson,
+  launchDigestInputs,
   decodeWireFrame,
   encodeWireFrame,
   LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
@@ -307,20 +307,11 @@ export class RunnerConnection {
     const socket=this.socket;
     if (!this.queueNegotiated || !parsed.success || this.stopped || socket===undefined || socket!==this.welcomedSocket || socket.readyState!==WebSocket.OPEN) return false;
     const grant=parsed.data;
-    const launchFields = JSON.parse(JSON.stringify({
-      workspace_id: input.workspace_id,
-      command: input.command,
-      args: input.args ?? null,
-      shell: input.shell,
-      cwd: input.cwd ?? ".",
-      request_id: input.request_id ?? null,
-      ...(typeof input.record_history === "boolean" ? { record_history: input.record_history } : {}),
-    })) as Record<string, unknown>;
-    const canonical = canonicalJson(launchFields);
-    const legacy = JSON.stringify(launchFields);
-    const canonicalDigest = createHash("sha256").update(canonical).digest("hex");
-    const legacyDigest = createHash("sha256").update(legacy).digest("hex");
+    const launchDigests = launchDigestInputs(input);
+    const canonicalDigest = createHash("sha256").update(launchDigests.canonical).digest("hex");
+    const legacyDigest = createHash("sha256").update(launchDigests.legacy).digest("hex");
     if (grant.payload.client_id!==clientId || grant.payload.runner_id!==this.config.runnerId || grant.payload.workspace_id!==input.workspace_id
+      || grant.payload.job_id !== jobId
       || grant.payload.policy_revision!==this.appliedPolicyRevision || grant.payload.expires_at_ms<=Date.now()
       || (grant.payload.launch_digest!==canonicalDigest && grant.payload.launch_digest!==legacyDigest)) return false;
     const requestId=`queue-${crypto.randomUUID()}`;

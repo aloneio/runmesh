@@ -442,12 +442,12 @@ export class RunnerDO {
       let allowed = false;
       let recordHistory = false;
       if (attachment.queueProtocol === 1 && grant !== undefined && message.runner_id === attachment.runnerId
-        && grant.runner_id === attachment.runnerId && grant.lifecycle_id === attachment.lifecycleId
+        && grant.runner_id === attachment.runnerId && grant.job_id === message.job_id && grant.lifecycle_id === attachment.lifecycleId
         && grant.credential_version === attachment.credentialVersion
         && await this.admitOrReconcileProtectedRpc(attachment,grant.policy_revision,grant.policy_checksum)) {
         const response = await boundedJsonResponse(signal => this.registryRequest(attachment.runnerId,"/mcp-authorization",{method:"POST",signal,body:JSON.stringify({
           client_id:grant.client_id,secret_version:grant.secret_version,method:"exec.start",workspace_id:grant.workspace_id,
-          policy_revision:grant.policy_revision,policy_checksum:grant.policy_checksum,
+          job_id:message.job_id, policy_revision:grant.policy_revision,policy_checksum:grant.policy_checksum,
           ...(attachment.historyProtocol === 2 ? {include_job_recording:true} : {}),
         })}));
         const decision = response?.value;
@@ -455,10 +455,20 @@ export class RunnerDO {
         recordHistory = allowed && isRecord(decision) && decision.record_history === true;
       }
       let nonceConsumed = false;
+      let authorizationUnavailable = false;
       if (allowed && grant !== undefined) {
-        nonceConsumed = await this.admissionStore.consumeQueueGrantNonce(grant.nonce, grant.expires_at_ms, state =>
-          admitsProtectedRpc(state, attachment, grant.policy_revision, grant.policy_checksum)
-            && this.ctx.getWebSockets("runner").includes(ws));
+        try {
+          nonceConsumed = await this.admissionStore.consumeQueueGrantNonce(grant.nonce, grant.expires_at_ms, state =>
+            admitsProtectedRpc(state, attachment, grant.policy_revision, grant.policy_checksum)
+              && this.ctx.getWebSockets("runner").includes(ws));
+        } catch {
+          authorizationUnavailable = true;
+        }
+      }
+      if (authorizationUnavailable) {
+        ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,
+          result:{authorized:false,authorization_unavailable:true,record_history:false}}));
+        return;
       }
       // No await after the final local session/policy fence. A grant never
       // authorizes by itself, and this decision never executes a command.
@@ -626,6 +636,12 @@ export class RunnerDO {
     // the Worker HMAC. Do not trust its earlier permission preflight: async
     // policy reconciliation can overlap client revocation or override edits.
     const reportingLaunch = attachment.historyProtocol === 2 && (method === "exec.start" || method === "exec.run");
+    // Generate the launch identity before the final Registry authorization so
+    // the decision and the dispatched job carry the same authenticated ID.
+    // Caller-supplied job_id values are never trusted at this boundary.
+    const authenticatedJobId = (method === "exec.start" || method === "exec.run") && isRecord(input.params)
+      ? "job-" + crypto.randomUUID()
+      : undefined;
     let recordHistory = !Object.prototype.hasOwnProperty.call(input, "mcp_authorization");
     if (Object.prototype.hasOwnProperty.call(input, "mcp_authorization")) {
       const principal = input.mcp_authorization;
@@ -637,7 +653,7 @@ export class RunnerDO {
           client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
           runner_pinned: principal.runner_pinned === true,
           workspace_id: params.expected_workspace_id ?? params.workspace_id,
-          ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
+          ...(authenticatedJobId === undefined ? {} : { job_id: authenticatedJobId }),
           policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
           ...(reportingLaunch ? { include_job_recording: true } : {}),
         }) });
@@ -658,20 +674,22 @@ export class RunnerDO {
     // Never accept a caller-supplied grant or creator identity at this boundary.
     let dispatchParams = input.params;
     if ((method === "exec.start" || method === "exec.run") && isRecord(input.params)) {
-      const clean = { ...input.params }; delete clean.queue_grant; delete clean.record_history; delete clean.created_by_client_id;
+      const clean = { ...input.params }; delete clean.queue_grant; delete clean.record_history; delete clean.created_by_client_id; delete clean.job_id;
       if (reportingLaunch) clean.record_history = recordHistory;
       const principal = input.mcp_authorization;
       if (isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)) {
         // Job attribution belongs to the authenticated launch, independently
         // of whether this Runner advertises queue admission.
         clean.created_by_client_id = principal.client_id;
+        const queueJobId = authenticatedJobId ?? "job-" + crypto.randomUUID();
+        clean.job_id = queueJobId;
         if (attachment.queueProtocol === 1 && typeof clean.workspace_id === "string" && validLifecycleId(attachment.lifecycleId)
           && requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
           clean.queue_grant = await signQueueGrant(this.env.INTERNAL_CONTROL_SECRET ?? "", {
             version:1, runner_id:attachment.runnerId,lifecycle_id:attachment.lifecycleId,credential_version:attachment.credentialVersion,
             client_id:principal.client_id,secret_version:principal.secret_version,workspace_id:clean.workspace_id,
             policy_revision:requestPolicyRevision,policy_checksum:expectedPolicyChecksum,
-            launch_digest:await launchDigest(clean),expires_at_ms:Date.now()+3600000,nonce:crypto.randomUUID(),
+            launch_digest:await launchDigest(clean),expires_at_ms:Date.now()+3600000,nonce:crypto.randomUUID(),job_id:queueJobId,
           });
         }
       }

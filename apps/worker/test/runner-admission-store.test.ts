@@ -92,4 +92,21 @@ describe("Runner admission persistence ownership", () => {
     await expect(second).resolves.toBe("ready");
     expect(order).toEqual(["first-start", "second"]);
   });
+
+  it("rejects new grants at capacity without evicting unexpired nonce records", async () => {
+    const { store, records } = fixture();
+    const expiresAtMs = Date.now() + 60_000;
+    let accepted = 0;
+    for (let index = 0; index < 4096; index += 1) {
+      if (await store.consumeQueueGrantNonce(`nonce-${index}`, expiresAtMs, () => true)) accepted += 1;
+    }
+    expect(accepted).toBe(4096);
+    expect(Object.keys(records.get("queue-grant-nonces-v1") as Record<string, number>)).toHaveLength(4096);
+
+    // A full store must fail closed: do not drop a live nonce to admit a new one.
+    await expect(store.consumeQueueGrantNonce("nonce-4096", expiresAtMs, () => true)).resolves.toBe(false);
+    expect(Object.keys(records.get("queue-grant-nonces-v1") as Record<string, number>)).toHaveLength(4096);
+    // The first still-unexpired grant remains recorded and cannot be replayed.
+    await expect(store.consumeQueueGrantNonce("nonce-0", expiresAtMs, () => true)).resolves.toBe(false);
+  });
 });
