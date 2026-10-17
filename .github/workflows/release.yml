@@ -153,6 +153,11 @@ jobs:
           mv "$packed" "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
       - name: Exercise the exact portable archive end to end before signing
         run: node scripts/test-packed-runner.mjs "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
+      - name: Generate commit-bound SPDX SBOM
+        run: |
+          set -euo pipefail
+          published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
+          node scripts/release-sbom.mjs release/assets/sbom.spdx.json "$(git rev-parse HEAD)" "$published_at"
       - name: Generate deterministic manifest and checksums
         run: |
           set -euo pipefail
@@ -176,7 +181,7 @@ jobs:
           node scripts/release-signature.mjs sign release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           node scripts/release-signature.mjs verify release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md release/assets/
-          (cd release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
+          (cd release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json sbom.spdx.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
           # Verify the exact bytes that will be uploaded before creating the
           # immutable tag/release. The post-publication check remains as an
           # independent transport/infrastructure verification.
@@ -235,6 +240,8 @@ jobs:
           fi
       - name: Require the audited production control plane before creating a release tag
         run: node scripts/check-live-release-prereqs.mjs https://runmesh.aloneio.workers.dev
+      - name: Require production source provenance at the exact protected main commit
+        run: node scripts/check-live-provenance.mjs https://runmesh.aloneio.workers.dev "$GITHUB_SHA" main
       - name: Create annotated release tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -318,6 +325,7 @@ jobs:
               "manifest.json",
               "manifest.sig",
               "manifest.signature.json",
+              "sbom.spdx.json",
               "SHA256SUMS",
               "LICENSE",
               "NOTICE",
@@ -331,11 +339,11 @@ jobs:
           '
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$draft_dir"
           for asset in \
-            "runmesh-runner-${RELEASE_VERSION}.tgz" manifest.json manifest.sig manifest.signature.json \
+            "runmesh-runner-${RELEASE_VERSION}.tgz" manifest.json manifest.sig manifest.signature.json sbom.spdx.json \
             SHA256SUMS LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json; do
             test -f "$draft_dir/$asset"
           done
-          test "$(find "$draft_dir" -maxdepth 1 -type f | wc -l)" -eq 9
+          test "$(find "$draft_dir" -maxdepth 1 -type f | wc -l)" -eq 10
           node scripts/release-verify.mjs "$draft_dir/manifest.json" "$draft_dir/manifest.sig" "$draft_dir/manifest.signature.json" release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
           GITHUB_SHA="$GITHUB_SHA" node --input-type=module -e '
             import { readFile } from "node:fs/promises";

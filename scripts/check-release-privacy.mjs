@@ -21,6 +21,7 @@ const expectedAssetNames = version => new Set([
   `runmesh-runner-${version}.tgz`, "manifest.json", "manifest.sig",
   "manifest.signature.json", "SHA256SUMS", "LICENSE", "NOTICE",
   "THIRD_PARTY_NOTICES.md", "trust-keyring.json",
+  ...(version.includes("-dev") ? [] : ["sbom.spdx.json"]),
 ]);
 
 /** Identifies release-private mailboxes, without ever printing their values. */
@@ -99,11 +100,13 @@ async function validateNotes(flag, pathname) {
 export async function checkReleaseAssets(directory, options = {}) {
   const base = resolve(directory);
   const names = await readdir(base);
-  assert.ok(names.length === 9 && names.every(name => /^[a-zA-Z0-9._-]+$/u.test(name)), "release_privacy_asset_count");
   const manifest = JSON.parse(await readFile(join(base, "manifest.json"), "utf8"));
   const version = manifest?.version;
   assert.ok(typeof version === "string" && /^\d+\.\d+\.\d+(?:-dev\.\d+)?$/u.test(version), "release_privacy_version");
-  assert.deepEqual(new Set(names), expectedAssetNames(version), "release_privacy_unexpected_assets");
+  const expected = expectedAssetNames(version);
+  assert.ok(names.length === expected.size && names.every(name => /^[a-zA-Z0-9._-]+$/u.test(name)), "release_privacy_asset_count");
+  assert.deepEqual(new Set(names), expected, "release_privacy_unexpected_assets");
+  if (!version.includes("-dev")) assert.equal(manifest.sbom?.name, "sbom.spdx.json", "release_privacy_sbom_manifest");
   for (const name of names) {
     const path = join(base, name), stat = await lstat(path);
     assert.ok(stat.isFile() && stat.size > 0 && stat.size <= 8 * 1024 * 1024, "release_privacy_asset_file");
