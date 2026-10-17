@@ -198,3 +198,8 @@ test("R01 failed deployment preflight does not echo private branch metadata or e
   assert.ok(!`${result.stdout}${result.stderr}`.includes("private-branch-do-not-publish"));
   assert.ok(!result.stderr.includes("AssertionError"));
 });
+
+test("production approval names the Windows GitLab CLI wrapper explicitly", async () => {
+  const source = await readFile(new URL("../scripts/production-approval-gitlab.mjs", import.meta.url), "utf8");
+  assert.match(source, /process\.platform === "win32" \? "glab\.cmd" : "glab"/u);
+});
