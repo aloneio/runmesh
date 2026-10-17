@@ -70,7 +70,7 @@ function fixture(change = () => {}) {
 
 test("Windows GitLab API paths escape cmd metacharacters without changing POSIX paths", () => {
   const path = "projects/85844627/pipelines?ref=main&sha=abc&per_page=100";
-  assert.equal(escapeWindowsShellArgument(path, "win32"), "projects/85844627/pipelines?ref=main^&sha=abc^&per_page=100");
+  assert.equal(escapeWindowsShellArgument(path, "win32"), "\"projects/85844627/pipelines?ref=main&sha=abc&per_page=100\"");
   assert.equal(escapeWindowsShellArgument(path, "linux"), path);
 });
 

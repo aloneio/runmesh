@@ -6,7 +6,7 @@ import { PRODUCTION_TRUST, requireProductionSource, checkProjectAndBranch,
 /** The release workstation holds the GitLab read credential, outside the
  * source tree. No token or synthetic approval file is accepted as proof. */
 export function escapeWindowsShellArgument(value, platform = process.platform) {
-  return platform === "win32" ? value.replace(/[&|<>^]/gu, match => `^${match}`) : value;
+  return platform === "win32" ? `"${value}"` : value;
 }
 
 export function localGitLabClient() {
