@@ -33,7 +33,7 @@ async function fixture(t, state = { version: "0.1.3", state: "released", release
   const tree = git(root, "rev-parse", "HEAD^{tree}");
   const stubDir = await mkdtemp(join(tmpdir(), "runmesh-approved-glab-"));
   t.after(() => rm(stubDir, { recursive: true, force: true }));
-  const stubPath = join(stubDir, "glab");
+  const stubPath = join(stubDir, process.platform === "win32" ? "glab.cmd" : "glab");
   const main = { id: 101, project_id: 85844627, sha: commit, ref: "main", source: "push", status: "success" };
   const merge = { id: 102, project_id: 85844627, sha: commit, ref: "refs/merge-requests/86/head",
     source: "merge_request_event", status: "success" };
@@ -78,8 +78,7 @@ async function fixture(t, state = { version: "0.1.3", state: "released", release
     [base + "/jobs/2/artifacts/ci-results/installed_transport.json", artifact("installed_transport")],
     [base + "/jobs/3/artifacts/ci-results/browser.json", artifact("browser")],
   ]);
-  const fakeGlab = `#!/usr/bin/env node
-const responses = ${JSON.stringify(responses)};
+  const fakeGlabSource = `const responses = ${JSON.stringify(responses)};
 const path = process.argv[3];
 if (process.env.RUNMESH_TEST_CHANGE_SOURCE === "1" && path.endsWith("/ci-results/browser.json")) {
   require("node:fs").writeFileSync("apps/worker/browser/admin-client.js", "source changed after approval");
@@ -88,6 +87,10 @@ if (${JSON.stringify(approved)} && Object.prototype.hasOwnProperty.call(response
   process.stdout.write(JSON.stringify(responses[path]) + "\\n");
 } else { process.exitCode = 1; }
 `;
+  const fakeGlab = process.platform === "win32"
+    ? `@echo off\r\nnode "%~dp0glab-stub.mjs" %*\r\n`
+    : `#!/usr/bin/env node\n${fakeGlabSource}`;
+  if (process.platform === "win32") await writeFile(join(stubDir, "glab-stub.mjs"), fakeGlabSource);
   await writeFile(stubPath, fakeGlab, { mode: 0o755 });
   const invoke = (extra = {}) => spawnSync(process.execPath, [join(root, "scripts/deploy-worker.mjs"), "--env", "production"], {
     cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true,
