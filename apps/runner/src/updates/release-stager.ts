@@ -212,7 +212,10 @@ export async function stageRunnerRelease(target: ReleaseTarget, context: RunnerR
     context.signal?.throwIfAborted();
     return { version: target.version, versionDirectory, manifestSha256, artifactSha256: artifact.sha256 };
   } catch (error) {
-    try { await rm(ownedDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+    const cleanupRetries = process.platform === "win32"
+      ? { maxRetries: 20, retryDelay: 250 }
+      : { maxRetries: 5, retryDelay: 50 };
+    try { await rm(ownedDirectory, { recursive: true, force: true, ...cleanupRetries }); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], "Runner release staging and owned installation cleanup failed.", { cause: error }); }
     throw error;
   }
