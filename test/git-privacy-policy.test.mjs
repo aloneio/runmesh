@@ -50,6 +50,10 @@ test("CI ranges only accept an observed ancestor; otherwise scan complete reacha
     CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "push",
     GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_REF: "refs/heads/main"
   }, () => false), "HEAD^..HEAD");
+  assert.equal(selectPrivacyRevision({
+    CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "push",
+    GITHUB_REPOSITORY: "other/project", GITHUB_REF: "refs/heads/main"
+  }, () => false), "HEAD");
 });
 test("privacy command examines actual commit objects, not the configured git identity", async t => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-git-privacy-"));
