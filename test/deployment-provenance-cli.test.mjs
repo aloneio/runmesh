@@ -90,9 +90,9 @@ if (${JSON.stringify(approved)} && Object.prototype.hasOwnProperty.call(response
 } else { process.exitCode = 1; }
 `;
   const fakeGlab = process.platform === "win32"
-    ? `@echo off\r\n"${process.execPath}" "%~dp0glab-stub.mjs" "%~1" "%~2"\r\n`
+    ? `@echo off\r\n"${process.execPath}" "%~dp0glab-stub.cjs" "%~1" "%~2"\r\n`
     : `#!/usr/bin/env node\n${fakeGlabSource}`;
-  if (process.platform === "win32") await writeFile(join(stubDir, "glab-stub.mjs"), fakeGlabSource);
+  if (process.platform === "win32") await writeFile(join(stubDir, "glab-stub.cjs"), fakeGlabSource);
   await writeFile(stubPath, fakeGlab, { mode: 0o755 });
   const searchPath = stubDir + delimiter + (environment.PATH ?? environment.Path ?? process.env.PATH ?? process.env.Path ?? "");
   const invoke = (extra = {}) => spawnSync(process.execPath, [join(root, "scripts/deploy-worker.mjs"), "--env", "production"], {
