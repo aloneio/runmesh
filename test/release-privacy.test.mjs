@@ -62,26 +62,26 @@ test("archive scanner inspects runtime code and metadata without losing legal no
     assert.throws(() => assertTarballPrivacy(brokenArchive2), /release_privacy_email_rejected/u);
   });
 });
-test("nine-asset distribution scan rejects added notes, manifest and archive email", async () => {
+test("stable distribution scan rejects added notes, manifest and archive email", async () => {
   await withArchive(async ({ root, dist, archive, pack }) => {
     const assets = join(root, "assets");
     await mkdir(assets);
     const version = "1.2.3";
     await pack();
     await copyFile(archive, join(assets, "runmesh-runner-1.2.3.tgz"));
-    const names = ["manifest.json", "manifest.sig", "manifest.signature.json", "SHA256SUMS", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "trust-keyring.json"];
-    for (const name of names) await writeFile(join(assets, name), name === "manifest.json" ? JSON.stringify({ version }) : "approved");
+    const names = ["manifest.json", "manifest.sig", "manifest.signature.json", "sbom.spdx.json", "SHA256SUMS", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "trust-keyring.json"];
+    for (const name of names) await writeFile(join(assets, name), name === "manifest.json" ? JSON.stringify({ version, sbom: { name: "sbom.spdx.json" } }) : name === "sbom.spdx.json" ? JSON.stringify({ spdxVersion: "SPDX-2.3" }) : "approved");
     await copyFile(rootNotice, join(assets, "THIRD_PARTY_NOTICES.md"));
-    assert.deepEqual(await checkReleaseAssets(assets), { assets: 9, archive: "runmesh-runner-1.2.3.tgz" });
+    assert.deepEqual(await checkReleaseAssets(assets), { assets: 10, archive: "runmesh-runner-1.2.3.tgz" });
     const notes = join(root, "release-notes.md");
     await writeFile(notes, "Release 1.2.3\n");
     await checkReleaseAssets(assets, { notes });
     await writeFile(notes, "Author: private@example.org");
     await assert.rejects(checkReleaseAssets(assets, { notes }), /release_privacy_email_rejected/u);
     await writeFile(notes, "Release 1.2.3\n");
-    await writeFile(join(assets, "manifest.json"), JSON.stringify({ version, maintainer: "someone@somewhere.example" }));
+    await writeFile(join(assets, "manifest.json"), JSON.stringify({ version, sbom: { name: "sbom.spdx.json" }, maintainer: "someone@somewhere.example" }));
     await assert.rejects(checkReleaseAssets(assets), /release_privacy_email_rejected/u);
-    await writeFile(join(assets, "manifest.json"), JSON.stringify({ version }));
+    await writeFile(join(assets, "manifest.json"), JSON.stringify({ version, sbom: { name: "sbom.spdx.json" } }));
     await writeFile(join(dist, "runner.cjs"), "console.log('person@example.net');");
     await pack();
     await copyFile(archive, join(assets, "runmesh-runner-1.2.3.tgz"));
