@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, readFile, copyFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:GIT_|WORKERS_CI|WRANGLER_CI_|CI_|GITHUB_)/u.test(key)));
@@ -91,7 +91,7 @@ if (${JSON.stringify(approved)} && Object.prototype.hasOwnProperty.call(response
   await writeFile(stubPath, fakeGlab, { mode: 0o755 });
   const invoke = (extra = {}) => spawnSync(process.execPath, [join(root, "scripts/deploy-worker.mjs"), "--env", "production"], {
     cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true,
-    env: { ...environment, PATH: stubDir + ":" + (environment.PATH ?? process.env.PATH ?? ""),
+    env: { ...environment, PATH: stubDir + delimiter + (environment.PATH ?? process.env.PATH ?? ""),
       WORKERS_CI: "1", WORKERS_CI_BRANCH: "main", WORKERS_CI_COMMIT_SHA: commit,
       WORKERS_CI_BUILD_UUID: buildUuid, ...extra },
   });
