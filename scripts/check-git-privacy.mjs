@@ -28,7 +28,7 @@ export function validateCommit({ name, email, committerName, committerEmail, par
   // GitHub creates the merge commit on a protected main branch. Its
   // platform identity is transport metadata; user-created commits remain
   // subject to the exact repository identity policy below.
-  const githubMerge = isGitHubMergeCommit({ committerName, committerEmail, parentCount, message });
+  const githubMerge = isGitHubMergeCommit({ committerName, committerEmail, parentCount });
   if (!githubMerge && (name !== EXPECTED_NAME || email !== EXPECTED_EMAIL)) issues.push("author");
   if (!githubMerge && (committerName !== EXPECTED_NAME || committerEmail !== EXPECTED_EMAIL)) issues.push("committer");
   if (!message.trim() || !/^[\x00-\x7f]*$/u.test(message)) issues.push("message_format");

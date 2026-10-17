@@ -17,8 +17,8 @@ test("commit validation enforces exact identity, ASCII messages and no assistant
   assert.deepEqual(validateCommit({ ...knownGood, message: "fix: issue\n\nCo-authored-by: Other <other@example.invalid>" }), ["attribution_trailer"]);
   assert.deepEqual(validateCommit({ ...knownGood, message: "" }), ["message_format"]);
   const githubMerge = { ...knownGood, email: "merge-author@example.invalid", committerName: "GitHub",
-    committerEmail: "noreply@github.com", parentCount: 2, message: "Merge verified runmesh fixes" };
-  assert.equal(isGitHubMergeCommit(githubMerge), true);
+    committerEmail: "noreply@github.com", parentCount: 2, message: "Harden release provenance and SBOM verification" };
+  assert.equal(isGitHubMergeCommit(githubMerge), true);\n  assert.equal(isGitHubMergeCommit({ ...githubMerge, message: "custom protected merge title" }), true);
   assert.deepEqual(validateCommit(githubMerge), []);
   assert.equal(isGitHubMergeCommit({ ...githubMerge, parentCount: 1 }), false);
   assert.deepEqual(validateCommit({ ...githubMerge, parentCount: 1 }), ["author", "committer"]);
