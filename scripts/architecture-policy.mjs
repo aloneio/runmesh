@@ -65,7 +65,7 @@ const browserDependencies = {
   "central/failures.ts": [], "central/request-contract.ts": [], "central/operations.ts": [],
   "central/messages.ts": [], "central/view.ts": [],
   "central/services.ts": ["central/service-inspection.ts", "central/request-contract.ts"], "central/skills.ts": ["central/skill-history.ts", "central/skill-source.ts"],
-  "central/skill-history.ts": [], "central/skill-source.ts": [], "central/registry.ts": [], "central/service-inspection.ts": ["central/request-contract.ts"],
+  "central/skill-history.ts": [], "central/skill-source.ts": [], "central/registry.ts": ["central/registry-input.ts"], "central/registry-input.ts": [], "central/service-inspection.ts": ["central/request-contract.ts"],
   "central/skill-lifecycle-receipts.ts": [], "central/skill-source-receipts.ts": [], "central/service-receipts.ts": [],
 };
 const registryRoute = path => /^apps\/worker\/src\/registry\/route-(?:inputs|projections)\.ts$/u.test(canonicalSource(path));

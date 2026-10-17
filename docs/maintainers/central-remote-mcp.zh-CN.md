@@ -78,15 +78,20 @@ POST `/admin/central/connection-check` 接受新公网 MCP 地址 `{endpoint}`�
 数量与其他服务声明。需要登录时返回 `{state:"authorization_required"}`。检查保留
 原档案及已发布目录，添加连接和刷新工具通过各自操作完成。
 
-POST `/admin/central/registry-preview` 接受 `{entry}`，内容为一份 server.json，
-或含 server 字段的 Registry 包装对象，使用同一管理员/CSRF 边界。请求上限为
-256 KiB，最多包含 16 个远程条目、16 个软件包，以及每远程条目 32 个请求头名称。
+POST `/admin/central/registry-preview` 接受 `{entry}`，内容可为 server.json、
+含 server 字段的 Registry 包装对象，或 `mcpServers`、`servers`、
+`mcp.servers` 客户端配置，使用同一管理员/CSRF 边界。请求上限为
+256 KiB，最多包含 16 个 Registry 远程条目、16 个软件包或 32 个客户端条目，
+以及每远程条目 32 个请求头名称。
 临时预览返回名称、版本、说明、schema 地址、摘要和观测时间，以及投影后的远程与
-软件包条目。
+软件包条目。客户端预览额外提供 `format: "client_config"`、候选名称和固定原因的
+`skipped` 元数据。摘要根据脱敏后的预览计算，不对原始密钥计算。
 
 公网 Streamable HTTP 地址在路径完整、无需请求头或变量配置时可填入连接表单。
 含 URL 占位符（包括编码后的花括号）、请求头或变量配置的条目提示先完成提供方
-配置。预览展示请求头名称和软件包标识，省略请求头值、变量值及启动参数。「使用此
+配置。预览展示请求头名称和软件包标识，省略请求头值、变量值及启动参数。客户端
+HTTP 类型归一化为 Streamable HTTP，SSE 仅提示配置，本地 stdio 命令绝不执行。
+浏览器在 POST 前移除密钥字段，不向 Worker 发送命令、参数、令牌或请求头值。「使用此
 连接」填入普通表单，管理员选择身份验证方式后点击「连接」。每次导入只处理所选
 文件，预览不保存外部目录快照，也不改动已有连接。
 

@@ -269,3 +269,23 @@ it("registry HTTP keeps encoded placeholders and declared variables configuratio
   expect(result.digest).toMatch(/^[a-f0-9]{64}$/u); expect(result.observed_at_ms).toBeGreaterThan(0);
   expect(f.get).not.toHaveBeenCalled(); expect(f.port.mutateProfile).not.toHaveBeenCalled(); expect(f.port.mutateCatalog).not.toHaveBeenCalled();
 });
+
+it("client MCP imports are read-only, redact private keys and do not fingerprint credential changes", async () => {
+  const f = await fixture();
+  const makeInput = (secret: string) => ({ mcpServers: {
+    context7: { command: "npx", args: ["-y", "@upstash/context7-mcp", "--api-key", secret] },
+    documents: { type: "http", url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer " + secret } }
+  } });
+  const first = await f.central("registry-preview", { entry: makeInput("synthetic-key-first") });
+  const second = await f.central("registry-preview", { entry: makeInput("synthetic-key-second") });
+  expect(first.status).toBe(200); expect(second.status).toBe(200);
+  const firstText = await first.text(), secondText = await second.text();
+  expect(firstText).not.toMatch(/synthetic-key-|@upstash|npx|--api-key|Bearer /u);
+  expect(secondText).not.toMatch(/synthetic-key-|@upstash|npx|--api-key|Bearer /u);
+  const preview = JSON.parse(firstText);
+  expect(preview).toMatchObject({ state: "previewed", format: "client_config",
+    skipped: [{ name: "context7", reason: "stdio" }],
+    remotes: [{ name: "documents", endpoint: "https://mcp.example.com/mcp", mode: "configure", headers: ["Authorization"] }] });
+  expect(preview.digest).toEqual(JSON.parse(secondText).digest);
+  for (const mutation of [f.port.mutateProfile, f.port.mutateCatalog, f.port.connectionOAuth]) expect(mutation).not.toHaveBeenCalled();
+});

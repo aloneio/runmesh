@@ -26,11 +26,13 @@ The check reads connection information. Select **Connect** to add the MCP, or **
 
 Runmesh treats an upstream HTTP `401` as an authentication challenge and may ask you to reconnect. An upstream HTTP `403` means the provider accepted the credential but denied MCP access; Runmesh reports a provider permission error instead of starting another OAuth loop. Check the provider's MCP feature availability and the account, group or project permissions in that case.
 
-## Import a server.json entry
+## Import MCP JSON configuration
 
-Expand **Import server.json**, choose the provider's file, then select **Preview connections**. For a ready HTTPS entry, select **Use this connection** to fill the connection form, choose the authentication method and select **Connect**.
+Expand **Import MCP JSON configuration**, choose a JSON file, then select **Preview connections**. Supported formats are MCP Registry `server.json` (including the `server` wrapper) and client `mcpServers`, `servers`, or `mcp.servers` configurations. For a public HTTPS entry, select **Use this connection** to fill the ordinary connection form, choose authentication and select **Connect**.
 
-Entries that need additional configuration show a prompt to check the provider's connection instructions. Package entries show the package details; after hosting one, add its HTTPS endpoint through the same connection form.
+Client `http` and `streamable-http` entries can be previewed as direct remote candidates. Legacy SSE requires separate configuration. Local `stdio` entries (`command` / `args`, including `npx`) are **never executed or installed**; obtain the provider's hosted HTTPS MCP endpoint instead. Custom request headers, private endpoints and URL templates cannot be connected automatically. RunMesh currently supports public MCP connections and managed OAuth, not arbitrary API-key headers.
+
+The browser strips command arguments, environment values, request-header values and secrets **before sending the preview request**. The Worker returns only projected connection metadata and computes the preview digest over that redacted projection. URLs containing credentials or query strings are excluded from client previews. Preview never stores or enables connections or publishes tools. Registry packages remain informational.
 
 ## Use and refresh tools
 

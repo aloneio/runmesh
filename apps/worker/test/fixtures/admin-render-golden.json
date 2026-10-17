@@ -9,8 +9,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "4f959905242fd75dcba231151c162e9e126f76861cc433bdd60737d3fc491103",
-      "bytes": 194544
+      "sha256": "c8e803ea6df53dc4ae751c4eea4cba86c119e659f8a326e348a2f5b59bf294e3",
+      "bytes": 201298
     },
     {
       "name": "setup",
@@ -19,8 +19,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "24d3f33078879deccf9620b508c812f9c53f5eea9c66a909c99b1d75c480a759",
-      "bytes": 195204
+      "sha256": "9a77c88a49c47fcee303750eaedc03e8278d73a3c59e837d6cd767813b26e34d",
+      "bytes": 201958
     },
     {
       "name": "secret",
@@ -29,8 +29,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "914ae092c0ac66cab739fc96b5856bf7360a859ea4ef69eaa857effbdf91e9ec",
-      "bytes": 197501
+      "sha256": "19ff74021ca3c468e7dd0186c5255d31f44cd0d5bb35491620ca23eaf015bfd4",
+      "bytes": 204255
     },
     {
       "name": "overview-empty",
@@ -354,8 +354,8 @@
           }
         ]
       ],
-      "sha256": "2f1fa0c863615db3830e125adb4d3da3afa37089ceca89335ede998d3c705177",
-      "bytes": 197850
+      "sha256": "68af9efdc11997e905576adb7940cd56c8ed336843044300f22ef071dd50e728",
+      "bytes": 204604
     }
   ]
 }

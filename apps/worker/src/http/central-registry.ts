@@ -11,5 +11,6 @@ export async function handleRegistryPreview(request: Request, env: WorkerEnv, ur
   if (Object.keys(admission.body).some(key => key !== "entry")) return centralFailure("central_invalid_request", 400);
   const preview = previewRegistryEntry(admission.body.entry);
   if (!preview) return centralFailure("registry_invalid_entry", 400);
-  return Response.json({ ...preview, digest: await sha256Hex(JSON.stringify(admission.body.entry)), observed_at_ms: Date.now() }, { headers: centralHeaders });
+  // Digest the redacted projection, not the source JSON that may contain keys.
+  return Response.json({ ...preview, digest: await sha256Hex(JSON.stringify(preview)), observed_at_ms: Date.now() }, { headers: centralHeaders });
 }

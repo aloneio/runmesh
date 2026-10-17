@@ -103,17 +103,24 @@ other service declarations. A sign-in requirement returns
 catalogs unchanged; connection and tool refresh remain separate actions.
 
 POST `/admin/central/registry-preview` accepts `{entry}` containing one
-`server.json` object or a Registry wrapper with a `server` field. The same
+`server.json` object, a Registry wrapper with a `server` field, or an MCP
+client configuration with `mcpServers`, `servers`, or `mcp.servers`. The same
 administrator/CSRF boundary applies. The request is bounded to 256 KiB, with
-at most 16 remotes, 16 packages and 32 header names per remote. The transient
+at most 16 Registry remotes, 16 packages or 32 client entries, and 32 header names per remote. The transient
 response includes name, version, description, schema URL, digest and observation
-time, plus projected remote and package entries.
+time, plus projected remote and package entries. Client previews also include
+`format: "client_config"`, candidate names and bounded `skipped` metadata
+with fixed reasons. The digest hashes the redacted preview, not source secrets.
 
 Public Streamable HTTP URLs with complete paths and no header or variable
 configuration become connection-form candidates. URL placeholders, including
 encoded braces, and configured headers or variables mark an entry for provider
 setup. Preview exposes header names and package identifiers while discarding
-header values, variable values and launch arguments. **Use this connection**
+header values, variable values and launch arguments. Client HTTP type is
+normalized to Streamable HTTP, SSE is configuration-only, and local stdio
+commands are never executed. The browser independently removes secret-bearing
+fields before POST; no command, argument, token or header value is sent to
+the Worker. **Use this connection**
 fills the ordinary form; the administrator chooses authentication and selects
 **Connect**. Import processes the selected file once and stores no directory
 snapshot or connection changes.

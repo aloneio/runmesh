@@ -11,6 +11,8 @@ import { bindSkillSource } from "../apps/worker/browser/central/skill-source.js"
 import { createServiceInspection } from "../apps/worker/browser/central/service-inspection.js";
 import { createServiceWorkflow } from "../apps/worker/browser/central/services.js";
 import { bindRegistryImport } from "../apps/worker/browser/central/registry.js";
+import { sanitizeRegistryUpload } from "../apps/worker/browser/central/registry-input.js";
+import { validRegistryPreview } from "../apps/worker/browser/central/service-receipts.js";
 import { createCentralOperations } from "../apps/worker/browser/central/operations.js";
 import { centralRequestContract, centralRequestScope } from "../apps/worker/browser/central/request-contract.js";
 
@@ -1468,7 +1470,7 @@ test("MCP inspection rejects incomplete results while keeping normal connection 
 
 test("Registry preview admits configuration-only metadata without claiming a usable connection", async t => {
   const preview = { state: "previewed", name: "example/mcp", version: "1.0.0", description: "A service", schema: null,
-    remotes: [{ endpoint: "http://localhost:8080/mcp", transport: "sse", mode: "configure", headers: ["Authorization"] }],
+    remotes: [{ endpoint: "https://localhost/mcp", transport: "sse", mode: "configure", headers: ["Authorization"] }],
     packages: [{ registry: "npm", identifier: "example-mcp", version: "1.0.0" }], digest: lifecycleDigests[0], observed_at_ms: 1000 };
   const api = client(t, () => Response.json(preview));
   assert.deepEqual(await api.request("registry-preview", { entry: {} }), preview);
@@ -1587,6 +1589,60 @@ test("Registry package metadata is displayed without install or execution contro
   assert.ok(ui.nodes(ui.result).some(node => node.textContent === "npm · team-mcp · 1.0.0"));
   assert.ok(ui.nodes(ui.result).some(node => node.textContent === "Host these packages, then connect their HTTPS endpoint."));
   assert.deepEqual(ui.requests.map(request => request.path), ["registry-preview"]);
+});
+
+test("MCP import browser redacts stdio commands, args and provider header keys before any network request", () => {
+  const secret = "synthetic-browser-private-key";
+  const upload = sanitizeRegistryUpload({ mcpServers: {
+    context7: { command: "npx", args: ["--api-key", secret], env: { CONTEXT7_API_KEY: secret } },
+    documents: { type: "http", url: "https://mcp.docs.example.com/mcp", headers: { Authorization: "Bearer " + secret },
+      env: { ACCESS_TOKEN: secret } },
+    invalid: { type: "http", url: "https://mcp.example.com/mcp?api_key=" + secret }
+  } });
+  assert.deepEqual(upload, { mcpServers: {
+    context7: { type: "stdio" },
+    documents: { type: "http", url: "https://mcp.docs.example.com/mcp", headers: { Authorization: "" }, env: {} },
+    invalid: { type: "http", url: "" }
+  } });
+  assert.ok(!JSON.stringify(upload).includes(secret));
+  const registry = sanitizeRegistryUpload({ name: "example/test", version: "1.0.0", remotes: [{
+    type: "streamable-http", url: "https://mcp.example.com/mcp",
+    headers: [{ name: "Authorization", value: secret }], variables: { password: { default: secret } }
+  }], packages: [{ registryType: "npm", identifier: "example", version: "1.0.0", packageArguments: [secret] }] });
+  assert.deepEqual(registry.remotes[0], { type: "streamable-http", url: "https://mcp.example.com/mcp",
+    headers: [{ name: "Authorization" }], variables: {} });
+  assert.ok(!JSON.stringify(registry).includes(secret));
+});
+
+test("MCP client import separates connectable HTTPS entries from unsupported stdio entries in the UI", async t => {
+  const receipt = { ...registryPreview, format: "client_config", name: "MCP client configuration", version: "", description: "",
+    remotes: [{ name: "documents", endpoint: "https://mcp.docs.example.com/mcp",
+      transport: "streamable-http", mode: "connect", headers: [] }],
+    packages: [], skipped: [{ name: "context7", reason: "stdio" }] };
+  const ui = registryFixture(t, () => receipt);
+  const raw = JSON.stringify({ mcpServers: {
+    context7: { command: "npx", args: ["--api-key", "synthetic-secret-do-not-upload"] },
+    documents: { type: "http", url: "https://mcp.docs.example.com/mcp" }
+  } });
+  const bytes = new TextEncoder().encode(raw);
+  ui.picker.files = [{ size: bytes.byteLength, arrayBuffer: async () => bytes.buffer }];
+  await ui.preview();
+  const posted = JSON.stringify(ui.requests.at(-1));
+  assert.ok(!posted.includes("synthetic-secret-do-not-upload") && !posted.includes("npx"));
+  assert.equal(ui.buttons().length, 1);
+  assert.ok(ui.nodes(ui.result).some(node => node.textContent === "Local stdio commands cannot run in RunMesh. Use the provider's public HTTPS MCP endpoint instead."));
+  await ui.click(ui.buttons()[0]);
+  assert.equal(ui.form.elements.endpoint.value, "https://mcp.docs.example.com/mcp");
+  assert.equal(ui.form.elements.name.value, "documents");
+});
+
+test("MCP client preview receipts accept redacted entries but reject unsafe or malformed skipped entries", () => {
+  const value = { ...registryPreview, format: "client_config", skipped: [{ name: "local", reason: "stdio" }] };
+  assert.equal(validRegistryPreview(value), true);
+  assert.equal(validRegistryPreview({ ...value, skipped: [{ name: "local", reason: "launch" }] }), false);
+  assert.equal(validRegistryPreview({ ...value, remotes: [{ ...value.remotes[0], endpoint: "https://mcp.example.com/mcp?key=private" }] }), false);
+  assert.equal(validRegistryPreview({ ...value, remotes: [{ ...value.remotes[0], endpoint: "https://user:secret@mcp.example.com/mcp" }] }), false);
+  assert.equal(validRegistryPreview({ ...value, remotes: [{ ...value.remotes[0], headers: ["Bad\nName"] }] }), false);
 });
 
 test("Registry pending preview is dropped when another file is selected", async t => {
