@@ -10,7 +10,8 @@ export function localGitLabClient() {
     assert.match(path, /^projects\/85844627(?:\/[a-zA-Z0-9/_?=&.%+-]+)?$/u);
     // glab authenticates with the release workstation's existing read session.
     // Errors are handled by the caller without exposing stderr or token values.
-    return execFileSync("glab", ["api", path], {
+    const executable = process.platform === "win32" ? "glab.cmd" : "glab";
+    return execFileSync(executable, ["api", path], {
       // Windows GitLab CLI installations may resolve through glab.cmd; the path
       // assertion above constrains every shell argument to the fixed API grammar.
       shell: process.platform === "win32",
