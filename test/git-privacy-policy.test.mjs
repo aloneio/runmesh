@@ -54,10 +54,13 @@ test("CI ranges only accept an observed ancestor; otherwise scan complete reacha
     CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "push",
     GITHUB_REPOSITORY: "other/project", GITHUB_REF: "refs/heads/main"
   }, () => false), "HEAD");
-  assert.equal(selectPrivacyRevision({
+  const reverseSyncEnvironment = {
     CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request",
     GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_BASE_REF: "dev", GITHUB_HEAD_REF: "main"
-  }, () => false), "HEAD^..HEAD");
+  };
+  assert.equal(selectPrivacyRevision(reverseSyncEnvironment, () => false), "HEAD^..HEAD");
+  // The reverse sync narrows the revision; it must not widen the API identity lane.
+  assert.equal(isGitHubApiCommit(githubApi, reverseSyncEnvironment), false);
 });
 test("privacy command examines actual commit objects, not the configured git identity", async t => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-git-privacy-"));
