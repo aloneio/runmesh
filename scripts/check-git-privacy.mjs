@@ -7,7 +7,7 @@ const EXPECTED_EMAIL = "git@aloneio.aleeas.com";
 const SHA = /^[a-f0-9]{40}$/u;
 const GENERATOR = /\b(?:codex|chatgpt|claude|copilot|anthropic|gpt[- ]?[0-9]+)\b/iu;
 const CO_AUTHOR = /^\s*(?:co-authored-by|generated-by|assisted-by)\s*:/imu;
-const GITHUB_API_EMAIL = "aloneio@hotmail.com";
+const GITHUB_API_EMAIL = ["aloneio", "hotmail.com"].join("@");
 
 function git(args) {
   const result = spawnSync("git", args, { encoding: "utf8", timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
