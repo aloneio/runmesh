@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { isGitHubMergeCommit, validateCommit, selectPrivacyRevision } from "../scripts/check-git-privacy.mjs";
+import { isGitHubMergeCommit, isGitHubApiCommit, validateCommit, selectPrivacyRevision } from "../scripts/check-git-privacy.mjs";
 
 const knownGood = { name: "aloneio", email: "git@aloneio.aleeas.com", committerName: "aloneio",
   committerEmail: "git@aloneio.aleeas.com", message: "fix(security): reject unsafe commit metadata" };
@@ -18,10 +18,16 @@ test("commit validation enforces exact identity, ASCII messages and no assistant
   assert.deepEqual(validateCommit({ ...knownGood, message: "" }), ["message_format"]);
   const githubMerge = { ...knownGood, email: "merge-author@example.invalid", committerName: "GitHub",
     committerEmail: "noreply@github.com", parentCount: 2, message: "Harden release provenance and SBOM verification" };
-  assert.equal(isGitHubMergeCommit(githubMerge), true);\n  assert.equal(isGitHubMergeCommit({ ...githubMerge, message: "custom protected merge title" }), true);
+  assert.equal(isGitHubMergeCommit(githubMerge), true);
+  assert.equal(isGitHubMergeCommit({ ...githubMerge, message: "custom protected merge title" }), true);
   assert.deepEqual(validateCommit(githubMerge), []);
   assert.equal(isGitHubMergeCommit({ ...githubMerge, parentCount: 1 }), false);
   assert.deepEqual(validateCommit({ ...githubMerge, parentCount: 1 }), ["author", "committer"]);
+  const githubApi = { ...knownGood, email: "aloneio@hotmail.com", committerEmail: "aloneio@hotmail.com", parentCount: 1 };
+  const githubEnvironment = { GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_BASE_REF: "main", GITHUB_HEAD_REF: "dev" };
+  assert.equal(isGitHubApiCommit(githubApi, githubEnvironment), true);
+  assert.deepEqual(validateCommit(githubApi, githubEnvironment), []);
+  assert.deepEqual(validateCommit(githubApi), ["author", "committer"]);
 });
 test("CI ranges only accept an observed ancestor; otherwise scan complete reachable history", () => {
   const old = "a".repeat(40);
