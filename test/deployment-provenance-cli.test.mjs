@@ -81,7 +81,7 @@ async function fixture(t, state = { version: "0.1.3", state: "released", release
   const sourceChangePath = join(root, "apps/worker/browser/admin-client.js");
   const fakeGlabSource = `const responses = ${JSON.stringify(responses)};
 const rawPath = process.argv[3] ?? "";
-const path = rawPath.replace(/^"(.*)"$/u, "$1");
+const path = rawPath.replaceAll(String.fromCharCode(34), "").trim();
 if (process.env.RUNMESH_TEST_CHANGE_SOURCE === "1" && path.endsWith("/ci-results/browser.json")) {
   require("node:fs").writeFileSync(${JSON.stringify(sourceChangePath)}, "source changed after approval");
 }
