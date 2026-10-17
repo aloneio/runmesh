@@ -29,8 +29,12 @@ export class RegistryPolicy {
     const requirement = typeof input.method === "string" ? rpcPermissionRequirement(input.method) : undefined;
     if (client === undefined || typeof runnerId !== "string" || !isSafeIdentifier(runnerId) || requirement === undefined) return deny();
     if (!client.scopes.includes(requirement.scope)) return deny("insufficient_scope");
-    const selection = this.ports.getMcpClientActiveRunner(client.client_id);
-    if (selection?.active_runner_id !== runnerId) return deny();
+    // Explicit operation pins do not rely on shared per-client selection.
+    // Neither path skips live scope, Runner policy or workspace admission.
+    if (input.runner_pinned !== true) {
+      const selection = this.ports.getMcpClientActiveRunner(client.client_id);
+      if (selection?.active_runner_id !== runnerId) return deny();
+    }
     const readiness = this.getPolicyReadiness(runnerId);
     if (!readiness.ok || readiness.applied_revision !== input.policy_revision || readiness.active_checksum !== input.policy_checksum) return deny("stale_policy");
     let workspaceId = input.workspace_id;
@@ -52,14 +56,19 @@ export class RegistryPolicy {
       ? { ok: true, ...(includeRecording ? { record_history: client.record_history === true } : {}) } : deny();
   }
 
-  public effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
+  /** One synchronous, currently-authorized observation for list tools.
+   * Combining the policy fence and workspace intersection in one Registry
+   * request eliminates a second Worker-to-DO hop and an additional policy
+   * read. The result is never cached across MCP operations. */
+  public effectiveWorkspaceDecision(clientId: string, runnerId: string):
+    | { ok: true; runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> }
+    | { ok: false; code: "permission_denied" | "policy_pending" | "stale_policy" } {
     const client = this.ports.getMcpClient(clientId);
-    if (client === undefined || client.revoked_at_ms !== null || !client.scopes.includes("coding:read")) return undefined;
+    if (client === undefined || client.revoked_at_ms !== null || !client.scopes.includes("coding:read"))
+      return { ok: false, code: "permission_denied" };
     const authorized = this.authorizedPolicySnapshot(runnerId);
-    if (!authorized.ok) return undefined;
+    if (!authorized.ok) return { ok: false, code: authorized.code };
     const policy = authorized.policy;
-    // This synchronous read uses one verified snapshot and current permission
-    // ceiling for the whole list. Nothing is cached between requests.
     let ceiling: PermissionSet | undefined;
     const workspaces = policy.workspaces.flatMap((workspace) => {
       if (!workspace.enabled) return [];
@@ -67,7 +76,14 @@ export class RegistryPolicy {
       const permissions = intersectPermissionSets(ceiling, workspace.permissions);
       return permissions.read ? [{ workspace_id: workspace.workspace_id, enabled: true, permissions }] : [];
     });
-    return { runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces };
+    return { ok: true, runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces };
+  }
+
+  public effectiveWorkspaceList(clientId: string, runnerId: string):
+    { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
+    const result = this.effectiveWorkspaceDecision(clientId, runnerId);
+    return result.ok ? { runner_id: result.runner_id, revision: result.revision,
+      checksum: result.checksum, workspaces: result.workspaces } : undefined;
   }
 
   public setClientRunnerOverride(clientId: string, runnerId: string, permissions: PermissionSet, nowMs: number): boolean {

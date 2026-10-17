@@ -79,9 +79,9 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
   assert.ok(ciActionRefs.every((ref) => /^[^@]+@[0-9a-f]{40}$/u.test(ref)), `mutable GitHub Action ref in ci.yml: ${ciActionRefs.join(", ")}`);
   assert.equal(ciWorkflow.includes("persist-credentials: false"), true);
   const gitlabWorkflow = (await readFile(join(repositoryRoot, ".gitlab-ci.yml"), "utf8")).replace(/\r\n/gu, "\n");
-  // Cloudflare Workers Builds owns deployment for both connected repositories;
-  // GitLab CI mirrors GitHub's verification lane and must not require a
-  // separate Wrangler token or carry a competing deployment job.
+  // GitLab CI verifies source without production Cloudflare credentials.
+  // The Cloudflare production Build Trigger is operationally inert and
+  // independently approved release workstations own the upload path.
   assert.equal(gitlabWorkflow.includes("cloudflare_deploy:"), false);
   assert.equal(gitlabWorkflow.includes("wrangler deploy"), false);
   assert.equal(gitlabWorkflow.includes("CLOUDFLARE_API_TOKEN"), false);

@@ -37,9 +37,11 @@
     "development": {
       "name": "runmeshdev",
       "observability": {
+        "redact_query_string": true,
         "logs": {
           "enabled": true,
-          "invocation_logs": true,
+          "head_sampling_rate": 0.1,
+          "invocation_logs": false,
           "persist": true
         }
       },
@@ -164,9 +166,11 @@
     "production": {
       "name": "runmesh",
       "observability": {
+        "redact_query_string": true,
         "logs": {
           "enabled": true,
-          "invocation_logs": true,
+          "head_sampling_rate": 0.1,
+          "invocation_logs": false,
           "persist": true
         }
       },
@@ -199,7 +203,7 @@
       ],
       "triggers": {
         "crons": [
-          "*/15 * * * *"
+          "0 * * * *"
         ]
       },
       "exports": {
@@ -238,7 +242,7 @@
   ],
   "triggers": {
     "crons": [
-      "*/15 * * * *"
+      "0 * * * *"
     ]
   },
   "exports": {

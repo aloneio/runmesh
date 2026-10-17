@@ -41,7 +41,7 @@ node scripts/check-release-contract.mjs --require-distributable
 
 The publication workflow requires the exact `verify-all` gate set. **RELEASED** records the independently verified publication, and generation places the selected version in `REVIEWED_RELEASE_VERSION`. **ENABLED** is confirmed after deployment when `/runner/releases/stable` returns that version with `distributable: true`. Production uses the generated version as its default activation value, together with a valid public origin and disabled test mode. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override pauses hosted distribution.
 
-Include `apps/worker/src/generated-release.ts` and the current release status in the activation change. Verify and promote that change through `dev` to protected `main`, then deploy it through the [production deployment procedure](../deployment.md#select-the-environment).
+Include `apps/worker/src/generated-release.ts` and the current release status in the activation change. Verify and promote that change through `dev` to protected `main`, then let Cloudflare Workers Builds deploy protected `main` automatically as documented in the [production deployment procedure](../deployment.md#select-the-environment).
 
 The publication commit identifies the signed Runner package and remains in `release_commit`. The later activation commit identifies the Worker that selects that package for stable installations. Compare `/health` with the activation commit using [build provenance](../build-provenance.md#verify-a-deployment), and confirm that `/runner/releases/stable` selects the published version. Complete the Runner service lifecycle and permission checks in the [upgrade guide](../upgrading.md).
 

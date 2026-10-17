@@ -25,7 +25,8 @@ async function command(file, args, timeout = 120000, env = process.env) {
 function sourceIdentity() {
   const observed = sourceObservation(root);
   assert.notEqual(observed.state, "unknown", "CI source observation unavailable");
-  for (const declared of [process.env.GITHUB_SHA, process.env.CI_COMMIT_SHA]) if (declared) assert.equal(declared, observed.commit, "CI source differs from checkout");
+  const declared = process.env.RUNMESH_SOURCE_SHA ?? process.env.GITHUB_SHA ?? process.env.CI_COMMIT_SHA;
+  if (declared) assert.equal(declared, observed.commit, "CI source differs from checkout");
   return observed;
 }
 async function writeReport(value) {

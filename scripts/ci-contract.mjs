@@ -89,5 +89,6 @@ export const GITLAB_EVENTS = Object.freeze([
   '$CI_PIPELINE_SOURCE == "merge_request_event"',
   '$CI_PIPELINE_SOURCE == "web"',
   '$CI_PIPELINE_SOURCE == "schedule"',
+  '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"',
 ]);
-export const GITLAB_PRIVACY_EVENTS = Object.freeze([...GITLAB_EVENTS, '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"']);
+export const GITLAB_PRIVACY_EVENTS = GITLAB_EVENTS;

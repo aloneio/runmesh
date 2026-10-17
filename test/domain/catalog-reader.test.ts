@@ -80,3 +80,19 @@ it.each([
   expect(await f.run()).toEqual({ state: expected });
   expect(f.ports.identity).toHaveBeenCalledTimes(2);
 });
+
+it("W04 precise tool ID lookup does not paginate or disclose unrelated schemas", async () => {
+  const f = await fixture();
+  const wanted = f.snapshot.tools[1]!;
+  const result = await f.run({ profile_id: "docs", tool_id: wanted.tool_id });
+  expect(result.state).toBe("listed");
+  if (result.state !== "listed") throw new Error("expected catalog");
+  expect(result.tools.map(tool => tool.tool_id)).toEqual([wanted.tool_id]);
+  expect(result.next_cursor).toBeNull();
+  expect(f.ports.cursor.open).not.toHaveBeenCalled();
+  expect(f.ports.cursor.seal).not.toHaveBeenCalled();
+  expect(await f.run({ profile_id: "docs", tool_id: "mcp." + "f".repeat(64) })).toMatchObject({ state: "listed", tools: [], next_cursor: null });
+  expect(await f.run({ profile_id: "docs", tool_id: wanted.tool_id, limit: 1 })).toEqual({ state: "invalid" });
+  expect(await f.run({ profile_id: "docs", tool_id: wanted.tool_id, cursor: "old" })).toEqual({ state: "invalid" });
+  expect(await f.run({ profile_id: "docs", tool_id: "invalid" })).toEqual({ state: "invalid" });
+});

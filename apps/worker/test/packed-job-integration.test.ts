@@ -1,6 +1,7 @@
 import { env,runInDurableObject } from "cloudflare:test";
 import { expect,it,vi, type Mock } from "vitest";
 import { RegistryDO } from "../src/registry.js";
+import { PackedJobHistory } from "../src/job-history-store.js";
 import { internalHeaders } from "../src/security.js";
 import { DEFAULT_JOB_HISTORY } from "../src/job-history-settings.js";
 const db=(env as unknown as {HISTORY_DB:D1Database}).HISTORY_DB;
@@ -236,5 +237,24 @@ it.each([true, false])("reporting capability negotiation is explicit, new peer=%
     expect(result.job_history).toEqual(DEFAULT_JOB_HISTORY);
     if (capable) expect(result.job_reporting).toBe(2);
     else expect(result).not.toHaveProperty("job_reporting");
+  });
+});
+
+it("a damaged archive leaves healthy Runner routes and core authorization unchanged", async () => {
+  await fixture(async (instance, state, send, identity) => {
+    expect((await send("sync", sync(identity))).status).toBe(200);
+    const namespace = state.id.toString(), client = instance.getMcpClient("c"), now = Date.now();
+    await db.prepare("UPDATE runmesh_job_snapshots_v1 SET jobs_json='{' WHERE namespace=? AND runner_id='r'").bind(namespace).run();
+    expect((await send("jobs?limit=10", {}, "GET")).status).toBe(503);
+    instance.registerRunner("healthy", "d".repeat(64), now, undefined, "dedicated_user");
+    const lifecycle = instance.getRunnerExecutionState("healthy")!.lifecycle_id;
+    await new PackedJobHistory(db, namespace).merge("healthy", lifecycle, [{ job_id: "healthy-job", runner_id: "healthy", workspace_id: "w", status: "succeeded", created_at_ms: now, updated_at_ms: now }],
+      () => ({ ...DEFAULT_JOB_HISTORY, mode: "immediate" }), jobs => new Set(jobs.map(job => job.job_id)), now);
+    const response = await send("/runners/healthy/jobs?limit=10", {}, "GET");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ jobs: [{ job_id: "healthy-job" }] });
+    expect((await send("sync", { ...sync(identity), session_id: "stale" })).status).toBe(409);
+    expect(instance.getMcpClient("c")).toEqual(client);
+    expect(instance.getRunner("r")?.state).toBe("online");
   });
 });

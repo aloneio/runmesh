@@ -38,7 +38,8 @@ export function createCatalogReader(ports: CatalogReadPorts) {
         const verified = await verifiedCatalogSnapshots(profile, head, { observed, approved }, ports.digest, () => expired() || signal.aborted);
         if (!verified || head.approved_names.some(name => !verified.approved.tools.some(tool => tool.definition.name === name))) return { state: "unavailable" };
         tools = compatibleApprovedTools(verified.observed, verified.approved, head.approved_names);
-        tools.sort((a, b) => a.public_name < b.public_name ? -1 : a.public_name > b.public_name ? 1 : 0);
+        if (query.tool_id !== undefined) tools = tools.filter(tool => tool.tool_id === query.tool_id);
+        else tools.sort((a, b) => a.public_name < b.public_name ? -1 : a.public_name > b.public_name ? 1 : 0);
       }
       if (expired() || signal.aborted) return { state: "unavailable" };
       const offset = cursor?.offset ?? 0;

@@ -6,6 +6,10 @@ import { Script } from "node:vm";
 import { build } from "esbuild";
 import { dependencies } from "./architecture-graph.mjs";
 
+// Allow reviewed import-format parsing while keeping the complete browser
+// dependency graph and generated inline script under a fixed memory budget.
+export const MAX_BROWSER_SOURCE_BYTES = 160 * 1024;
+
 /** Bundle only bounded, reviewed local browser modules; never execute them. */
 export async function buildBrowserSource(root) {
   const directory = await realpath(join(root, "apps/worker/browser"));
@@ -24,7 +28,7 @@ export async function buildBrowserSource(root) {
       });
       builder.onLoad({ filter: /.*/ }, async args => {
         const stat = await lstat(args.path);
-        if (!stat.isFile() || stat.isSymbolicLink() || (bytes += stat.size) > 128 * 1024) throw new Error("invalid_browser_source");
+        if (!stat.isFile() || stat.isSymbolicLink() || (bytes += stat.size) > MAX_BROWSER_SOURCE_BYTES) throw new Error("invalid_browser_source");
         const contents = await readFile(args.path, "utf8");
         if (dependencies(contents, args.path).some(edge => typeof edge.specifier !== "string"))
           throw new Error("invalid_browser_dependency");
@@ -39,7 +43,7 @@ export async function buildBrowserSource(root) {
 
 /** Parse browser syntax without executing DOM code or modifying its bytes. */
 export function browserModule(source) {
-  if (typeof source !== "string" || Buffer.byteLength(source) > 128 * 1024 || /<\/script\s*>/iu.test(source)) throw new Error("invalid_browser_source");
+  if (typeof source !== "string" || Buffer.byteLength(source) > MAX_BROWSER_SOURCE_BYTES || /<\/script\s*>/iu.test(source)) throw new Error("invalid_browser_source");
   new Script(source, { filename: "admin-client.js" });
   return `// Generated from the reviewed browser source. Do not edit or commit.\nexport const ADMIN_CLIENT_SOURCE = ${JSON.stringify(source)};\n`;
 }

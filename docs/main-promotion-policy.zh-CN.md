@@ -23,10 +23,10 @@ MR 合并的角色权限，并要求成功且非 skipped 的流水线。服务�
 将项目的 **CI/CD configuration file** 设为：
 
 ```text
-.gitlab/main-policy.yml@aloneio/runmesh:dev
+.gitlab/main-policy.yml@aloneio/runmesh:main
 ```
 
-入口从经过审阅的 `dev` 读取，再包含实际流水线提交的 `.gitlab-ci.yml`，
+入口从受保护的 `main` 读取，再包含实际流水线提交的 `.gitlab-ci.yml`，
 最后应用必需的元数据 `.pre` 任务和流水线创建规则。早于门禁的旧分支也使用
 同一策略。分叉仓库应在该管理设置中替换为自己的项目路径。
 
@@ -61,10 +61,18 @@ node --test test/main-promotion-policy.test.mjs
 [本地合并流程](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)，
 保留已有作者和提交者身份 `aloneio <git@aloneio.aleeas.com>`。
 
-GitLab 镜像晋级使用对应的受保护 `dev -> main` MR，采用快进合并并等待流水线成功。
-保留 `dev`，并核对两端 `main` 指向同一个已审核提交。
+GitLab 仍通过受保护的 `dev -> main` MR 快进合并，要求所有必需检查
+通过，并保留 `dev`。Cloudflare Workers Builds 直接监听受保护的
+`main` 分支，收到合并提交后自动运行构建及 Wrangler 生产部署命令。
+GitLab `main` 流水线是推送后的独立检查，不是额外的部署审批服务。
+每次合并后应核对 Cloudflare 构建和线上提交；需要时可回滚 Worker 版本，
+但 D1/Durable Object 数据与不可逆迁移仍需保持向后兼容。
 
-正式发行从受保护的 `main` 进入发布检查。分别核对两端最终提交和实际部署的 Worker。
+原先的空操作占位分支不再参与生产部署。实际构建命令、验收及恢复方式
+见[部署指南](deployment.md)。
+
+GitLab 是唯一的部署权威来源。GitHub 的发行历史独立保留，本流程不会对其进行
+自动同步或强制覆盖。
 
 GitHub 当前采用只读 `pull_request` 工作流，其信任范围包含能够修改工作流
 或仓库规则的维护者。这些修改应作为安全配置审阅；需要独立执行权限的组织

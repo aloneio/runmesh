@@ -367,6 +367,8 @@ export const QueueGrantPayloadSchema = z.object({
   policy_revision: z.number().int().positive(), policy_checksum: z.string().regex(/^[a-f0-9]{64}$/),
   launch_digest: z.string().regex(/^[a-f0-9]{64}$/), expires_at_ms: TimestampSchema,
   nonce: IdentifierSchema,
+  // Optional during rolling upgrades; queue admission requires a matching job_id.
+  job_id: IdentifierSchema.optional(),
 }).strict();
 export const QueueGrantSchema = z.object({ payload: QueueGrantPayloadSchema, signature: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export const RunnerQueueCheckSchema = CorrelatedEnvelopeSchema.extend({

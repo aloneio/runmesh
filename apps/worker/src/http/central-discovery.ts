@@ -21,12 +21,21 @@ export async function handleCentralDiscovery(request: Request, env: WorkerEnv, u
     const owner = env.CAPABILITIES.get(env.CAPABILITIES.idFromName("central")) as unknown as CentralRemote;
     const result = await Promise.race([owner.discoverRemote(admission.session_hash, profileId, revision),
       new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), REMOTE_LIMITS.operation_ms + 2000); })]);
-    if (result?.state === "written") {
+    if (result?.state === "written" || result?.state === "unchanged") {
       const head = parseCatalogHead(result.head);
       const excluded = result.excluded_tools === undefined ? [] : parseRemoteToolIssues(result.excluded_tools);
       if (excluded === undefined) return centralFailure("central_result_unconfirmed", 503, "unknown");
-      if (head?.profile_id === profileId && head.revision === revision + 1 && head.approved_digest === head.observed_digest)
-        return Response.json({ state: "written", head, ...(excluded.length ? { excluded_tools: excluded } : {}) }, { headers: centralHeaders });
+      // Both first discovery and refresh must confirm a published digest:
+      // never report success for a pending/staged catalog or malformed reply.
+      const expectedResultRevision = revision + (result.state === "written" ? 1 : 0);
+      // An advanced head requires an explicit safe-rebase receipt from the
+      // state owner; ordinary writes keep their original exact CAS contract.
+      const recovered = result.recovered_from_revision === revision && head !== undefined
+        && head.revision > expectedResultRevision;
+      if (head?.profile_id === profileId && (head.revision === expectedResultRevision || recovered)
+        && head.approved_digest === head.observed_digest)
+        return Response.json({ state: result.state, head, ...(recovered ? { recovered_from_revision: revision } : {}),
+          ...(excluded.length ? { excluded_tools: excluded } : {}) }, { headers: centralHeaders });
     } else if (result?.state === "conflict" && catalogRevision(result.current_revision, true)) {
       return Response.json({ error: { code: "central_revision_conflict", operation_state: "not_started", current_revision: result.current_revision } }, { status: 409, headers: centralHeaders });
     } else if (result?.state === "failed" && REMOTE_CODES.includes(result.code) && ["not_started", "unknown"].includes(result.operation_state)) {

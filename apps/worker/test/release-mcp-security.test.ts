@@ -87,11 +87,9 @@ it.each(["denied", "pending", "missing"] as const)("AUDIT-LIST: runner authoriza
   let injected = 0;
   (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: async (request: Request) => {
     const path = new URL(request.url).pathname;
-    if (state === "pending" && path === "/runners/r/snapshot-authorization") {
-      injected++; return Response.json({ ok: false, code: "policy_pending", reason: "policy identity is not fully applied" });
-    }
-    if (state !== "pending" && path === "/auth/clients/c/effective-workspaces/r") {
+    if (path === "/auth/clients/c/effective-workspaces/r") {
       injected++;
+      if (state === "pending") return Response.json({ ok: false, code: "policy_pending" });
       if (state === "missing") return new Response(null, { status: 404 });
       const response = await original(id).fetch(request);
       return Response.json({ ...await response.json() as Record<string, unknown>, workspaces: [] });
@@ -175,21 +173,25 @@ it("AUDIT-READ: invalid Runner catalog does not become an empty automatic select
   expect(f.forwarded).toHaveLength(0);
 });
 
-it.each([{}, { ok: true }, { ok: false, code: "policy_pending" }])("AUDIT-LIST: snapshot authorization rejects incomplete receipt %j", async receipt => {
+it.each([{}, { ok: true }, { ok: false, code: "unknown" }])("AUDIT-LIST: combined authorization rejects incomplete attestation %j", async receipt => {
   const f = await fixture();
   const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
-  let snapshotReads = 0, workspaceReads = 0;
-  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: async (request: Request) => {
-    const path = new URL(request.url).pathname;
-    if (path === "/runners/r/snapshot-authorization") { snapshotReads++; return Response.json(receipt); }
-    if (path === "/auth/clients/c/effective-workspaces/r") workspaceReads++;
+  let guardReads = 0, legacySnapshotReads = 0;
+  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => {
+    const url = new URL(request.url);
+    if (url.pathname === "/runners/r/snapshot-authorization") legacySnapshotReads++;
+    if (url.pathname === "/auth/clients/c/effective-workspaces/r") {
+      expect(url.searchParams.get("snapshot_guard")).toBe("1");
+      guardReads++;
+      return Response.json(receipt);
+    }
     return original(id).fetch(request);
   } });
   const result = (await f.call("runner_list", {})).body.result;
-  expect(snapshotReads).toBe(1);
+  expect(guardReads).toBe(1);
+  expect(legacySnapshotReads).toBe(0);
   expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "authorization_response_invalid", operation_state: "not_started" } } });
   expect(result.structuredContent).not.toHaveProperty("runners");
-  expect(workspaceReads).toBe(0);
   expect(f.forwarded).toHaveLength(0);
 });
 

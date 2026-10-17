@@ -59,7 +59,7 @@ function diagnosticDependency(stage: ControlPlaneFailureStage): McpDiagnosticDep
   }
 }
 
-export async function callRunner(env: McpRequestEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string, workspaceBoundJob = false): Promise<ToolCall> {
+export async function callRunner(env: McpRequestEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string, workspaceBoundJob = false, runnerPinned = false): Promise<ToolCall> {
   if (!isSafeIdentifier(runnerId)) return fail("invalid_runner_id", "runner_id is invalid", "Use a runner identifier returned by runner_list.");
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.", "not_started");
   if ((policyRevision === undefined || policyChecksum === undefined || !/^[a-f0-9]{64}$/.test(policyChecksum)) && method !== "echo" && method !== "runner.info") return fail("policy_pending", "The selected runner policy could not be verified.", "Wait for the runner to apply its control-plane policy, then retry.");
@@ -70,7 +70,7 @@ export async function callRunner(env: McpRequestEnv, runnerId: string, method: s
       params: params as JsonValue, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision }) }));
   } catch { return fail("invalid_params", "Request exceeds the wire budget or is not JSON-safe; nothing was sent to the Runner.", "Reduce patch size, paths or expected hashes and retry."); }
   const authorization = await registryPostCall(env, "/auth/mcp/authorize-rpc", {
-    ...env.mcpPrincipal, runner_id: runnerId, method, workspace_bound: workspaceBoundJob,
+    ...env.mcpPrincipal, runner_id: runnerId, method, workspace_bound: workspaceBoundJob, runner_pinned: runnerPinned,
     workspace_id: params.expected_workspace_id ?? params.workspace_id,
     ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
     policy_revision: policyRevision, policy_checksum: policyChecksum,
@@ -84,7 +84,7 @@ export async function callRunner(env: McpRequestEnv, runnerId: string, method: s
     if (authorization.value.code === "runner_upgrade_required") return fail("runner_upgrade_required", "History-independent Job operations require Runner 0.1.1 or newer.", "Install a verified supported Runner before disabling cloud Job history.");
     return fail("permission_denied", "The current client, workspace or policy no longer authorizes this operation.", "Refresh the current permissions and policy before retrying.");
   }
-  const body = JSON.stringify({ method, params, mcp_authorization: { ...env.mcpPrincipal, workspace_bound: workspaceBoundJob }, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
+  const body = JSON.stringify({ method, params, mcp_authorization: { ...env.mcpPrincipal, workspace_bound: workspaceBoundJob, runner_pinned: runnerPinned }, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", "/rpc", body);
   let response: Response;
   try {

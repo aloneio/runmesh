@@ -5,6 +5,17 @@ interface RankedTool { readonly score: number; readonly entry: ToolSearchEntry }
 const normalize = (value: string) => value.normalize("NFKC").toLowerCase();
 const words = (value: string) => normalize(value).match(/[\p{L}\p{N}]+/gu) ?? [];
 
+/** Small, deterministic vocabulary; never fetch embeddings or inspect credentials.
+ * Alternatives broaden recall without relaxing the every-term requirement. */
+const ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  repo: ["repository", "仓库"], repository: ["repo", "仓库"], 仓库: ["repository", "repo"],
+  issues: ["issue", "问题"], issue: ["issues", "问题"], 问题: ["issue", "issues"],
+  deploy: ["deployment", "部署"], deployment: ["deploy", "部署"], 部署: ["deploy", "deployment"],
+  merge: ["合并"], 合并: ["merge"],
+  files: ["file", "文件"], file: ["files", "文件"], 文件: ["file", "files"],
+  search: ["find", "搜索"], find: ["search", "搜索"], 搜索: ["search", "find"],
+});
+
 /** Exact names rank first; every keyword must occur in the tool or its connection.
  * Unicode substring matching handles Chinese keywords without a locale dependency. */
 export function createToolSearchScorer(query: string): (tool: SearchText) => number {
@@ -15,8 +26,10 @@ export function createToolSearchScorer(query: string): (tool: SearchText) => num
       profile = normalize(tool.profile_name), nameWords = new Set(words(tool.name));
     let score = name === exact ? 1000 : 0;
     for (const term of terms) {
-      const match = nameWords.has(term) ? 100 : name.includes(term) ? 60 : title.includes(term) ? 30
-        : description.includes(term) ? 10 : profile.includes(term) ? 5 : 0;
+      const relevance = (candidate: string) => nameWords.has(candidate) ? 100 : name.includes(candidate) ? 60
+        : title.includes(candidate) ? 30 : description.includes(candidate) ? 10 : profile.includes(candidate) ? 5 : 0;
+      const direct = relevance(term);
+      const match = direct || Math.max(0, ...(ALIASES[term] ?? []).map(alias => Math.floor(relevance(alias) / 2)));
       if (!match) return 0;
       score += match;
     }

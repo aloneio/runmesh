@@ -79,9 +79,9 @@ Default history upload is every five minutes and cloud retention is seven days. 
 
 ## Configure shared execution
 
-Runners from 0.1.4 onward default to two execution slots, configurable from 1 to 64. Check each installed Runner's effective setting; existing explicit limits are preserved.
+Runner execution defaults to 32 slots (half of the 64-slot limit); operators can set 1–64 explicitly. The revised default takes effect when running a compatible new Runner without an explicit limit. Existing stored or command-line overrides are preserved; an already running Runner must be upgraded and restarted to use new defaults.
 
-Compatible queues hold up to 32 waiting Jobs and eight per client, schedule clients in turn, and check authorization again before starting. A shell request with `queue: false` returns immediately when no slot is available. See [queue behavior](job-queue-and-localization.md).
+Compatible queues default to 500 waiting Jobs in total and 500 per client (half of each 1,000-slot hard limit). Custom JobManager integration limits are preserved. Default local Job metadata retention is 632 records to allow 32 active + 500 queued Jobs with 100 completed records; explicitly lower retention limits may reduce effective admission capacity. Queues schedule clients in turn and check authorization again before starting. A shell request with `queue: false` returns immediately when no slot is available. See [queue behavior](job-queue-and-localization.md).
 
 From 0.1.4 onward, history reporting uploads snapshots when they change while heartbeats, authorization and maintenance continue as usual. This requires a compatible Worker and Runner. See [release notes](release-notes.md) and [history reporting](demand-job-history.md) for upgrade steps and reporting settings.
 

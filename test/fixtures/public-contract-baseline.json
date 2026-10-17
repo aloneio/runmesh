@@ -12,8 +12,8 @@
     "shell",
     "workspace_list"
   ],
-  "mcp_catalog_sha256": "bf9a174d3e4715d7debd1c33352cf372b4e94e423c5adfc07c9740d51be81adc",
-  "wire_schema_sha256": "7d1f2eaadbf88685f5a416785de44e86f44945aa938bc7a103c907d22b41c7f2",
+  "mcp_catalog_sha256": "1550c3e210dc9cba5b4b516faf4a91edbcdd3911df704c97c30e7f4adc75f652",
+  "wire_schema_sha256": "941e6db6a272624ce1a0d306e01568441a85f5d87d52be236debbca38a1157d9",
   "maintenance_v1": {
     "source_commit": "e3cf4bae5f96c96d3fd27dcf7f9f45321b8c9eb8",
     "runner_release": "0.1.8-dev.45",

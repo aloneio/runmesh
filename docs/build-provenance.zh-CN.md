@@ -20,11 +20,15 @@ npm run build
 npm run deploy:worker -- --env development
 ```
 
-生产使用受保护的 `main`，在签名发行物完成验证和激活后执行：
+生产环境由 Cloudflare Workers Builds 自动部署受保护 `main` 的提交，
+部署命令使用仓库中的生产 Wrangler 配置：
 
 ```sh
-npm run deploy:worker -- --env production
+npx wrangler deploy --config apps/worker/wrangler.jsonc --env production --name runmesh --tag "main:$WORKERS_CI_COMMIT_SHA"
 ```
+
+日常发布无需本机 Cloudflare Token。原有
+`npm run deploy:worker -- --env production` 仅作为受审查的手动恢复方式。
 
 生产部署使用已通过测试、包含[发行状态](release-readiness.zh-CN.md)所列正式版本激活记录的 `main` 提交。后续控制端更新可以继续使用同一正式 Runner 包。新改动先在 development 测试，再按下文核对部署后实际运行的源码。
 
@@ -57,7 +61,7 @@ npm run check:deployment -- https://your-worker.example <实际40位提交> main
 | 失败阶段 | 下一步 |
 | --- | --- |
 | Cloudflare 安装工具或依赖 | 检查完整日志、工具链版本和缓存设置，修正日志指出的问题后重试 |
-| 部署预检 | 修正分支、源码或发布状态问题，再开始上传 |
+| 手动恢复预检 | 修正分支、源码或发布状态问题，再开始上传 |
 | Wrangler 上传 | 先检查线上来源；即使响应失败，提供商也可能已接收部署 |
 
 重试成功后，再运行上面的来源比较命令。

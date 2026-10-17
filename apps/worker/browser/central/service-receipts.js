@@ -23,11 +23,19 @@ export function validServiceInspection(value) {
 
 export function validRegistryPreview(value) {
   return ['name', 'version', 'description'].every(key => typeof value[key] === 'string')
+    && (value.format === undefined || value.format === 'client_config')
     && (value.schema === null || typeof value.schema === 'string')
     && typeof value.digest === 'string' && /^[a-f0-9]{64}$/.test(value.digest)
     && Number.isSafeInteger(value.observed_at_ms) && value.observed_at_ms > 0
-    && Array.isArray(value.remotes) && value.remotes.every(remote => typeof remote?.endpoint === 'string'
-      && (remote.mode !== 'connect' || remote.endpoint.startsWith('https://')) && typeof remote.transport === 'string' && ['connect', 'configure'].includes(remote.mode)
-      && Array.isArray(remote.headers) && remote.headers.every(header => typeof header === 'string'))
-    && Array.isArray(value.packages) && value.packages.every(item => item && ['registry', 'identifier', 'version'].every(key => typeof item[key] === 'string'));
+    && Array.isArray(value.remotes) && value.remotes.length <= 32 && value.remotes.every(remote => typeof remote?.endpoint === 'string'
+      && remote.endpoint.startsWith('https://') && remote.endpoint.length <= 2048 && !/[?#\u0000-\u0020\u007f\\]/.test(remote.endpoint)
+      && !/^https:\/\/[^/]*@/.test(remote.endpoint)
+      && (remote.name === undefined || typeof remote.name === 'string' && remote.name.length > 0 && remote.name.length <= 128)
+      && typeof remote.transport === 'string' && ['connect', 'configure'].includes(remote.mode)
+      && Array.isArray(remote.headers) && remote.headers.length <= 32 && remote.headers.every(header => typeof header === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(header)))
+    && Array.isArray(value.packages) && value.packages.length <= 16
+    && value.packages.every(item => item && ['registry', 'identifier', 'version'].every(key => typeof item[key] === 'string'))
+    && (value.skipped === undefined || value.format === 'client_config' && Array.isArray(value.skipped)
+      && value.skipped.length <= 32 && value.skipped.every(item => item && typeof item.name === 'string' && item.name.length > 0
+        && item.name.length <= 128 && ['stdio', 'unsupported_transport', 'invalid_endpoint', 'invalid_definition'].includes(item.reason)));
 }

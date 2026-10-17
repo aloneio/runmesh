@@ -2,7 +2,7 @@ const remoteMessages = Object.freeze({ remote_upstream_unavailable: 'mcpServiceU
   remote_upstream_protocol_error: 'mcpResponseInvalid', remote_result_invalid: 'mcpResponseInvalid',
   remote_dependency_unavailable: 'mcpConnectionUnavailable', remote_schema_unsupported: 'mcpSchemaUnsupported', remote_catalog_limit_exceeded: 'mcpCatalogLimit' });
 const sourceMessages = Object.freeze({ skill_source_invalid: 'skillSourceInvalid', skill_source_missing: 'skillSourceMissing',
-  skill_source_capacity: 'skillSourceCapacity', skill_source_changed: 'skillSourceChanged', skill_source_unavailable: 'skillSourceUnavailable' });
+  skill_source_capacity: 'skillSourceCapacity', skill_source_rate_limited: 'skillSourceRateLimited', skill_source_changed: 'skillSourceChanged', skill_source_unavailable: 'skillSourceUnavailable' });
 
 /** Classify failure receipts into guidance and recovery metadata; the API owns refresh admission. */
 export function classifyCentralFailure({ serviceInput, skillInput, skillInstallation, sourceAction, inspection, registry }, status, value) {

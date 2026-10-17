@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { reconnectDelayMs } from "../src/backoff.js";
-import { DEFAULT_MAX_CONCURRENT_JOBS, parseRunnerArgs, validateRunnerConfig } from "../src/config.js";
+import { DEFAULT_MAX_CONCURRENT_JOBS, effectiveJobStorageLimits, parseRunnerArgs, validateRunnerConfig } from "../src/config.js";
 import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
 import { defaultRunnerStateDir } from "../src/state-path.js";
 import { RunnerRuntime } from "../src/runtime.js";
@@ -25,11 +25,20 @@ describe("runner configuration", () => {
     await expect(validateRunnerConfig({ server: "wss://user:password@example.test", token: "0123456789abcdef", runnerId: "runner-1" })).rejects.toThrow("credentials");
     await expect(validateRunnerConfig({ server: "wss://example.test/path?token=leak", token: "0123456789abcdef", runnerId: "runner-1" })).rejects.toThrow("query");
   });
-  it("defaults to two execution slots while preserving explicit operator limits", async () => {
+  it("defaults to half of the concurrency hard cap while preserving explicit operator limits", async () => {
     const base = { server: "ws://127.0.0.1:8787", insecureLocal: true, token: "0123456789abcdef", runnerId: "runner-1" } as const;
-    await expect(validateRunnerConfig(base)).resolves.toMatchObject({ maxConcurrentJobs: DEFAULT_MAX_CONCURRENT_JOBS });
+    expect(DEFAULT_MAX_CONCURRENT_JOBS).toBe(32);
+    const config = await validateRunnerConfig(base);
+    expect(config.maxConcurrentJobs).toBe(32);
+    expect(effectiveJobStorageLimits(config).maxRetainedJobs).toBe(632);
+    expect(new RunnerRuntime({ config }).jobs.queueStatus()).toMatchObject({
+      waiting: 0, running: 0, max_concurrent_jobs: 32, available_slots: 32, limit: 500, per_client_limit: 500,
+    });
     await expect(validateRunnerConfig({ ...base, maxConcurrentJobs: 1 })).resolves.toMatchObject({ maxConcurrentJobs: 1 });
     await expect(validateRunnerConfig({ ...base, maxConcurrentJobs: 64 })).resolves.toMatchObject({ maxConcurrentJobs: 64 });
+    const override = await validateRunnerConfig({ ...base, maxConcurrentJobs: 1, maxRetainedJobs: 25 });
+    expect(new RunnerRuntime({ config: override }).jobs.queueStatus()).toMatchObject({ max_concurrent_jobs: 1, limit: 500 });
+    expect(effectiveJobStorageLimits(override).maxRetainedJobs).toBe(25);
   });
   it("rejects overlapping central workspace roots", async () => {
     const root = await mkdtemp(join(tmpdir(), "runmesh-runner-overlap-"));

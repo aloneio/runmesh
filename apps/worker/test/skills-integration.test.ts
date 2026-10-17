@@ -230,6 +230,25 @@ it('large Skill packages install through HTTP and return complete one MiB files 
   const resource = await f.rpc(client.secret, 'resources/read', { uri: 'runmesh-skill://bundle/' + receipt.skill_id + '/' + receipt.digest + '/references/0.txt' });
   expect(resource.result.contents[0].text).toBe(files[1]!.text);
 });
+it('chunked multi-MiB Skill text survives HTTP installation and full MCP tool/resource reads', async () => {
+  const f = await fixture(), client = f.clients[0]!;
+  const large = '中😀'.repeat(500_000);
+  const files = [
+    { path: 'SKILL.md', text: '---\nname: chunked-http\ndescription: Chunked HTTP fixture\n---\nRead references/large.md' },
+    { path: 'references/large.md', text: large },
+  ];
+  const response = await f.admin('skill-installations', { files, expected_revision: 0 });
+  expect(response.status).toBe(200);
+  const receipt = await response.json() as { skill_id: string; digest: string };
+  expect(receipt.skill_id).toBe('chunked-http');
+  const read = await f.rpc(client.secret, 'tools/call', { name: 'skill_read',
+    arguments: { skill_id: receipt.skill_id, digest: receipt.digest, path: 'references/large.md' } });
+  expect(read.result.isError).not.toBe(true);
+  expect(JSON.parse(read.result.content[0].text).text).toBe(large);
+  const resource = await f.rpc(client.secret, 'resources/read',
+    { uri: 'runmesh-skill://bundle/' + receipt.skill_id + '/' + receipt.digest + '/references/large.md' });
+  expect(resource.result.contents[0].text).toBe(large);
+});
 it('invalid Skill actions preserve the installed version and enabled state through the admin HTTP boundary', async () => {
   const f = await fixture();
   const response = await f.admin('skill-installations', { expected_revision: 0, files: [

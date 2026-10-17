@@ -49,3 +49,7 @@ Runner 声明 `capabilities.labels.job_reporting_protocol="2"`，并在认证 we
 | 回退旧程序 | 旧代码可能忽略或移除记录标记；依赖源头过滤前，应用备份验证回退行为 |
 
 先部署兼容 Worker，再安装包含功能的已验证 Runner 发行包，最后检查实际协商结果。Worker 部署和 Runner 安装是两个升级步骤。
+
+## 数据与凭据恢复
+
+损坏历史隔离、单条快照版本保护修复、身份绑定凭据恢复和同提交验收，请参阅[数据恢复指南](data-recovery.zh-CN.md)。

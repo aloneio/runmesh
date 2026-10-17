@@ -1,6 +1,6 @@
 import type { RegistryRoute } from "./request.js";
 import type { ClientIdentity } from "../../contracts/identity.js";
-import type { McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness } from "../../contracts/runner-selection.js";
+import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness } from "../../contracts/runner-selection.js";
 import { isSafeIdentifier } from "../../security.js";
 import type { CodingScope, McpClientRecord, VerifiedMcpClient, PermissionSet } from "../records.js";
 import { parseMcpIdentity, parseNativeMcpClient } from "../route-inputs.js";
@@ -25,11 +25,15 @@ export interface ClientsRoutePorts {
   effectivePermissions(clientId: string, runnerId: string, workspaceId: string): PermissionSet | undefined;
   getPolicyReadiness(runnerId: string): PolicyReadiness;
   getMcpClientActiveRunner(clientId: string): McpClientActiveRunner | undefined;
+  getMcpClientRunnerContext(clientId: string, runnerId: string): ActiveRunnerContext | undefined;
   resetMcpClientRunner(clientId: string, nowMs: number): McpClientActiveRunner | undefined;
   revalidateMcpClient(clientId: unknown, secretVersion: unknown, includeJobRecording?: boolean): VerifiedMcpClient | undefined;
   selectMcpClientRunner(clientId: string, runnerId: string, confirmSwitch: boolean, nowMs: number): McpRunnerSelectionResult;
   autoSelectOnlyRunner(clientId: string, nowMs: number): McpRunnerSelectionResult | undefined;
   effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined;
+  effectiveWorkspaceDecision(clientId: string, runnerId: string):
+    | { ok: true; runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> }
+    | { ok: false; code: "permission_denied" | "policy_pending" | "stale_policy" };
 }
 
 /** Parsing and responses only; authority and transactions stay with RegistryDO. */
@@ -93,6 +97,13 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
         ? ports.getPolicyReadiness(targetRunnerId) : undefined;
       return Response.json({ permissions, ...(readiness === undefined ? {} : { policy_readiness: readiness }) });
     }
+    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "runner-context"
+      && targetRunnerId !== undefined && segments.length === 4) {
+      // A pinned lookup is read-only, uses a single indexed Runner row, and
+      // never touches the shared active-runner selection.
+      const context = ports.getMcpClientRunnerContext(clientId, targetRunnerId);
+      return context === undefined ? new Response("not found", { status: 404 }) : Response.json(context);
+    }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "active-runner") {
       const selection = ports.getMcpClientActiveRunner(clientId);
       return selection === undefined ? new Response("not found", { status: 404 }) : Response.json(selection);
@@ -123,6 +134,11 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
       return result === undefined ? Response.json({ code: "runner_not_selected" }, { status: 409 }) : result.ok ? Response.json(result) : new Response("not found", { status: 404 });
     }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-workspaces" && targetRunnerId !== undefined) {
+      if (url.searchParams.get("snapshot_guard") === "1") {
+        // The guard and permissions are observed inside one synchronous DO
+        // event. In particular, no cached authorization crosses a mutation.
+        return Response.json(ports.effectiveWorkspaceDecision(clientId, targetRunnerId));
+      }
       const value = ports.effectiveWorkspaceList(clientId, targetRunnerId);
       return value === undefined ? new Response("not found", { status: 404 }) : Response.json(value);
     }

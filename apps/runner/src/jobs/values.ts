@@ -28,7 +28,8 @@ export function parseStartValues(params: Record<string, unknown>, workspace: Wor
   const createdByClientId = safeOptionalIdentifier(params.created_by_client_id);
   if (params.record_history !== undefined && typeof params.record_history !== "boolean") throw new RpcRuntimeError("invalid_params", "record_history must be a boolean");
   const requestId = safeOptionalRequestId(params.request_id);
-  return { invocation, createdByClientId, requestId };
+  const jobId = params.job_id === undefined ? null : safeOptionalRequestId(params.job_id, "job_id");
+  return { invocation, createdByClientId, requestId, jobId };
 }
 
 export function paramsObject(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object"); return value as Record<string, unknown>; }
@@ -50,7 +51,7 @@ export function relativeWorkspacePath(workspace: WorkspaceConfig, path: string):
 
 export function safeOptionalIdentifier(value: unknown): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new RpcRuntimeError("invalid_params", "created_by_client_id is invalid"); return value; }
 
-export function safeOptionalRequestId(value: unknown): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new RpcRuntimeError("invalid_params", "request_id is invalid"); return value; }
+export function safeOptionalRequestId(value: unknown, label = "request_id"): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new RpcRuntimeError("invalid_params", `${label} is invalid`); return value; }
 
 export function launchRequestFingerprint(workspaceId: string, cwd: string, invocation: { readonly file: string; readonly args: readonly string[]; readonly command: readonly string[]; readonly shell: boolean }, clientId: string | null): string {
   return createHash("sha256").update(JSON.stringify({ workspace_id: workspaceId, cwd, file: invocation.file, args: invocation.args, command: invocation.command, shell: invocation.shell, client_id: clientId })).digest("hex");

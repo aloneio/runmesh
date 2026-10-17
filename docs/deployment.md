@@ -29,27 +29,46 @@ npm run pack:runner
 
 The [release status](release-readiness.md) lists the current stable package and installation options. Deploy the activated `main` source for production, then verify the live commit through [build provenance](build-provenance.md).
 
-In Cloudflare Workers Builds, select the repository root and set the build command to `npm run build`. Use the matching deploy command:
+**Production auto-deployment:** Cloudflare Workers Builds is connected to the
+GitLab `aloneio/runmesh` repository, watches only the protected `main` branch
+and runs from the repository root. Configure its production trigger as:
 
-```sh
-# Development
-npm run deploy:worker -- --env development
-
-# Production
-npm run deploy:worker -- --env production
+```text
+Build:  npm run build
+Deploy: npx wrangler deploy --config apps/worker/wrangler.jsonc --env production --name runmesh --tag "main:$WORKERS_CI_COMMIT_SHA"
 ```
 
-Cloudflare manages build-connection authentication. The deployment wrapper checks the branch, release state and clean Git source against the CI declarations, then records the source commit/tree. After deployment, compare the live commit through [build provenance](build-provenance.md).
+Normal deployment requires no separate release workstation or local Cloudflare
+API token. Develop on `dev`, pass its tests and the protected `dev -> main`
+MR gates, then fast-forward merge to `main`. The GitLab push automatically
+starts a Cloudflare build and publishes the Worker if its build/deploy commands
+succeed. The independent GitLab `main` pipeline runs after the push and may
+finish later than the Cloudflare deployment: it is not a pre-deploy gate.
+Check the Cloudflare build result and compare the live `/health` commit to the
+merged SHA before considering deployment verified.
 
-For candidate commits on `main`, Workers Builds completes these checks and keeps the active production Worker in place. Its log records `production_preserved` and `uploaded: false` while the signed release is prepared and verified. Pushing the reviewed release activation then deploys that source automatically with its commit tag. A manual production deployment requires the activated release record.
+**Development** remains separate: deploy a clean `dev` checkout only to
+`runmeshdev` using `npm run deploy:worker -- --env development` and its
+development credentials. Do not add production deployment tokens to GitLab
+CI variables.
 
-GitLab is the authoritative repository for deployment. Push reviewed development changes to GitLab `dev`, run the required GitLab checks, and promote the exact commit to protected `main` through a same-project `dev` to `main` merge request. Do not synchronize the deployment branches from GitHub. Keep the Cloudflare build connections bound to their respective GitLab branches.
+**Manual recovery path:** `npm run deploy:worker -- --env production` remains
+available on a trusted workstation. That command retains its existing
+independent GitLab same-SHA approval and artifact checks, but it is not part
+of the normal Cloudflare Builds path. For a failed production rollout, review
+the Cloudflare build/deployment logs and use the previous known-good Worker
+version to roll back. Version rollback does not roll back D1/Durable Object
+data or undo destructive migrations: keep schema changes backward-compatible
+and use the [data recovery guide](data-recovery.md) for data repairs.
+
+GitLab is the authoritative source. Only protected `dev -> main` merges
+advance the production branch; GitHub is not modified by this workflow.
 
 ## Provision resources and secrets
 
 A standard production deployment uses the Worker, SQLite-backed `RegistryDOv2`, `RunnerDOv2` and `CapabilitiesDOv1`, the `HISTORY_DB` D1 history database, static assets and version metadata. The checked-in development environment uses its own Durable Objects and stores history in Registry SQLite, with no D1 binding or Cron Trigger. New installations provision their own account resources. Upgrades retain the live resource identities and shared-capability settings described in [runtime configuration](runtime-config.md).
 
-Production uses one Cron Trigger (`*/15 * * * *`) for [D1 history retention](quota-resilience.md#retention). Reserve one slot within the target account's [Cron Trigger allowance](https://developers.cloudflare.com/workers/platform/limits/#account-plan-limits). If deployment reports error `10072`, review existing schedules and remove an obsolete schedule you manage, or increase the account allowance, then rerun deployment. A Worker upload can succeed before trigger configuration fails; verify the final deployment status and the `runmesh` Cron Trigger together.
+Production uses one hourly Cron Trigger (`0 * * * *`) for [D1 history retention](quota-resilience.md#retention). Reserve one slot within the target account's [Cron Trigger allowance](https://developers.cloudflare.com/workers/platform/limits/#account-plan-limits). If deployment reports error `10072`, review existing schedules and remove an obsolete schedule you manage, or increase the account allowance, then rerun deployment. A Worker upload can succeed before trigger configuration fails; verify the final deployment status and the `runmesh` Cron Trigger together.
 
 Create two independent cryptographically random secrets, using at least 32 random bytes encoded as text. Accepted values are 32–512 non-whitespace characters:
 

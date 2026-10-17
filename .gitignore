@@ -22,8 +22,9 @@ release/download/
 # Machine-generated source identity, never a tracked self-reference.
 /apps/worker/src/generated-provenance.ts*
 
-# GitLab dependency cache, never application source.
+# GitLab dependency and Playwright browser caches, never application source.
 /.npm/
+/.cache/
 
 # Sanitized CI observations are output, never build input.
 /ci-results/

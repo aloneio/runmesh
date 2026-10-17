@@ -11,6 +11,8 @@ import { bindSkillSource } from "../apps/worker/browser/central/skill-source.js"
 import { createServiceInspection } from "../apps/worker/browser/central/service-inspection.js";
 import { createServiceWorkflow } from "../apps/worker/browser/central/services.js";
 import { bindRegistryImport } from "../apps/worker/browser/central/registry.js";
+import { sanitizeRegistryUpload } from "../apps/worker/browser/central/registry-input.js";
+import { validRegistryPreview } from "../apps/worker/browser/central/service-receipts.js";
 import { createCentralOperations } from "../apps/worker/browser/central/operations.js";
 import { centralRequestContract, centralRequestScope } from "../apps/worker/browser/central/request-contract.js";
 
@@ -61,7 +63,7 @@ test("central request contracts keep recovery scopes and read-only POST receipts
     ['catalogs/cloud%2Fdocs', undefined, false, 'mcp:cloud/docs', false, ['found']],
     ['catalogs/cloud%2Fdocs', undefined, true, 'mcp:cloud/docs', false, ['found', 'empty']],
     ['catalogs/cloud%2Fdocs', { action: 'approve' }, true, 'mcp:cloud/docs', true, ['written']],
-    ['discovery/cloud%2Fdocs', { expected_revision: 0 }, false, 'mcp:cloud/docs', true, ['written', 'authorization_required']],
+    ['discovery/cloud%2Fdocs', { expected_revision: 0 }, false, 'mcp:cloud/docs', true, ['written', 'authorization_required', 'unchanged']],
     ['connections/begin', { profile_id: 'cloud/docs' }, false, 'mcp:cloud/docs', true, ['started']],
     ['connections/revoke', { profile_id: 'cloud/docs' }, false, 'mcp:cloud/docs', true, ['revoked']],
     ['connection-check', { profile_id: 'cloud/docs' }, false, 'mcp:cloud/docs', false, ['inspected', 'authorization_required']],
@@ -1389,6 +1391,46 @@ test("MCP inspection invalidation follows the displayed connection or draft", as
   assert.equal(ui.panel.children.length, 0);
 });
 
+test("Existing MCP tools refresh automatically without a review checkbox or approval request", async t => {
+  const { element } = centralDomFixture(t);
+  const list = element(), panel = element(), status = element(), form = element('form');
+  const app = { querySelector: selector => ({ '[data-service-list]': list,
+    '[data-service-tools]': panel, '[data-product-status]': status, '[data-service-create]': form })[selector] ?? null };
+  const profile = { profile_id: 'docs', connector_id: 'docs', display_name: 'Docs', enabled: true, endpoint: 'https://example.com/mcp' };
+  const digest = 'b'.repeat(64), previous = 'a'.repeat(64), requests = [];
+  let approvedNames = ['lookup', 'stable'], approvedDigest = previous, revision = 2;
+  const tools = ['lookup', 'new', 'stable'].map(name => ({ definition: { name, description: name } }));
+  const catalog = () => ({ head: { revision, observed_digest: digest, approved_digest: approvedDigest, approved_names: approvedNames },
+    snapshot: { digest, tools } });
+  let pending;
+  const run = action => { pending = Promise.resolve().then(action); return pending; };
+  const view = createCentralView(app, key => key, run);
+  const workflow = createServiceWorkflow({ app, view, t: key => key, run, navigate() {},
+    refresh: async () => { workflow.render([profile]); return [profile]; },
+    api: async (path, body) => {
+      requests.push({ path, body });
+      if (path === 'catalogs/docs' && body === undefined) return catalog();
+      if (path === 'discovery/docs' && body?.expected_revision === revision) {
+        approvedNames = ['lookup', 'new', 'stable']; approvedDigest = digest; revision++;
+        return { state: 'written', head: catalog().head };
+      }
+      throw new Error('Unexpected request: ' + path);
+    } });
+  workflow.render([profile]);
+  const nodes = node => [node, ...node.children.flatMap(nodes)];
+  const button = (container, label) => nodes(container).find(node => node.tag === 'button' && node.textContent === label);
+  button(list, 'viewTools').dispatch('click'); await pending;
+  assert.equal(status.textContent, 'catalogRefreshNeeded', 'Legacy pending state shows refresh guidance');
+  assert.equal(nodes(panel).some(node => node.tag === 'input' || node.tag === 'button'), false,
+    'No tool approval checkboxes or actions remain');
+  button(list, 'refreshTools').dispatch('click'); await pending;
+  assert.equal(status.textContent, 'serviceConnectedToolsReady');
+  assert.deepEqual(approvedNames, ['lookup', 'new', 'stable']);
+  assert.deepEqual(requests.filter(item => item.path === 'discovery/docs').map(item => item.body.expected_revision), [2]);
+  assert.equal(requests.some(item => item.body?.action === 'approve'), false);
+  assert.equal(nodes(panel).filter(node => node.tag === 'h3').length, 3);
+});
+
 test("A late tool read cannot replace a later selection, and unrelated invalidation keeps that selection", async t => {
   const { element } = centralDomFixture(t), list = element(), panel = element(), status = element(), form = element('form');
   const app = { querySelector: selector => ({ '[data-service-list]': list, '[data-service-tools]': panel,
@@ -1428,7 +1470,7 @@ test("MCP inspection rejects incomplete results while keeping normal connection 
 
 test("Registry preview admits configuration-only metadata without claiming a usable connection", async t => {
   const preview = { state: "previewed", name: "example/mcp", version: "1.0.0", description: "A service", schema: null,
-    remotes: [{ endpoint: "http://localhost:8080/mcp", transport: "sse", mode: "configure", headers: ["Authorization"] }],
+    remotes: [{ endpoint: "https://localhost/mcp", transport: "sse", mode: "configure", headers: ["Authorization"] }],
     packages: [{ registry: "npm", identifier: "example-mcp", version: "1.0.0" }], digest: lifecycleDigests[0], observed_at_ms: 1000 };
   const api = client(t, () => Response.json(preview));
   assert.deepEqual(await api.request("registry-preview", { entry: {} }), preview);
@@ -1547,6 +1589,60 @@ test("Registry package metadata is displayed without install or execution contro
   assert.ok(ui.nodes(ui.result).some(node => node.textContent === "npm · team-mcp · 1.0.0"));
   assert.ok(ui.nodes(ui.result).some(node => node.textContent === "Host these packages, then connect their HTTPS endpoint."));
   assert.deepEqual(ui.requests.map(request => request.path), ["registry-preview"]);
+});
+
+test("MCP import browser redacts stdio commands, args and provider header keys before any network request", () => {
+  const secret = "synthetic-browser-private-key";
+  const upload = sanitizeRegistryUpload({ mcpServers: {
+    context7: { command: "npx", args: ["--api-key", secret], env: { CONTEXT7_API_KEY: secret } },
+    documents: { type: "http", url: "https://mcp.docs.example.com/mcp", headers: { Authorization: "Bearer " + secret },
+      env: { ACCESS_TOKEN: secret } },
+    invalid: { type: "http", url: "https://mcp.example.com/mcp?api_key=" + secret }
+  } });
+  assert.deepEqual(upload, { mcpServers: {
+    context7: { type: "stdio" },
+    documents: { type: "http", url: "https://mcp.docs.example.com/mcp", headers: { Authorization: "" }, env: {} },
+    invalid: { type: "http", url: "" }
+  } });
+  assert.ok(!JSON.stringify(upload).includes(secret));
+  const registry = sanitizeRegistryUpload({ name: "example/test", version: "1.0.0", remotes: [{
+    type: "streamable-http", url: "https://mcp.example.com/mcp",
+    headers: [{ name: "Authorization", value: secret }], variables: { password: { default: secret } }
+  }], packages: [{ registryType: "npm", identifier: "example", version: "1.0.0", packageArguments: [secret] }] });
+  assert.deepEqual(registry.remotes[0], { type: "streamable-http", url: "https://mcp.example.com/mcp",
+    headers: [{ name: "Authorization" }], variables: {} });
+  assert.ok(!JSON.stringify(registry).includes(secret));
+});
+
+test("MCP client import separates connectable HTTPS entries from unsupported stdio entries in the UI", async t => {
+  const receipt = { ...registryPreview, format: "client_config", name: "MCP client configuration", version: "", description: "",
+    remotes: [{ name: "documents", endpoint: "https://mcp.docs.example.com/mcp",
+      transport: "streamable-http", mode: "connect", headers: [] }],
+    packages: [], skipped: [{ name: "context7", reason: "stdio" }] };
+  const ui = registryFixture(t, () => receipt);
+  const raw = JSON.stringify({ mcpServers: {
+    context7: { command: "npx", args: ["--api-key", "synthetic-secret-do-not-upload"] },
+    documents: { type: "http", url: "https://mcp.docs.example.com/mcp" }
+  } });
+  const bytes = new TextEncoder().encode(raw);
+  ui.picker.files = [{ size: bytes.byteLength, arrayBuffer: async () => bytes.buffer }];
+  await ui.preview();
+  const posted = JSON.stringify(ui.requests.at(-1));
+  assert.ok(!posted.includes("synthetic-secret-do-not-upload") && !posted.includes("npx"));
+  assert.equal(ui.buttons().length, 1);
+  assert.ok(ui.nodes(ui.result).some(node => node.textContent === "Local stdio commands cannot run in RunMesh. Use the provider's public HTTPS MCP endpoint instead."));
+  await ui.click(ui.buttons()[0]);
+  assert.equal(ui.form.elements.endpoint.value, "https://mcp.docs.example.com/mcp");
+  assert.equal(ui.form.elements.name.value, "documents");
+});
+
+test("MCP client preview receipts accept redacted entries but reject unsafe or malformed skipped entries", () => {
+  const value = { ...registryPreview, format: "client_config", skipped: [{ name: "local", reason: "stdio" }] };
+  assert.equal(validRegistryPreview(value), true);
+  assert.equal(validRegistryPreview({ ...value, skipped: [{ name: "local", reason: "launch" }] }), false);
+  assert.equal(validRegistryPreview({ ...value, remotes: [{ ...value.remotes[0], endpoint: "https://mcp.example.com/mcp?key=private" }] }), false);
+  assert.equal(validRegistryPreview({ ...value, remotes: [{ ...value.remotes[0], endpoint: "https://user:secret@mcp.example.com/mcp" }] }), false);
+  assert.equal(validRegistryPreview({ ...value, remotes: [{ ...value.remotes[0], headers: ["Bad\nName"] }] }), false);
 });
 
 test("Registry pending preview is dropped when another file is selected", async t => {

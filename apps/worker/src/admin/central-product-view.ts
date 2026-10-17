@@ -40,8 +40,9 @@ export function centralProductView(csrf: string, skills: boolean, oauthCallbackU
             <div class="form-submit-wrap actions"><button type="submit" class="button">Connect</button><button type="button" class="button secondary" data-service-check>Check connection</button></div>
           </form>
           <details class="central-file-preview" data-registry-import data-max-bytes="${MCP_REGISTRY_LIMITS.bytes}">
-            <summary>Import server.json</summary>
-            <label>Registry entry<input type="file" data-registry-file accept=".json,application/json"></label>
+            <summary>Import MCP JSON configuration</summary>
+            <p class="muted">Preview Registry server.json or client mcpServers / servers. Local commands are never executed and credentials are never imported.</p>
+            <label>MCP JSON file<input type="file" data-registry-file accept=".json,application/json"></label>
             <button type="button" class="button secondary" data-registry-preview>Preview connections</button>
             <div data-registry-results></div>
           </details>

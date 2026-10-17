@@ -29,6 +29,45 @@ function createInput(lifecycleId: string, operationId = crypto.randomUUID()) {
 const scoped = () => env.REGISTRY.get(env.REGISTRY.idFromName(`upgrade-tests-${crypto.randomUUID()}`));
 
 describe("independent Runner update control", () => {
+  it.each(["table", "index"] as const)("isolates a selective optional %s DDL failure and retries only after cooldown", async failedDdl => {
+    await runInDurableObject(scoped(), async (instance, state) => {
+      const { runnerId, lifecycleId, credential } = await setup(instance);
+      // Re-create an incomplete optional migration while core schema remains valid.
+      state.storage.sql.exec(failedDdl === "table" ? "DROP TABLE runner_updates" : "DROP INDEX idx_runner_updates_latest");
+      const control = instance as unknown as {
+        runnerUpdatesReady: boolean;
+        ensureOptionalRunnerUpdatesReady(nowMs: number): boolean;
+      };
+      control.runnerUpdatesReady = false;
+      const exec = state.storage.sql.exec.bind(state.storage.sql);
+      let attempts = 0;
+      const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+        if (query.startsWith(failedDdl === "table" ? "CREATE TABLE runner_updates" : "CREATE INDEX idx_runner_updates_latest")) {
+          attempts++;
+          throw new Error("selective optional schema quota fault");
+        }
+        return exec(query, ...args);
+      });
+      try {
+        const now = Date.now();
+        expect(control.ensureOptionalRunnerUpdatesReady(now)).toBe(false);
+        expect(attempts).toBe(1);
+        expect(control.ensureOptionalRunnerUpdatesReady(now + 1000)).toBe(false);
+        expect(attempts).toBe(1);
+        expect(instance.getRunnerExecutionState(runnerId)?.lifecycle_id).toBe(lifecycleId);
+        const degraded = await instance.fetch(await signed(`/runners/${runnerId}/update?lifecycle_id=${lifecycleId}&credential_version=${credential}`));
+        expect(degraded.status).toBe(503);
+        expect(attempts).toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(control.ensureOptionalRunnerUpdatesReady(Date.now() + 16 * 60_000)).toBe(true);
+      const restored = await instance.fetch(await signed(`/runners/${runnerId}/update?lifecycle_id=${lifecycleId}&credential_version=${credential}`));
+      expect(restored.status).toBe(200);
+      expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_runner_updates_latest'").toArray()).toHaveLength(1);
+    });
+  });
+
   it("migrates existing update history to bounded latest reads without changing replay or same-millisecond ordering", async () => {
     await runInDurableObject(scoped(), async (instance, state) => {
       const { runnerId, lifecycleId, credential } = await setup(instance), create = createInput(lifecycleId);

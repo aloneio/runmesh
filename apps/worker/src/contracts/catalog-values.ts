@@ -119,11 +119,14 @@ export function parseCatalogSnapshot(value: unknown): CatalogSnapshot | undefine
 
 export function parseCatalogQuery(value: unknown): CatalogQuery | undefined {
   const item = catalogObject(value);
-  if (item === undefined || !catalogKeys(item, ["profile_id", "limit", "cursor"]) || !isCapabilityIdentifier(item.profile_id)
+  if (item === undefined || !catalogKeys(item, ["profile_id", "limit", "cursor", "tool_id"]) || !isCapabilityIdentifier(item.profile_id)
     || (item.limit !== undefined && (!Number.isSafeInteger(item.limit) || (item.limit as number) < 1 || (item.limit as number) > CATALOG_LIMITS.page_tools))
-    || (item.cursor !== undefined && (typeof item.cursor !== "string" || item.cursor.length === 0 || item.cursor.length > CATALOG_LIMITS.cursor_bytes))) return undefined;
+    || (item.cursor !== undefined && (typeof item.cursor !== "string" || item.cursor.length === 0 || item.cursor.length > CATALOG_LIMITS.cursor_bytes))
+    || (item.tool_id !== undefined && (typeof item.tool_id !== "string" || !/^mcp\.[a-f0-9]{64}$/u.test(item.tool_id)
+      || item.limit !== undefined || item.cursor !== undefined))) return undefined;
   return { profile_id: item.profile_id, ...(item.limit === undefined ? {} : { limit: item.limit as number }),
-    ...(item.cursor === undefined ? {} : { cursor: item.cursor as string }) };
+    ...(item.cursor === undefined ? {} : { cursor: item.cursor as string }),
+    ...(item.tool_id === undefined ? {} : { tool_id: item.tool_id as string }) };
 }
 
 export function parseCatalogCursor(value: unknown): CatalogCursor | undefined {

@@ -9,8 +9,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "872f33fea86ff4b6ae02be7c1eaf256577c375ec3bf6073eb6e0f1e261f92664",
-      "bytes": 193456
+      "sha256": "c8e803ea6df53dc4ae751c4eea4cba86c119e659f8a326e348a2f5b59bf294e3",
+      "bytes": 201298
     },
     {
       "name": "setup",
@@ -19,8 +19,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "1f0c3451f489fcae45f3fa4dac23110a922d47ee48c1c00bb61d62f0b2de484c",
-      "bytes": 194116
+      "sha256": "9a77c88a49c47fcee303750eaedc03e8278d73a3c59e837d6cd767813b26e34d",
+      "bytes": 201958
     },
     {
       "name": "secret",
@@ -29,8 +29,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "546fb191274da49ee3f01d2f48ff56295325b5dca536725f8a4d67d104661b51",
-      "bytes": 196413
+      "sha256": "19ff74021ca3c468e7dd0186c5255d31f44cd0d5bb35491620ca23eaf015bfd4",
+      "bytes": 204255
     },
     {
       "name": "overview-empty",
@@ -56,7 +56,7 @@
           "clients": [
             {
               "client_id": "client-fixture",
-              "label": "<img src=x onerror=alert(1)> \u5ba2\u6237\u7aef",
+              "label": "<img src=x onerror=alert(1)> 客户端",
               "active_runner_id": "runner-fixture",
               "active_runner_updated_at_ms": 2,
               "scopes": [
@@ -71,7 +71,7 @@
           "runners": [
             {
               "runner_id": "runner-fixture",
-              "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
+              "display_name": "<b>Runner 中文 & \"name\"</b>",
               "state": "offline",
               "public_info": {
                 "platform": "linux",
@@ -132,7 +132,7 @@
           "clients": [
             {
               "client_id": "client-fixture",
-              "label": "<img src=x onerror=alert(1)> \u5ba2\u6237\u7aef",
+              "label": "<img src=x onerror=alert(1)> 客户端",
               "active_runner_id": "runner-fixture",
               "active_runner_updated_at_ms": 2,
               "scopes": [
@@ -147,7 +147,7 @@
           "runners": [
             {
               "runner_id": "runner-fixture",
-              "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
+              "display_name": "<b>Runner 中文 & \"name\"</b>",
               "state": "offline",
               "public_info": {
                 "platform": "linux",
@@ -181,7 +181,7 @@
       "args": [
         {
           "client_id": "client-fixture",
-          "label": "<img src=x onerror=alert(1)> \u5ba2\u6237\u7aef",
+          "label": "<img src=x onerror=alert(1)> 客户端",
           "active_runner_id": "runner-fixture",
           "active_runner_updated_at_ms": 2,
           "scopes": [
@@ -195,7 +195,7 @@
         [
           {
             "runner_id": "runner-fixture",
-            "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
+            "display_name": "<b>Runner 中文 & \"name\"</b>",
             "state": "offline",
             "public_info": {
               "platform": "linux",
@@ -248,7 +248,7 @@
           "clients": [
             {
               "client_id": "client-fixture",
-              "label": "<img src=x onerror=alert(1)> \u5ba2\u6237\u7aef",
+              "label": "<img src=x onerror=alert(1)> 客户端",
               "active_runner_id": "runner-fixture",
               "active_runner_updated_at_ms": 2,
               "scopes": [
@@ -263,7 +263,7 @@
           "runners": [
             {
               "runner_id": "runner-fixture",
-              "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
+              "display_name": "<b>Runner 中文 & \"name\"</b>",
               "state": "offline",
               "public_info": {
                 "platform": "linux",
@@ -303,7 +303,7 @@
       "args": [
         {
           "runner_id": "runner-fixture",
-          "display_name": "<b>Runner \u4e2d\u6587 & \"name\"</b>",
+          "display_name": "<b>Runner 中文 & \"name\"</b>",
           "state": "offline",
           "public_info": {
             "platform": "linux",
@@ -354,8 +354,8 @@
           }
         ]
       ],
-      "sha256": "d45323f14f9b3ddd6386907d018ae749460c8e31bfba31375824c2db2c3026cd",
-      "bytes": 196762
+      "sha256": "68af9efdc11997e905576adb7940cd56c8ed336843044300f22ef071dd50e728",
+      "bytes": 204604
     }
   ]
 }

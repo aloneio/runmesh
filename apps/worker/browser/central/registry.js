@@ -1,3 +1,5 @@
+import { sanitizeRegistryUpload } from './registry-input.js';
+
 /** A registry entry fills the ordinary connection form; it never connects it. */
 export function bindRegistryImport({ app, api, view, t, run }) {
   const panel = app.querySelector('[data-registry-import]');
@@ -14,25 +16,39 @@ export function bindRegistryImport({ app, api, view, t, run }) {
     if (!selected || !Number.isSafeInteger(limit) || selected.size > limit) throw new Error(t('registryChooseFile'));
     const current = generation;
     let entry;
-    try { entry = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await selected.arrayBuffer())); }
+    try { entry = sanitizeRegistryUpload(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await selected.arrayBuffer()))); }
     catch { throw new Error(t('registryInvalidEntry')); }
     const preview = await api('registry-preview', { entry });
     if (current !== generation) return;
-    result.append(view.el('h3', preview.name), view.el('p', preview.description), view.el('p', preview.version, 'muted'));
+    result.append(view.el('h3', preview.format === 'client_config' ? t('registryClientConfiguration') : preview.name));
+    if (preview.description) result.append(view.el('p', preview.description));
+    if (preview.version) result.append(view.el('p', preview.version, 'muted'));
+    if (preview.format === 'client_config') result.append(view.el('p', t('registryClientPreviewOnly'), 'muted'));
     for (const candidate of preview.remotes) {
       const card = view.el('article', undefined, 'central-card');
+      if (candidate.name) card.append(view.el('h4', candidate.name));
       card.append(view.el('p', candidate.endpoint), view.el('p', candidate.transport, 'muted'));
       if (candidate.mode === 'connect') view.button(card, t('registryUseConnection'), async () => {
         if (current !== generation) return;
         form.elements.endpoint.value = candidate.endpoint;
         form.elements.authentication.value = 'none';
-        form.elements.name.value = preview.name.slice(-form.elements.name.maxLength);
+        form.elements.name.value = (candidate.name || preview.name).slice(0, form.elements.name.maxLength);
         form.elements.endpoint.dispatchEvent(new Event('input', { bubbles: true }));
         form.elements.endpoint.focus();
         form.scrollIntoView({ block: 'nearest' });
         view.say(t('registryConnectionReady'));
       });
-      else card.append(view.el('p', t('registryConfigureConnection'), 'muted'));
+      else card.append(view.el('p', t(candidate.headers.length ? 'registryHeaderConfiguration' : 'registryConfigureConnection'), 'muted'));
+      result.append(card);
+    }
+    for (const skipped of preview.skipped ?? []) {
+      const card = view.el('article', undefined, 'central-card');
+      card.append(view.el('h4', skipped.name), view.el('p', t({
+        stdio: 'registryStdioUnsupported',
+        unsupported_transport: 'registryTransportUnsupported',
+        invalid_endpoint: 'registryEndpointUnsupported',
+        invalid_definition: 'registryDefinitionInvalid'
+      }[skipped.reason]), 'muted'));
       result.append(card);
     }
     if (preview.packages.length) {

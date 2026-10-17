@@ -18,7 +18,7 @@ Runmesh relays bounded remote tool discovery and calls, not arbitrary server cod
 | Results | Text, image, audio, embedded resources, links, structured JSON and tool errors; non-object structured outputs require the modern wire version |
 | Authentication | Existing managed OAuth: CIMD, DCR, pre-registered clients; encrypted credentials and issuer/PKCE/state binding |
 | Tool isolation | Supported siblings publish with exclusions; all-unsupported nonempty catalogs preserve the old publication |
-| Large libraries | 512 tools per catalog; remote_search/remote_tools/remote_call avoid direct-menu overload |
+| Large libraries | 512 tools per catalog; remote_search/remote_tools/remote_call avoid direct-menu overload. remote_tools accepts an exact tool_id or paginated limit/cursor |
 
 ## Explicit boundaries
 

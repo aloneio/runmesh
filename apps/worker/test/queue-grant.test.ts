@@ -4,9 +4,11 @@ import {encodeWireFrame,PROTOCOL_CURRENT_VERSION} from "@aloneio/runmesh-protoco
 import {signQueueGrant,verifyQueueGrant,launchDigest} from "../src/queue-grant.js";
 import {runnerSession} from "./helpers/runner-session.js";
 const secret="synthetic-queue-signing-secret-at-least-32";
-const payload={version:1 as const,runner_id:"r",lifecycle_id:"lifecycle-queue-tests",credential_version:1,client_id:"c",secret_version:1,workspace_id:"w",policy_revision:1,policy_checksum:"a".repeat(64),launch_digest:"b".repeat(64),expires_at_ms:Date.now()+3500000,nonce:"queue-test-nonce"};
+const payload={version:1 as const,runner_id:"r",lifecycle_id:"lifecycle-queue-tests",credential_version:1,client_id:"c",secret_version:1,workspace_id:"w",policy_revision:1,policy_checksum:"a".repeat(64),launch_digest:"b".repeat(64),expires_at_ms:Date.now()+3500000,nonce:"queue-test-nonce",job_id:"queued-j"};
 it("queue grants authenticate the full context and reject tampering, cross-key reuse and expiry",async()=>{
  const grant=await signQueueGrant(secret,payload);expect(await verifyQueueGrant(secret,grant)).toEqual(payload);
+ const reordered={...grant,payload:{nonce:payload.nonce,expires_at_ms:payload.expires_at_ms,launch_digest:payload.launch_digest,policy_checksum:payload.policy_checksum,policy_revision:payload.policy_revision,workspace_id:payload.workspace_id,secret_version:payload.secret_version,client_id:payload.client_id,credential_version:payload.credential_version,lifecycle_id:payload.lifecycle_id,runner_id:payload.runner_id,version:payload.version,job_id:payload.job_id}};
+ expect(await verifyQueueGrant(secret,reordered)).toEqual(payload);
  expect(await verifyQueueGrant(secret,{...grant,payload:{...payload,client_id:"other"}})).toBeUndefined();
  expect(await verifyQueueGrant(secret+"other",grant)).toBeUndefined();expect(await verifyQueueGrant(secret,grant,payload.expires_at_ms)).toBeUndefined();
  expect(await launchDigest({workspace_id:"w",command:"a",shell:true})).not.toBe(await launchDigest({workspace_id:"w",command:"b",shell:true}));
@@ -25,6 +27,11 @@ it.each([[true,200],[false,403],[true,201],[true,202],[true,203],[true,206],[tru
   expect(auth).toHaveBeenCalledTimes(1);expect(auth.mock.calls[0]?.[1]).toBe("/mcp-authorization");
   expect(f.frames).toHaveLength(1);
   expect(f.frames[0]).toMatchObject({type:"rpc.response",request_id:"q-check",result:{authorized:allowed && status===200}});
+  if (allowed && status === 200) {
+   await f.runner.webSocketMessage(f.socket,encodeWireFrame({type:"runner.queue_check",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:"q-replay",runner_id:"r",job_id:"queued-j",grant}));
+   expect(f.frames).toHaveLength(2);
+   expect(f.frames[1]).toMatchObject({type:"rpc.response",request_id:"q-replay",result:{authorized:false}});
+  }
   expect(f.socket.close).not.toHaveBeenCalled();
  });
 });
@@ -53,6 +60,12 @@ it.each(["credential","lifecycle","expiry","policy-race"])("dequeue denies %s ch
 
 it("argument arrays are included in the signed launch digest",async()=>{
  expect(await launchDigest({workspace_id:"w",command:"node",args:["allowed"]})).not.toBe(await launchDigest({workspace_id:"w",command:"node",args:["different"]}));
+});
+
+it("launch digests are stable when nested argument keys arrive in a different order", async () => {
+  const first = { workspace_id: "w", command: "node", args: { z: ["終"], a: { nested: true } } };
+  const second = { workspace_id: "w", command: "node", args: { a: { nested: true }, z: ["終"] } };
+  expect(await launchDigest(first)).toBe(await launchDigest(second));
 });
 
 it("trusted job recording is bound to the queue launch digest without changing legacy digests", async () => {

@@ -83,7 +83,7 @@ export interface CatalogCursorCodec {
   seal(cursor: CatalogCursor): Promise<string>;
   open(value: string): Promise<CatalogCursor | undefined>;
 }
-export interface CatalogQuery { readonly profile_id: string; readonly limit?: number; readonly cursor?: string }
+export interface CatalogQuery { readonly profile_id: string; readonly limit?: number; readonly cursor?: string; readonly tool_id?: string }
 export type CatalogPage = { readonly state: "listed"; readonly tools: readonly CatalogTool[]; readonly next_cursor: string | null }
   | { readonly state: "denied" | "unavailable" | "invalid" | "stale_cursor" };
 export interface CatalogReadPorts extends CatalogSnapshotPorts {

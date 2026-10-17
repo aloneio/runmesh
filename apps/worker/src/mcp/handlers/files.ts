@@ -8,9 +8,10 @@ import type { McpRequestEnv } from "../contracts.js";
 import { z } from "zod";
 
 export async function inspectTool(env: McpRequestEnv, clientId: string, params: z.output<typeof InspectInputSchema>, scopes: readonly string[]): Promise<unknown> {
-  if (params.action === "diagnostics") return diagnosticsTool(env, clientId, params.workspace_id, scopes);
+  if (params.action === "diagnostics") return diagnosticsTool(env, clientId, params.workspace_id, scopes, params.runner_id);
   const method = MCP_RPC_ACTIONS.inspect[params.action];
   const input: Record<string, unknown> = {
+    ...(params.runner_id === undefined ? {} : { runner_id: params.runner_id }),
     workspace_id: params.workspace_id,
     ...(params.path === undefined ? {} : { path: params.path }),
     ...(params.action === "search" ? { query: params.query } : {}),

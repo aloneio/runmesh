@@ -572,7 +572,7 @@ describe("workspace path policy", () => {
 });
 
 describe("persistent local jobs", () => {
-  it("uses two product execution slots by default and reports effective scheduler capacity", async () => {
+  it("reports the 32-slot product default with two concurrent Jobs", async () => {
     const test = await fixture();
     let first: JobRecord | undefined;
     let second: JobRecord | undefined;
@@ -585,10 +585,10 @@ describe("persistent local jobs", () => {
       second = await runtime.dispatch("exec.start", { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"] }) as JobRecord;
       expect(first.status).toBe("running");
       expect(second.status).toBe("running");
-      expect(runtime.jobs.queueStatus()).toMatchObject({ running: 2, waiting: 0, max_concurrent_jobs: 2, available_slots: 0 });
+      expect(runtime.jobs.queueStatus()).toMatchObject({ running: 2, waiting: 0, max_concurrent_jobs: 32, available_slots: 30, limit: 500, per_client_limit: 500 });
       await expect(runtime.envInfo()).resolves.toMatchObject({
-        runtime_capabilities: { max_concurrent_jobs: 2 },
-        job_scheduler: { running: 2, waiting: 0, max_concurrent_jobs: 2, available_slots: 0 },
+        runtime_capabilities: { max_concurrent_jobs: 32 },
+        job_scheduler: { running: 2, waiting: 0, max_concurrent_jobs: 32, available_slots: 30, limit: 500, per_client_limit: 500 },
       });
     } finally {
       // The runtime owns the live ChildProcess handles; cancel through that same
@@ -627,6 +627,19 @@ describe("persistent local jobs", () => {
       expect(repeated.job_id).toBe(first.job_id);
       expect(repeated.request_id).toBe("request-a");
       await expect(manager.start({ ...input, args: ["-e", "process.exit(0)"] })).rejects.toMatchObject({ code: "request_id_conflict" });
+      await manager.cancel(first.job_id);
+      await waitFor(() => manager.get(first.job_id), (job) => !["queued", "running", "cancelling"].includes(job.status));
+    } finally { await test.cleanup(); }
+  });
+  it("binds an explicit job_id and rejects conflicting reuse", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 2 });
+      await manager.initialize();
+      const input = { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"], job_id: "job-bound" };
+      const first = await manager.start(input);
+      expect(first.job_id).toBe("job-bound");
+      await expect(manager.start({ ...input, args: ["-e", "process.exit(0)"] })).rejects.toMatchObject({ code: "job_id_conflict" });
       await manager.cancel(first.job_id);
       await waitFor(() => manager.get(first.job_id), (job) => !["queued", "running", "cancelling"].includes(job.status));
     } finally { await test.cleanup(); }

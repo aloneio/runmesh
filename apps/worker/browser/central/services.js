@@ -127,9 +127,11 @@ export function createServiceWorkflow({
     });
   }
   function isPublished(catalog) {
-    return catalog && catalog.head.approved_digest === catalog.snapshot.digest
+    // A legacy staged or partially approved catalog is not fully available;
+    // Refresh tools automatically publishes the complete compatible set.
+    return Boolean(catalog && catalog.head.approved_digest === catalog.snapshot.digest
       && catalog.head.approved_names.length === catalog.snapshot.tools.length
-      && catalog.snapshot.tools.every(tool => catalog.head.approved_names.includes(tool.definition.name));
+      && catalog.snapshot.tools.every(tool => catalog.head.approved_names.includes(tool.definition.name)));
   }
   async function connectService(profile, { catalog: observedCatalog, authorize = true, background = false, mayPresent = () => false,
     selection = background ? undefined : selectTools(profile),
@@ -213,18 +215,26 @@ export function createServiceWorkflow({
       return null;
     }
     heading.append(el('span', catalog.snapshot.tools.length + ' ' + t(catalog.snapshot.tools.length === 1 ? 'toolCountOne' : 'toolCount'), 'muted'));
-    if (!profile.enabled || !isPublished(catalog)) panel.append(el('p', t(!profile.enabled ? 'serviceNoLongerEnabled' : 'toolsNotReadyRefreshToConnect')));
-    catalog.snapshot.tools.forEach(function (tool) {
+    if (!profile.enabled) panel.append(el('p', t('serviceNoLongerEnabled')));
+    if (!isPublished(catalog)) panel.append(el('p', t('catalogRefreshNeeded'), 'muted'));
+    for (const tool of catalog.snapshot.tools) {
       var card = el('article', undefined, 'central-card');
       card.append(el('h3', tool.definition.title || tool.definition.name));
       if (tool.definition.description) card.append(el('p', tool.definition.description, 'muted'));
+      const details = el('details', undefined, 'central-file-preview');
+      const summary = el('summary', t('catalogInspectDefinition'));
+      const definition = el('pre');
+      details.append(summary, definition);
+      // Keep provider schemas inert and only render them when expanded.
+      details.addEventListener('toggle', () => {
+        if (details.open && !definition.textContent) definition.textContent = JSON.stringify(tool.definition, null, 2);
+      });
+      card.append(details);
       panel.append(card);
-    });
+    }
     if (!catalog.snapshot.tools.length) panel.append(el('p', t('serviceHasNoTools')));
-    panel.scrollIntoView({
-      block: 'nearest'
-    });
-    say(t('toolsReadyToView'));
+    panel.scrollIntoView({ block: 'nearest' });
+    say(t(isPublished(catalog) ? 'toolsReadyToView' : 'catalogRefreshNeeded'));
     return catalog;
   }
   async function connectOAuth(profile, authorization = authorizationIntent(profile.authentication), oauthClient) {

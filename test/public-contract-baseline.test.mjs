@@ -12,6 +12,36 @@ test("public MCP inputs, outputs, descriptions and annotations match the reviewe
   assert.deepEqual(catalog.tools.map(tool => tool.name), baseline.tools);
   assert.equal(digest(JSON.stringify(ordered(catalog))), baseline.mcp_catalog_sha256);
 });
+// Preserve the reviewed pre-runner-pinning catalog independently of the current hash.
+test("public MCP changes retain the reviewed v1 callable shapes", async () => {
+  const historic = JSON.parse(await readFile(new URL("fixtures/public-mcp-contract-v1.catalog.json", import.meta.url), "utf8"));
+  const current = await sourceCatalog();
+  const oldByName = new Map(historic.tools.map(tool => [tool.name, tool]));
+  const currentByName = new Map(current.tools.map(tool => [tool.name, tool]));
+  assert.deepEqual([...currentByName.keys()].sort(), [...oldByName.keys()].sort());
+  for (const [name, previous] of oldByName) {
+    const next = structuredClone(currentByName.get(name));
+    // Descriptions clarify shared sticky selection, without changing a callable shape.
+    next.description = previous.description;
+    // Optional explicit Runner targeting only adds properties, never new required arguments.
+    if (["context", "edit", "inspect", "job", "read", "shell", "workspace_list"].includes(name)) {
+      assert.equal(next.inputSchema.properties.runner_id?.type, "string");
+      assert.notEqual(next.inputSchema.required?.includes("runner_id"), true);
+      delete next.inputSchema.properties.runner_id;
+      for (const item of next.inputSchema.oneOf ?? []) {
+        assert.equal(item.properties.runner_id?.type, "string");
+        assert.notEqual(item.required?.includes("runner_id"), true);
+        delete item.properties.runner_id;
+      }
+    }
+    // The bootstrap revision reflects added routing guidance, not a removed field.
+    if (name === "bootstrap") {
+      assert.equal(next.outputSchema.properties.manifest.properties.revision.const, 3);
+      next.outputSchema.properties.manifest.properties.revision.const = 2;
+    }
+    assert.deepEqual(ordered(next), ordered(previous), `Unexpected compatibility change: ${name}`);
+  }
+});
 test("architecture refactoring preserves the checked-in wire schema byte for byte", async () => {
   const schema = await readFile(new URL("../packages/protocol/schema/wire-message.schema.json", import.meta.url));
   assert.equal(digest(schema), baseline.wire_schema_sha256);
