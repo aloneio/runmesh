@@ -9,6 +9,7 @@ import { isGitHubMergeCommit, isGitHubApiCommit, validateCommit, selectPrivacyRe
 const githubApiEmail = ["aloneio", "hotmail.com"].join("@");
 const knownGood = { name: "aloneio", email: "git@aloneio.aleeas.com", committerName: "aloneio",
   committerEmail: "git@aloneio.aleeas.com", message: "fix(security): reject unsafe commit metadata" };
+const githubApi = { ...knownGood, email: githubApiEmail, committerEmail: githubApiEmail, parentCount: 1 };
 test("commit validation enforces exact identity, ASCII messages and no assistant attribution", () => {
   assert.deepEqual(validateCommit(knownGood), []);
   assert.deepEqual(validateCommit({ ...knownGood, email: "private@example.invalid" }), ["author"]);
@@ -24,7 +25,7 @@ test("commit validation enforces exact identity, ASCII messages and no assistant
   assert.deepEqual(validateCommit(githubMerge), []);
   assert.equal(isGitHubMergeCommit({ ...githubMerge, parentCount: 1 }), false);
   assert.deepEqual(validateCommit({ ...githubMerge, parentCount: 1 }), ["author", "committer"]);
-  const githubApi = { ...knownGood, email: githubApiEmail, committerEmail: githubApiEmail, parentCount: 1 };
+
   const githubEnvironment = { GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_BASE_REF: "main", GITHUB_HEAD_REF: "dev" };
   assert.equal(isGitHubApiCommit(githubApi, githubEnvironment), true);
   assert.deepEqual(validateCommit(githubApi, githubEnvironment), []);
@@ -54,6 +55,13 @@ test("CI ranges only accept an observed ancestor; otherwise scan complete reacha
     CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "push",
     GITHUB_REPOSITORY: "other/project", GITHUB_REF: "refs/heads/main"
   }, () => false), "HEAD");
+  const reverseSyncEnvironment = {
+    CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request",
+    GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_BASE_REF: "dev", GITHUB_HEAD_REF: "main"
+  };
+  assert.equal(selectPrivacyRevision(reverseSyncEnvironment, () => false), "HEAD^..HEAD");
+  // The reverse sync narrows the revision; it must not widen the API identity lane.
+  assert.equal(isGitHubApiCommit(githubApi, reverseSyncEnvironment), false);
 });
 test("privacy command examines actual commit objects, not the configured git identity", async t => {
   const root = await mkdtemp(join(tmpdir(), "runmesh-git-privacy-"));
