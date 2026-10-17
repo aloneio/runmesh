@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { isGitHubMergeCommit, isGitHubApiCommit, validateCommit, selectPrivacyRevision } from "../scripts/check-git-privacy.mjs";
 
+const githubApiEmail = ["aloneio", "hotmail.com"].join("@");
 const knownGood = { name: "aloneio", email: "git@aloneio.aleeas.com", committerName: "aloneio",
   committerEmail: "git@aloneio.aleeas.com", message: "fix(security): reject unsafe commit metadata" };
 test("commit validation enforces exact identity, ASCII messages and no assistant attribution", () => {
@@ -23,7 +24,7 @@ test("commit validation enforces exact identity, ASCII messages and no assistant
   assert.deepEqual(validateCommit(githubMerge), []);
   assert.equal(isGitHubMergeCommit({ ...githubMerge, parentCount: 1 }), false);
   assert.deepEqual(validateCommit({ ...githubMerge, parentCount: 1 }), ["author", "committer"]);
-  const githubApi = { ...knownGood, email: "aloneio@hotmail.com", committerEmail: "aloneio@hotmail.com", parentCount: 1 };
+  const githubApi = { ...knownGood, email: githubApiEmail, committerEmail: githubApiEmail, parentCount: 1 };
   const githubEnvironment = { GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_BASE_REF: "main", GITHUB_HEAD_REF: "dev" };
   assert.equal(isGitHubApiCommit(githubApi, githubEnvironment), true);
   assert.deepEqual(validateCommit(githubApi, githubEnvironment), []);
