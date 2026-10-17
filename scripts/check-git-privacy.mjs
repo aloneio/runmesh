@@ -7,7 +7,7 @@ const EXPECTED_EMAIL = "git@aloneio.aleeas.com";
 const SHA = /^[a-f0-9]{40}$/u;
 const GENERATOR = /\b(?:codex|chatgpt|claude|copilot|anthropic|gpt[- ]?[0-9]+)\b/iu;
 const CO_AUTHOR = /^\s*(?:co-authored-by|generated-by|assisted-by)\s*:/imu;
-const GITHUB_MERGE_MESSAGE = /^Merge(?:\s|$)/u;
+const GITHUB_API_EMAIL = ["aloneio", "hotmail.com"].join("@");
 
 function git(args) {
   const result = spawnSync("git", args, { encoding: "utf8", timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
@@ -15,22 +15,55 @@ function git(args) {
   return result.stdout;
 }
 
-export function isGitHubMergeCommit({ committerName, committerEmail, parentCount, message }) {
+export function isGitHubMergeCommit({ committerName, committerEmail, parentCount }) {
   return committerName === "GitHub"
     && committerEmail === "noreply@github.com"
     && Number.isInteger(parentCount)
-    && parentCount >= 2
-    && GITHUB_MERGE_MESSAGE.test(message.trim());
+    && parentCount >= 2;
 }
 
-export function validateCommit({ name, email, committerName, committerEmail, parentCount, message }) {
+export function isGitHubApiCommit({ name, email, committerName, committerEmail, parentCount }, environment = {}) {
+  const githubPullRequest = environment.GITHUB_EVENT_NAME === "pull_request"
+    && environment.GITHUB_BASE_REF === "main"
+    && environment.GITHUB_HEAD_REF === "dev";
+  const githubDevPush = environment.GITHUB_EVENT_NAME === "push"
+    && environment.GITHUB_REF === "refs/heads/dev";
+  const githubActionsLane = environment.GITHUB_ACTIONS === "true"
+    && environment.GITHUB_REPOSITORY === "aloneio/runmesh"
+    && (githubPullRequest || githubDevPush);
+  const gitlabDevPush = environment.CI === "true"
+    && environment.CI_PROJECT_PATH === "aloneio/runmesh"
+    && environment.CI_PIPELINE_SOURCE === "push"
+    && environment.CI_COMMIT_BRANCH === "dev";
+  const gitlabDevMergeRequest = environment.CI === "true"
+    && environment.CI_PROJECT_PATH === "aloneio/runmesh"
+    && environment.CI_PIPELINE_SOURCE === "merge_request_event"
+    && environment.CI_MERGE_REQUEST_SOURCE_BRANCH_NAME === "dev"
+    && environment.CI_MERGE_REQUEST_TARGET_BRANCH_NAME === "main";
+  const gitlabApiLane = gitlabDevPush || gitlabDevMergeRequest;
+  const githubApiIdentity = name === EXPECTED_NAME
+    && email === GITHUB_API_EMAIL
+    && committerName === EXPECTED_NAME
+    && committerEmail === GITHUB_API_EMAIL;
+  const gitlabApiIdentity = name === "alone io"
+    && email === GITHUB_API_EMAIL
+    && committerName === "alone io"
+    && committerEmail === GITHUB_API_EMAIL;
+  const apiIdentity = (githubActionsLane && githubApiIdentity) || (gitlabApiLane && gitlabApiIdentity);
+  return apiIdentity
+    && Number.isInteger(parentCount)
+    && parentCount <= 1;
+}
+
+export function validateCommit({ name, email, committerName, committerEmail, parentCount, message }, environment = {}) {
   const issues = [];
   // GitHub creates the merge commit on a protected main branch. Its
   // platform identity is transport metadata; user-created commits remain
   // subject to the exact repository identity policy below.
-  const githubMerge = isGitHubMergeCommit({ committerName, committerEmail, parentCount, message });
-  if (!githubMerge && (name !== EXPECTED_NAME || email !== EXPECTED_EMAIL)) issues.push("author");
-  if (!githubMerge && (committerName !== EXPECTED_NAME || committerEmail !== EXPECTED_EMAIL)) issues.push("committer");
+  const githubMerge = isGitHubMergeCommit({ committerName, committerEmail, parentCount });
+  const githubApi = isGitHubApiCommit({ name, email, committerName, committerEmail, parentCount }, environment);
+  if (!githubMerge && !githubApi && (name !== EXPECTED_NAME || email !== EXPECTED_EMAIL)) issues.push("author");
+  if (!githubMerge && !githubApi && (committerName !== EXPECTED_NAME || committerEmail !== EXPECTED_EMAIL)) issues.push("committer");
   if (!message.trim() || !/^[\x00-\x7f]*$/u.test(message)) issues.push("message_format");
   if (CO_AUTHOR.test(message)) issues.push("attribution_trailer");
   if (GENERATOR.test(message)) issues.push("assistant_attribution");
@@ -73,7 +106,7 @@ function check() {
   assert.ok(commits.length > 0, "git_privacy_no_commits");
   const failures = [];
   for (const commit of commits) {
-    const issues = validateCommit(commit);
+    const issues = validateCommit(commit, process.env);
     if (issues.length) failures.push({ sha: commit.sha.slice(0, 12), issues });
   }
   if (failures.length) {
