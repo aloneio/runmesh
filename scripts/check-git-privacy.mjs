@@ -77,6 +77,15 @@ export function selectPrivacyRevision(environment, isAncestor) {
     && environment.GITHUB_REPOSITORY === "aloneio/runmesh"
     && environment.GITHUB_REF === "refs/heads/main";
   if (githubMainPush) return "HEAD^..HEAD";
+  const githubMainToDevPullRequest = environment.GITHUB_ACTIONS === "true"
+    && environment.GITHUB_EVENT_NAME === "pull_request"
+    && environment.GITHUB_REPOSITORY === "aloneio/runmesh"
+    && environment.GITHUB_BASE_REF === "dev"
+    && environment.GITHUB_HEAD_REF === "main";
+  // A protected main tip is already validated by the main push lane. The
+  // reverse sync PR only establishes ancestry in dev, so inspect that tip
+  // without rewalking older provider commits.
+  if (githubMainToDevPullRequest) return "HEAD^..HEAD";
   const bases = environment.CI_PIPELINE_SOURCE === "merge_request_event"
     ? [environment.CI_MERGE_REQUEST_DIFF_BASE_SHA]
     : [environment.CI_COMMIT_BEFORE_SHA];
