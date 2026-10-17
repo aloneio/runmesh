@@ -7,6 +7,7 @@ const EXPECTED_EMAIL = "git@aloneio.aleeas.com";
 const SHA = /^[a-f0-9]{40}$/u;
 const GENERATOR = /\b(?:codex|chatgpt|claude|copilot|anthropic|gpt[- ]?[0-9]+)\b/iu;
 const CO_AUTHOR = /^\s*(?:co-authored-by|generated-by|assisted-by)\s*:/imu;
+const GITHUB_MERGE_MESSAGE = /^Merge(?:\s|$)/u;
 
 function git(args) {
   const result = spawnSync("git", args, { encoding: "utf8", timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
@@ -14,10 +15,22 @@ function git(args) {
   return result.stdout;
 }
 
-export function validateCommit({ name, email, committerName, committerEmail, message }) {
+export function isGitHubMergeCommit({ committerName, committerEmail, parentCount, message }) {
+  return committerName === "GitHub"
+    && committerEmail === "noreply@github.com"
+    && Number.isInteger(parentCount)
+    && parentCount >= 2
+    && GITHUB_MERGE_MESSAGE.test(message.trim());
+}
+
+export function validateCommit({ name, email, committerName, committerEmail, parentCount, message }) {
   const issues = [];
-  if (name !== EXPECTED_NAME || email !== EXPECTED_EMAIL) issues.push("author");
-  if (committerName !== EXPECTED_NAME || committerEmail !== EXPECTED_EMAIL) issues.push("committer");
+  // GitHub creates the merge commit on a protected main branch. Its
+  // platform identity is transport metadata; user-created commits remain
+  // subject to the exact repository identity policy below.
+  const githubMerge = isGitHubMergeCommit({ committerName, committerEmail, parentCount, message });
+  if (!githubMerge && (name !== EXPECTED_NAME || email !== EXPECTED_EMAIL)) issues.push("author");
+  if (!githubMerge && (committerName !== EXPECTED_NAME || committerEmail !== EXPECTED_EMAIL)) issues.push("committer");
   if (!message.trim() || !/^[\x00-\x7f]*$/u.test(message)) issues.push("message_format");
   if (CO_AUTHOR.test(message)) issues.push("attribution_trailer");
   if (GENERATOR.test(message)) issues.push("assistant_attribution");
@@ -40,11 +53,13 @@ export function selectPrivacyRevision(environment, isAncestor) {
 }
 
 function commitsIn(revision) {
-  const output = git(["log", "--no-use-mailmap", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x1e", revision]);
+  const output = git(["log", "--no-use-mailmap", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%P%x00%B%x1e", revision]);
   return output.split("\x1e").map(raw => raw.trim()).filter(Boolean).map(raw => {
     const fields = raw.split("\x00");
-    assert.ok(fields.length >= 6 && SHA.test(fields[0]), "git_privacy_invalid_commit");
-    return { sha: fields[0], name: fields[1], email: fields[2], committerName: fields[3], committerEmail: fields[4], message: fields.slice(5).join("\x00") };
+    assert.ok(fields.length >= 7 && SHA.test(fields[0]), "git_privacy_invalid_commit");
+    const parents = fields[5].trim().split(/\s+/u).filter(Boolean);
+    return { sha: fields[0], name: fields[1], email: fields[2], committerName: fields[3], committerEmail: fields[4],
+      parentCount: parents.length, message: fields.slice(6).join("\x00") };
   });
 }
 
