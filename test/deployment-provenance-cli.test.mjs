@@ -88,7 +88,7 @@ if (${JSON.stringify(approved)} && Object.prototype.hasOwnProperty.call(response
 } else { process.exitCode = 1; }
 `;
   const fakeGlab = process.platform === "win32"
-    ? `@echo off\r\nnode "%~dp0glab-stub.mjs" %*\r\n`
+    ? `@echo off\r\n"${process.execPath}" "%~dp0glab-stub.mjs" %*\r\n`
     : `#!/usr/bin/env node\n${fakeGlabSource}`;
   if (process.platform === "win32") await writeFile(join(stubDir, "glab-stub.mjs"), fakeGlabSource);
   await writeFile(stubPath, fakeGlab, { mode: 0o755 });
