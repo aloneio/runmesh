@@ -91,7 +91,13 @@ export function selectPrivacyRevision(environment, isAncestor) {
 }
 
 function commitsIn(revision) {
-  const output = git(["log", "--no-use-mailmap", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%P%x00%B%x1e", revision]);
+  const args = ["log", "--no-use-mailmap", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%P%x00%B%x1e"];
+  // HEAD^..HEAD is a range over both parents of a merge commit. In the
+  // protected-main lane we need the merge object itself, not the reviewed
+  // source branch's commits; --no-walk also works in shallow checkouts.
+  if (revision === "HEAD^..HEAD") { args.push("--no-walk", "HEAD"); }
+  else args.push(revision);
+  const output = git(args);
   return output.split("\x1e").map(raw => raw.trim()).filter(Boolean).map(raw => {
     const fields = raw.split("\x00");
     assert.ok(fields.length >= 7 && SHA.test(fields[0]), "git_privacy_invalid_commit");
