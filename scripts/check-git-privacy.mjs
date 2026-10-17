@@ -23,14 +23,24 @@ export function isGitHubMergeCommit({ committerName, committerEmail, parentCount
 }
 
 export function isGitHubApiCommit({ name, email, committerName, committerEmail, parentCount }, environment = {}) {
-  const pullRequest = environment.GITHUB_EVENT_NAME === "pull_request"
+  const githubPullRequest = environment.GITHUB_EVENT_NAME === "pull_request"
     && environment.GITHUB_BASE_REF === "main"
     && environment.GITHUB_HEAD_REF === "dev";
-  const devPush = environment.GITHUB_EVENT_NAME === "push"
+  const githubDevPush = environment.GITHUB_EVENT_NAME === "push"
     && environment.GITHUB_REF === "refs/heads/dev";
-  return environment.GITHUB_ACTIONS === "true"
+  const githubActionsLane = environment.GITHUB_ACTIONS === "true"
     && environment.GITHUB_REPOSITORY === "aloneio/runmesh"
-    && (pullRequest || devPush)
+    && (githubPullRequest || githubDevPush);
+  const gitlabDevPush = environment.CI === "true"
+    && environment.CI_PROJECT_PATH === "aloneio/runmesh"
+    && environment.CI_PIPELINE_SOURCE === "push"
+    && environment.CI_COMMIT_BRANCH === "dev";
+  const gitlabDevMergeRequest = environment.CI === "true"
+    && environment.CI_PROJECT_PATH === "aloneio/runmesh"
+    && environment.CI_PIPELINE_SOURCE === "merge_request_event"
+    && environment.CI_MERGE_REQUEST_SOURCE_BRANCH_NAME === "dev"
+    && environment.CI_MERGE_REQUEST_TARGET_BRANCH_NAME === "main";
+  return (githubActionsLane || gitlabDevPush || gitlabDevMergeRequest)
     && name === EXPECTED_NAME
     && email === GITHUB_API_EMAIL
     && committerName === EXPECTED_NAME

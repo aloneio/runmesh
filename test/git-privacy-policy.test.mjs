@@ -27,7 +27,13 @@ test("commit validation enforces exact identity, ASCII messages and no assistant
   const githubEnvironment = { GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_BASE_REF: "main", GITHUB_HEAD_REF: "dev" };
   assert.equal(isGitHubApiCommit(githubApi, githubEnvironment), true);
   assert.deepEqual(validateCommit(githubApi, githubEnvironment), []);
+  const gitlabPushEnvironment = { CI: "true", CI_PIPELINE_SOURCE: "push", CI_PROJECT_PATH: "aloneio/runmesh", CI_COMMIT_BRANCH: "dev" };
+  const gitlabMergeRequestEnvironment = { CI: "true", CI_PIPELINE_SOURCE: "merge_request_event", CI_PROJECT_PATH: "aloneio/runmesh", CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: "dev", CI_MERGE_REQUEST_TARGET_BRANCH_NAME: "main" };
+  assert.equal(isGitHubApiCommit(githubApi, gitlabPushEnvironment), true);
+  assert.equal(isGitHubApiCommit(githubApi, gitlabMergeRequestEnvironment), true);
+  assert.deepEqual(validateCommit(githubApi, gitlabPushEnvironment), []);
   assert.deepEqual(validateCommit(githubApi), ["author", "committer"]);
+  assert.equal(isGitHubApiCommit(githubApi, { ...gitlabPushEnvironment, CI_PROJECT_PATH: "other/project" }), false);
 });
 test("CI ranges only accept an observed ancestor; otherwise scan complete reachable history", () => {
   const old = "a".repeat(40);
