@@ -72,6 +72,11 @@ export function validateCommit({ name, email, committerName, committerEmail, par
 
 export function selectPrivacyRevision(environment, isAncestor) {
   if (!environment.CI) return "HEAD";
+  const githubMainPush = environment.GITHUB_ACTIONS === "true"
+    && environment.GITHUB_EVENT_NAME === "push"
+    && environment.GITHUB_REPOSITORY === "aloneio/runmesh"
+    && environment.GITHUB_REF === "refs/heads/main";
+  if (githubMainPush) return "HEAD^..HEAD";
   const bases = environment.CI_PIPELINE_SOURCE === "merge_request_event"
     ? [environment.CI_MERGE_REQUEST_DIFF_BASE_SHA]
     : [environment.CI_COMMIT_BEFORE_SHA];
