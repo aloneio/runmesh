@@ -10,6 +10,9 @@ import { downloadRunnerReleaseAsset, stageRunnerRelease } from "../src/updates/r
 
 const cleanupFault = vi.hoisted(() => ({ error: undefined as Error | undefined, matches: undefined as ((path: string) => boolean) | undefined }));
 const commitFault = vi.hoisted(() => ({ error: undefined as Error | undefined, remaining: 0, attempts: 0, onFailure: undefined as (() => void) | undefined }));
+const cleanupRetryOptions = () => process.platform === "win32"
+  ? { maxRetries: 20, retryDelay: 250 }
+  : { maxRetries: 5, retryDelay: 50 };
 vi.mock("node:fs/promises", async importOriginal => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const remove: typeof actual.rm = async (path, options) => {
@@ -66,7 +69,7 @@ describe("Runner exact release staging", () => {
     const f = fixture(); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
     // Test cleanup is a separate hook, so a locked executable cannot replace
     // the staging failure that initiated cleanup.
-    onTestFinished(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    onTestFinished(() => rm(root, { recursive: true, force: true, ...cleanupRetryOptions() }));
     await mkdir(join(root, "state"));
     await writeFile(join(root, "profile.json"), "existing credentials\n");
     await writeFile(join(root, "state", "job.json"), "existing job history\n");
@@ -82,7 +85,7 @@ describe("Runner exact release staging", () => {
 
   it("verifies the installed runtime and bundle before recording the release", async ({ onTestFinished }) => {
     const root = await mkdtemp(join(tmpdir(), "runmesh-stager-")), observation = join(root, "probe.json");
-    onTestFinished(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    onTestFinished(() => rm(root, { recursive: true, force: true, ...cleanupRetryOptions() }));
     const f = fixture("0.1.6", { bundle: `const fs = require("node:fs"), path = require("node:path");
       const directory = path.dirname(path.dirname(process.execPath));
       fs.writeFileSync(${JSON.stringify(observation)}, JSON.stringify({ runtime: process.execPath, bundle: process.argv[1],
@@ -105,7 +108,7 @@ describe("Runner exact release staging", () => {
     { name: "nonzero exit", bundle: "process.exitCode = 7;", error: { code: 7 } },
   ])("removes its placed installation after a probe reports $name", async ({ bundle, error }) => {
     const root = await mkdtemp(join(tmpdir(), "runmesh-stager-")), f = fixture("0.1.6", { bundle });
-    onTestFinished(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    onTestFinished(() => rm(root, { recursive: true, force: true, ...cleanupRetryOptions() }));
     await expect(stageRunnerRelease({ version: "0.1.6", channel: "stable", artifact_sha256: f.sha, manifest_sha256: f.manifestSha },
       { installRoot: root, operationId: "failed-probe", runtimePath: process.execPath, fetch: f.fetchImpl }, { trust: f.trust })).rejects.toMatchObject(error);
     expect(await readdir(join(root, "versions"))).toEqual([]);
@@ -128,7 +131,7 @@ describe("Runner exact release staging", () => {
         expect(commitFault.attempts).toBe(1);
         expect(await readdir(join(root, "versions"))).toEqual([]);
       }
-    } finally { commitFault.error = undefined; await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+    } finally { commitFault.error = undefined; await rm(root, { recursive: true, force: true, ...cleanupRetryOptions() }); }
   }, 30000);
 
   it.each(["EBUSY", "EIO"])("preserves a persistent %s and removes its uncommitted directory", async code => {
@@ -142,7 +145,7 @@ describe("Runner exact release staging", () => {
       expect(commitFault.attempts).toBe(process.platform === "win32" && code === "EBUSY" ? 6 : 1);
       expect(await readdir(join(root, "versions"))).toEqual([]);
       await expect(readFile(probeMarker)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally { commitFault.error = undefined; await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+    } finally { commitFault.error = undefined; await rm(root, { recursive: true, force: true, ...cleanupRetryOptions() }); }
   }, 30000);
 
   it("stops staging commit retries when maintenance is cancelled", async () => {
@@ -155,7 +158,7 @@ describe("Runner exact release staging", () => {
         { installRoot: root, operationId: "cancelled-commit", runtimePath: process.execPath, fetch: f.fetchImpl, signal: controller.signal }, { trust: f.trust })).rejects.toBe(process.platform === "win32" ? reason : error);
       expect(commitFault.attempts).toBe(1);
       expect(await readdir(join(root, "versions"))).toEqual([]);
-    } finally { commitFault.error = undefined; commitFault.onFailure = undefined; await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+    } finally { commitFault.error = undefined; commitFault.onFailure = undefined; await rm(root, { recursive: true, force: true, ...cleanupRetryOptions() }); }
   }, 30000);
   it("rejects an asset changed after selection before extracting any files", async () => {
     const f = fixture(); const root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
@@ -311,7 +314,7 @@ describe("Runner exact release staging", () => {
 
   it("retains the probe failure and cleanup error for its placed installation", async ({ onTestFinished }) => {
     const f = fixture("0.1.6", { bundle: 'console.log("0.0.0");' }), root = await mkdtemp(join(tmpdir(), "runmesh-stager-"));
-    onTestFinished(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    onTestFinished(() => rm(root, { recursive: true, force: true, ...cleanupRetryOptions() }));
     const cleanup = new Error("placed installation cleanup fixture");
     cleanupFault.error = cleanup;
     cleanupFault.matches = path => dirname(path) === join(root, "versions") && !path.endsWith(".staging");

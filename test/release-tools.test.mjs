@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { buildManifest, releaseArtifactName, releaseTag, validateManifest } from "../scripts/release-manifest.mjs";
+import { RELEASE_SBOM_NAME, generateReleaseSbom } from "../scripts/release-sbom.mjs";
 import { verifyReleaseAssets } from "../scripts/release-verify.mjs";
 import { signReleaseManifest, verifyReleaseManifest } from "../scripts/release-signature.mjs";
 import { resolveTrustedTaskkillPath } from "../scripts/windows-tools.mjs";
@@ -23,6 +24,37 @@ const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const execFileAsync = promisify(execFile);
 const productVersion = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8")).version;
 async function fixture() { const root = await mkdtemp(join(tmpdir(), "runmesh-release-tools-")); return { root, cleanup: () => rm(root, { recursive: true, force: true }) }; }
+
+test("generates a commit-bound SPDX SBOM with deterministic release metadata", async () => {
+  const f = await fixture();
+  try {
+    const outputPath = join(f.root, RELEASE_SBOM_NAME);
+    const source = {
+      spdxVersion: "SPDX-2.3",
+      creationInfo: { created: "2000-01-01T00:00:00Z" },
+      packages: [{ name: "example", versionInfo: "1.0.0" }],
+    };
+    const document = await generateReleaseSbom({
+      outputPath,
+      commitSha: "a".repeat(40),
+      publishedAt: "2026-10-17T00:00:00Z",
+      run: async () => ({ stdout: JSON.stringify(source) }),
+    });
+    assert.equal(document.creationInfo.created, "2026-10-17T00:00:00Z");
+    assert.equal(document.documentNamespace, "https://github.com/aloneio/runmesh/spdx/" + "a".repeat(40));
+    assert.equal(document.creationInfo.comment, "Generated from Runmesh commit " + "a".repeat(40));
+    assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), document);
+    await assert.rejects(
+      generateReleaseSbom({
+        outputPath,
+        commitSha: "a".repeat(40),
+        publishedAt: "2026-10-17T00:00:00Z",
+        run: async () => ({ stdout: JSON.stringify(source) }),
+      }),
+      /EEXIST/u,
+    );
+  } finally { await f.cleanup(); }
+});
 
 test("pins manually-dispatched releases to the triggering main commit", async () => {
   const workflow = (await readFile(join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8")).replace(/\r\n/gu, "\n");
@@ -46,6 +78,7 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
   assert.equal(workflow.includes("release/download/trust-keyring.json \"$RELEASE_SIGNING_KEY_ID\""), false);
   assert.equal(workflow.includes("cmp release/download/trust-keyring.json release/trust-keyring.json"), true);
   assert.equal(workflow.includes("node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig"), true);
+  assert.equal(workflow.includes('node scripts/check-live-provenance.mjs https://runmesh.aloneio.workers.dev "$GITHUB_SHA" main'), true);
   assert.equal(workflow.includes("(cd release/assets && sha256sum -c SHA256SUMS)"), true);
   assert.equal(workflow.includes("actions/upload-artifact@v4"), false);
   assert.equal(workflow.includes("contents: write"), true);
@@ -67,9 +100,9 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
   const publishTipAssertIndex = workflow.indexOf('test "$(git rev-parse origin/main)" = "$GITHUB_SHA"', publishIndex);
   assert.ok(publishIndex >= 0 && publishTipFetchIndex > publishIndex && publishTipAssertIndex > publishTipFetchIndex, "publish must re-check the protected main tip");
   assert.equal(workflow.includes('git push origin "v${RELEASE_VERSION}"'), false);
-  assert.equal(workflow.includes("sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS"), true);
-  assert.equal(workflow.includes("npm sbom"), false);
-  assert.equal(workflow.includes("sbom.spdx.json"), false);
+  assert.equal(workflow.includes("node scripts/release-sbom.mjs release/assets/sbom.spdx.json"), true);
+  assert.equal(workflow.includes("sha256sum *.tgz manifest.json manifest.sig manifest.signature.json sbom.spdx.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS"), true);
+  assert.equal(workflow.includes("sbom.spdx.json"), true);
   const actionRefs = [...workflow.matchAll(/^\s+(?:-\s+)?uses:\s+([^\s#]+)/gmu)].map((match) => match[1]);
   assert.ok(actionRefs.length > 0);
   assert.ok(actionRefs.every((ref) => ref === "./.github/workflows/ci.yml" || /^[^@]+@[0-9a-f]{40}$/u.test(ref)), `mutable GitHub Action ref: ${actionRefs.join(", ")}`);
@@ -438,6 +471,27 @@ test("rejects an artifact replaced after checksums are regenerated", async () =>
     await assert.rejects(verifyReleaseAssets({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: keyring, expectedKeyId: keyId, expectedVersion: productVersion }), /mismatch/);
   } finally { await f.cleanup(); }
 });
+test("rejects an SBOM replaced after its signed digest was generated", async () => {
+  const f = await fixture();
+  try {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519"); const keyId = "test-key";
+    const keyring = join(f.root, "trust-keyring.json"); const artifact = join(f.root, releaseArtifactName(productVersion)); const sbom = join(f.root, RELEASE_SBOM_NAME);
+    const manifest = join(f.root, "manifest.json"); const signature = join(f.root, "manifest.sig"); const descriptor = join(f.root, "manifest.signature.json");
+    await writeFile(keyring, JSON.stringify({ schema_version: 1, keys: [{ key_id: keyId, algorithm: "ed25519", public_key_pem: publicKey.export({ type: "spki", format: "pem" }) }] }));
+    await writeFile(artifact, "original artifact");
+    await writeFile(sbom, JSON.stringify({ spdxVersion: "SPDX-2.3", packages: [{ name: "original" }] }));
+    const built = await buildManifest({ releaseDirectory: f.root, version: productVersion, commitSha: "a".repeat(40), publishedAt: "2026-08-27T00:00:00Z" });
+    assert.equal(built.sbom.name, RELEASE_SBOM_NAME);
+    await writeFile(manifest, JSON.stringify(built));
+    await signReleaseManifest({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: keyring, keyId, privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }) });
+    await writeFile(sbom, JSON.stringify({ spdxVersion: "SPDX-2.3", packages: [{ name: "tampered" }] }));
+    await assert.rejects(
+      verifyReleaseAssets({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: keyring, expectedKeyId: keyId, expectedVersion: productVersion }),
+      /release SBOM SHA-256 mismatch/u,
+    );
+  } finally { await f.cleanup(); }
+});
+
 test("embeds the independently reviewed fixed release key and immutable installer contract", async () => {
   const f = await fixture();
   try {

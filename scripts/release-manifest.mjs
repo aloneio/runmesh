@@ -4,6 +4,7 @@ import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PRODUCT_VERSION } from "./product-version.mjs";
 import { validateDevPlan } from "./dev-release/policy.mjs";
+import { RELEASE_SBOM_NAME } from "./release-sbom.mjs";
 import { MAX_RELEASE_ASSET_BYTES, readBoundedReleaseFile } from "./release-io.mjs";
 
 export const RELEASE_PROJECT = "runmesh";
@@ -11,7 +12,7 @@ export const RELEASE_CHANNEL = PRODUCT_VERSION.includes("-dev") ? "dev" : "stabl
 export const RELEASE_MANIFEST_SCHEMA_VERSION = 1;
 export const RELEASE_PROTOCOL_MIN = 2;
 export const RELEASE_PROTOCOL_MAX = 2;
-export { MAX_RELEASE_ASSET_BYTES };
+export { MAX_RELEASE_ASSET_BYTES, RELEASE_SBOM_NAME };
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 // Accept stable SemVer and the explicitly supported dev lane. Release jobs
@@ -66,6 +67,18 @@ async function buildVersionedManifest({ releaseDirectory, version, commitSha, pu
     if (error instanceof Error && error.message.includes("release input limit")) throw error;
     throw new Error(`empty or unreadable Runner artifact: ${expectedName}`, { cause: error });
   }
+  let sbomBytes;
+  try { sbomBytes = await readBoundedReleaseFile(join(releaseDirectory, RELEASE_SBOM_NAME), RELEASE_SBOM_NAME); }
+  catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const sbom = sbomBytes === undefined ? undefined : {
+    name: RELEASE_SBOM_NAME,
+    format: "spdx-json",
+    url: releaseAssetUrl(version, RELEASE_SBOM_NAME),
+    size: sbomBytes.byteLength,
+    sha256: createHash("sha256").update(sbomBytes).digest("hex"),
+  };
   return validateManifest({
     schema_version: RELEASE_MANIFEST_SCHEMA_VERSION,
     project: RELEASE_PROJECT,
@@ -86,6 +99,7 @@ async function buildVersionedManifest({ releaseDirectory, version, commitSha, pu
       size: bytes.byteLength,
       sha256: createHash("sha256").update(bytes).digest("hex"),
     }],
+    ...(sbom === undefined ? {} : { sbom }),
   }, version);
 }
 
@@ -107,6 +121,7 @@ export function validateManifest(value, expectedVersion = value?.version) {
     throw new Error("invalid Runmesh release manifest");
   }
   const artifact = value.artifacts[0];
+  const sbom = value.sbom === undefined ? undefined : validateSbom(value.sbom, version);
   const expectedName = releaseArtifactName(version);
   if (!isObject(artifact)
     || artifact.name !== expectedName
@@ -141,6 +156,26 @@ export function validateManifest(value, expectedVersion = value?.version) {
       size: artifact.size,
       sha256: artifact.sha256,
     }],
+    ...(sbom === undefined ? {} : { sbom }),
+  };
+}
+
+function validateSbom(value, version) {
+  if (!isObject(value)
+    || value.name !== RELEASE_SBOM_NAME
+    || value.format !== "spdx-json"
+    || value.url !== releaseAssetUrl(version, RELEASE_SBOM_NAME)
+    || !Number.isSafeInteger(value.size)
+    || value.size <= 0
+    || value.size > MAX_RELEASE_ASSET_BYTES
+    || typeof value.sha256 !== "string"
+    || !SHA256.test(value.sha256)) throw new Error("invalid manifest SBOM");
+  return {
+    name: value.name,
+    format: value.format,
+    url: value.url,
+    size: value.size,
+    sha256: value.sha256,
   };
 }
 

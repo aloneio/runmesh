@@ -17,6 +17,14 @@ export async function verifyReleaseAssets({ manifestPath, signaturePath, descrip
     const digest = createHash("sha256").update(bytes).digest("hex");
     if (digest !== artifact.sha256) throw new Error(`release artifact SHA-256 mismatch: ${artifact.name}`);
   }
+  if (manifest.sbom !== undefined) {
+    const path = join(directory, manifest.sbom.name);
+    if (basename(path) !== manifest.sbom.name) throw new Error("release SBOM name is unsafe");
+    const bytes = await readBoundedReleaseFile(path, manifest.sbom.name);
+    if (bytes.byteLength !== manifest.sbom.size) throw new Error("release SBOM size mismatch");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (digest !== manifest.sbom.sha256) throw new Error("release SBOM SHA-256 mismatch");
+  }
   return manifest;
 }
 
