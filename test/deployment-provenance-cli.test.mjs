@@ -92,9 +92,11 @@ if (${JSON.stringify(approved)} && Object.prototype.hasOwnProperty.call(response
     : `#!/usr/bin/env node\n${fakeGlabSource}`;
   if (process.platform === "win32") await writeFile(join(stubDir, "glab-stub.mjs"), fakeGlabSource);
   await writeFile(stubPath, fakeGlab, { mode: 0o755 });
+  const searchPath = stubDir + delimiter + (environment.PATH ?? environment.Path ?? process.env.PATH ?? process.env.Path ?? "");
   const invoke = (extra = {}) => spawnSync(process.execPath, [join(root, "scripts/deploy-worker.mjs"), "--env", "production"], {
     cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true,
-    env: { ...environment, PATH: stubDir + delimiter + (environment.PATH ?? process.env.PATH ?? ""),
+    env: { ...environment, PATH: searchPath, Path: searchPath,
+      PATHEXT: environment.PATHEXT ?? process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
       WORKERS_CI: "1", WORKERS_CI_BRANCH: "main", WORKERS_CI_COMMIT_SHA: commit,
       WORKERS_CI_BUILD_UUID: buildUuid, ...extra },
   });
