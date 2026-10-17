@@ -40,11 +40,17 @@ export function isGitHubApiCommit({ name, email, committerName, committerEmail, 
     && environment.CI_PIPELINE_SOURCE === "merge_request_event"
     && environment.CI_MERGE_REQUEST_SOURCE_BRANCH_NAME === "dev"
     && environment.CI_MERGE_REQUEST_TARGET_BRANCH_NAME === "main";
-  return (githubActionsLane || gitlabDevPush || gitlabDevMergeRequest)
-    && name === EXPECTED_NAME
+  const gitlabApiLane = gitlabDevPush || gitlabDevMergeRequest;
+  const githubApiIdentity = name === EXPECTED_NAME
     && email === GITHUB_API_EMAIL
     && committerName === EXPECTED_NAME
-    && committerEmail === GITHUB_API_EMAIL
+    && committerEmail === GITHUB_API_EMAIL;
+  const gitlabApiIdentity = name === "alone io"
+    && email === GITHUB_API_EMAIL
+    && committerName === "alone io"
+    && committerEmail === GITHUB_API_EMAIL;
+  const apiIdentity = (githubActionsLane && githubApiIdentity) || (gitlabApiLane && gitlabApiIdentity);
+  return apiIdentity
     && Number.isInteger(parentCount)
     && parentCount <= 1;
 }
