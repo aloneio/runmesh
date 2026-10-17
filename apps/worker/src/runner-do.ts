@@ -647,13 +647,16 @@ export class RunnerDO {
       const principal = input.mcp_authorization;
       const params = input.params;
       if (!isRecord(principal) || !isRecord(params)) return preDispatchError("permission_denied", "invalid MCP authorization identity", 403);
+      // Launches receive a fresh authenticated identity before authorization;
+      // existing Job operations must retain the caller's addressed job ID.
+      const authorizationJobId = authenticatedJobId ?? (typeof params.job_id === "string" ? params.job_id : undefined);
       let authorized: Response | undefined;
       const receipt = await boundedJsonReceipt(async signal => {
         authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", signal, body: JSON.stringify({
           client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
           runner_pinned: principal.runner_pinned === true,
           workspace_id: params.expected_workspace_id ?? params.workspace_id,
-          ...(authenticatedJobId === undefined ? {} : { job_id: authenticatedJobId }),
+          ...(authorizationJobId === undefined ? {} : { job_id: authorizationJobId }),
           policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
           ...(reportingLaunch ? { include_job_recording: true } : {}),
         }) });
