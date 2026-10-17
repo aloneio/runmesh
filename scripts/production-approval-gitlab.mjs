@@ -5,13 +5,17 @@ import { PRODUCTION_TRUST, requireProductionSource, checkProjectAndBranch,
 
 /** The release workstation holds the GitLab read credential, outside the
  * source tree. No token or synthetic approval file is accepted as proof. */
+export function escapeWindowsShellArgument(value, platform = process.platform) {
+  return platform === "win32" ? value.replace(/[&|<>^]/gu, match => `^${match}`) : value;
+}
+
 export function localGitLabClient() {
   function call(path) {
     assert.match(path, /^projects\/85844627(?:\/[a-zA-Z0-9/_?=&.%+-]+)?$/u);
     // glab authenticates with the release workstation's existing read session.
     // Errors are handled by the caller without exposing stderr or token values.
     const executable = process.platform === "win32" ? "glab.cmd" : "glab";
-    return execFileSync(executable, ["api", path], {
+    return execFileSync(executable, ["api", escapeWindowsShellArgument(path)], {
       // Windows GitLab CLI installations may resolve through glab.cmd; the path
       // assertion above constrains every shell argument to the fixed API grammar.
       shell: process.platform === "win32",

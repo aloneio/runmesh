@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { checkGateArtifact, checkPipeline, checkProjectAndBranch, PRODUCTION_TRUST } from "../scripts/production-approval-policy.mjs";
-import { verifyGitLabProductionApproval } from "../scripts/production-approval-gitlab.mjs";
+import { escapeWindowsShellArgument, verifyGitLabProductionApproval } from "../scripts/production-approval-gitlab.mjs";
 
 const sha = "a".repeat(40), tree = "b".repeat(40);
 const source = { branch: "main", commit: sha, tree, state: "clean" };
@@ -67,6 +67,12 @@ function fixture(change = () => {}) {
     },
   };
 }
+
+test("Windows GitLab API paths escape cmd metacharacters without changing POSIX paths", () => {
+  const path = "projects/85844627/pipelines?ref=main&sha=abc&per_page=100";
+  assert.equal(escapeWindowsShellArgument(path, "win32"), "projects/85844627/pipelines?ref=main^&sha=abc^&per_page=100");
+  assert.equal(escapeWindowsShellArgument(path, "linux"), path);
+});
 
 test("exact-SHA main and MR gates plus clean artifacts are required before upload", async () => {
   const approval = await verifyGitLabProductionApproval(source, fixture());
