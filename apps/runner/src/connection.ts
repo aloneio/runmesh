@@ -9,6 +9,7 @@ import { HistoryUploadScheduler, type HistoryUploadClock } from "./history-uploa
 import { QueueGrantSchema } from "@aloneio/runmesh-protocol";
 import { parseJobHistorySettings, type JobHistorySettings } from "@aloneio/runmesh-protocol";
 import {
+  canonicalJson,
   decodeWireFrame,
   encodeWireFrame,
   LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
@@ -21,6 +22,7 @@ import {
   type RunnerWelcome,
   type RunnerSync,
   type RpcRequest,
+  type ProtocolVersion,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
 import WebSocket from "ws";
@@ -72,6 +74,8 @@ export interface RunnerConnectionOptions {
 export class RunnerConnection {
   private queueNegotiated = false;
   private reportingNegotiated = false;
+  /** Protocol selected by the Worker welcome for the current socket. */
+  private negotiatedProtocolVersion: ProtocolVersion | undefined;
   private readonly historyUploads: HistoryUploadScheduler;
   private demandSnapshot: { revision: number; socket: WebSocket; jobs: RunnerSync["jobs"]; workspaces: RunnerSync["workspaces"]; snapshot: string } | undefined;
   private readonly config: RunnerConfig;
@@ -206,6 +210,7 @@ export class RunnerConnection {
   private async startLifecycle(): Promise<void> {
     const generation = ++this.lifecycleGeneration;
     this.stopped = false;
+    this.negotiatedProtocolVersion = undefined;
     await this.runtime.initialize();
     // `stop()` may be called while local state/policy is loading. Do not
     // blindly clear that stop request after the await and open a socket anyway.
@@ -281,6 +286,7 @@ export class RunnerConnection {
     this.lifecycleGeneration += 1;
     this.stopped = true;
     this.queueNegotiated = false;
+    this.negotiatedProtocolVersion = undefined;
     this.historyUploads.stop(); this.reportingNegotiated = false; this.demandSnapshot = undefined;
     this.cancelReconnectSleep?.();
     this.transportKeepalive?.stop(); this.transportKeepalive = undefined;
@@ -301,16 +307,28 @@ export class RunnerConnection {
     const socket=this.socket;
     if (!this.queueNegotiated || !parsed.success || this.stopped || socket===undefined || socket!==this.welcomedSocket || socket.readyState!==WebSocket.OPEN) return false;
     const grant=parsed.data;
-    const canonical=JSON.stringify({workspace_id:input.workspace_id,command:input.command,args:input.args??null,shell:input.shell,cwd:input.cwd??".",request_id:input.request_id??null,...(typeof input.record_history === "boolean" ? {record_history:input.record_history} : {})});
+    const launchFields = JSON.parse(JSON.stringify({
+      workspace_id: input.workspace_id,
+      command: input.command,
+      args: input.args ?? null,
+      shell: input.shell,
+      cwd: input.cwd ?? ".",
+      request_id: input.request_id ?? null,
+      ...(typeof input.record_history === "boolean" ? { record_history: input.record_history } : {}),
+    })) as Record<string, unknown>;
+    const canonical = canonicalJson(launchFields);
+    const legacy = JSON.stringify(launchFields);
+    const canonicalDigest = createHash("sha256").update(canonical).digest("hex");
+    const legacyDigest = createHash("sha256").update(legacy).digest("hex");
     if (grant.payload.client_id!==clientId || grant.payload.runner_id!==this.config.runnerId || grant.payload.workspace_id!==input.workspace_id
       || grant.payload.policy_revision!==this.appliedPolicyRevision || grant.payload.expires_at_ms<=Date.now()
-      || grant.payload.launch_digest!==createHash("sha256").update(canonical).digest("hex")) return false;
+      || (grant.payload.launch_digest!==canonicalDigest && grant.payload.launch_digest!==legacyDigest)) return false;
     const requestId=`queue-${crypto.randomUUID()}`;
     try {
       const result=await new Promise<unknown>((resolve,reject)=>{
         const timer=setTimeout(()=>this.pending.reject(requestId,new Error("Queue authorization timed out")),5000);
         this.pending.register(requestId,resolve,reject,timer);
-        try {socket.send(encodeWireFrame({type:"runner.queue_check",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:requestId,runner_id:this.config.runnerId,job_id:jobId,grant}));}
+        try {socket.send(encodeWireFrame({type:"runner.queue_check",protocol_version:this.protocolVersion(socket),request_id:requestId,runner_id:this.config.runnerId,job_id:jobId,grant}));}
         catch(error){this.pending.reject(requestId,error instanceof Error ? error : new Error("Queue authorization send failed"));}
       });
       const allowed = this.socket===socket && this.welcomedSocket===socket && !this.stopped && socket.readyState===WebSocket.OPEN
@@ -318,6 +336,13 @@ export class RunnerConnection {
       if (allowed && this.reportingNegotiated && (!("record_history" in result) || result.record_history !== true)) input.record_history = false;
       return allowed;
     } catch { return false; }
+  }
+
+  private protocolVersion(socket: WebSocket): ProtocolVersion {
+    if (socket !== this.welcomedSocket || this.negotiatedProtocolVersion === undefined) {
+      throw new Error("runner protocol is not negotiated");
+    }
+    return this.negotiatedProtocolVersion;
   }
 
   /** Test/operator control: close only the transport; local JobManager continues. */
@@ -330,9 +355,10 @@ export class RunnerConnection {
       return Promise.reject(new Error("runner is not connected"));
     }
     const requestId = `rpc-${crypto.randomUUID()}`;
+    const protocolVersion = this.protocolVersion(socket);
     const request: RpcRequest = policyRevision === undefined
-      ? { type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: requestId, method: method as "echo" | "runner.info", params: params as RpcRequest["params"] }
-      : { type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: requestId, method, params: params as RpcRequest["params"], policy_revision: policyRevision };
+      ? { type: "rpc.request", protocol_version: protocolVersion, request_id: requestId, method: method as "echo" | "runner.info", params: params as RpcRequest["params"] }
+      : { type: "rpc.request", protocol_version: protocolVersion, request_id: requestId, method, params: params as RpcRequest["params"], policy_revision: policyRevision };
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.reject(requestId, new Error(`RPC request timed out: ${method}`));
@@ -361,7 +387,9 @@ export class RunnerConnection {
       this.socket = socket;
       // A replacement socket is unauthorized until its own welcome arrives.
       this.welcomedSocket = undefined;
+      this.negotiatedProtocolVersion = undefined;
       let welcomed = false;
+      let negotiatedProtocolVersion: ProtocolVersion | undefined;
       let welcomedAtMs = 0;
       let keepalive: RunnerTransportKeepalive | undefined;
       let localCloseReason = "";
@@ -410,7 +438,7 @@ export class RunnerConnection {
         if (!isBinary && bytes.byteLength === 4 && Buffer.from(bytes).toString("utf8") === "pong" && keepalive?.acknowledge()) return;
         let message: WireMessage;
         try {
-          message = decodeWireFrame(bytes);
+          message = decodeWireFrame(bytes, negotiatedProtocolVersion);
         } catch {
           socket.close(1007, "invalid protocol frame");
           return;
@@ -431,6 +459,13 @@ export class RunnerConnection {
             socket.close(1008, "duplicate welcome");
             return;
           }
+          const negotiated = message.negotiated_protocol_version;
+          if (message.protocol_version !== negotiated || negotiated < PROTOCOL_MIN_VERSION || negotiated > PROTOCOL_CURRENT_VERSION) {
+            socket.close(1002, "invalid negotiated protocol");
+            return;
+          }
+          negotiatedProtocolVersion = negotiated;
+          this.negotiatedProtocolVersion = negotiated;
           const rawHistory = message.extensions?.runmesh_job_history;
           const history = rawHistory === undefined ? undefined : parseJobHistorySettings(rawHistory);
           if (rawHistory !== undefined && history === undefined) { socket.close(1008,"invalid history settings"); return; }
@@ -539,6 +574,7 @@ export class RunnerConnection {
         if (currentSocket) {
           this.socket = undefined;
           this.welcomedSocket = undefined;
+          this.negotiatedProtocolVersion = undefined;
         }
         const closeReason = reason.toString("utf8") || localCloseReason;
         reportTransportClose({ code, reason: closeReason, welcomed, current: currentSocket,
@@ -628,11 +664,13 @@ export class RunnerConnection {
 
   private sendPolicyAck(socket: WebSocket, status: RunnerPolicyAck["status"], workspaceStatus: RunnerPolicyAck["workspace_status"]): void {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+    let protocolVersion: ProtocolVersion;
+    try { protocolVersion = this.protocolVersion(socket); } catch { return; }
     const reportedRevision = this.appliedPolicyRevision;
     const reportedChecksum = this.appliedPolicyChecksum;
     const ack: RunnerPolicyAck = {
       type: "runner.policy_ack",
-      protocol_version: PROTOCOL_CURRENT_VERSION,
+      protocol_version: protocolVersion,
       runner_id: this.config.runnerId,
       desired_revision: this.desiredPolicyRevision,
       desired_checksum: this.desiredPolicyChecksum,
@@ -650,10 +688,12 @@ export class RunnerConnection {
 
   private sendHeartbeat(socket: WebSocket): void {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+    let protocolVersion: ProtocolVersion;
+    try { protocolVersion = this.protocolVersion(socket); } catch { return; }
     try {
       socket.send(encodeWireFrame({
         type: "runner.heartbeat",
-        protocol_version: PROTOCOL_CURRENT_VERSION,
+        protocol_version: protocolVersion,
         runner_id: this.config.runnerId,
         sent_at_ms: Date.now(),
         active_job_ids: this.runtime.jobs.activeHistoryJobIds(),
@@ -718,7 +758,9 @@ export class RunnerConnection {
     if (captured.jobs.length === 0 || captured.snapshot === this.historyReceipts.lastSnapshot) {
       this.historyUploads.acknowledge(revision); return;
     }
-    const sync: RunnerSync = { type: "runner.sync", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId,
+    let protocolVersion: ProtocolVersion;
+    try { protocolVersion = this.protocolVersion(socket); } catch { return; }
+    const sync: RunnerSync = { type: "runner.sync", protocol_version: protocolVersion, runner_id: this.config.runnerId,
       sync_sequence: this.syncSequence++, sent_at_ms: Date.now(), workspaces: captured.workspaces, jobs: captured.jobs,
       extensions: { runmesh_history_ack: true } };
     this.historyReceipts.track(socket, `history-${sync.sync_sequence}`, captured.snapshot, revision);
@@ -734,9 +776,11 @@ export class RunnerConnection {
     const workspaces = this.runtime.syncWorkspaceMetadata();
     const snapshot = JSON.stringify({ workspaces, jobs });
     if (snapshot === this.historyReceipts.lastSnapshot) return;
+    let protocolVersion: ProtocolVersion;
+    try { protocolVersion = this.protocolVersion(socket); } catch { return; }
     const sync: RunnerSync = {
       type: "runner.sync",
-      protocol_version: PROTOCOL_CURRENT_VERSION,
+      protocol_version: protocolVersion,
       runner_id: this.config.runnerId,
       sync_sequence: this.syncSequence++,
       ...(this.jobHistory === undefined ? {} : {extensions:{runmesh_history_ack:true}}),
@@ -752,20 +796,21 @@ export class RunnerConnection {
   }
 
   private async respondToRpc(socket: WebSocket, request: RpcRequest, sessionCurrent: () => boolean): Promise<void> {
+    if (!sessionCurrent() || this.negotiatedProtocolVersion === undefined) return;
+    const protocolVersion = this.negotiatedProtocolVersion;
     let admitted = false;
     try {
-      if (!sessionCurrent()) return;
       const expectedRevision = this.appliedPolicyRevision;
       if (request.method !== "echo" && request.method !== "runner.info" && (expectedRevision === null || request.policy_revision === undefined || request.policy_revision !== expectedRevision)) throw new Error("stale_policy");
       const limit = CONTROL_RPC_METHODS.has(request.method) ? MAX_IN_FLIGHT_RPCS : MAX_IN_FLIGHT_RPCS - RESERVED_CONTROL_RPCS;
       if (this.inFlightRpcs >= limit) throw new RpcRuntimeError("busy", "Runner RPC concurrency limit reached; this request was not started");
       this.inFlightRpcs++; admitted = true;
       const result = request.method === "echo" ? request.params : request.method === "runner.info" ? this.metadata : await this.runtime.dispatch(request.method, request.params);
-      if (sessionCurrent() && socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.response", protocol_version: request.protocol_version, request_id: request.request_id, result: result as RpcRequest["params"] }));
+      if (sessionCurrent() && socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.response", protocol_version: protocolVersion, request_id: request.request_id, result: result as RpcRequest["params"] }));
     } catch (error) {
       const details = rpcError(error);
       if (sessionCurrent() && socket.readyState === WebSocket.OPEN) {
-        try { socket.send(encodeWireFrame({ type: "rpc.error", protocol_version: request.protocol_version, request_id: request.request_id, error: { code: details.code, message: details.message, failure_class: details.failure_class, operation_state: details.operation_state, ...(details.retry_after_ms === undefined ? {} : { retry_after_ms: details.retry_after_ms }), next_action: details.next_action, ...(details.details === undefined ? {} : { details: details.details as RpcRequest["params"] }) } })); } catch { /* close handler drives reconnect */ }
+        try { socket.send(encodeWireFrame({ type: "rpc.error", protocol_version: protocolVersion, request_id: request.request_id, error: { code: details.code, message: details.message, failure_class: details.failure_class, operation_state: details.operation_state, ...(details.retry_after_ms === undefined ? {} : { retry_after_ms: details.retry_after_ms }), next_action: details.next_action, ...(details.details === undefined ? {} : { details: details.details as RpcRequest["params"] }) } })); } catch { /* close handler drives reconnect */ }
       }
     } finally {
       if (admitted) this.inFlightRpcs--;
@@ -795,7 +840,7 @@ export class RunnerConnection {
     // snapshots. The local durable Job store is sampled by the sync timer.
     if (this.jobHistory !== undefined && this.jobHistory.mode !== "immediate") return;
     try {
-      const message = jobEventMessage(event, this.config.runnerId);
+      const message = jobEventMessage(event, this.config.runnerId, this.protocolVersion(socket));
       if (message !== undefined) socket.send(encodeWireFrame(message));
     } catch { /* local persistence remains authoritative; transport is best effort */ }
     // Event delivery is intentionally best effort, while the periodic sync is

@@ -4,6 +4,8 @@ import {
 } from "./domain/runner-admission.js";
 
 const ADMISSION_STATE_KEY = "policy-admission-v1";
+const QUEUE_GRANT_NONCES_KEY = "queue-grant-nonces-v1";
+const MAX_QUEUE_GRANT_NONCES = 4096;
 
 /** Durable admission state and serialized writes are owned together. A failed
  * persistent mutation must never expose an optimistic authorization grant. */
@@ -79,5 +81,42 @@ export class RunnerAdmissionStore {
   public fenceUncertainMutation(mutationId: string): void {
     const current = this.cached;
     if (current?.mutationId === mutationId) this.cached = conservativeAdmission(current);
+  }
+
+  /**
+   * Atomically consume a queue-grant nonce with the admission fence. The
+   * predicate is evaluated after the serialized read, so a policy mutation or
+   * session replacement cannot authorize a stale grant while this write is in
+   * flight. Expired entries are pruned and the table remains bounded.
+   */
+  public async consumeQueueGrantNonce(
+    nonce: string,
+    expiresAtMs: number,
+    admissionCurrent: (state: AdmissionState) => boolean,
+  ): Promise<boolean> {
+    return this.exclusive(async () => {
+      const state = await this.read();
+      if (!admissionCurrent(state)) return false;
+      const now = Date.now();
+      const stored = await this.storage.get<unknown>(QUEUE_GRANT_NONCES_KEY);
+      const entries: Record<string, number> = Object.create(null) as Record<string, number>;
+      if (stored !== null && typeof stored === "object" && !Array.isArray(stored)) {
+        for (const [key, value] of Object.entries(stored as Record<string, unknown>)) {
+          if (typeof value === "number" && Number.isSafeInteger(value) && value > now) entries[key] = value;
+        }
+      }
+      if (entries[nonce] !== undefined) {
+        await this.storage.put(QUEUE_GRANT_NONCES_KEY, entries);
+        return false;
+      }
+      entries[nonce] = expiresAtMs;
+      const keys = Object.keys(entries);
+      if (keys.length > MAX_QUEUE_GRANT_NONCES) {
+        keys.sort((left, right) => (entries[left] ?? 0) - (entries[right] ?? 0));
+        for (const key of keys.slice(0, keys.length - MAX_QUEUE_GRANT_NONCES)) delete entries[key];
+      }
+      await this.storage.put(QUEUE_GRANT_NONCES_KEY, entries);
+      return true;
+    });
   }
 }

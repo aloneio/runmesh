@@ -454,9 +454,15 @@ export class RunnerDO {
         allowed=response?.status===200 && isRecord(decision) && decision.ok===true;
         recordHistory = allowed && isRecord(decision) && decision.record_history === true;
       }
+      let nonceConsumed = false;
+      if (allowed && grant !== undefined) {
+        nonceConsumed = await this.admissionStore.consumeQueueGrantNonce(grant.nonce, grant.expires_at_ms, state =>
+          admitsProtectedRpc(state, attachment, grant.policy_revision, grant.policy_checksum)
+            && this.ctx.getWebSockets("runner").includes(ws));
+      }
       // No await after the final local session/policy fence. A grant never
       // authorizes by itself, and this decision never executes a command.
-      allowed = allowed && grant !== undefined && this.admissionState !== undefined
+      allowed = allowed && nonceConsumed && grant !== undefined && this.admissionState !== undefined
         && admitsProtectedRpc(this.admissionState,attachment,grant.policy_revision,grant.policy_checksum)
         && this.ctx.getWebSockets("runner").includes(ws);
       ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed,...(attachment.historyProtocol === 2 ? {record_history:allowed && recordHistory} : {})}}));
