@@ -79,3 +79,26 @@ test("privacy command examines actual commit objects, not the configured git ide
   assert.equal(cmd([process.execPath, script, "--ci"], { CI: "true", CI_COMMIT_BEFORE_SHA: base }).status, 0);
   assert.equal(cmd([process.execPath, script, "--ci"], { CI: "true", CI_COMMIT_BEFORE_SHA: head }).status, 0);
 });
+
+test("head-only privacy mode validates the protected merge object without walking its second parent", async t => {
+  const root = await mkdtemp(join(tmpdir(), "runmesh-git-privacy-merge-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  function cmd(args, env = {}) {
+    return spawnSync(args[0], args.slice(1), { cwd: root, encoding: "utf8", env: { ...process.env, ...env }, timeout: 10000 });
+  }
+  const git = (...args) => cmd(["git", ...args]);
+  assert.equal(git("init", "-q").status, 0);
+  assert.equal(git("branch", "-M", "main").status, 0);
+  assert.equal(git("config", "user.name", "aloneio").status, 0);
+  assert.equal(git("config", "user.email", "git@aloneio.aleeas.com").status, 0);
+  assert.equal(git("commit", "--allow-empty", "-qm", "fix: base").status, 0);
+  assert.equal(git("checkout", "-qb", "feature").status, 0);
+  assert.equal(git("commit", "--allow-empty", "-qm", "feat: Codex event").status, 0);
+  assert.equal(git("checkout", "-q", "main").status, 0);
+  const merge = cmd(["git", "merge", "--no-ff", "feature", "-m", "protected merge"], {
+    GIT_AUTHOR_NAME: "GitHub", GIT_AUTHOR_EMAIL: "noreply@github.com",
+    GIT_COMMITTER_NAME: "GitHub", GIT_COMMITTER_EMAIL: "noreply@github.com"
+  });
+  assert.equal(merge.status, 0);
+  assert.equal(cmd([process.execPath, new URL("../scripts/check-git-privacy.mjs", import.meta.url).pathname, "--head"]).status, 0);
+});
