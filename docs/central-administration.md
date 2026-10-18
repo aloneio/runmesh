@@ -2,51 +2,44 @@
 
 [简体中文](central-administration.zh-CN.md) · [Documentation](README.md)
 
-Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. Then add your AI client to use the shared collection. See [release status](release-readiness.md) for signed packages and deployment and upgrade steps.
+Use **MCP & Skill** in the control panel to connect MCP services, install Skills and share them with your AI clients.
 
-## Set up your collection
+## Three steps to start
 
-| Task | Steps |
-| --- | --- |
-| Connect an MCP | Open **MCP**, enter its public HTTPS MCP URL, choose **No authentication** or **OAuth**, and select **Connect**. For OAuth, sign in on the provider's page and complete consent. |
-| Install a Skill | Open **Skill**, select its folder or `SKILL.md` and supporting text files, then select **Install Skill**. |
-| Connect an AI client | Select **Connect an AI client**, enter a label, choose the access type, and create the connection. Copy the URL shown when it is created into your client's MCP settings. |
+1. **Connect an MCP.** Open **MCP**, enter the address provided by the service, choose **No authentication** or OAuth, and finish the connection or sign-in.
+2. **Install a Skill.** Select the folder containing `SKILL.md`, or select `SKILL.md` and its supporting text files, then choose **Install Skill**.
+3. **Connect an AI client.** Choose **Connect an AI client**, enter a label, select the access scope and create the connection. Copy the address shown by Runmesh into the client's MCP settings.
 
-Enabled MCP tools and Skills are shared with every active AI client in this instance. MCP connections load their tools automatically; the MCP card's **View tools** button shows the available tools. Skill cards provide **View files** to read the installed content.
+Enabled MCP tools and Skills are shared with active AI clients in the instance. Refresh the Runmesh connection in a client when it still shows an earlier list after an install or update.
 
-## Choose the AI client's access
+## Choose the access scope
 
-**MCP and Skills** gives the client access to the shared collection. Runmesh handles these connections and content reads.
+- **MCP and Skills:** access to the instance's shared MCPs and Skills.
+- **MCP, Skills and computer access:** the shared collection plus files and commands in approved Runner workspaces.
 
-Choose **MCP, Skills and computer access** when the client also needs files or commands on your machines. The computer-permission choices open automatically; select the required read, write and execution permissions. Read is selected initially. Register a Runner and configure its workspaces using the [administrator guide](admin-guide.md).
+Choose computer permissions when creating the connection. Add a machine on **Runner** first, then approve the workspaces it may use. The [administrator guide](admin-guide.md) covers machine and workspace setup.
 
-See the [user guide](user-guide.md) for connecting the AI client and starting work.
-
-## Change shared content
+## Everyday management
 
 | Action | Result |
 | --- | --- |
-| MCP: **Refresh tools** | Loads and automatically publishes compatible provider tools, including changed and new definitions. No separate tool approval is required. |
-| MCP: **Pause** / **Enable** | Stops or resumes shared access. Enabling refreshes the tool list. |
-| OAuth MCP: **Reconnect** | Starts a new authorization flow with the provider. |
-| OAuth MCP: **Disconnect account** | Removes the account connection saved in Runmesh. Select **Reconnect** to authorize again. |
-| Skill: upload an update with the same `name` in `SKILL.md` | Shows the proposed replacement; select **Update Skill** to publish it to all clients. |
-| Skill: **Pause** | Stops future reads while keeping the installed files. |
-| Paused Skill: **View files → Enable Skill** | Resumes access to the displayed version. |
+| MCP **Refresh tools** | Reads the provider's latest tools and updates the shared list. |
+| MCP **Pause** / **Enable** | Pauses or resumes sharing. Enabling reads the tools again. |
+| OAuth **Reconnect** | Opens the provider sign-in page again. |
+| OAuth **Disconnect account** | Removes the saved account connection; reconnect when needed. |
+| Upload a Skill update | Review the changes, then confirm **Update Skill**; the update applies to every client. |
+| Skill **Pause** / **Enable** | Pauses or resumes reads while keeping the installed content. |
 
-After a change, refresh the Runmesh connection in AI clients that cache their tool or resource list. Previously delivered Skill content stays in an existing conversation; start a new conversation when you need to work exclusively with the updated content.
+You can change a Skill's friendly name in the Central list. The name remains after a refresh. A deleted Skill does not return automatically, and its original Skill ID cannot be reused for new content.
 
-## Manage a client's connection
+## Manage AI client connections
 
-Open **AI connections** to manage each client's credential. **Rotate** creates a replacement URL and invalidates the previous one. **Revoke** stops that client's access and retains its record. **Delete** also removes the client record. Review the displayed confirmation before deleting.
+On **AI connections**:
 
-Shared MCP and Skill access follows the instance's enabled collection. Computer access additionally follows the client's permissions, selected Runner and approved workspaces. Use separate instances for groups that need different shared collections.
+- **Rotate** creates a new address and immediately invalidates the old one.
+- **Revoke** stops access while keeping the connection record.
+- **Delete** removes the connection record.
 
-## Continue setup or resolve a problem
+The address and Runner enrollment command are credentials. Share them only through a secure channel. Rotate or revoke them immediately if they are exposed.
 
-- [Connect an MCP](central-remote-mcp.md): URL requirements, authentication and tool refresh.
-- [Authorize an MCP account](central-oauth.md): sign-in, reconnection and account management.
-- [Install and update a Skill](central-skills.md): folder layout, file sizes and updates.
-- [Troubleshooting](troubleshooting.md): the next step for a failed connection or upload.
-
-Implementation details: [administration reference](maintainers/central-administration.md).
+Continue with the [user guide](user-guide.md), [MCP account authorization](central-oauth.md), [Skill installation and updates](central-skills.md) or [troubleshooting](troubleshooting.md). See [release status](release-readiness.md) for deployment and version information.
