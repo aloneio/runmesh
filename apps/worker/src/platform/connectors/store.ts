@@ -35,6 +35,7 @@ export class ConnectionState implements ProfileRepository {
         if (meta.length !== 1 || meta[0]?.schema_version !== 1) throw new Error("connector_schema_unsupported");
       }
     });
+    this.storage.sql.exec("CREATE TABLE IF NOT EXISTS connection_profile_deleted_v1 (profile_id TEXT PRIMARY KEY, deleted_at_ms INTEGER NOT NULL)");
     this.ready = true;
   }
 
@@ -62,6 +63,7 @@ export class ConnectionState implements ProfileRepository {
     this.initialize();
     return this.storage.transactionSync(() => {
       const current = this.read(profile.profile_id), revision = current?.profile.revision ?? 0;
+      if (profile.revision === 1 && this.storage.sql.exec("SELECT 1 FROM connection_profile_deleted_v1 WHERE profile_id=?", profile.profile_id).toArray().length) return { state: "invalid" };
       if (revision !== expectedRevision) return { state: "conflict", current_revision: revision };
       if (current === undefined) {
         if (profile.enabled) return { state: "invalid" };
@@ -74,6 +76,20 @@ export class ConnectionState implements ProfileRepository {
       this.storage.sql.exec("INSERT INTO connection_profiles_v1 VALUES (?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision,profile_json=excluded.profile_json,envelope_json=excluded.envelope_json",
         profile.profile_id, profile.revision, JSON.stringify(profile), JSON.stringify(envelope));
       return { state: "written", profile };
+    });
+  }
+
+  public remove(profileId: string, expectedRevision: number): ProfileResult {
+    if (!isCapabilityIdentifier(profileId) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return { state: "invalid" };
+    this.initialize();
+    return this.storage.transactionSync(() => {
+      if (this.storage.sql.exec("SELECT 1 FROM connection_profile_deleted_v1 WHERE profile_id=?", profileId).toArray().length) return { state: "missing" };
+      const current = this.read(profileId);
+      if (!current) return { state: "missing" };
+      if (current.profile.revision !== expectedRevision) return { state: "conflict", current_revision: current.profile.revision };
+      this.storage.sql.exec("DELETE FROM connection_profiles_v1 WHERE profile_id=?", profileId);
+      this.storage.sql.exec("INSERT INTO connection_profile_deleted_v1 VALUES (?,?)", profileId, Date.now());
+      return { state: "deleted", profile_id: profileId };
     });
   }
 }
