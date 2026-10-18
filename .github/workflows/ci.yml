@@ -32,6 +32,8 @@ jobs:
           cache: npm
       - run: node scripts/ci-check.mjs --initialize verify
       - run: node scripts/check-git-privacy.mjs --ci
+        env:
+          RUNMESH_RELEASE_VERIFICATION: ${{ inputs.release_verification }}
       - run: npm install --global npm@10.9.3
       - run: node scripts/ci-check.mjs toolchain
       - run: node scripts/ci-check.mjs install

@@ -84,7 +84,11 @@ export function selectPrivacyRevision(environment, isAncestor) {
     && environment.GITHUB_EVENT_NAME === "push"
     && environment.GITHUB_REPOSITORY === "aloneio/runmesh"
     && environment.GITHUB_REF === "refs/heads/main";
-  if (githubMainPush) return "HEAD^..HEAD";
+  const githubReleaseVerification = environment.GITHUB_ACTIONS === "true"
+    && environment.GITHUB_REPOSITORY === "aloneio/runmesh"
+    && environment.GITHUB_REF === "refs/heads/main"
+    && environment.RUNMESH_RELEASE_VERIFICATION === "true";
+  if (githubMainPush || githubReleaseVerification) return "HEAD^..HEAD";
   const githubMainToDevPullRequest = environment.GITHUB_ACTIONS === "true"
     && environment.GITHUB_EVENT_NAME === "pull_request"
     && environment.GITHUB_REPOSITORY === "aloneio/runmesh"
