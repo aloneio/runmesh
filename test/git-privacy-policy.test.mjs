@@ -58,6 +58,15 @@ test("CI ranges only accept an observed ancestor; otherwise scan complete reacha
     CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "push",
     GITHUB_REPOSITORY: "other/project", GITHUB_REF: "refs/heads/main"
   }, () => false), "HEAD");
+  const releaseVerificationEnvironment = {
+    CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_REF: "refs/heads/main",
+    RUNMESH_RELEASE_VERIFICATION: "true"
+  };
+  assert.equal(selectPrivacyRevision(releaseVerificationEnvironment, () => false), "HEAD^..HEAD");
+  assert.equal(selectPrivacyRevision({ ...releaseVerificationEnvironment, RUNMESH_RELEASE_VERIFICATION: "false" }, () => false), "HEAD");
+  assert.equal(selectPrivacyRevision({ ...releaseVerificationEnvironment, GITHUB_REF: "refs/heads/dev" }, () => false), "HEAD");
+  assert.equal(isGitHubApiCommit(githubApi, releaseVerificationEnvironment), false);
   const reverseSyncEnvironment = {
     CI: "true", GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request",
     GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_BASE_REF: "dev", GITHUB_HEAD_REF: "main"
