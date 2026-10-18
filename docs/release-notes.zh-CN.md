@@ -2,6 +2,18 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
+## 0.2.0 — 候选版本
+
+[Runmesh 0.2.0](releases/0.2.0.md) 汇总了本次 Skill、MCP 与 Runner 管理改进。正式安装包发布后，发行状态页会显示下载入口。
+
+- Skill 重命名后，中央列表和刷新页面都会保留友好名称。
+- 已删除的 Skill 会永久保留删除记录，原 Skill ID 不能再次复用。
+- Git 检查无法使用 Git 时会明确报告不可用，避免把不完整检查误判为干净。
+- 远端 MCP 目录的容量状态与已配置连接的可用状态分开显示。
+- 控制台中的 MCP、Skill、Runner 和客户端名称在更新后继续保持一致。
+
+升级前请阅读[升级指南](upgrading.zh-CN.md)。
+
 ## 0.1.10 — 已发布正式版
 
 [Runmesh 0.1.10](https://github.com/aloneio/runmesh/releases/tag/v0.1.10) 已发布，提供签名便携 Runner 安装包。本版本让 Runner 维护和发行物下载在取消时保持一致，包括响应即将结束的阶段。中断更新会保留清晰的中断结果，并可在同一安装上安全重试。
