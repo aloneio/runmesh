@@ -38,9 +38,13 @@ export function bindCentralProduct(root, { isCurrent: pageIsCurrent, navigate, r
   const oauthCallbackUrl = app.getAttribute('data-oauth-callback-url') || '';
   const services = createServiceWorkflow({ app, api: client.request, view, t, refresh: refreshProfiles,
     run: runService, getProfiles: () => profiles, oauthCallbackUrl,
+    prompt: view.prompt,
+    confirm: view.confirm,
     navigate: url => { if (isCurrent()) navigate(url); } });
   const skillWorkflow = createSkillWorkflow({ app, api: client.request, view: skillView, t,
-    refresh: refreshSkills, run: runSkill, getSkills: () => skills });
+    refresh: refreshSkills, run: runSkill, getSkills: () => skills,
+    prompt: skillView.prompt,
+    confirm: skillView.confirm });
   bindRegistryImport({ app, api: client.request, view, t, run: runService });
   app.querySelector('[data-service-create]')?.setAttribute('data-operation-scope', 'mcp-create');
   app.querySelector('[data-registry-import]')?.setAttribute('data-operation-scope', 'mcp-create');
