@@ -11,6 +11,7 @@ import { matchIdentifierPath } from "./path-identifiers.js";
 async function safeSkillResponse(raw: unknown, id: string, command: SkillCommand | undefined, requestedDigest: string | undefined): Promise<Record<string, unknown> | undefined> {
   const value = skillObject(raw); if (!value) return undefined;
   if (value.state === 'conflict') return command !== undefined && command.action !== 'preview' && Number.isSafeInteger(value.current_revision) && (value.current_revision as number) >= 0 ? { state: 'conflict', current_revision: value.current_revision } : undefined;
+  if (value.state === 'deleted') return command?.action === 'delete' && value.skill_id === id ? { state: 'deleted', skill_id: id } : undefined;
   if (typeof value.state === 'string' && ['invalid', 'missing', 'denied', 'unavailable', 'capacity', 'unknown'].includes(value.state)) return { state: value.state };
   const expectedState = command === undefined ? 'found' : command.action === 'preview' ? 'previewed' : 'written';
   if (value.state !== expectedState) return undefined;
@@ -19,14 +20,17 @@ async function safeSkillResponse(raw: unknown, id: string, command: SkillCommand
   if (value.state !== 'previewed') {
     const head = skillObject(value.head);
     if (!head || head.skill_id !== id || !Number.isSafeInteger(head.revision) || (head.revision as number) < 1 || typeof head.enabled !== 'boolean'
+      || (head.display_name !== undefined && (typeof head.display_name !== 'string' || head.display_name.length === 0 || head.display_name.length > 64))
       || !skillDigest(head.staged_digest) || (head.active_digest !== null && !skillDigest(head.active_digest)) || (head.enabled && head.active_digest === null)) return undefined;
     if (command !== undefined && command.action !== 'preview') {
       if (head.revision !== command.expected_revision + 1) return undefined;
       if (command.action === 'disable' && head.enabled) return undefined;
       if (command.action === 'activate' && (!head.enabled || head.active_digest !== command.digest)) return undefined;
+      if (command.action === 'rename' && head.display_name !== command.display_name) return undefined;
     }
     selectedDigest ??= head.staged_digest;
-    result.head = { skill_id: id, revision: head.revision, staged_digest: head.staged_digest, active_digest: head.active_digest, enabled: head.enabled };
+    result.head = { skill_id: id, revision: head.revision, staged_digest: head.staged_digest, active_digest: head.active_digest, enabled: head.enabled,
+      ...(typeof head.display_name === 'string' ? { display_name: head.display_name } : {}) };
   }
   if (value.state !== 'written') {
     const bundle = await verifySkillBundle(value.bundle, sha256Hex), digest = skillObject(value.bundle)?.digest;
@@ -68,7 +72,7 @@ export async function handleCentralSkills(request: Request, env: WorkerEnv, url:
     new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), SKILL_LIMITS.operation_ms + 1_000); })]);
     const safe = await safeSkillResponse(result, id, command, requestedDigest);
     if (!result || !safe) return centralFailure("central_result_unconfirmed", 503, "unknown");
-    const status = ["found", "written", "previewed"].includes(result.state) ? 200 : result.state === "conflict" ? 409
+    const status = ["found", "written", "previewed", "deleted"].includes(result.state) ? 200 : result.state === "conflict" ? 409
       : result.state === "invalid" ? 400 : result.state === "denied" ? 403 : result.state === "missing" ? 404 : result.state === "capacity" ? 429 : 503;
     return Response.json(safe, { status, headers: centralHeaders });
   } catch { return centralFailure("central_result_unconfirmed", 503, "unknown"); }

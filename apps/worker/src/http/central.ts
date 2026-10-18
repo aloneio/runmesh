@@ -49,6 +49,10 @@ export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: 
       new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), CONNECTOR_LIMITS.operation_ms + 1_000); }),
     ]);
     if (typeof result !== "object" || result === null || Array.isArray(result)) return fail("central_result_unconfirmed", 503, "unknown");
+    if (result.state === "deleted") {
+      if (result.profile_id !== profileId) return fail("central_result_unconfirmed", 503, "unknown");
+      return Response.json({ state: "deleted", profile_id: profileId }, { headers });
+    }
     if (result.state === "found" || result.state === "written") {
       if ((result.state === "found") !== (request.method === "GET")) return fail("central_result_unconfirmed", 503, "unknown");
       const profile = parseProfile(result.profile);
@@ -58,6 +62,8 @@ export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: 
           return fail("central_result_unconfirmed", 503, "unknown");
         if (command.action === "connect" && (profile.authentication !== command.authentication || profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint || profile.enabled || profile.credential !== null)) return fail("central_result_unconfirmed", 503, "unknown");
         if ((command.action === "enable" || command.action === "disable") && profile.enabled !== (command.action === "enable"))
+          return fail("central_result_unconfirmed", 503, "unknown");
+        if (command.action === "rename" && profile.display_name !== command.display_name)
           return fail("central_result_unconfirmed", 503, "unknown");
       }
       return Response.json({ state: result.state, profile }, { headers });
