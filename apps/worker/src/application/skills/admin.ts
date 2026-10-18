@@ -58,6 +58,8 @@ export function createSkillAdministration(ports: SkillAdminPorts) {
           }
           case "activate": return ports.repository.activate(command.skill_id, command.digest, command.expected_revision);
           case "disable": return ports.repository.disable(command.skill_id, command.expected_revision);
+          case "rename": return ports.repository.rename(command.skill_id, command.display_name, command.expected_revision);
+          case "delete": return ports.repository.remove(command.skill_id, command.expected_revision);
         }
       } catch { return { state: "unavailable" }; }
     },

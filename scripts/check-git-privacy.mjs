@@ -40,7 +40,15 @@ export function isGitHubApiCommit({ name, email, committerName, committerEmail, 
     && environment.CI_PIPELINE_SOURCE === "merge_request_event"
     && environment.CI_MERGE_REQUEST_SOURCE_BRANCH_NAME === "dev"
     && environment.CI_MERGE_REQUEST_TARGET_BRANCH_NAME === "main";
-  const gitlabApiLane = gitlabDevPush || gitlabDevMergeRequest;
+  // GitLab's protected MR merge API may fast-forward main and preserve the
+  // reviewed source commit as a single-parent object while normalizing its
+  // author and committer fields to the GitLab API identity. The main branch
+  // is protected and only receives this lane through the MR merge policy.
+  const gitlabMainPush = environment.CI === "true"
+    && environment.CI_PROJECT_PATH === "aloneio/runmesh"
+    && environment.CI_PIPELINE_SOURCE === "push"
+    && environment.CI_COMMIT_BRANCH === "main";
+  const gitlabApiLane = gitlabDevPush || gitlabDevMergeRequest || gitlabMainPush;
   const githubApiIdentity = name === EXPECTED_NAME
     && email === GITHUB_API_EMAIL
     && committerName === EXPECTED_NAME
