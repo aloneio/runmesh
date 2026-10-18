@@ -3,7 +3,8 @@ const count = value => Number.isSafeInteger(value) && value >= 0;
 const digests = values => Array.isArray(values) && values.every(digest) && new Set(values).size === values.length;
 const sameSet = (left, right) => digests(left) && digests(right) && left.length === right.length && left.every(value => right.includes(value));
 const headFor = (head, id) => head?.skill_id === id && count(head.revision) && head.revision > 0
-  && digest(head.staged_digest) && (head.active_digest === null || digest(head.active_digest)) && typeof head.enabled === 'boolean';
+  && digest(head.staged_digest) && (head.active_digest === null || digest(head.active_digest)) && typeof head.enabled === 'boolean'
+  && (head.display_name === undefined || typeof head.display_name === 'string' && head.display_name.length > 0 && head.display_name.length <= 64);
 const capacityValid = value => value && ['skill_bytes', 'skill_versions', 'library_bytes', 'library_skills', 'max_versions', 'max_library_bytes', 'max_skills'].every(key => count(value[key]));
 
 /** Local installation returns the published identity before the workflow reloads its head. */

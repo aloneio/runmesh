@@ -45,6 +45,12 @@ export function createCentralView(app, t, run) {
       p.hidden = p.getAttribute('data-central-panel') !== name;
     });
   }
+  function prompt(message, initial) {
+    return document.defaultView?.prompt(message, initial) ?? null;
+  }
+  function confirm(message) {
+    return document.defaultView?.confirm(message) ?? false;
+  }
   return {
     el,
     say,
@@ -53,6 +59,8 @@ export function createCentralView(app, t, run) {
     details,
     invalidate,
     onInvalidate(listener) { invalidationListeners.add(listener); },
-    showTab
+    showTab,
+    prompt,
+    confirm
   };
 }
