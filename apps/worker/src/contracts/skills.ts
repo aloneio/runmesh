@@ -16,10 +16,12 @@ export interface SkillFile { readonly path: string; readonly text: string }
 export interface SkillBundle { readonly schema_version: 1; readonly skill_id: string; readonly name: string; readonly description: string;
   readonly source: string; readonly license: string; readonly files: readonly SkillFile[]; readonly digest: string; readonly required_capabilities?: readonly CapabilityTarget[] }
 export interface SkillHead { readonly skill_id: string; readonly revision: number; readonly staged_digest: string;
-  readonly active_digest: string | null; readonly enabled: boolean }
+  readonly active_digest: string | null; readonly enabled: boolean; readonly display_name?: string }
 export type SkillFailure = { readonly state: "invalid" | "missing" | "denied" | "unavailable" | "capacity" | "unknown" };
 export type SkillMutation = { readonly state: "written"; readonly head: SkillHead }
-  | { readonly state: "previewed"; readonly bundle: SkillBundle } | { readonly state: "conflict"; readonly current_revision: number } | SkillFailure;
+  | { readonly state: "previewed"; readonly bundle: SkillBundle }
+  | { readonly state: "deleted"; readonly skill_id: string }
+  | { readonly state: "conflict"; readonly current_revision: number } | SkillFailure;
 export type SkillInspection = { readonly state: "found"; readonly head: SkillHead; readonly bundle: SkillBundle } | SkillFailure;
 export interface SkillSummary { readonly skill_id: string; readonly digest: string; readonly name: string; readonly description: string;
   readonly source: string; readonly license: string; readonly revision: number; readonly required_capabilities?: readonly CapabilityTarget[] }
@@ -38,9 +40,11 @@ export interface SkillRepository {
   install(bundle: SkillBundle, revision: number): SkillMutation;
   activate(id: string, digest: string, revision: number): SkillMutation;
   disable(id: string, revision: number): SkillMutation;
+  rename(id: string, displayName: string, revision: number): SkillMutation;
+  remove(id: string, revision: number): SkillMutation;
 }
 export interface SkillAdminPorts {
-  readonly repository: Pick<SkillRepository, "heads" | "head" | "bundle" | "summary" | "install" | "stage" | "activate" | "disable">;
+  readonly repository: Pick<SkillRepository, "heads" | "head" | "bundle" | "summary" | "install" | "stage" | "activate" | "disable" | "rename" | "remove">;
   readonly digest: (text: string) => Promise<string>;
   readonly admin: (sessionHash: string, signal: AbortSignal) => Promise<AdminDecision>;
 }

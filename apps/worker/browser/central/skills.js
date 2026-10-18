@@ -9,7 +9,9 @@ export function createSkillWorkflow({
   t,
   refresh,
   run,
-  getSkills
+  getSkills,
+  prompt: requestDisplayName = () => null,
+  confirm: confirmDeletion = () => false
 }) {
   const {
     el,
@@ -39,18 +41,40 @@ export function createSkillWorkflow({
         head = item.head,
         selectedDigest = head.active_digest ?? head.staged_digest,
         latestDiffers = head.staged_digest !== selectedDigest;
-      card.append(el('h3', item.summary.name), el('p', item.summary.description), el('p', head.enabled ? t('installed') : t('paused')));
+      card.append(el('h3', head.display_name || item.summary.name), el('p', item.summary.description), el('p', head.enabled ? t('installed') : t('paused')));
       if (latestDiffers) card.append(el('p', t('latestUploadDiffersFromSelectedVersion')));
       var actions = el('div', undefined, 'actions');
       button(actions, t('viewFiles'), () => showVersion(head.skill_id, selectedDigest));
       if (latestDiffers) button(actions, t('viewLatestUpload'), () => showVersion(head.skill_id, head.staged_digest));
-      button(actions, t('skillHistory'), () => history.open(head.skill_id, item.summary.name));
+      button(actions, t('skillHistory'), () => history.open(head.skill_id, head.display_name || item.summary.name));
       if (head.enabled) button(actions, t('pause'), async function () {
         await api('skills/' + encodeURIComponent(head.skill_id), {
           action: 'disable',
           expected_revision: head.revision
         });
         await refresh();
+      });
+      button(actions, t('rename'), async function () {
+        const name = requestDisplayName(t('renamePrompt'), head.display_name || item.summary.name);
+        if (name === null) return;
+        if (!name.trim()) throw new Error(t('displayNameRequired'));
+        await api('skills/' + encodeURIComponent(head.skill_id), {
+          action: 'rename',
+          expected_revision: head.revision,
+          display_name: name.trim()
+        });
+        await refresh();
+        say(t('renamed'));
+      });
+      button(actions, t('delete'), async function () {
+        if (!confirmDeletion(t('deleteSkillConfirm'))) return;
+        await api('skills/' + encodeURIComponent(head.skill_id), {
+          action: 'delete',
+          expected_revision: head.revision,
+          confirm: true
+        });
+        await refresh();
+        say(t('deleted'));
       });
       card.append(actions);
       list.append(card);

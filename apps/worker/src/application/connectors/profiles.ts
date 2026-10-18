@@ -21,11 +21,20 @@ export function createProfileManager(ports: ProfileServicePorts) {
           const expected = command.action === "connect" ? 0 : command.expected_revision;
           if (current === undefined && command.action !== "connect") return { state: "missing" };
           if ((current?.profile.revision ?? 0) !== expected) return { state: "conflict", current_revision: current?.profile.revision ?? 0 };
+          if (command.action === "delete") {
+            if (expired()) return { state: "unavailable" };
+            const final = await ports.authorize(signal);
+            if (expired()) return { state: "unavailable" };
+            if (final !== "allowed") return { state: final === "denied" ? "denied" : "unavailable" };
+            writeAttempted = true;
+            return ports.repository.remove(command.profile_id, expected);
+          }
           const profile: ConnectionProfile = command.action === "connect"
             ? { schema_version: 1, profile_id: command.profile_id, connector_id: command.connector_id,
               ...(command.display_name === undefined ? {} : { display_name: command.display_name }), endpoint: command.endpoint,
               revision: 1, enabled: false, owner: { kind: "instance_admin" }, authentication: command.authentication, credential: null }
-            : { ...current!.profile, revision: expected + 1, enabled: command.action === "enable" };
+            : { ...current!.profile, ...(command.action === "rename" ? { display_name: command.display_name } : {}), revision: expected + 1,
+                enabled: command.action === "enable" ? true : command.action === "disable" ? false : current!.profile.enabled };
           if (expired() || parseProfile(profile) === undefined) return { state: "unavailable" };
           const final = await ports.authorize(signal);
           if (expired()) return { state: "unavailable" };

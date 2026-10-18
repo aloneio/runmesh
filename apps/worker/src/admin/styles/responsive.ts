@@ -72,7 +72,7 @@ export const responsiveStyles = `/* Responsive Breakpoints & Accessibility */
   .action-btn-group{flex-wrap:nowrap}
   .action-btn-group > *{flex:0 0 auto}
   .action-btn-group .danger-action label{white-space:nowrap}
-  .actions{width:300px;min-width:300px}
+  .actions{width:100%;min-width:0;max-width:100%}
   .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .metric{padding:14px;min-height:116px}
   .metric-value,.metric strong{font-size:24px}

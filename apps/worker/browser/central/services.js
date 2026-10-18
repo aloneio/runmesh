@@ -11,7 +11,9 @@ export function createServiceWorkflow({
   run,
   getProfiles,
   navigate,
-  oauthCallbackUrl
+  oauthCallbackUrl,
+  prompt: requestDisplayName = () => null,
+  confirm: confirmDeletion = () => false
 }) {
   const {
     el,
@@ -96,6 +98,30 @@ export function createServiceWorkflow({
         });
         await refresh();
         if (result.profile.enabled) await connectService(result.profile, { selection, authorization });
+      });
+      button(actions, t('rename'), async function () {
+        const name = requestDisplayName(t('renamePrompt'), profile.display_name || profile.connector_id);
+        if (name === null) return;
+        if (!name.trim()) throw new Error(t('displayNameRequired'));
+        view.invalidate(scope);
+        await api('profiles/' + encodeURIComponent(profile.profile_id), {
+          action: 'rename',
+          expected_revision: profile.revision,
+          display_name: name.trim()
+        });
+        await refresh();
+        say(t('renamed'));
+      });
+      button(actions, t('delete'), async function () {
+        if (!confirmDeletion(t('deleteMcpConfirm'))) return;
+        view.invalidate(scope);
+        await api('profiles/' + encodeURIComponent(profile.profile_id), {
+          action: 'delete',
+          expected_revision: profile.revision,
+          confirm: true
+        });
+        await refresh();
+        say(t('deleted'));
       });
       card.append(actions);
       if (profile.authentication === 'oauth') {

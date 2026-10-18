@@ -17,13 +17,16 @@ export async function listSkillLibraryResponse(env: WorkerEnv, hash: string, aft
     let previous = after ?? "";
     const skills = result.skills.map(entry => {
       const head = skillObject(entry.head), summary = skillObject(entry.summary);
+      const displayName = head?.display_name;
       if (!head || !summary || !isCapabilityIdentifier(head.skill_id) || head.skill_id <= previous
         || !Number.isSafeInteger(head.revision) || (head.revision as number) < 1 || typeof head.enabled !== "boolean"
         || !skillDigest(head.staged_digest) || (head.active_digest !== null && !skillDigest(head.active_digest)) || (head.enabled && !head.active_digest)
+        || (displayName !== undefined && (typeof displayName !== "string" || displayName.trim().length === 0 || displayName.length > 64 || /[\u0000-\u001f\u007f]/u.test(displayName)))
         || summary.skill_id !== head.skill_id || summary.digest !== (head.active_digest ?? head.staged_digest)
         || typeof summary.name !== "string" || summary.name.length > 64 || typeof summary.description !== "string" || summary.description.length > 1024) throw new Error();
       previous = head.skill_id;
-      return { head: { skill_id: head.skill_id, revision: head.revision, staged_digest: head.staged_digest, active_digest: head.active_digest, enabled: head.enabled },
+      return { head: { skill_id: head.skill_id, revision: head.revision, staged_digest: head.staged_digest, active_digest: head.active_digest, enabled: head.enabled,
+        ...(typeof displayName === "string" ? { display_name: displayName } : {}) },
         summary: { name: summary.name, description: summary.description } };
     });
     if (result.next_after !== null && (skills.length !== 50 || result.next_after !== previous)) throw new Error();

@@ -23,9 +23,11 @@ export interface CredentialInput { readonly kind: "bearer"; readonly token: stri
 export interface ProfileRecord { readonly profile: ConnectionProfile; readonly envelope: null }
 export type ProfileCommand =
   | { readonly action: "connect"; readonly profile_id: string; readonly connector_id: string; readonly display_name?: string; readonly endpoint: string; readonly authentication: "none" | "oauth" }
-  | { readonly action: "enable" | "disable"; readonly profile_id: string; readonly expected_revision: number };
+  | { readonly action: "enable" | "disable" | "rename"; readonly profile_id: string; readonly expected_revision: number; readonly display_name?: string }
+  | { readonly action: "delete"; readonly profile_id: string; readonly expected_revision: number; readonly confirm: true };
 export type ProfileResult =
   | { readonly state: "written"; readonly profile: ConnectionProfile }
+  | { readonly state: "deleted"; readonly profile_id: string }
   | { readonly state: "conflict"; readonly current_revision: number }
   | { readonly state: "invalid" | "missing" | "capacity" | "denied" | "unavailable" | "unknown" };
 
@@ -33,6 +35,7 @@ export type ProfileResult =
 export interface ProfileRepository {
   read(profileId: string): ProfileRecord | undefined;
   replace(record: ProfileRecord, expectedRevision: number): ProfileResult;
+  remove(profileId: string, expectedRevision: number): ProfileResult;
 }
 export interface ProfileServicePorts {
   readonly repository: ProfileRepository;

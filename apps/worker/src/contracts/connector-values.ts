@@ -52,6 +52,14 @@ export function parseProfileCommand(value: unknown): ProfileCommand | undefined 
       authentication: item.authentication as "none" | "oauth", ...(item.display_name === undefined ? {} : { display_name: item.display_name as string }) };
   }
   if (!revision(item.expected_revision)) return undefined;
+  if (item.action === "delete") {
+    if (!exact(item, ["action", "profile_id", "expected_revision", "confirm"]) || item.confirm !== true) return undefined;
+    return { action: "delete", profile_id: item.profile_id, expected_revision: item.expected_revision, confirm: true };
+  }
+  if (item.action === "rename") {
+    if (!displayName(item) || typeof item.display_name !== "string" || !exact(item, ["action", "profile_id", "expected_revision", "display_name"])) return undefined;
+    return { action: "rename", profile_id: item.profile_id, expected_revision: item.expected_revision, display_name: item.display_name };
+  }
   if (!["enable", "disable"].includes(item.action as string) || !exact(item, ["action", "profile_id", "expected_revision"])) return undefined;
   return { action: item.action as "enable" | "disable", profile_id: item.profile_id, expected_revision: item.expected_revision };
 }

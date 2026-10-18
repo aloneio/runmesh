@@ -15,7 +15,9 @@ export type SkillCommand =
   | { readonly action: "preview"; readonly bundle: unknown }
   | { readonly action: "stage"; readonly bundle: unknown; readonly expected_revision: number }
   | { readonly action: "activate"; readonly skill_id: string; readonly digest: string; readonly expected_revision: number }
-  | { readonly action: "disable"; readonly skill_id: string; readonly expected_revision: number };
+  | { readonly action: "disable"; readonly skill_id: string; readonly expected_revision: number }
+  | { readonly action: "rename"; readonly skill_id: string; readonly display_name: string; readonly expected_revision: number }
+  | { readonly action: "delete"; readonly skill_id: string; readonly expected_revision: number; readonly confirm: true };
 
 /** Select an exact operation before authorization or storage. Bundle content is
  * validated by the domain once the administrator has been admitted. */
@@ -30,6 +32,11 @@ export function parseSkillCommand(input: unknown): SkillCommand | undefined {
     case "activate": return skillDigest(value.digest)
       ? { action: "activate", skill_id: value.skill_id, digest: value.digest, expected_revision: revision } : undefined;
     case "disable": return { action: "disable", skill_id: value.skill_id, expected_revision: revision };
+    case "rename": return typeof value.display_name === "string" && value.display_name.trim().length > 0 && value.display_name.length <= 64
+      && !/[\u0000-\u001f\u007f]/u.test(value.display_name) && Object.keys(value).length === 4
+      ? { action: "rename", skill_id: value.skill_id, display_name: value.display_name, expected_revision: revision } : undefined;
+    case "delete": return value.confirm === true && Object.keys(value).length === 4
+      ? { action: "delete", skill_id: value.skill_id, expected_revision: revision, confirm: true } : undefined;
     default: return undefined;
   }
 }
