@@ -2,46 +2,33 @@
 
 [简体中文](README.zh-CN.md)
 
-Choose a guide for the task you want to complete. Start with the user guide to connect an MCP client, or the administrator guide to set up an instance.
+Choose the guide for the task you want to complete. Start with the user guide for first use, or the administrator guide for a new instance.
 
-https://github.com/user-attachments/assets/49488721-4a41-40af-a0a6-5482f71b937c
-
-[Download MP4](media/runmesh-promo.en.mp4?raw=1) · [Overview and subtitles](media/README.md) · [中文版](media/README.zh-CN.md) — English narration and captions.
-
-## Use Runmesh
+## Get started
 
 | Task | Guide |
 | --- | --- |
-| Connect an MCP client and run your first task | [User guide](user-guide.md) |
-| Deploy the control plane, enroll a machine and grant access | [Administrator guide](admin-guide.md) |
-| Connect MCPs, install Skills and share them with AI clients | [MCP and Skill guide](central-administration.md) |
-| Complete OAuth sign-in or reconnect an MCP account | [Account authorization](central-oauth.md) |
-| Prepare a Skill folder and update its contents | [Skill installation](central-skills.md) |
-| Update an existing installation and preserve its data | [Upgrade guide](upgrading.md) |
-| Remotely upgrade a Runner or choose an earlier version | [Runner versions](runner-versions.md) |
-| Resolve connection, permission, installation or Job problems | [Troubleshooting](troubleshooting.md) |
-| Read version changes and upgrade guidance | [Release notes](release-notes.md) |
+| Connect an AI client and run the first task | [User guide](user-guide.md) |
+| Connect MCPs, install Skills and share them with clients | [MCP and Skill guide](central-administration.md) |
+| Prepare, update, rename or delete a Skill | [Skill installation and updates](central-skills.md) |
+| Complete OAuth sign-in or reconnect an account | [Account authorization](central-oauth.md) |
+| Deploy the control plane, add computers and workspaces | [Administrator guide](admin-guide.md) |
+| Update an existing installation and keep its settings | [Upgrade guide](upgrading.md) |
+| Remotely upgrade a Runner or choose a version | [Runner versions](runner-versions.md) |
+| Resolve connection, permission, installation or job problems | [Troubleshooting](troubleshooting.md) |
+| Check the current version and installation path | [Release status](release-readiness.md) |
+| Read changes in each release | [Release notes](release-notes.md) |
 
-## Install and manage your instance
+## Administrator references
 
-To add a computer, open **Runner → Add Runner** and run the generated installation command on that machine. To update an existing installation, follow the [upgrade guide](upgrading.md).
+- [System requirements](installer-prerequisites.md)
+- [Runtime configuration](runtime-config.md)
+- [Portable installation](portable-runner-installation.md)
+- [Deployment](deployment.md)
+- [Uninstall](runner-uninstall.md)
+- [Permission guide](permission-model.md)
+- [Security guide](security.md)
 
-Installation references: [portable installation](portable-runner-installation.md), [system requirements](installer-prerequisites.md), [runtime configuration](runtime-config.md), [deployment](deployment.md), and [uninstall](runner-uninstall.md).
+## Maintainer references
 
-Use the [permission guide](permission-model.md) to choose access for each client and workspace. The [security guide](security.md) covers credentials, service accounts and host isolation.
-
-## Versions and features
-
-Runmesh shares enabled MCP tools and Skills with connected clients. After adding or updating them, refresh your AI client's tool catalog. To work with files or run commands, add computer access and install a Runner on the target machine.
-
-Check [release status](release-readiness.md) for package availability and [build provenance](build-provenance.md) for your deployed Worker. [Development prereleases](dev-runner-prereleases.md) provide a separate testing channel.
-
-## Integration and maintenance
-
-For custom integrations, start with the [tool examples](tool-examples.md), [MCP call contract](mcp-agent-call-contract.md), [bootstrap manifest v1](mcp-bootstrap-manifest.md) and [catalog refresh guide](mcp-connector-refresh.md).
-
-The [maintainer documentation](maintainers/README.md) covers architecture, development, publication and historical review records.
-
-For project participation, see [community governance](community/GOVERNANCE.md) and [contributors](community/CONTRIBUTORS.md).
-
-Security reports follow the private process in [SECURITY.md](../.github/SECURITY.md). For other issues, include the version, operation, time and redacted error code. Review attachments for credentials and private output before sharing.
+Architecture, protocol, integration and publication material is collected in the [maintainer documentation](maintainers/README.md). Use the user and administrator guides above for everyday work.

@@ -2,6 +2,18 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
+## 0.2.0 — release candidate
+
+[Runmesh 0.2.0](releases/0.2.0.md) collects the Skill, MCP and Runner-management improvements in this release. The release-status page will show the download entry after the signed stable package is published.
+
+- Renamed Skills keep their friendly name in the Central list and after a refresh.
+- Deleted Skills retain a permanent deletion record, so their original Skill ID cannot be reused.
+- Git checks clearly report when Git is unavailable instead of treating an incomplete check as clean.
+- Remote MCP directory capacity is shown separately from the availability of an already configured connection.
+- MCP, Skill, Runner and client names stay consistent after updates.
+
+Read the [upgrade guide](upgrading.md) before updating an existing installation.
+
 ## 0.1.10 — published stable release
 
 [Runmesh 0.1.10](https://github.com/aloneio/runmesh/releases/tag/v0.1.10) is available with a signed portable Runner package. It makes cancellation consistent during Runner maintenance and release downloads, including the final stage of a response. An interrupted update keeps its interrupted result and can be retried safely with the same installation.
