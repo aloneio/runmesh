@@ -2,11 +2,11 @@
 
 [简体中文](central-skills.zh-CN.md) · [MCP and Skill guide](central-administration.md)
 
-Install a Skill's instructions and supporting text files once, then make them available to your connected AI clients.
+A Skill is a set of instructions and reference material for an AI client. Once installed, it is available to active clients in the instance.
 
 ## Prepare the files
 
-Place `SKILL.md` at the root of the selected folder. Put references and other text files beneath that root:
+Put `SKILL.md` at the root of the Skill folder and keep references in subfolders:
 
 ```text
 project-review/
@@ -15,80 +15,35 @@ project-review/
     checklist.md
 ```
 
-Start `SKILL.md` with YAML metadata containing a name and description. Descriptions can span several lines:
-
-```markdown
----
-name: project-review
-description: >-
-  Review a project using its checklist
-  and report actionable findings.
----
-
-Read references/checklist.md, inspect the project, and summarize the findings.
-```
-
-Names use lowercase letters, digits and internal hyphens, up to 64 UTF-8 bytes. Save all files as UTF-8 text. For a downloaded archive, extract it first and select the Skill folder containing `SKILL.md`. Select a folder to preserve nested paths; selecting individual files places them at the root.
+The beginning of `SKILL.md` must include a name and description. Use lowercase letters, digits and hyphens for the name, up to 64 bytes. Save every file as UTF-8 text. Extract an archive before selecting the folder that contains `SKILL.md`.
 
 ## Install
 
 1. Open **MCP & Skill → Skill**.
-2. Select the whole **Skill folder**, or select `SKILL.md` and its supporting files through **Skill files**.
-3. Select **Install Skill**.
-4. Open **View files** on the installed card to check the content.
+2. Select the whole Skill folder, or select `SKILL.md` and its supporting text files.
+3. Choose **Install Skill**, then open **View files** to confirm the content.
 
-The Skill becomes available to all active AI clients in the instance. In the client, refresh the Runmesh tool or resource list, then use `skill_list` to find it and `skill_read` to read its instructions and attachments. Clients that browse MCP resources can also open the Skill there.
-
-Reading `SKILL.md` returns a file manifest with each file's path, UTF-8 size and SHA-256 hash. Use its paths and the same Skill digest to read the supporting files you need.
-
-Skill files are delivered as text. An AI client follows the instructions through its available tools, with each tool using its own permissions. Review a Skill's source and content before sharing it.
+Refresh the Runmesh connection in your AI client before using the Skill. Review its source and content before sharing it.
 
 ## Import from GitHub
 
-GitHub import and the version-management tools below require a compatible control plane running 0.1.8 or later. Check [release status](release-readiness.md) for deployment choices.
+Expand **Import from GitHub**, enter the public repository URL, the commit version to use and the Skill folder path. Leave the path empty when `SKILL.md` is at the repository root. Choose **Preview Skill**, review the files and then install or update it.
 
-In the Skill section, expand **Import from GitHub** and enter a public repository URL, the full 40-character commit SHA, and the Skill folder path. Leave the path empty when `SKILL.md` is at the repository root. Select **Preview Skill**, review the files, then select **Install Skill** or **Update Skill**.
+The imported content comes from the commit you selected. To update later, choose a new commit and preview it again. If there are too many files or a file is too large, the page will ask you to narrow the selection; folder upload is another option.
 
-The import downloads up to four source files at a time and uses a bounded 45-second deadline. GitHub rate limits are reported separately from invalid input. The installed source links to that exact commit. To update later, enter the new commit SHA and preview it again. One import can include up to 32 text files; use folder upload for a larger collection.
+## Update, rename, pause and delete
 
-## Update, pause and resume
+- **Update:** select the new files, review the preview and choose **Update Skill**. The update applies to every client.
+- **Rename:** change the friendly name in the Central list. This changes the title shown to people and does not change the Skill's original identity; the name remains after a refresh.
+- **Pause:** clients cannot read a paused Skill, while its current content is kept. Choose **Enable** to resume it.
+- **Delete:** deletion removes the Skill from use and keeps a deletion record. Its original Skill ID can never be reused, and an old upload does not return after a refresh or re-import.
 
-To update, keep the same `name` in `SKILL.md`, select the updated folder or files, and select **Install Skill**. Review the displayed files, then select **Update Skill**. The new version becomes active for every client.
+Content already read into a conversation remains there. Start a new conversation when it must use the new version throughout.
 
-**Pause** stops subsequent reads and retains the selected version. To resume that version, select **View files → Enable Skill**. Content already read into a conversation remains in that conversation; begin a fresh conversation when the task should use only the new version.
+## Version history and capacity
 
-The card's description and **View files** show the selected version, including a version chosen from history. When the latest upload differs, select **View latest upload** to review it, then **Update Skill** to make it active. For a paused Skill, that action is labeled **Enable Skill**.
+Open **Version history** on a Skill card to review older versions, compare changes, restore a version or clean up old versions. Preview cleanup before confirming; the active and kept versions are protected.
 
-After an update, clients should call `skill_list` again and use the returned digest for both `SKILL.md` and its attachments. This keeps the task on one version of the Skill.
+A Skill can retain up to 32 versions. An instance can hold up to 1,000 Skills and 256 MiB of stored content. One file is limited to 4 MiB and one GitHub import to 32 text files. When a limit is reached, clean up old versions before installing another.
 
-## Manage versions and storage
-
-Open **Version history** on the Skill card to see retained versions, their file counts and sizes, and the Skill library's capacity. Each version is identified by its content digest. Versions with a recorded installation time also show that time.
-
-- Select two versions and choose **Compare versions** to review changed files and metadata. Open either version's files for the full text.
-- Choose **Use this version**, then **Confirm**, to make a retained version active for all clients.
-- Choose **Keep version** to retain a version for later. **Unpin version** removes that choice.
-- Select older versions, choose **Preview cleanup**, review the list and space to free, then confirm. The active version, latest upload and kept versions stay in the library.
-
-Cleanup previews remain valid for five minutes. Changing the selection or updating the Skill calls for a fresh preview. After cleanup, the capacity display updates and you can install the next version.
-
-## File and storage limits
-
-| Item | Limit |
-| --- | --- |
-| Files per uploaded Skill | 256 |
-| Files per GitHub import | 32 |
-| One file | 4 MiB |
-| File path length | 200 characters |
-| Upload bundle, including encoded paths and metadata | 16 MiB |
-| Retained versions per Skill | 32 |
-| Skills per instance | 1,000 |
-| Stored Skill bundles per instance | 256 MiB |
-
-File sizes use UTF-8 bytes. Stored capacity counts the logical size of retained bundles, including JSON encoding, paths and metadata; Cloudflare storage and billing usage are available in its dashboard. Installing identical content again keeps the same stored version and its recorded time.
-
-Keep the selected folder focused on the Skill's instructions and references; leave out dependency directories, generated output and unrelated files. Use relative paths with forward slashes and names made of English letters, digits, periods, underscores and hyphens, such as `references/checklist.md`. Choose names valid on Windows, and keep file paths unique when letter case is ignored. When the version or storage limit is reached, open **Version history** to clean up older versions.
-
-If an upload needs correction, follow the panel's message, select the revised files and submit again. See [troubleshooting](troubleshooting.md) for common upload and update issues.
-
-API pagination, optional dependency metadata and version administration are documented in the [Skill reference](maintainers/central-skills.md).
+If an upload fails, follow the page message, correct the files and select them again. See [troubleshooting](troubleshooting.md) for common issues.
