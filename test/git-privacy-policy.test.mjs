@@ -32,9 +32,12 @@ test("commit validation enforces exact identity, ASCII messages and no assistant
   const gitlabApi = { ...githubApi, name: "alone io", committerName: "alone io" };
   const gitlabPushEnvironment = { CI: "true", CI_PIPELINE_SOURCE: "push", CI_PROJECT_PATH: "aloneio/runmesh", CI_COMMIT_BRANCH: "dev" };
   const gitlabMergeRequestEnvironment = { CI: "true", CI_PIPELINE_SOURCE: "merge_request_event", CI_PROJECT_PATH: "aloneio/runmesh", CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: "dev", CI_MERGE_REQUEST_TARGET_BRANCH_NAME: "main" };
+  const gitlabMainPushEnvironment = { ...gitlabPushEnvironment, CI_COMMIT_BRANCH: "main" };
   assert.equal(isGitHubApiCommit(gitlabApi, gitlabPushEnvironment), true);
   assert.equal(isGitHubApiCommit(gitlabApi, gitlabMergeRequestEnvironment), true);
+  assert.equal(isGitHubApiCommit(gitlabApi, gitlabMainPushEnvironment), true);
   assert.deepEqual(validateCommit(gitlabApi, gitlabPushEnvironment), []);
+  assert.deepEqual(validateCommit(gitlabApi, gitlabMainPushEnvironment), []);
   assert.deepEqual(validateCommit(githubApi, gitlabPushEnvironment), ["author", "committer"]);
   assert.deepEqual(validateCommit(githubApi), ["author", "committer"]);
   assert.equal(isGitHubApiCommit(gitlabApi, { ...gitlabPushEnvironment, CI_PROJECT_PATH: "other/project" }), false);

@@ -13,6 +13,10 @@ function fixture() {
     repository: { read: vi.fn(() => record), replace: vi.fn((next: ProfileRecord, expected: number): ProfileResult => {
       if ((record?.profile.revision ?? 0) !== expected) return { state: "conflict", current_revision: record?.profile.revision ?? 0 };
       record = structuredClone(next); return { state: "written", profile: next.profile };
+    }), remove: vi.fn((profileId: string, expected: number): ProfileResult => {
+      if (!record || record.profile.profile_id !== profileId) return { state: "missing" };
+      if (record.profile.revision !== expected) return { state: "conflict", current_revision: record.profile.revision };
+      record = undefined; return { state: "deleted", profile_id: profileId };
     }) },
   };
   const manager = createProfileManager(ports);
@@ -25,6 +29,19 @@ it("W03 creates disabled profiles then enables only an observed revision", async
   expect(await f.run({ action: "enable", profile_id: "docs", expected_revision: 1 }))
     .toMatchObject({ state: "written", profile: { revision: 2, enabled: true } });
   expect(await f.run({ action: "disable", profile_id: "docs", expected_revision: 1 })).toEqual({ state: "conflict", current_revision: 2 });
+});
+
+it("W03 renames and deletes a profile through the same revision-checked repository boundary", async () => {
+  const f = fixture();
+  expect(await f.run(command)).toMatchObject({ state: "written", profile: { revision: 1 } });
+  expect(await f.run({ action: "rename", profile_id: "docs", expected_revision: 1, display_name: "Documentation" }))
+    .toMatchObject({ state: "written", profile: { revision: 2, display_name: "Documentation" } });
+  expect(await f.run({ action: "delete", profile_id: "docs", expected_revision: 1, confirm: true }))
+    .toEqual({ state: "conflict", current_revision: 2 });
+  expect(await f.run({ action: "delete", profile_id: "docs", expected_revision: 2, confirm: true }))
+    .toEqual({ state: "deleted", profile_id: "docs" });
+  expect(f.record()).toBeUndefined();
+  expect(f.ports.repository.remove).toHaveBeenCalledOnce();
 });
 
 it.each(["denied", "unavailable"] as const)("W03 initial %s does not touch state", async decision => {
