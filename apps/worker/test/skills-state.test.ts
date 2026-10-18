@@ -52,6 +52,21 @@ it("Skill repository is lazy and preserves approved old bodies across updates, r
     expect(readSkillCapacity(state.storage.sql, a.skill_id)).toMatchObject({ skill_versions: 2, library_skills: 1 });
   });
 });
+it("Skill display aliases and deletion tombstones preserve revision checks and prevent resurrection", async () => {
+  const value = (await bundle())!;
+  await runInDurableObject(owner(), (_instance, state) => {
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    expect(store.install(value, 0)).toMatchObject({ state: "written", head: { revision: 1 } });
+    expect(store.rename(value.skill_id, "Research notes", 1))
+      .toMatchObject({ state: "written", head: { revision: 2, display_name: "Research notes" } });
+    expect(store.remove(value.skill_id, 1)).toEqual({ state: "conflict", current_revision: 2 });
+    expect(store.remove(value.skill_id, 2)).toEqual({ state: "deleted", skill_id: value.skill_id });
+    expect(store.head(value.skill_id)).toBeUndefined();
+    expect(store.heads("", 10)).toEqual([]);
+    expect(store.stage(value, 0)).toEqual({ state: "invalid" });
+    expect(store.bundle(value.skill_id, value.digest)).toBeUndefined();
+  });
+});
 it("Skill head pages use one bounded read and preserve ordering, cursors and enabled state", async () => {
   const values = await Promise.all(Array.from({ length: 7 }, (_, index) => makeSkillBundle({
     skill_id: `skill-${String(index).padStart(2, "0")}`, source: "reviewed", license: "MIT", files: [
