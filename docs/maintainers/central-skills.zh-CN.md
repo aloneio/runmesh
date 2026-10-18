@@ -114,6 +114,22 @@ CSRF 边界和现有 Skill head 修订号。应用策略依赖仓储端口，SQL
 unknown。写入结果未知时先刷新历史，再进行下一次修改。浏览器校验回执，并在更改
 选择、刷新或出错后清除旧确认项。
 
+## 永久删除与 tombstone
+
+管理员通过 `POST /admin/central/skills/{skill_id}` 提交
+`{action:"delete",expected_revision}` 执行永久生命周期操作。它复用管理员会话、
+同源 CSRF 校验和精确的 head revision。成功事务会删除该 Skill 的全部 bundle、
+元数据、head 与显示名称别名，然后写入
+`skill_deleted_v1(skill_id,deleted_at_ms)`，返回
+`{state:"deleted",skill_id}`。修订号过期返回 `conflict`，head 不存在返回
+`missing`。
+
+此 tombstone 永久有效，`skill_id` 永远不可复用。已删除 Skill 不会出现在列表或
+检查结果中；之后用同一 `skill_id` 执行 `stage` 或 `install`，即使旧内容已经删除，
+仍会返回 `invalid`。删除没有恢复或重新激活路径。`activate` 只能在永久删除之前
+恢复仍保留的摘要；清理和删除都不能描述为可逆操作。需要替代时必须创建新的
+Skill 标识，并将删除回执与审计记录一起保留。
+
 ## 列出、读取、更新与停用
 
 skill_list 只返回当前启用且批准的元数据，不读取正文。每页扫描最多 128 个 head，

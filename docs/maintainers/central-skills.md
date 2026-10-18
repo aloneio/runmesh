@@ -143,6 +143,26 @@ Lifecycle failures use `skill_lifecycle_*` codes and an `operation_state` of
 another change. The browser validates receipts and clears stale confirmations
 after selection changes, refreshes or errors.
 
+## Permanent deletion and tombstones
+
+The administrator `POST /admin/central/skills/{skill_id}` command with
+`{action:"delete",expected_revision}` is a permanent lifecycle operation. It uses
+the same administrator session, same-origin CSRF check and exact head revision as
+the other mutations. A successful transaction removes every stored bundle and
+its metadata, the head and the display-name alias, then records
+`skill_deleted_v1(skill_id,deleted_at_ms)` before returning
+`{state:"deleted",skill_id}`. A stale revision returns `conflict`; an absent
+head returns `missing`.
+
+The tombstone is permanent and the `skill_id` is never reusable. Listing and
+inspection omit the deleted Skill, while a later `stage` or `install` using the
+same `skill_id` is rejected as `invalid`, even when the old content is no longer
+present. There is no restore or reactivation path for a deleted Skill. The
+`activate` action can restore only a retained digest before permanent deletion;
+cleanup and deletion must not be described as reversible. Operators who need a
+replacement create a new Skill with a new identifier and keep the deletion
+receipt with the audit record.
+
 ## List, read, update and disable
 
 skill_list returns active approved metadata without loading file bodies. It
