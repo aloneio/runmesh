@@ -8,7 +8,7 @@ export { FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, MAX_RELEASE_ASSET_B
  * assets are authenticated with this embedded key; a downloaded keyring is
  * never fetched or used by an installer.
  */
-export const FIXED_RELEASE_VERSION = "0.1.10";
+export const FIXED_RELEASE_VERSION = "0.2.0";
 export const FIXED_NODE_VERSION = "22.23.2";
 export const FIXED_NODE_BASE_URL = `https://nodejs.org/dist/v${FIXED_NODE_VERSION}`;
 export const FIXED_RELEASE_CHANNEL = "stable" as const;
