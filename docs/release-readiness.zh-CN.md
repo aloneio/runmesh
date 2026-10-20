@@ -6,6 +6,8 @@
 
 **Runmesh 0.2.0 已是当前正式版。** 签名 Runner 安装包已发布并通过独立验证。新机器请使用已登录的 Runner 注册页面提供的安装命令；更新已有实例请按[升级指南](upgrading.zh-CN.md)操作。使用托管安装器前，请确认 Worker 的 `/runner/releases/stable` 返回 `distributable: true`。详见 [v0.2.0 正式版](https://github.com/aloneio/runmesh/releases/tag/v0.2.0)。
 
+正式版激活绑定到 `release/release-state.json` 中经审核的源提交和清单摘要，不会仅凭版本号启用分发。
+
 0.2.0 带来 Skill 重命名显示、删除后不可复用、MCP 状态提示和 Runner 管理改进。具体变化见[版本说明](release-notes.zh-CN.md)。
 
 | 你要做什么 | 下一步 |
