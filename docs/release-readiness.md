@@ -4,7 +4,7 @@
 
 ## Current status
 
-**0.2.0 is being published.** The current stable release is still [Runmesh 0.1.10](https://github.com/aloneio/runmesh/releases/tag/v0.1.10). After the signed Runner package is published, this page will switch to 0.2.0 and include its installation entry.
+**Runmesh 0.2.0 is the current stable release.** The signed Runner package has been published and independently verified. Use the authenticated Runner enrollment page to install a new host, or follow the [upgrade guide](upgrading.md) for an existing installation. Before using the hosted installer, confirm that your Worker reports `distributable: true` at `/runner/releases/stable`. See the [v0.2.0 release](https://github.com/aloneio/runmesh/releases/tag/v0.2.0).
 
 Version 0.2.0 adds friendly Skill names, permanent deletion records, clearer MCP status and Runner-management improvements. See the [release notes](release-notes.md).
 
